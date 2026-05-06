@@ -7,8 +7,10 @@ parent and root progress roll up automatically from the leaves. Optional
 weighting lets you say "this subtask is worth 30% of its parent" without forcing
 the user to set weights for everything.
 
-This repository implements **M01-BaseApp** as defined in
-[`docs/m01-baseapp.md`](docs/m01-baseapp.md).
+Do It List grows milestone by milestone. The current execution dashboard
+— what's active, what's next, and decisions deferred — lives in
+[`docs/PLAN.md`](docs/PLAN.md). The first shipped milestone is
+**M01-BaseApp** ([`docs/m01-baseapp.md`](docs/m01-baseapp.md)).
 
 ## Stack
 
