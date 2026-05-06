@@ -6,6 +6,8 @@ Claude Code instructions for **Do It List** — a web app for nested task trees 
 
 The `.agents/` folder holds files and guardrails that help agents (currently just Claude) use this project's frameworks, APIs, libraries, and interfaces correctly. See `.agents/README.md`.
 
+For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see [`docs/README.md`](docs/README.md). Consult when adding any doc or making a structural decision.
+
 @.agents/phoenix.md
 
 ## Product (primer — see [`docs/ProductSpec.md`](docs/ProductSpec.md) for canonical detail)
