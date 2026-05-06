@@ -7,10 +7,10 @@ parent and root progress roll up automatically from the leaves. Optional
 weighting lets you say "this subtask is worth 30% of its parent" without forcing
 the user to set weights for everything.
 
-Do It List grows milestone by milestone. The current execution dashboard
-— what's active, what's next, and decisions deferred — lives in
-[`docs/PLAN.md`](docs/PLAN.md). The first shipped milestone is
-**M01-BaseApp** ([`docs/m01-baseapp.md`](docs/m01-baseapp.md)).
+Do It List grows milestone by milestone. The execution dashboard lives in
+[`docs/PLAN.md`](docs/PLAN.md); the canonical product spec lives in
+[`docs/ProductSpec.md`](docs/ProductSpec.md). The first shipped milestone
+is **M01-BaseApp** ([`docs/m01-baseapp.md`](docs/m01-baseapp.md)).
 
 ## Stack
 
@@ -68,7 +68,7 @@ at all and are the fastest signal that the roll-up math is correct.
 
 ## Terminology
 
-The product vocabulary in this repo is:
+Canonical definitions live in [`docs/ProductSpec.md`](docs/ProductSpec.md). Quick reference:
 
 - **Project** — the top-level container, has members and a tree of tasks.
 - **Task** — any node in the tree.
@@ -83,7 +83,9 @@ The product vocabulary in this repo is:
 
 ## How progress works
 
-Pure logic lives in `DoIt.Tasks.Progress` and is exercised by
+The principle and formula live in [`docs/ProductSpec.md`](docs/ProductSpec.md);
+detailed edge cases live in [`docs/m01-baseapp.md`](docs/m01-baseapp.md).
+Pure implementation lives in `DoIt.Tasks.Progress` and is exercised by
 `test/doit/tasks/progress_test.exs`.
 
 ```
