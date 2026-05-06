@@ -1,6 +1,6 @@
 # M01-BaseApp
 
-> Canonical product principles, vocabulary, and the roll-up formula live in [`ProductSpec.md`](ProductSpec.md). This milestone doc owns scope, acceptance criteria, and the detailed edge cases for the behaviors it introduces.
+> Canonical product principles, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). This milestone doc owns scope, acceptance criteria, and the detailed edge cases for the behaviors it introduces.
 
 ## Goal
 

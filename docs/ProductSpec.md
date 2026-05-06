@@ -39,7 +39,7 @@ Leaf tasks use manual progress. Branch tasks use computed progress:
 sum(child_progress * child_weight) / sum(child_weight)
 ```
 
-Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`m01-baseapp.md`](m01-baseapp.md) → "Progress Rules".
+Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 
 ## Collaboration Model
 - Multiple users may open the same project simultaneously.

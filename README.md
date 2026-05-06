@@ -10,7 +10,7 @@ the user to set weights for everything.
 Do It List grows milestone by milestone. The execution dashboard lives in
 [`docs/PLAN.md`](docs/PLAN.md); the canonical product spec lives in
 [`docs/ProductSpec.md`](docs/ProductSpec.md). The first shipped milestone
-is **M01-BaseApp** ([`docs/m01-baseapp.md`](docs/m01-baseapp.md)).
+is **M01-BaseApp** ([`docs/milestones/m01-baseapp/m01-baseapp.md`](docs/milestones/m01-baseapp/m01-baseapp.md)).
 
 ## Stack
 
@@ -84,7 +84,7 @@ Canonical definitions live in [`docs/ProductSpec.md`](docs/ProductSpec.md). Quic
 ## How progress works
 
 The principle and formula live in [`docs/ProductSpec.md`](docs/ProductSpec.md);
-detailed edge cases live in [`docs/m01-baseapp.md`](docs/m01-baseapp.md).
+detailed edge cases live in [`docs/milestones/m01-baseapp/m01-baseapp.md`](docs/milestones/m01-baseapp/m01-baseapp.md).
 Pure implementation lives in `DoIt.Tasks.Progress` and is exercised by
 `test/doit/tasks/progress_test.exs`.
 

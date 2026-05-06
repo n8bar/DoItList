@@ -1,11 +1,11 @@
 # PLAN
-_Last updated: 2026-05-05_
+_Last updated: 2026-05-06_
 
 Human-facing execution dashboard for Do It List. Open this doc first when resuming work.
 
 Use [`CLAUDE.md`](../CLAUDE.md) for working style and engineering rules.
 Use [`ProductSpec.md`](ProductSpec.md) for product behavior and invariants.
-Use milestone docs under `docs/m##-<name>.md` for milestone scope and exit criteria.
+Use milestone docs under `docs/milestones/m##-<slug>/` for milestone scope and acceptance criteria.
 
 ## Doc Roles
 Two top-level docs sit at level 1 of the hierarchy, split by purpose:
@@ -14,18 +14,57 @@ Two top-level docs sit at level 1 of the hierarchy, split by purpose:
 
 [`CLAUDE.md`](../CLAUDE.md) sits above the split as the always-loaded primer — not a spec, not an action list, just whatever should be in context regardless of what we're working on.
 
-Below level 1:
-- **Milestone docs** (`docs/m##-<name>.md`) — per-milestone scope and acceptance criteria.
-- **Worklist docs** *(future, optional)* — task-level action breakdowns under a milestone, when one gets large enough to warrant them.
-- **Subsystem specs** *(future, optional)* — focused specs for behaviors that outgrow their milestone doc.
+The action-list hierarchy below PLAN.md:
+
+```
+PLAN.md
+  Milestone     coherent shippable slice of the product
+    Arc         focused slab of work within a milestone
+      Worklist  sequenced list of Items belonging to one Arc
+        Item    leaf action (a single concrete task)
+          Subitem  finer-grained sub-action (only inside a Worklist)
+      Item    leaf directly under an Arc — shortcut for a single-Item Worklist
+```
+
+Adding Subitems to an Arc-level Item decompresses the shortcut: that Item should be written as a proper Worklist with its own Items.
+
+**Docs stop at Worklist.** Items and Subitems live as inline checklist content inside their parent Worklist; they never get their own files.
 
 **Stay at your altitude.** A higher-level doc summarizes intent, names the thing, and links down. It does not catalog the same level of detail as its child docs. If PLAN.md or ProductSpec.md starts listing edge cases or per-task steps, that content belongs lower.
 
 ## Conventions
-- Milestones live as `docs/m##-<name>.md` (e.g. [`docs/m01-baseapp.md`](m01-baseapp.md)).
-- New work branches: `claude/<task>`.
-- `main` is canonical on GitHub; commits/PRs stay small and reviewable.
-- Specs first: a milestone doc exists before its code lands.
+
+### 1. Numbering
+1.1 Milestones use `m##` (zero-padded, lowercase, ceiling 99): `m01`, `m02`, …
+1.2 Arcs are numbered within their milestone: `m##.NN` — e.g. `m02.01`, `m02.02`, …
+1.3 Worklists are numbered within their arc: `m##.NN.NN` — e.g. `m02.01.01`.
+1.4 Items use plain Markdown numbered checkboxes inside their parent Worklist; Subitems use nested checkboxes.
+1.5 References in prose extend the dotted form down to Item and Subitem positions: `m02.01.01.05.03` = milestone 2 / arc 1 / worklist 1 / item 5 / subitem 3.
+1.6 References are tolerant: padding optional, leading `m`/`M` case-insensitive. `m02.1.1.5.3`, `M02.1.1`, and `m02.01.01.05.03` are equivalent. Filenames are strict — always padded, always lowercase.
+1.7 Within a milestone doc, the milestone prefix may be omitted from references when context implies it (`.04.03.02.05`).
+
+### 2. Doc Layout
+2.1 Milestone docs live at `docs/milestones/m##-<slug>/m##-<slug>.md`.
+2.2 Arc and Worklist content default to inline within the milestone doc.
+2.3 Optional breakouts as flat siblings:
+   - Arc: `docs/milestones/m##-<slug>/m##.NN-<slug>.md`
+   - Worklist: `docs/milestones/m##-<slug>/m##.NN.NN-<slug>.md`
+2.4 If breakouts get crowded, introduce arc subfolders: `docs/milestones/m##-<slug>/m##.NN-<slug>/...`.
+2.5 Subordinate specs are content-named (not milestone-named) and live at `docs/specs/<topic>.md`.
+
+### 3. Specs vs. Action lists
+3.1 Specs describe behavior and invariants; action lists describe how/when work happens.
+3.2 Action lists may reference specs but aren't required to — they may simply subdivide their parent's goal.
+3.3 Specs do not refer back to action lists.
+
+### 4. Branches
+4.1 Milestone-scoped work: `M##-<slug>` (uppercase M, no padding). Example: `M02-keyboard-nav`.
+4.2 Non-milestone work uses semantic prefixes: `fix/<slug>`, `chore/<slug>`, `docs/<slug>`, `spike/<slug>`.
+
+### 5. Repo
+5.1 `main` is canonical on GitHub.
+5.2 Specs-first: a milestone doc with acceptance criteria exists before its code lands.
+5.3 Don't merge with a dirty tree or unpushed commits without explicit confirmation.
 
 ## Deferred Decisions
 Decisions consciously postponed. Each entry names the trigger that should make us revisit it.
@@ -38,8 +77,8 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 ## Current
 - Active milestone: **M01-BaseApp** — scaffold complete and pushed; treating as done-as-scoped.
 - Status: `complete (per m01-baseapp.md acceptance criteria)`
-- Next action: scope **M02** (UX Overhaul). Write the spec at `docs/m02-ux-overhaul.md` before code.
-- Primary next doc: _TBD — `docs/m02-ux-overhaul.md` (not yet written)._
+- Next action: scope **M02** (UX Overhaul). Write the milestone doc at `docs/milestones/m02-ux-overhaul/m02-ux-overhaul.md` before code.
+- Primary next doc: _TBD — `docs/milestones/m02-ux-overhaul/m02-ux-overhaul.md` (not yet written)._
 
 ## Release Target
 No public release yet. Owner will not release until at least M02 (UX Overhaul) lands and the app feels presentable.
@@ -52,4 +91,4 @@ No public release yet. Owner will not release until at least M02 (UX Overhaul) l
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Doc |
 |---|---|---|---|---|
-| [x] | M01 | BaseApp | First working slice: accounts, projects, nested task tree, roll-up progress, project membership, basic activity log, Dockerized. | [`docs/m01-baseapp.md`](m01-baseapp.md) |
+| [x] | M01 | BaseApp | First working slice: accounts, projects, nested task tree, roll-up progress, project membership, basic activity log, Dockerized. | [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) |
