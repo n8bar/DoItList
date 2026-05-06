@@ -1,0 +1,8 @@
+CHANGELOG — Do It List
+
+Plain text. Append-only. Chronological (oldest first). Records scope, requirement, and doc-structure changes — not git commit history.
+
+2026-05-05  M01-BaseApp scaffold landed; project pushed to https://github.com/n8bar/DoItList as a public MIT repo.
+2026-05-05  Established doc hierarchy: ProductSpec.md as master spec, PLAN.md as master action list, CLAUDE.md as always-loaded primer above the spec/action split. Defined the "stay at your altitude" rule.
+2026-05-06  Migrated milestone docs into docs/milestones/<milestone>/ subfolders. Codified the action-list hierarchy (Milestone -> Arc -> Worklist -> Item -> Subitem), dotted reference notation (m##.NN.NN.NN.NN), and branch naming (M##-<slug> + semantic prefixes).
+2026-05-06  Added baseline ancillary docs: BACKLOG.md, FINDINGS.md, UX_GUARDRAILS.md, CHANGELOG.log. Added milestone-deadline convention (target dates required, approximate flags allowed).

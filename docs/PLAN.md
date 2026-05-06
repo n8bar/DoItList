@@ -14,6 +14,12 @@ Two top-level docs sit at level 1 of the hierarchy, split by purpose:
 
 [`CLAUDE.md`](../CLAUDE.md) sits above the split as the always-loaded primer — not a spec, not an action list, just whatever should be in context regardless of what we're working on.
 
+Other level-1 docs:
+- **[`BACKLOG.md`](BACKLOG.md)** — work for releases after the current target.
+- **[`FINDINGS.md`](FINDINGS.md)** — observation log; action lists reference findings by ID.
+- **[`UX_GUARDRAILS.md`](UX_GUARDRAILS.md)** — universal UX/a11y baseline + project-specific additions.
+- **[`CHANGELOG.log`](CHANGELOG.log)** — chronological record of scope/requirement/doc-structure changes.
+
 The action-list hierarchy below PLAN.md:
 
 ```
@@ -66,6 +72,11 @@ Adding Subitems to an Arc-level Item decompresses the shortcut: that Item should
 5.2 Specs-first: a milestone doc with acceptance criteria exists before its code lands.
 5.3 Don't merge with a dirty tree or unpushed commits without explicit confirmation.
 
+### 6. Milestone deadlines
+6.1 Every milestone carries a target date. Set the target when the milestone is scoped — `TBD` is allowed only for milestones still pending a scoping pass.
+6.2 Approximate dates are fine and should be marked: `~2026-08-15` for "around mid-August," `~2026-Q3` for quarter precision.
+6.3 Completed milestones record their actual completion date in the Completed Milestones table.
+
 ## Deferred Decisions
 Decisions consciously postponed. Each entry names the trigger that should make us revisit it.
 
@@ -84,11 +95,11 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 No public release yet. Owner will not release until at least M02 (UX Overhaul) lands and the app feels presentable.
 
 ## Milestones
-| Status | ID | Milestone | Short intent | Doc |
-|---|---|---|---|---|
-| [ ] | M02 | UX Overhaul | Make the app presentable: visual polish, interaction quality, mobile/responsive baseline. Scope TBD. | _TBD_ |
+| Status | ID | Milestone | Short intent | Target | Doc |
+|---|---|---|---|---|---|
+| [ ] | M02 | UX Overhaul | Make the app presentable: visual polish, interaction quality, mobile/responsive baseline. Scope TBD. | _TBD (set at scoping)_ | _TBD_ |
 
 ## Completed Milestones
-| Status | ID | Milestone | Short intent | Doc |
-|---|---|---|---|---|
-| [x] | M01 | BaseApp | First working slice: accounts, projects, nested task tree, roll-up progress, project membership, basic activity log, Dockerized. | [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) |
+| Status | ID | Milestone | Short intent | Completed | Doc |
+|---|---|---|---|---|---|
+| [x] | M01 | BaseApp | First working slice: accounts, projects, nested task tree, roll-up progress, project membership, basic activity log, Dockerized. | 2026-05-05 | [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) |
