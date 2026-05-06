@@ -1,0 +1,45 @@
+# CLAUDE
+
+Claude Code instructions for **Do It List** — a web app for nested task trees with real, rolled-up progress. Domain: DoItList.app.
+
+`@.agents/phoenix.md` below auto-loads the Phoenix/Elixir framework rules. Treat any `mix ...` command in those rules as running *inside the container* — wrap with `docker compose run --rm web ...` (or `docker compose exec web ...` if the stack is already up).
+
+The `.agents/` folder holds files and guardrails that help agents (currently just Claude) use this project's frameworks, APIs, libraries, and interfaces correctly. See `.agents/README.md`.
+
+@.agents/phoenix.md
+
+## Product
+- Core idea: **Task trees with real progress.** Nest tasks, update leaves, parents roll up automatically. Weighting is optional.
+- Vocabulary (use consistently): **Project**, **Task**, **Progress**, **Weight**, **Roll-up progress**, **Project member**. Not a generic todo app.
+
+## Durable Principles
+- Nested work is first-class.
+- Progress is useful by default; weighting is optional.
+- No file check-in/check-out collaboration.
+- Grow milestone by milestone — resist becoming bloated PM software.
+
+## Engineering Style
+- Boring, understandable code; small, reviewable changes.
+- Business logic in domain/service modules with tests, not views. Progress math stays in pure modules with unit tests.
+
+## Dev Environment
+- Everything runs through Docker — `docker compose up --build`. No host installs beyond Docker + Compose.
+- Required infra: `Dockerfile`, `compose.yaml`, `.env.example`, persistent DB volume, README setup commands.
+- Must stay runnable on a clean Linux box with just Docker.
+
+## Working Style
+- Specs first: align on milestone scope in `docs/m##-*.md` before writing code. If asked to code before a spec exists, pause and recommend writing it first.
+- Keep docs in sync within the same commit when scope shifts.
+- When the user asks for input/feedback ("what do you think?", "should we…?"), answer first; don't change files until they confirm.
+- Use the system date for any dated docs.
+
+## Branch & Repo
+- New work branches: `claude/<task>`.
+- `main` is canonical on GitHub once the remote is set up.
+- Don't merge with a dirty tree or unpushed commits without explicit confirmation.
+
+## Terminal Ownership
+Claude drives Docker, git, and `mix` (via the container) — assume the user has no shell open unless they say otherwise.
+
+## Subagents
+Use only for independent, path-scoped tasks that materially shorten cycle time. The primary agent owns integration and the user-facing summary.

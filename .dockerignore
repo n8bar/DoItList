@@ -1,0 +1,8 @@
+_build
+deps
+.elixir_ls
+.git
+priv/static/assets
+assets/node_modules
+.env
+*.log

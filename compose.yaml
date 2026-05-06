@@ -1,0 +1,41 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_DATABASE:-doit_dev}
+    volumes:
+      - doit_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MIX_ENV: dev
+      PHX_SERVER: "true"
+      PORT: "4000"
+      DB_HOSTNAME: db
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_DATABASE: ${DB_DATABASE:-doit_dev}
+    ports:
+      - "${WEB_PORT:-4000}:4000"
+    volumes:
+      - .:/app
+      - doit_build:/app/_build
+      - doit_deps:/app/deps
+      - doit_node_modules:/app/assets/node_modules
+
+volumes:
+  doit_pgdata:
+  doit_build:
+  doit_deps:
+  doit_node_modules:
