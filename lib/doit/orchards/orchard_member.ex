@@ -1,16 +1,16 @@
-defmodule DoIt.Projects.ProjectMember do
+defmodule DoIt.Orchards.OrchardMember do
   use Ecto.Schema
   import Ecto.Changeset
 
   alias DoIt.Accounts.User
-  alias DoIt.Projects.Project
+  alias DoIt.Orchards.Orchard
 
   @roles ~w(owner editor viewer)
 
-  schema "project_members" do
+  schema "orchard_members" do
     field :role, :string
 
-    belongs_to :project, Project
+    belongs_to :orchard, Orchard
     belongs_to :user, User
 
     timestamps(type: :utc_datetime)
@@ -20,9 +20,9 @@ defmodule DoIt.Projects.ProjectMember do
 
   def changeset(member, attrs) do
     member
-    |> cast(attrs, [:project_id, :user_id, :role])
-    |> validate_required([:project_id, :user_id, :role])
+    |> cast(attrs, [:orchard_id, :user_id, :role])
+    |> validate_required([:orchard_id, :user_id, :role])
     |> validate_inclusion(:role, @roles)
-    |> unique_constraint([:project_id, :user_id])
+    |> unique_constraint([:orchard_id, :user_id])
   end
 end

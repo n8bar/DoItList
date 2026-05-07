@@ -1,38 +1,38 @@
-defmodule DoItWeb.ProjectShowLive do
+defmodule DoItWeb.OrchardShowLive do
   use DoItWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
 
-  alias DoIt.{Accounts, Projects, Repo, Tasks}
+  alias DoIt.{Accounts, Orchards, Repo, Tasks}
   alias DoIt.Tasks.Task
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
     user = socket.assigns.current_user
-    project = Projects.get_project(id)
-    role = project && Projects.get_role(project.id, user.id)
+    orchard = Orchards.get_orchard(id)
+    role = orchard && Orchards.get_role(orchard.id, user.id)
 
     cond do
-      is_nil(project) ->
-        {:ok, socket |> put_flash(:error, "Project not found.") |> push_navigate(to: ~p"/projects")}
+      is_nil(orchard) ->
+        {:ok, socket |> put_flash(:error, "Orchard not found.") |> push_navigate(to: ~p"/orchards")}
 
       is_nil(role) ->
         {:ok,
          socket
-         |> put_flash(:error, "You don't have access to that project.")
-         |> push_navigate(to: ~p"/projects")}
+         |> put_flash(:error, "You don't have access to that orchard.")
+         |> push_navigate(to: ~p"/orchards")}
 
       true ->
-        if connected?(socket), do: Tasks.subscribe(project.id)
+        if connected?(socket), do: Tasks.subscribe(orchard.id)
 
         {:ok,
          socket
-         |> assign(:page_title, project.name)
-         |> assign(:project, project)
+         |> assign(:page_title, orchard.name)
+         |> assign(:orchard, orchard)
          |> assign(:role, role)
-         |> assign(:can_edit, Projects.can_edit?(role))
-         |> assign(:can_admin, Projects.can_admin?(role))
-         |> assign(:members, Projects.list_members(project.id))
+         |> assign(:can_edit, Orchards.can_edit?(role))
+         |> assign(:can_admin, Orchards.can_admin?(role))
+         |> assign(:members, Orchards.list_members(orchard.id))
          |> assign(:show_member_form, false)
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
@@ -43,8 +43,8 @@ defmodule DoItWeb.ProjectShowLive do
   end
 
   defp load_tree(socket) do
-    project_id = socket.assigns.project.id
-    tree = Tasks.project_task_tree(project_id)
+    orchard_id = socket.assigns.orchard.id
+    tree = Tasks.orchard_task_tree(orchard_id)
     assign(socket, :tree, tree)
   end
 
@@ -87,7 +87,7 @@ defmodule DoItWeb.ProjectShowLive do
 
   def handle_event("create_task", %{"title" => title} = params, socket) do
     user = socket.assigns.current_user
-    project = socket.assigns.project
+    orchard = socket.assigns.orchard
 
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission to add tasks.")}
@@ -99,7 +99,7 @@ defmodule DoItWeb.ProjectShowLive do
         end
 
       attrs = %{
-        "project_id" => project.id,
+        "orchard_id" => orchard.id,
         "parent_id" => parent_id,
         "title" => title,
         "weight" => Map.get(params, "weight", "1.0")
@@ -239,20 +239,20 @@ defmodule DoItWeb.ProjectShowLive do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
     else
-      project = socket.assigns.project
+      orchard = socket.assigns.orchard
 
       case Accounts.get_user_by_email(email) do
         nil ->
           {:noreply, put_flash(socket, :error, "No user with that email.")}
 
         user ->
-          case Projects.add_member(project.id, user.id, role) do
+          case Orchards.add_member(orchard.id, user.id, role) do
             {:ok, _} ->
               {:noreply,
                socket
                |> assign(:show_member_form, false)
                |> put_flash(:info, "Added #{user.name}.")
-               |> assign(:members, Projects.list_members(project.id))}
+               |> assign(:members, Orchards.list_members(orchard.id))}
 
             {:error, _} ->
               {:noreply, put_flash(socket, :error, "Could not add member.")}
@@ -277,11 +277,11 @@ defmodule DoItWeb.ProjectShowLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex items-start justify-between mb-6">
         <div>
-          <.link navigate={~p"/projects"} class="text-sm text-zinc-500 hover:text-zinc-800">
-            ← All projects
+          <.link navigate={~p"/orchards"} class="text-sm text-zinc-500 hover:text-zinc-800">
+            ← All orchards
           </.link>
-          <h1 class="text-2xl font-semibold text-zinc-800 mt-1">{@project.name}</h1>
-          <p :if={@project.description} class="text-sm text-zinc-500 mt-1">{@project.description}</p>
+          <h1 class="text-2xl font-semibold text-zinc-800 mt-1">{@orchard.name}</h1>
+          <p :if={@orchard.description} class="text-sm text-zinc-500 mt-1">{@orchard.description}</p>
         </div>
         <div class="text-right text-xs text-zinc-500">
           Your role: <span class="font-medium text-zinc-700">{@role}</span>

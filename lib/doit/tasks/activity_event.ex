@@ -3,7 +3,7 @@ defmodule DoIt.Tasks.ActivityEvent do
   import Ecto.Changeset
 
   alias DoIt.Accounts.User
-  alias DoIt.Projects.Project
+  alias DoIt.Orchards.Orchard
   alias DoIt.Tasks.Task
 
   schema "activity_events" do
@@ -11,7 +11,7 @@ defmodule DoIt.Tasks.ActivityEvent do
     field :data, :map, default: %{}
 
     belongs_to :task, Task
-    belongs_to :project, Project
+    belongs_to :orchard, Orchard
     belongs_to :user, User
 
     timestamps(type: :utc_datetime, updated_at: false)
@@ -19,8 +19,8 @@ defmodule DoIt.Tasks.ActivityEvent do
 
   def changeset(event, attrs) do
     event
-    |> cast(attrs, [:task_id, :project_id, :user_id, :kind, :data])
-    |> validate_required([:task_id, :project_id, :kind])
+    |> cast(attrs, [:task_id, :orchard_id, :user_id, :kind, :data])
+    |> validate_required([:task_id, :orchard_id, :kind])
     |> validate_length(:kind, min: 1, max: 60)
   end
 end

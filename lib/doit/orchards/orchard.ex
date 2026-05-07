@@ -1,24 +1,24 @@
-defmodule DoIt.Projects.Project do
+defmodule DoIt.Orchards.Orchard do
   use Ecto.Schema
   import Ecto.Changeset
 
   alias DoIt.Accounts.User
-  alias DoIt.Projects.ProjectMember
+  alias DoIt.Orchards.OrchardMember
   alias DoIt.Tasks.Task
 
-  schema "projects" do
+  schema "orchards" do
     field :name, :string
     field :description, :string
 
     belongs_to :owner, User
-    has_many :memberships, ProjectMember
+    has_many :memberships, OrchardMember
     has_many :tasks, Task
 
     timestamps(type: :utc_datetime)
   end
 
-  def changeset(project, attrs) do
-    project
+  def changeset(orchard, attrs) do
+    orchard
     |> cast(attrs, [:name, :description, :owner_id])
     |> validate_required([:name, :owner_id])
     |> validate_length(:name, min: 1, max: 120)

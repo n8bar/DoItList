@@ -23,7 +23,7 @@ defmodule DoItWeb.UserAuth do
     conn
     |> renew_session()
     |> put_session(@session_key, user.id)
-    |> redirect(to: ~p"/projects")
+    |> redirect(to: ~p"/orchards")
   end
 
   def log_out_user(conn) do
@@ -52,7 +52,7 @@ defmodule DoItWeb.UserAuth do
   def redirect_if_user_is_authenticated(conn, _opts) do
     if conn.assigns[:current_user] do
       conn
-      |> redirect(to: ~p"/projects")
+      |> redirect(to: ~p"/orchards")
       |> halt()
     else
       conn
