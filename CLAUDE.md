@@ -31,14 +31,15 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 - Must stay runnable on a clean Linux box with just Docker.
 
 ## Working Style
-- Specs first: align on milestone scope in `docs/m##-*.md` before writing code. If asked to code before a spec exists, pause and recommend writing it first.
+- Specs first: align on milestone scope in `docs/milestones/m##-<slug>/m##-<slug>.md` before writing code. If asked to code before a spec exists, pause and recommend writing it first.
 - Keep docs in sync within the same commit when scope shifts.
 - When the user asks for input/feedback ("what do you think?", "should we…?"), answer first; don't change files until they confirm.
 - Use the system date for any dated docs.
 
 ## Branch & Repo
-- New work branches: `claude/<task>`.
-- `main` is canonical on GitHub once the remote is set up.
+- Milestone-scoped work: `M##-<slug>` (uppercase M, no padding). Example: `M02-keyboard-nav`.
+- Non-milestone work: semantic prefixes — `fix/<slug>`, `chore/<slug>`, `docs/<slug>`, `spike/<slug>`.
+- `main` is canonical on GitHub.
 - Don't merge with a dirty tree or unpushed commits without explicit confirmation.
 
 ## Terminal Ownership
