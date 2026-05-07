@@ -44,7 +44,7 @@ Adding Subitems to an Arc-level Item decompresses the shortcut: that Item should
 1.1 Milestones use `m##` (zero-padded, lowercase, ceiling 99): `m01`, `m02`, …
 1.2 Arcs are numbered within their milestone: `m##.NN` — e.g. `m02.01`, `m02.02`, … In Arc headings inside a milestone doc, use the local number only: `### 1 — <name>`. Do not repeat the dotted form in the heading.
 1.3 Worklists are numbered within their arc: `m##.NN.NN` — e.g. `m02.01.01`.
-1.4 Items use plain Markdown numbered checkboxes inside their parent Worklist; Subitems use nested checkboxes. **Items must not prefix themselves with their own dotted reference** — position in the doc gives the reference. `1. [ ] Audit the app...` ✓ — `1. [ ] **m02.01.01** — Audit the app...` ✗.
+1.4 Items use plain Markdown numbered checkboxes inside their parent Worklist; Subitems use nested checkboxes. Checkboxes (`[ ]` / `[x]`) attach only to actionable items — never to action-list titles or headings (Milestone, Arc, Worklist) at any level. **Items must not prefix themselves with their own dotted reference** — position in the doc gives the reference. `1. [ ] Audit the app...` ✓ — `1. [ ] **m02.01.01** — Audit the app...` ✗.
 1.5 References in prose extend the dotted form down to Item and Subitem positions: `m02.01.01.05.03` = milestone 2 / arc 1 / worklist 1 / item 5 / subitem 3. Cross-references between items are fine; self-labels on items are not.
 1.6 References are tolerant: padding optional, leading `m`/`M` case-insensitive. `m02.1.1.5.3`, `M02.1.1`, and `m02.01.01.05.03` are equivalent. Filenames are strict — always padded, always lowercase.
 1.7 Within a milestone doc, the milestone prefix may be omitted from references when context implies it (`.04.03.02.05`).

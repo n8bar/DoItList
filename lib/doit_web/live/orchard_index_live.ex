@@ -55,7 +55,7 @@ defmodule DoItWeb.OrchardIndexLive do
         <div>
           <h1 class="text-2xl font-semibold text-zinc-800">Your orchards</h1>
           <p class="text-sm text-zinc-500">
-            Each Orchard holds a tree of tasks. Root tasks act as separate Lists.
+            An Orchard holds multiple Lists. Each List is a tree of nested tasks.
           </p>
         </div>
         <button
