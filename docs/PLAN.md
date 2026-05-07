@@ -28,9 +28,9 @@ No public release yet. Owner will not release until at least M02 (UX Overhaul) l
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Overhaul | Align app with UX guardrails + targeted design refinements (theme toggle, full-width progress underbar, completion checkbox, collapsible children, inline description, project header bar, signifier rework, drop status from UI). | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
+| [ ] | M02 | UX Overhaul | Align app with UX guardrails + targeted design refinements (theme toggle, full-width progress underbar, completion checkbox, collapsible children, inline description, Orchard header bar, signifier rework, drop status from UI, botanical icons). | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |
 |---|---|---|---|---|---|
-| [x] | M01 | BaseApp | First working slice: accounts, projects, nested task tree, roll-up progress, project membership, basic activity log, Dockerized. | 2026-05-05 | [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) |
+| [x] | M01 | BaseApp | First working slice: accounts, Orchards, nested task tree, roll-up progress, Orchard membership, basic activity log, Dockerized. | 2026-05-05 | [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) |

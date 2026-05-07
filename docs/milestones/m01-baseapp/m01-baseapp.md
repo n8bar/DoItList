@@ -27,15 +27,15 @@ This milestone is not the full product. It is the first working slice.
 - User login
 - User logout
 
-### Projects
+### Orchards
 
-- Create project
-- View project list
-- Open project detail page
+- Create orchard
+- View orchard list
+- Open orchard detail page
 
-### Project Members
+### Orchard Members
 
-- Associate users with projects
+- Associate users with orchards
 - Support simple roles:
   - owner
   - editor
@@ -49,7 +49,7 @@ Tasks must support:
 
 - title
 - optional description
-- project
+- orchard
 - parent task
 - status
 - priority
@@ -146,13 +146,13 @@ This milestone is complete when:
 
 - The app starts with `docker compose up --build`.
 - A user can register and log in.
-- A user can create a project.
-- A user can create nested tasks inside a project.
+- A user can create an Orchard.
+- A user can create nested tasks inside an Orchard.
 - A user can update progress on leaf tasks.
 - Parent progress calculates from child tasks.
 - Weighted progress works correctly.
 - Roll-up progress updates recursively.
-- A task can be assigned to a project member.
+- A task can be assigned to an Orchard member.
 - A basic activity log records task changes.
 - The README explains how to run the app through Docker.
 - Progress calculation has automated tests.

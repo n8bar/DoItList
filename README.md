@@ -28,7 +28,7 @@ requirements are Docker and Docker Compose.
 docker compose up --build
 ```
 
-Then open <http://localhost:4000>. Register an account, create a project, and
+Then open <http://localhost:4000>. Register an account, create an Orchard, and
 start adding lists and nested tasks.
 
 The first boot is slow — Elixir, Hex, and the JS asset toolchain are all
@@ -70,15 +70,15 @@ at all and are the fastest signal that the roll-up math is correct.
 
 Canonical definitions live in [`docs/ProductSpec.md`](docs/ProductSpec.md). Quick reference:
 
-- **Project** — the top-level container, has members and a tree of tasks.
+- **Orchard** — the top-level container, has members and a tree of tasks.
 - **Task** — any node in the tree.
 - **List** — informal name for a *root* task (a task whose `parent_id` is
-  `null`). A project usually has multiple Lists, each with its own tree.
+  `null`). An Orchard usually has multiple Lists, each with its own tree.
 - **Roll-up progress** — `computed_progress` on a task: the weighted average of
   its children's rolled-up progress.
 - **Weight** — how much a child contributes to its parent's roll-up. Default
   is `1`; users only have to touch it when they want non-equal contributions.
-- **Project member** — a `(user, project, role)` triple. Roles are `owner`,
+- **Orchard member** — a `(user, orchard, role)` triple. Roles are `owner`,
   `editor`, `viewer`.
 
 ## How progress works
@@ -101,11 +101,11 @@ changes, `DoIt.Tasks` recomputes its ancestors recursively.
 ## Architecture, briefly
 
 - `lib/doit/accounts/` — user registration / login / password hashing.
-- `lib/doit/projects/` — projects and project membership.
+- `lib/doit/orchards/` — orchards and orchard membership.
 - `lib/doit/tasks/` — tasks, comments, activity events, and the
   pure-Elixir `Progress` module.
-- `lib/doit_web/live/` — `ProjectIndexLive` and `ProjectShowLive`. The latter
-  subscribes to `project:<id>` PubSub topics so other browsers see updates
+- `lib/doit_web/live/` — `OrchardIndexLive` and `OrchardShowLive`. The latter
+  subscribes to `orchard:<id>` PubSub topics so other browsers see updates
   promptly. Last writer wins; no conflict resolution.
 - `lib/doit_web/user_auth.ex` — session-based auth plug + LiveView mount hooks.
 
