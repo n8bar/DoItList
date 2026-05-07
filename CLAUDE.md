@@ -12,7 +12,7 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 
 ## Product (primer — see [`docs/ProductSpec.md`](docs/ProductSpec.md) for canonical detail)
 - **Core idea:** Task trees with real progress. Nest tasks, update leaves, parents roll up automatically. Weighting is optional.
-- **Vocabulary** (use consistently): Orchard, Task, Progress, Weight, Roll-up progress, Orchard member. Not a generic todo app.
+- **Vocabulary** (use consistently): Initiative, Task, Progress, Weight, Roll-up progress, Initiative member. Not a generic todo app.
 - **Inspiration:** AbstractSpoon's ToDo List, with three deliberate departures — web-based, real-time collaborative, deliberately simpler.
 
 ## Durable Principles

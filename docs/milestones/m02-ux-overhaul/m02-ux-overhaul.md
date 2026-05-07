@@ -11,7 +11,7 @@ This is the milestone that earns the first public release.
 
 ## Preconditions
 
-- The `Project → Orchard` vocabulary rename (separate chore branch) lands before M02 implementation begins. M02 items reference the post-rename vocabulary.
+- The vocabulary rename of Project → Initiative (two chore branches on 2026-05-07; see [`CHANGELOG.log`](../../CHANGELOG.log)) is complete. M02 items reference the final vocabulary.
 
 ## Arcs
 
@@ -34,10 +34,16 @@ Discrete UI changes scoped explicitly with the owner.
 3. [ ] **Completion checkbox left of task name.** Adds a checkbox immediately before the title. On a leaf task, toggling sets progress 0 ↔ 100. On a parent task, checking opens a confirmation dialog ("Mark all child tasks completed?"); on confirm, cascade 100% to every descendant; on cancel, no-op. Use the same dialog pattern for any future destructive/irreversible confirmations.
 4. [ ] **Collapsible children.** Tasks with children show an expand/collapse signifier — visually distinct from the add-subtask signifier (item 7). Default state on first view: expanded. Per-task collapsed state persists in `localStorage` only (not server). Collapsed branches still contribute to roll-up; only the visual children are hidden.
 5. [ ] **Task row layout.** Single-line row, in order: completion checkbox · botanical icon (item 9) · title · custom-attribute chips (only when non-default per Arc 1) · ` — ` (em dash with surrounding spaces) · description in a faded font. Description fills remaining horizontal space with `white-space: nowrap; overflow: hidden; text-overflow: ellipsis`. On very narrow viewports the description hides entirely; otherwise it consumes whatever width remains. Description is read-only inline — editing happens in the task detail view. Clicking anywhere on the row outside interactive sub-elements opens detail.
-6. [ ] **Orchard-level progress underbar.** An Orchard may contain multiple Lists (root tasks), so surface an aggregate progress bar in the Orchard header using the same underbar treatment as the per-task bar. Aggregate is the equal-weighted average of root-task roll-up progress (custom weights at root level are not honored at the Orchard level — the Orchard header is informational, not itself a task).
+6. [ ] **Initiative-level progress underbar.** An Initiative may contain multiple Lists (root tasks), so surface an aggregate progress bar in the Initiative header using the same underbar treatment as the per-task bar. Aggregate is the equal-weighted average of root-task roll-up progress (custom weights at root level are not honored at the Initiative level — the Initiative header is informational, not itself a task).
 7. [ ] **Add-subtask signifier rework.** Current `+` is unclear and conflicts visually with an expand-style affordance. (Per Jakob Nielsen, _signifier_ is the correct term — "a perceivable indicator that communicates appropriate behavior to a user.") Replace with a clearer add-subtask affordance distinct from the collapse/expand control in item 4. Pick one direction: a labeled "+ Subtask" pill on row hover/focus, an indented placeholder row at the end of a parent's children, or a dedicated icon (e.g. plus-with-branch). Whichever direction wins must survive keyboard-only use and meet the 44×44 px touch-target rule.
 8. [ ] **Remove `status` from task UI.** Hide the task `status` field from every UI surface: task detail, task row, filters, activity log entries. Schema column stays — no migration in M02 — so we can revisit later as a more complete idea. Activity-log entries that previously named status changes are dropped from the log going forward; existing rows in the log can stay in place (they don't surface anywhere now).
-9. [ ] **Botanical icon set.** Apply the visual metaphor: tree icon on Lists (root tasks), branch icon on parent tasks, leaf icon on leaf tasks. Heroicons doesn't ship tree/branch/leaf — pull from Lucide (MIT, similar line-style aesthetic) and import alongside Heroicons. Pairs with item 5 (row layout); land before or with it so the row composes correctly.
+9. [ ] **Botanical icon set.** Apply the visual metaphor at the icon layer:
+   - **Initiative** (in nav, page header, and the Initiative-list cards): Lucide `trees` (small grove of multiple trees).
+   - **List** (root task): Lucide `tree-deciduous` or `tree-pine`.
+   - **Task with children** (parent task): branch icon (custom SVG or closest Lucide; verify availability at implementation time).
+   - **Leaf task** (no children): Lucide `leaf`.
+
+   Heroicons doesn't ship most of these — import Lucide (MIT, similar line-style aesthetic) alongside Heroicons. Pairs with item 5 (row layout); land before or with it so the row composes correctly.
 
 ## Non-Goals
 
@@ -59,7 +65,7 @@ Discrete UI changes scoped explicitly with the owner.
 
 - **Theme persistence.** Persist user choice on the `users` table (or a `user_preferences` join — pick whichever fits the schema with less churn). System mode means "follow `prefers-color-scheme`" — store no override, not a literal `"system"` string, unless a column-default makes the latter cleaner.
 - **Underbar implementation.** Prefer CSS-only driven by a `--progress` custom property; avoid layout-shifting on update.
-- **Collapse-state key.** Key by `(orchard_id, task_id)` in `localStorage`; expire entries when their task is deleted.
+- **Collapse-state key.** Key by `(initiative_id, task_id)` in `localStorage`; expire entries when their task is deleted.
 - **Narrow-viewport breakpoint.** Pick one Tailwind breakpoint for "very narrow" (likely `sm:` boundary) and reuse it consistently for description-hide and any other narrow-mode behavior.
 - **Audit pairing.** The theme toggle lands before the audit so audit covers both modes in a single pass.
 - **Icons before row layout.** Item 9 (icons) ships before or with item 5 (row layout); the row references the leaf/branch icon directly.
