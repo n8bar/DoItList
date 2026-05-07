@@ -10,10 +10,10 @@
     <div class="mt-8 flex items-center justify-center gap-3">
       <%= if @current_user do %>
         <.link
-          navigate={~p"/orchards"}
+          navigate={~p"/initiatives"}
           class="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
         >
-          Go to your orchards
+          Go to your initiatives
         </.link>
       <% else %>
         <.link

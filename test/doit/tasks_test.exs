@@ -5,9 +5,9 @@ defmodule DoIt.TasksTest do
   """
   use DoIt.DataCase, async: true
 
-  alias DoIt.{Accounts, Orchards, Tasks}
+  alias DoIt.{Accounts, Initiatives, Tasks}
 
-  defp setup_user_and_orchard(_) do
+  defp setup_user_and_initiative(_) do
     {:ok, user} =
       Accounts.register_user(%{
         "email" => "owner-#{System.unique_integer([:positive])}@example.com",
@@ -15,17 +15,17 @@ defmodule DoIt.TasksTest do
         "password" => "password123"
       })
 
-    {:ok, orchard} = Orchards.create_orchard(user, %{"name" => "Test orchard"})
+    {:ok, initiative} = Initiatives.create_initiative(user, %{"name" => "Test initiative"})
 
-    %{user: user, orchard: orchard}
+    %{user: user, initiative: initiative}
   end
 
-  setup :setup_user_and_orchard
+  setup :setup_user_and_initiative
 
-  test "creating a leaf records its manual progress as 0", %{user: user, orchard: orchard} do
+  test "creating a leaf records its manual progress as 0", %{user: user, initiative: initiative} do
     {:ok, task} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "title" => "Solo"
       })
 
@@ -33,19 +33,19 @@ defmodule DoIt.TasksTest do
     assert task.computed_progress == 0
   end
 
-  test "updating a leaf rolls progress up to root", %{user: user, orchard: orchard} do
-    {:ok, root} = Tasks.create_task(user, %{"orchard_id" => orchard.id, "title" => "Root"})
+  test "updating a leaf rolls progress up to root", %{user: user, initiative: initiative} do
+    {:ok, root} = Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
     {:ok, _a} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => root.id,
         "title" => "A"
       })
 
     {:ok, b} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => root.id,
         "title" => "B"
       })
@@ -57,19 +57,19 @@ defmodule DoIt.TasksTest do
     assert refreshed_root.computed_progress == 50
   end
 
-  test "weighted children roll up correctly to grandparent", %{user: user, orchard: orchard} do
-    {:ok, root} = Tasks.create_task(user, %{"orchard_id" => orchard.id, "title" => "Root"})
+  test "weighted children roll up correctly to grandparent", %{user: user, initiative: initiative} do
+    {:ok, root} = Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
     {:ok, mid} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => root.id,
         "title" => "Mid"
       })
 
     {:ok, leaf1} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => mid.id,
         "title" => "L1",
         "weight" => "3"
@@ -77,7 +77,7 @@ defmodule DoIt.TasksTest do
 
     {:ok, leaf2} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => mid.id,
         "title" => "L2",
         "weight" => "1"
@@ -95,12 +95,12 @@ defmodule DoIt.TasksTest do
     assert refreshed_root.computed_progress == 75
   end
 
-  test "marking a leaf done forces 100 and propagates", %{user: user, orchard: orchard} do
-    {:ok, root} = Tasks.create_task(user, %{"orchard_id" => orchard.id, "title" => "Root"})
+  test "marking a leaf done forces 100 and propagates", %{user: user, initiative: initiative} do
+    {:ok, root} = Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
     {:ok, leaf} =
       Tasks.create_task(user, %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => root.id,
         "title" => "L"
       })
@@ -114,9 +114,9 @@ defmodule DoIt.TasksTest do
     assert refreshed_root.computed_progress == 100
   end
 
-  test "activity events are recorded on create and update", %{user: user, orchard: orchard} do
+  test "activity events are recorded on create and update", %{user: user, initiative: initiative} do
     {:ok, task} =
-      Tasks.create_task(user, %{"orchard_id" => orchard.id, "title" => "Hi"})
+      Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Hi"})
 
     {:ok, _} = Tasks.update_task(task, user, %{"manual_progress" => 50})
 

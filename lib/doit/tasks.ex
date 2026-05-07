@@ -35,10 +35,10 @@ defmodule DoIt.Tasks do
     )
   end
 
-  @doc "All tasks for an Orchard, ordered for tree assembly."
-  def list_orchard_tasks(orchard_id) do
+  @doc "All tasks for an Initiative, ordered for tree assembly."
+  def list_initiative_tasks(initiative_id) do
     from(t in Task,
-      where: t.orchard_id == ^orchard_id,
+      where: t.initiative_id == ^initiative_id,
       order_by: [asc: t.sort_order, asc: t.inserted_at],
       preload: [:assignee, :updated_by]
     )
@@ -46,12 +46,12 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Builds a tree of tasks for an Orchard. Returns a list of root tasks (the
+  Builds a tree of tasks for an Initiative. Returns a list of root tasks (the
   separate Lists), each with a `:children` list, recursively.
   """
-  def orchard_task_tree(orchard_id) do
-    orchard_id
-    |> list_orchard_tasks()
+  def initiative_task_tree(initiative_id) do
+    initiative_id
+    |> list_initiative_tasks()
     |> assemble_tree()
   end
 
@@ -76,10 +76,10 @@ defmodule DoIt.Tasks do
   """
   def create_task(%User{} = actor, attrs) do
     attrs = stringify_keys(attrs)
-    orchard_id = attrs["orchard_id"]
+    initiative_id = attrs["initiative_id"]
     parent_id = attrs["parent_id"]
 
-    sort_order = next_sort_order(orchard_id, parent_id)
+    sort_order = next_sort_order(initiative_id, parent_id)
 
     attrs =
       attrs
@@ -92,7 +92,7 @@ defmodule DoIt.Tasks do
            task <- maybe_set_done_progress(task) do
         record_event(task, actor, "created", %{title: task.title})
         task = recompute_self_and_ancestors(task)
-        broadcast_change(task.orchard_id, {:task_created, task.id})
+        broadcast_change(task.initiative_id, {:task_created, task.id})
         task
       else
         {:error, cs} -> Repo.rollback(cs)
@@ -128,7 +128,7 @@ defmodule DoIt.Tasks do
 
           # Always recompute self in case manual_progress changed
           updated = recompute_self_and_ancestors(updated)
-          broadcast_change(updated.orchard_id, {:task_updated, updated.id})
+          broadcast_change(updated.initiative_id, {:task_updated, updated.id})
           updated
 
         {:error, cs} ->
@@ -140,13 +140,13 @@ defmodule DoIt.Tasks do
   def delete_task(%Task{} = task, %User{} = actor) do
     Repo.transaction(fn ->
       parent_id = task.parent_id
-      orchard_id = task.orchard_id
+      initiative_id = task.initiative_id
 
       case Repo.delete(task) do
         {:ok, deleted} ->
           record_event(deleted, actor, "deleted", %{title: deleted.title})
           if parent_id, do: recompute_ancestors(parent_id)
-          broadcast_change(orchard_id, {:task_deleted, task.id})
+          broadcast_change(initiative_id, {:task_deleted, task.id})
           deleted
 
         {:error, cs} ->
@@ -166,10 +166,10 @@ defmodule DoIt.Tasks do
 
   defp maybe_set_done_progress(updated, _prev), do: updated
 
-  defp next_sort_order(orchard_id, parent_id) do
+  defp next_sort_order(initiative_id, parent_id) do
     query =
       from t in Task,
-        where: t.orchard_id == ^orchard_id,
+        where: t.initiative_id == ^initiative_id,
         select: max(t.sort_order)
 
     query =
@@ -202,7 +202,7 @@ defmodule DoIt.Tasks do
     |> case do
       {:ok, comment} ->
         record_event(task, actor, "commented", %{comment_id: comment.id})
-        broadcast_change(task.orchard_id, {:comment_added, task.id})
+        broadcast_change(task.initiative_id, {:comment_added, task.id})
         {:ok, comment}
 
       err ->
@@ -226,7 +226,7 @@ defmodule DoIt.Tasks do
     %ActivityEvent{}
     |> ActivityEvent.changeset(%{
       task_id: task.id,
-      orchard_id: task.orchard_id,
+      initiative_id: task.initiative_id,
       user_id: actor.id,
       kind: kind,
       data: data
@@ -263,15 +263,15 @@ defmodule DoIt.Tasks do
   # --- Progress roll-up ------------------------------------------------------
 
   @doc """
-  Recompute the rolled-up progress for the entire Orchard. Returns the
+  Recompute the rolled-up progress for the entire Initiative. Returns the
   updated tree.
   """
-  def recompute_orchard_progress(orchard_id) do
-    list_orchard_tasks(orchard_id)
+  def recompute_initiative_progress(initiative_id) do
+    list_initiative_tasks(initiative_id)
     |> assemble_tree()
     |> Enum.each(&recompute_subtree/1)
 
-    orchard_task_tree(orchard_id)
+    initiative_task_tree(initiative_id)
   end
 
   defp recompute_subtree(%Task{children: children} = task) when is_list(children) do
@@ -328,15 +328,15 @@ defmodule DoIt.Tasks do
 
   # --- PubSub ----------------------------------------------------------------
 
-  def subscribe(orchard_id) do
-    Phoenix.PubSub.subscribe(DoIt.PubSub, topic(orchard_id))
+  def subscribe(initiative_id) do
+    Phoenix.PubSub.subscribe(DoIt.PubSub, topic(initiative_id))
   end
 
-  defp broadcast_change(orchard_id, message) do
-    Phoenix.PubSub.broadcast(DoIt.PubSub, topic(orchard_id), message)
+  defp broadcast_change(initiative_id, message) do
+    Phoenix.PubSub.broadcast(DoIt.PubSub, topic(initiative_id), message)
   end
 
-  defp topic(orchard_id), do: "orchard:#{orchard_id}"
+  defp topic(initiative_id), do: "initiative:#{initiative_id}"
 
   # --- Helpers ---------------------------------------------------------------
 

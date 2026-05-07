@@ -3,7 +3,7 @@ defmodule DoIt.Tasks.Task do
   import Ecto.Changeset
 
   alias DoIt.Accounts.User
-  alias DoIt.Orchards.Orchard
+  alias DoIt.Initiatives.Initiative
   alias DoIt.Tasks.{Comment, Task}
 
   @statuses ~w(open in_progress done)
@@ -19,7 +19,7 @@ defmodule DoIt.Tasks.Task do
     field :weight, :decimal, default: Decimal.new("1.0")
     field :sort_order, :integer, default: 0
 
-    belongs_to :orchard, Orchard
+    belongs_to :initiative, Initiative
     belongs_to :parent, Task
     belongs_to :assignee, User
     belongs_to :created_by, User
@@ -44,13 +44,13 @@ defmodule DoIt.Tasks.Task do
       :manual_progress,
       :weight,
       :sort_order,
-      :orchard_id,
+      :initiative_id,
       :parent_id,
       :assignee_id,
       :created_by_id,
       :updated_by_id
     ])
-    |> validate_required([:title, :orchard_id, :created_by_id])
+    |> validate_required([:title, :initiative_id, :created_by_id])
     |> validate_length(:title, min: 1, max: 200)
     |> validate_length(:description, max: 8000)
     |> validate_inclusion(:status, @statuses)

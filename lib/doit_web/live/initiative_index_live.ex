@@ -1,20 +1,20 @@
-defmodule DoItWeb.OrchardIndexLive do
+defmodule DoItWeb.InitiativeIndexLive do
   use DoItWeb, :live_view
 
-  alias DoIt.Orchards
+  alias DoIt.Initiatives
 
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
-    orchards = Orchards.list_visible_orchards(user)
+    initiatives = Initiatives.list_visible_initiatives(user)
 
     {:ok,
      socket
-     |> assign(:page_title, "Orchards")
+     |> assign(:page_title, "Initiatives")
      |> assign(:show_form, false)
-     |> assign(:orchard_count, length(orchards))
+     |> assign(:initiative_count, length(initiatives))
      |> assign(:form, build_empty_form())
-     |> stream(:orchards, orchards)}
+     |> stream(:initiatives, initiatives)}
   end
 
   @impl true
@@ -26,17 +26,17 @@ defmodule DoItWeb.OrchardIndexLive do
     {:noreply, assign(socket, :show_form, false)}
   end
 
-  def handle_event("create", %{"orchard" => params}, socket) do
+  def handle_event("create", %{"initiative" => params}, socket) do
     user = socket.assigns.current_user
 
-    case Orchards.create_orchard(user, params) do
-      {:ok, orchard} ->
+    case Initiatives.create_initiative(user, params) do
+      {:ok, initiative} ->
         {:noreply,
          socket
          |> assign(:show_form, false)
-         |> update(:orchard_count, &(&1 + 1))
-         |> put_flash(:info, "Orchard created.")
-         |> stream_insert(:orchards, orchard, at: 0)}
+         |> update(:initiative_count, &(&1 + 1))
+         |> put_flash(:info, "Initiative created.")
+         |> stream_insert(:initiatives, initiative, at: 0)}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
@@ -44,7 +44,7 @@ defmodule DoItWeb.OrchardIndexLive do
   end
 
   defp build_empty_form do
-    to_form(Orchards.change_orchard(%DoIt.Orchards.Orchard{}))
+    to_form(Initiatives.change_initiative(%DoIt.Initiatives.Initiative{}))
   end
 
   @impl true
@@ -53,9 +53,9 @@ defmodule DoItWeb.OrchardIndexLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex items-center justify-between mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-zinc-800">Your orchards</h1>
+          <h1 class="text-2xl font-semibold text-zinc-800">Your initiatives</h1>
           <p class="text-sm text-zinc-500">
-            An Orchard holds multiple Lists. Each List is a tree of nested tasks.
+            An Initiative holds multiple Lists. Each List is a tree of nested tasks.
           </p>
         </div>
         <button
@@ -63,7 +63,7 @@ defmodule DoItWeb.OrchardIndexLive do
           phx-click="show_new"
           class="px-3 py-2 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700"
         >
-          New orchard
+          New initiative
         </button>
       </div>
 
@@ -80,34 +80,34 @@ defmodule DoItWeb.OrchardIndexLive do
               >
                 Cancel
               </button>
-              <.button type="submit">Create orchard</.button>
+              <.button type="submit">Create initiative</.button>
             </div>
           </.form>
         </div>
       <% end %>
 
-      <div id="orchards" phx-update="stream" class="space-y-2">
+      <div id="initiatives" phx-update="stream" class="space-y-2">
         <div
-          :for={{dom_id, orchard} <- @streams.orchards}
+          :for={{dom_id, initiative} <- @streams.initiatives}
           id={dom_id}
           class="rounded border border-zinc-200 bg-white p-4 hover:shadow-sm transition"
         >
-          <.link navigate={~p"/orchards/#{orchard.id}"} class="block">
+          <.link navigate={~p"/initiatives/#{initiative.id}"} class="block">
             <div class="flex items-center justify-between">
-              <span class="font-medium text-zinc-800">{orchard.name}</span>
+              <span class="font-medium text-zinc-800">{initiative.name}</span>
               <span class="text-xs text-zinc-500">
-                Updated {Calendar.strftime(orchard.updated_at, "%b %-d, %Y")}
+                Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
               </span>
             </div>
-            <p :if={orchard.description} class="mt-1 text-sm text-zinc-500 line-clamp-2">
-              {orchard.description}
+            <p :if={initiative.description} class="mt-1 text-sm text-zinc-500 line-clamp-2">
+              {initiative.description}
             </p>
           </.link>
         </div>
       </div>
 
-      <p :if={@orchard_count == 0 and not @show_form} class="text-zinc-500 mt-4">
-        No orchards yet. Create one to get started.
+      <p :if={@initiative_count == 0 and not @show_form} class="text-zinc-500 mt-4">
+        No initiatives yet. Create one to get started.
       </p>
     </Layouts.app>
     """

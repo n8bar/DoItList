@@ -1,0 +1,118 @@
+defmodule DoIt.Initiatives do
+  @moduledoc """
+  Initiative and initiative-membership operations.
+
+  An Initiative is the container for a tree of Tasks. Each Initiative has an
+  owner and any number of additional members with role `owner`, `editor`, or
+  `viewer`.
+  """
+
+  import Ecto.Query, warn: false
+
+  alias DoIt.Repo
+  alias DoIt.Accounts.User
+  alias DoIt.Initiatives.{Initiative, InitiativeMember}
+
+  @doc "List initiatives the given user can see (any role)."
+  def list_visible_initiatives(%User{id: user_id}) do
+    from(i in Initiative,
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id == ^user_id,
+      order_by: [desc: i.updated_at]
+    )
+    |> Repo.all()
+  end
+
+  def get_initiative!(id), do: Repo.get!(Initiative, id)
+  def get_initiative(id), do: Repo.get(Initiative, id)
+
+  @doc "Create an Initiative and make the creator its owner."
+  def create_initiative(%User{} = owner, attrs) do
+    attrs = Map.put(stringify_keys(attrs), "owner_id", owner.id)
+
+    Repo.transaction(fn ->
+      with {:ok, initiative} <- %Initiative{} |> Initiative.changeset(attrs) |> Repo.insert(),
+           {:ok, _member} <-
+             %InitiativeMember{}
+             |> InitiativeMember.changeset(%{
+               initiative_id: initiative.id,
+               user_id: owner.id,
+               role: "owner"
+             })
+             |> Repo.insert() do
+        initiative
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  def change_initiative(%Initiative{} = initiative, attrs \\ %{}) do
+    Initiative.changeset(initiative, attrs)
+  end
+
+  def list_members(initiative_id) do
+    from(m in InitiativeMember,
+      where: m.initiative_id == ^initiative_id,
+      join: u in User,
+      on: u.id == m.user_id,
+      order_by: u.name,
+      preload: [user: u]
+    )
+    |> Repo.all()
+  end
+
+  @doc "Return %{user_id => role} for quick role lookups."
+  def membership_map(initiative_id) do
+    from(m in InitiativeMember,
+      where: m.initiative_id == ^initiative_id,
+      select: {m.user_id, m.role}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  def get_role(initiative_id, user_id) do
+    Repo.one(
+      from m in InitiativeMember,
+        where: m.initiative_id == ^initiative_id and m.user_id == ^user_id,
+        select: m.role
+    )
+  end
+
+  def add_member(initiative_id, user_id, role) do
+    %InitiativeMember{}
+    |> InitiativeMember.changeset(%{initiative_id: initiative_id, user_id: user_id, role: role})
+    |> Repo.insert()
+  end
+
+  def remove_member(initiative_id, user_id) do
+    from(m in InitiativeMember,
+      where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
+    )
+    |> Repo.delete_all()
+  end
+
+  def update_member_role(initiative_id, user_id, role) when role in ~w(owner editor viewer) do
+    case Repo.get_by(InitiativeMember, initiative_id: initiative_id, user_id: user_id) do
+      nil -> {:error, :not_found}
+      member -> member |> InitiativeMember.changeset(%{role: role}) |> Repo.update()
+    end
+  end
+
+  def can_view?(role) when role in ~w(owner editor viewer), do: true
+  def can_view?(_), do: false
+
+  def can_edit?(role) when role in ~w(owner editor), do: true
+  def can_edit?(_), do: false
+
+  def can_admin?("owner"), do: true
+  def can_admin?(_), do: false
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+end

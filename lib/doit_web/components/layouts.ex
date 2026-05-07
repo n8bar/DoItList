@@ -21,7 +21,7 @@ defmodule DoItWeb.Layouts do
 
         <nav class="flex items-center gap-3 text-sm">
           <%= if @current_user do %>
-            <.link navigate={~p"/orchards"} class="hover:text-emerald-700">Orchards</.link>
+            <.link navigate={~p"/initiatives"} class="hover:text-emerald-700">Initiatives</.link>
             <span class="text-zinc-400">·</span>
             <span class="text-zinc-600">{@current_user.name}</span>
             <.link

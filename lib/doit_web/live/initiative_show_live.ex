@@ -1,38 +1,41 @@
-defmodule DoItWeb.OrchardShowLive do
+defmodule DoItWeb.InitiativeShowLive do
   use DoItWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
 
-  alias DoIt.{Accounts, Orchards, Repo, Tasks}
+  alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
     user = socket.assigns.current_user
-    orchard = Orchards.get_orchard(id)
-    role = orchard && Orchards.get_role(orchard.id, user.id)
+    initiative = Initiatives.get_initiative(id)
+    role = initiative && Initiatives.get_role(initiative.id, user.id)
 
     cond do
-      is_nil(orchard) ->
-        {:ok, socket |> put_flash(:error, "Orchard not found.") |> push_navigate(to: ~p"/orchards")}
+      is_nil(initiative) ->
+        {:ok,
+         socket
+         |> put_flash(:error, "Initiative not found.")
+         |> push_navigate(to: ~p"/initiatives")}
 
       is_nil(role) ->
         {:ok,
          socket
-         |> put_flash(:error, "You don't have access to that orchard.")
-         |> push_navigate(to: ~p"/orchards")}
+         |> put_flash(:error, "You don't have access to that initiative.")
+         |> push_navigate(to: ~p"/initiatives")}
 
       true ->
-        if connected?(socket), do: Tasks.subscribe(orchard.id)
+        if connected?(socket), do: Tasks.subscribe(initiative.id)
 
         {:ok,
          socket
-         |> assign(:page_title, orchard.name)
-         |> assign(:orchard, orchard)
+         |> assign(:page_title, initiative.name)
+         |> assign(:initiative, initiative)
          |> assign(:role, role)
-         |> assign(:can_edit, Orchards.can_edit?(role))
-         |> assign(:can_admin, Orchards.can_admin?(role))
-         |> assign(:members, Orchards.list_members(orchard.id))
+         |> assign(:can_edit, Initiatives.can_edit?(role))
+         |> assign(:can_admin, Initiatives.can_admin?(role))
+         |> assign(:members, Initiatives.list_members(initiative.id))
          |> assign(:show_member_form, false)
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
@@ -43,8 +46,8 @@ defmodule DoItWeb.OrchardShowLive do
   end
 
   defp load_tree(socket) do
-    orchard_id = socket.assigns.orchard.id
-    tree = Tasks.orchard_task_tree(orchard_id)
+    initiative_id = socket.assigns.initiative.id
+    tree = Tasks.initiative_task_tree(initiative_id)
     assign(socket, :tree, tree)
   end
 
@@ -87,7 +90,7 @@ defmodule DoItWeb.OrchardShowLive do
 
   def handle_event("create_task", %{"title" => title} = params, socket) do
     user = socket.assigns.current_user
-    orchard = socket.assigns.orchard
+    initiative = socket.assigns.initiative
 
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission to add tasks.")}
@@ -99,7 +102,7 @@ defmodule DoItWeb.OrchardShowLive do
         end
 
       attrs = %{
-        "orchard_id" => orchard.id,
+        "initiative_id" => initiative.id,
         "parent_id" => parent_id,
         "title" => title,
         "weight" => Map.get(params, "weight", "1.0")
@@ -239,20 +242,20 @@ defmodule DoItWeb.OrchardShowLive do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
     else
-      orchard = socket.assigns.orchard
+      initiative = socket.assigns.initiative
 
       case Accounts.get_user_by_email(email) do
         nil ->
           {:noreply, put_flash(socket, :error, "No user with that email.")}
 
         user ->
-          case Orchards.add_member(orchard.id, user.id, role) do
+          case Initiatives.add_member(initiative.id, user.id, role) do
             {:ok, _} ->
               {:noreply,
                socket
                |> assign(:show_member_form, false)
                |> put_flash(:info, "Added #{user.name}.")
-               |> assign(:members, Orchards.list_members(orchard.id))}
+               |> assign(:members, Initiatives.list_members(initiative.id))}
 
             {:error, _} ->
               {:noreply, put_flash(socket, :error, "Could not add member.")}
@@ -277,11 +280,11 @@ defmodule DoItWeb.OrchardShowLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex items-start justify-between mb-6">
         <div>
-          <.link navigate={~p"/orchards"} class="text-sm text-zinc-500 hover:text-zinc-800">
-            ← All orchards
+          <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 hover:text-zinc-800">
+            ← All initiatives
           </.link>
-          <h1 class="text-2xl font-semibold text-zinc-800 mt-1">{@orchard.name}</h1>
-          <p :if={@orchard.description} class="text-sm text-zinc-500 mt-1">{@orchard.description}</p>
+          <h1 class="text-2xl font-semibold text-zinc-800 mt-1">{@initiative.name}</h1>
+          <p :if={@initiative.description} class="text-sm text-zinc-500 mt-1">{@initiative.description}</p>
         </div>
         <div class="text-right text-xs text-zinc-500">
           Your role: <span class="font-medium text-zinc-700">{@role}</span>
