@@ -409,6 +409,7 @@ defmodule DoItWeb.InitiativeShowLive do
               add_task_for={@add_task_for}
               can_edit={@can_edit}
               selected_id={@selected_task_id}
+              initiative_id={@initiative.id}
             />
           </ul>
         </div>
@@ -495,6 +496,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :add_task_for, :any, required: true
   attr :can_edit, :boolean, required: true
   attr :selected_id, :any, required: true
+  attr :initiative_id, :integer, required: true
 
   def task_node(assigns) do
     ~H"""
@@ -503,6 +505,26 @@ defmodule DoItWeb.InitiativeShowLive do
         "relative flex items-center gap-2 px-3 pt-2 pb-3",
         @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950"
       ]}>
+        <button
+          :if={@task.children != []}
+          type="button"
+          id={"collapse-#{@task.id}"}
+          phx-hook=".CollapseToggle"
+          phx-update="ignore"
+          data-task-id={@task.id}
+          data-initiative-id={@initiative_id}
+          aria-controls={"children-#{@task.id}"}
+          aria-expanded="true"
+          aria-label="Toggle children"
+          class="flex-none w-5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
+        >
+          <.icon
+            name="hero-chevron-down"
+            class="w-4 h-4 transition-transform motion-reduce:transition-none aria-[expanded=false]:-rotate-90"
+          />
+        </button>
+        <div :if={@task.children == []} class="flex-none w-5 h-5"></div>
+
         <button
           :if={@can_edit}
           type="button"
@@ -578,7 +600,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <.task_form parent_id={@task.id} />
       </div>
 
-      <ul :if={@task.children != []} class="pl-6 pb-2 space-y-1">
+      <ul :if={@task.children != []} id={"children-#{@task.id}"} class="pl-6 pb-2 space-y-1">
         <.task_node
           :for={c <- @task.children}
           task={c}
@@ -586,9 +608,41 @@ defmodule DoItWeb.InitiativeShowLive do
           add_task_for={@add_task_for}
           can_edit={@can_edit}
           selected_id={@selected_id}
+          initiative_id={@initiative_id}
         />
       </ul>
     </li>
+
+    <script :type={Phoenix.LiveView.ColocatedHook} name=".CollapseToggle">
+      export default {
+        mounted() { this.bind(); this.apply(); },
+        updated() { this.apply(); },
+        get storageKey() {
+          return `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`;
+        },
+        get childrenEl() {
+          return document.getElementById(`children-${this.el.dataset.taskId}`);
+        },
+        apply() {
+          const ce = this.childrenEl;
+          if (!ce) return;
+          const collapsed = localStorage.getItem(this.storageKey) === "1";
+          ce.classList.toggle("hidden", collapsed);
+          this.el.setAttribute("aria-expanded", String(!collapsed));
+        },
+        bind() {
+          this.el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const ce = this.childrenEl;
+            if (!ce) return;
+            const collapsed = !ce.classList.contains("hidden");
+            ce.classList.toggle("hidden", collapsed);
+            this.el.setAttribute("aria-expanded", String(!collapsed));
+            localStorage.setItem(this.storageKey, collapsed ? "1" : "0");
+          });
+        }
+      }
+    </script>
     """
   end
 
