@@ -631,11 +631,12 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-click="show_add_child"
           phx-value-parent={@task.id}
           onclick="event.stopPropagation()"
-          class="flex-none text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400"
+          class="flex-none inline-flex items-center justify-center gap-1 min-h-11 min-w-11 px-2 rounded text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           aria-label="Add subtask"
           title="Add subtask"
         >
-          +
+          <.icon name="hero-plus" class="w-4 h-4" />
+          <span class="hidden sm:inline">Subtask</span>
         </button>
 
         <div
