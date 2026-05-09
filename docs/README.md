@@ -14,7 +14,6 @@ Two top-level docs sit at level 1 of the hierarchy, split by purpose:
 
 Other level-1 docs:
 - **[`BACKLOG.md`](BACKLOG.md)** — work for releases after the current target.
-- **[`FINDINGS.md`](FINDINGS.md)** — observation log; action lists reference findings by ID.
 - **[`UX_GUARDRAILS.md`](UX_GUARDRAILS.md)** — universal UX/a11y baseline + project-specific additions.
 - **[`CHANGELOG.log`](CHANGELOG.log)** — chronological record of scope/requirement/doc-structure changes.
 
