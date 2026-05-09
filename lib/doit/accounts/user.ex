@@ -7,6 +7,7 @@ defmodule DoIt.Accounts.User do
     field :name, :string
     field :hashed_password, :string, redact: true
     field :password, :string, virtual: true, redact: true
+    field :theme, :string
 
     timestamps(type: :utc_datetime)
   end

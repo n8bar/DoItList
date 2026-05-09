@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme={theme_attr(assigns)}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -26,11 +26,16 @@
         }
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
         
-        window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
+        window.addEventListener("phx:set-theme", (e) => {
+          // Click via JS.dispatch puts the value on the button's data attribute;
+          // server-side push_event puts it in e.detail. Handle both.
+          const theme = (e.detail && e.detail.theme) || (e.target && e.target.dataset && e.target.dataset.phxTheme);
+          if (theme) setTheme(theme);
+        });
       })();
     </script>
   </head>
-  <body>
+  <body class="bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
     {@inner_content}
   </body>
 </html>

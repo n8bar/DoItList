@@ -36,4 +36,19 @@ defmodule DoIt.Accounts do
       {:error, :invalid_credentials}
     end
   end
+
+  @doc """
+  Update a user's theme preference. Stores nil for "system" (so DaisyUI's
+  prefersdark behavior takes over) and "light" / "dark" verbatim for explicit
+  overrides.
+  """
+  def update_theme(%User{} = user, theme) when theme in ~w(system light dark) do
+    stored = if theme == "system", do: nil, else: theme
+
+    user
+    |> Ecto.Changeset.change(theme: stored)
+    |> Repo.update()
+  end
+
+  def update_theme(_user, _theme), do: {:error, :invalid_theme}
 end

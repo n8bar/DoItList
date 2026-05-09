@@ -280,26 +280,26 @@ defmodule DoItWeb.InitiativeShowLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex items-start justify-between mb-6">
         <div>
-          <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 hover:text-zinc-800">
+          <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-100">
             ← All initiatives
           </.link>
           <h1 class="text-2xl font-semibold text-zinc-800 mt-1">{@initiative.name}</h1>
           <p :if={@initiative.description} class="text-sm text-zinc-500 mt-1">{@initiative.description}</p>
         </div>
-        <div class="text-right text-xs text-zinc-500">
-          Your role: <span class="font-medium text-zinc-700">{@role}</span>
+        <div class="text-right text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+          Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
         </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         <div>
           <div class="flex items-center justify-between mb-3">
-            <h2 class="text-lg font-medium text-zinc-800">Lists & tasks</h2>
+            <h2 class="text-lg font-medium text-zinc-800 dark:text-zinc-100">Lists & tasks</h2>
             <button
               :if={@can_edit}
               type="button"
               phx-click="show_add_root"
-              class="text-sm px-2 py-1 rounded border border-zinc-300 hover:bg-zinc-50"
+              class="text-sm px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800"
             >
               + New list
             </button>
@@ -326,9 +326,9 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <aside class="space-y-4">
-          <div class="rounded border border-zinc-200 bg-white p-4">
+          <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
             <div class="flex items-center justify-between mb-2">
-              <h3 class="font-medium text-zinc-800">Members</h3>
+              <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
               <button
                 :if={@can_admin}
                 type="button"
@@ -358,7 +358,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   <button
                     type="button"
                     phx-click="cancel_member"
-                    class="text-xs text-zinc-500 hover:text-zinc-800"
+                    class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
                   >
                     Cancel
                   </button>
@@ -375,13 +375,13 @@ defmodule DoItWeb.InitiativeShowLive do
 
             <ul class="space-y-1 text-sm">
               <li :for={m <- @members} class="flex items-center justify-between">
-                <span class="text-zinc-700">{m.user.name}</span>
-                <span class="text-xs text-zinc-500">{m.role}</span>
+                <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
+                <span class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{m.role}</span>
               </li>
             </ul>
           </div>
 
-          <div :if={@selected_task_id} class="rounded border border-zinc-200 bg-white p-4">
+          <div :if={@selected_task_id} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
             <.task_editor
               task={@selected_task}
               comments={@comments}
@@ -406,19 +406,19 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def task_node(assigns) do
     ~H"""
-    <li class="rounded border border-zinc-200 bg-white">
+    <li class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
       <div class={[
         "flex items-center gap-2 px-3 py-2",
-        @selected_id == @task.id && "bg-emerald-50"
+        @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950"
       ]}>
         <span class="text-zinc-400 text-xs w-10 tabular-nums">
           {progress_value(@task)}%
         </span>
-        <div class="w-24 h-1.5 bg-zinc-100 rounded overflow-hidden">
+        <div class="w-24 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded overflow-hidden">
           <div
             class={[
               "h-full rounded",
-              @task.status == "done" && "bg-emerald-500",
+              @task.status == "done" && "bg-emerald-50 dark:bg-emerald-9500",
               @task.status != "done" && "bg-emerald-400"
             ]}
             style={"width: #{progress_value(@task)}%"}
@@ -434,16 +434,16 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <span class={[
             "font-medium",
-            @task.status == "done" && "line-through text-zinc-400"
+            @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
           ]}>
             {@task.title}
           </span>
-          <span :if={@task.assignee} class="ml-2 text-xs text-zinc-500">
+          <span :if={@task.assignee} class="ml-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
             @{@task.assignee.name}
           </span>
         </button>
 
-        <span class="text-xs text-zinc-400">
+        <span class="text-xs text-zinc-400 dark:text-zinc-500">
           w={Decimal.to_string(@task.weight)}
         </span>
 
@@ -509,7 +509,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <button
         type="button"
         phx-click="cancel_add"
-        class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800"
+        class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
       >
         Cancel
       </button>
@@ -527,11 +527,11 @@ defmodule DoItWeb.InitiativeShowLive do
     ~H"""
     <div class="space-y-4">
       <div class="flex items-start justify-between gap-2">
-        <h3 class="font-medium text-zinc-800">Task details</h3>
+        <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Task details</h3>
         <button
           type="button"
           phx-click="close_task"
-          class="text-xs text-zinc-500 hover:text-zinc-800"
+          class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
         >
           Close
         </button>
@@ -539,7 +539,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <form phx-change="update_task" phx-submit="update_task" class="space-y-3">
         <div>
-          <label class="text-xs text-zinc-500">Title</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Title</label>
           <input
             type="text"
             name="task[title]"
@@ -551,7 +551,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div>
-          <label class="text-xs text-zinc-500">Description</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Description</label>
           <textarea
             name="task[description]"
             class="w-full textarea textarea-bordered textarea-sm"
@@ -563,7 +563,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs text-zinc-500">Status</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Status</label>
             <select
               name="task[status]"
               class="w-full select select-bordered select-sm"
@@ -575,7 +575,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label class="text-xs text-zinc-500">Priority</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Priority</label>
             <select
               name="task[priority]"
               class="w-full select select-bordered select-sm"
@@ -587,7 +587,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label class="text-xs text-zinc-500">Weight</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Weight</label>
             <input
               type="number"
               name="task[weight]"
@@ -600,7 +600,7 @@ defmodule DoItWeb.InitiativeShowLive do
             />
           </div>
           <div>
-            <label class="text-xs text-zinc-500">Assignee</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Assignee</label>
             <select
               name="task[assignee_id]"
               class="w-full select select-bordered select-sm"
@@ -619,7 +619,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div :if={leaf?(@task)}>
-          <label class="text-xs text-zinc-500">Manual progress: {@task.manual_progress}%</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Manual progress: {@task.manual_progress}%</label>
           <input
             type="range"
             name="task[manual_progress]"
@@ -638,10 +638,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
-      <div class="flex items-center justify-between gap-2 border-t border-zinc-100 pt-3">
-        <div class="text-xs text-zinc-500">
+      <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+        <div class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
           <%= if @task.updated_by do %>
-            Last updated by <span class="font-medium text-zinc-700">{@task.updated_by.name}</span>
+            Last updated by <span class="font-medium text-zinc-700 dark:text-zinc-200">{@task.updated_by.name}</span>
             <span title={@task.updated_at}>({Calendar.strftime(@task.updated_at, "%b %-d %H:%M")})</span>
           <% else %>
             Updated {Calendar.strftime(@task.updated_at, "%b %-d %H:%M")}
@@ -654,7 +654,7 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-click="toggle_done"
             class={[
               "text-xs px-2 py-1 rounded",
-              @task.status == "done" && "bg-zinc-100 text-zinc-700",
+              @task.status == "done" && "bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200",
               @task.status != "done" && "bg-emerald-600 text-white hover:bg-emerald-700"
             ]}
           >
@@ -672,11 +672,11 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
-      <div class="border-t border-zinc-100 pt-3">
+      <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 mb-2">Comments</h4>
         <ul class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
-            <div class="text-xs text-zinc-500">
+            <div class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
               {c.user && c.user.name}
               · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
@@ -701,14 +701,14 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div class="border-t border-zinc-100 pt-3">
+      <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 mb-2">Activity</h4>
-        <ul class="space-y-1 text-xs text-zinc-600">
+        <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity}>
-            <span class="text-zinc-500">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
+            <span class="text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
             · <span class="font-medium">{e.user && e.user.name || "system"}</span>
             · {e.kind}
-            <span :if={Map.get(e.data, "from") || Map.get(e.data, "to")} class="text-zinc-500">
+            <span :if={Map.get(e.data, "from") || Map.get(e.data, "to")} class="text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
             </span>
           </li>

@@ -53,8 +53,8 @@ defmodule DoItWeb.InitiativeIndexLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex items-center justify-between mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-zinc-800">Your initiatives</h1>
-          <p class="text-sm text-zinc-500">
+          <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Your initiatives</h1>
+          <p class="text-sm text-zinc-500 dark:text-zinc-400">
             An Initiative holds multiple Lists. Each List is a tree of nested tasks.
           </p>
         </div>
@@ -68,7 +68,7 @@ defmodule DoItWeb.InitiativeIndexLive do
       </div>
 
       <%= if @show_form do %>
-        <div class="rounded border border-zinc-200 bg-white p-4 mb-6">
+        <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-6">
           <.form :let={f} for={@form} phx-submit="create" class="space-y-3">
             <.input field={f[:name]} type="text" label="Name" required />
             <.input field={f[:description]} type="textarea" label="Description (optional)" />
@@ -76,7 +76,7 @@ defmodule DoItWeb.InitiativeIndexLive do
               <button
                 type="button"
                 phx-click="cancel_new"
-                class="px-3 py-1.5 rounded border border-zinc-300 text-sm text-zinc-700 hover:bg-zinc-50"
+                class="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
               >
                 Cancel
               </button>
@@ -90,12 +90,12 @@ defmodule DoItWeb.InitiativeIndexLive do
         <div
           :for={{dom_id, initiative} <- @streams.initiatives}
           id={dom_id}
-          class="rounded border border-zinc-200 bg-white p-4 hover:shadow-sm transition motion-reduce:transition-none"
+          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 hover:shadow-sm transition motion-reduce:transition-none"
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} class="block">
             <div class="flex items-center justify-between">
-              <span class="font-medium text-zinc-800">{initiative.name}</span>
-              <span class="text-xs text-zinc-500">
+              <span class="font-medium text-zinc-800 dark:text-zinc-100">{initiative.name}</span>
+              <span class="text-xs text-zinc-500 dark:text-zinc-400">
                 Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
               </span>
             </div>
