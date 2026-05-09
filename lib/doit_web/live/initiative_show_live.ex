@@ -501,10 +501,14 @@ defmodule DoItWeb.InitiativeShowLive do
   def task_node(assigns) do
     ~H"""
     <li class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-      <div class={[
-        "relative flex items-center gap-2 px-3 pt-2 pb-3",
-        @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950"
-      ]}>
+      <div
+        class={[
+          "relative flex items-center gap-2 px-3 pt-2 pb-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
+          @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+        ]}
+        phx-click="select_task"
+        phx-value-id={@task.id}
+      >
         <button
           :if={@task.children != []}
           type="button"
@@ -516,6 +520,7 @@ defmodule DoItWeb.InitiativeShowLive do
           aria-controls={"children-#{@task.id}"}
           aria-expanded="true"
           aria-label="Toggle children"
+          onclick="event.stopPropagation()"
           class="flex-none w-5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
         >
           <.icon
@@ -533,6 +538,7 @@ defmodule DoItWeb.InitiativeShowLive do
           data-confirm={if @task.children != [], do: "Mark this task and all its children completed?"}
           aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
           aria-pressed={@task.status == "done"}
+          onclick="event.stopPropagation()"
           class={[
             "flex-none w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
             @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
@@ -542,25 +548,68 @@ defmodule DoItWeb.InitiativeShowLive do
           <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
         </button>
 
-        <button
-          type="button"
-          phx-click="select_task"
-          phx-value-id={@task.id}
-          class="flex-1 text-left text-sm hover:underline"
-        >
+        <%!-- Botanical icon — full set lands in item 10 (Lucide). For now Heroicon stand-ins. --%>
+        <span class="flex-none text-zinc-400 dark:text-zinc-500" aria-hidden="true">
+          <.icon
+            :if={@task.children == [] and @depth == 0}
+            name="hero-document"
+            class="w-4 h-4"
+          />
+          <.icon
+            :if={@task.children != [] and @depth == 0}
+            name="hero-document-text"
+            class="w-4 h-4"
+          />
+          <.icon
+            :if={@task.children != [] and @depth > 0}
+            name="hero-arrows-pointing-out"
+            class="w-4 h-4"
+          />
+          <.icon
+            :if={@task.children == [] and @depth > 0}
+            name="hero-minus"
+            class="w-4 h-4"
+          />
+        </span>
+
+        <span class="flex-1 min-w-0 flex items-baseline gap-2">
           <span class={[
-            "font-medium",
+            "text-sm font-medium flex-none",
             @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
           ]}>
             {@task.title}
           </span>
-          <span :if={@task.assignee} class="ml-2 text-xs text-zinc-500 dark:text-zinc-400">
+
+          <%!-- Custom-attribute chips: weight (≠ 1), priority (≠ normal), assignee (set) --%>
+          <span
+            :if={not Decimal.equal?(@task.weight, Decimal.new(1))}
+            class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
+            title={"Weight #{Decimal.to_string(@task.weight)}"}
+          >
+            w={Decimal.to_string(@task.weight)}
+          </span>
+          <span
+            :if={@task.priority != "normal"}
+            class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
+            title={"Priority: #{@task.priority}"}
+          >
+            {@task.priority}
+          </span>
+          <span
+            :if={@task.assignee_id && @task.assignee}
+            class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
+            title="Assignee"
+          >
             @{@task.assignee.name}
           </span>
-        </button>
 
-        <span class="text-xs text-zinc-400 dark:text-zinc-500">
-          w={Decimal.to_string(@task.weight)}
+          <%!-- Em-dash + description: hidden on very narrow; ellipsis on overflow --%>
+          <span
+            :if={@task.description && @task.description != ""}
+            class="hidden sm:inline text-sm text-zinc-400 dark:text-zinc-500 truncate min-w-0"
+          >
+            {" — " <> @task.description}
+          </span>
         </span>
 
         <button
@@ -568,7 +617,8 @@ defmodule DoItWeb.InitiativeShowLive do
           type="button"
           phx-click="show_add_child"
           phx-value-parent={@task.id}
-          class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400"
+          onclick="event.stopPropagation()"
+          class="flex-none text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400"
           aria-label="Add subtask"
           title="Add subtask"
         >
