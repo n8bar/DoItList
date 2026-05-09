@@ -166,6 +166,46 @@ defmodule DoIt.Tasks do
 
   defp maybe_set_done_progress(updated, _prev), do: updated
 
+  @doc """
+  Toggle a task's done state. Marking done snaps progress to 100 (via
+  maybe_set_done_progress); reopening drops back to open + 0.
+  """
+  def toggle_complete(%Task{status: "done"} = task, %User{} = actor) do
+    update_task(task, actor, %{"status" => "open", "manual_progress" => 0})
+  end
+
+  def toggle_complete(%Task{} = task, %User{} = actor) do
+    update_task(task, actor, %{"status" => "done"})
+  end
+
+  @doc """
+  Mark this task and every descendant as done. Uses `update_task/3` per node
+  so each gets activity events and ancestor recompute. Wrapped in a single
+  transaction so the cascade is atomic.
+  """
+  def cascade_complete(%Task{} = task, %User{} = actor) do
+    Repo.transaction(fn ->
+      task.id
+      |> list_descendants()
+      |> Enum.each(fn descendant ->
+        case update_task(descendant, actor, %{"status" => "done"}) do
+          {:ok, _} -> :ok
+          {:error, cs} -> Repo.rollback(cs)
+        end
+      end)
+
+      case update_task(task, actor, %{"status" => "done"}) do
+        {:ok, updated} -> updated
+        {:error, cs} -> Repo.rollback(cs)
+      end
+    end)
+  end
+
+  defp list_descendants(task_id) do
+    immediate = Repo.all(from t in Task, where: t.parent_id == ^task_id)
+    Enum.flat_map(immediate, fn t -> [t | list_descendants(t.id)] end)
+  end
+
   defp next_sort_order(initiative_id, parent_id) do
     query =
       from t in Task,

@@ -238,6 +238,34 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  def handle_event("toggle_complete", %{"id" => id}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      task = Tasks.get_task!(String.to_integer(id))
+      user = socket.assigns.current_user
+
+      case Tasks.toggle_complete(task, user) do
+        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
+        {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
+  def handle_event("cascade_complete", %{"id" => id}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      task = Tasks.get_task!(String.to_integer(id))
+      user = socket.assigns.current_user
+
+      case Tasks.cascade_complete(task, user) do
+        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
+        {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
   def handle_event("add_comment", %{"comment" => %{"body" => body}}, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
@@ -445,7 +473,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
           </div>
 
-          <div :if={@selected_task_id and not @editing_initiative?} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div :if={@selected_task_id && not @editing_initiative?} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
             <.task_editor
               task={@selected_task}
               comments={@comments}
@@ -475,6 +503,23 @@ defmodule DoItWeb.InitiativeShowLive do
         "relative flex items-center gap-2 px-3 pt-2 pb-3",
         @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950"
       ]}>
+        <button
+          :if={@can_edit}
+          type="button"
+          phx-click={if @task.children == [], do: "toggle_complete", else: "cascade_complete"}
+          phx-value-id={@task.id}
+          data-confirm={if @task.children != [], do: "Mark this task and all its children completed?"}
+          aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
+          aria-pressed={@task.status == "done"}
+          class={[
+            "flex-none w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+            @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
+            @task.status != "done" && "border-zinc-300 dark:border-zinc-600 hover:border-emerald-500"
+          ]}
+        >
+          <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
+        </button>
+
         <button
           type="button"
           phx-click="select_task"
