@@ -51,6 +51,13 @@ defmodule DoIt.Initiatives do
     Initiative.changeset(initiative, attrs)
   end
 
+  @doc "Update an Initiative's editable fields (name, description). Owner stays as-is."
+  def update_initiative(%Initiative{} = initiative, attrs) do
+    initiative
+    |> Initiative.changeset(stringify_keys(attrs))
+    |> Repo.update()
+  end
+
   def list_members(initiative_id) do
     from(m in InitiativeMember,
       where: m.initiative_id == ^initiative_id,

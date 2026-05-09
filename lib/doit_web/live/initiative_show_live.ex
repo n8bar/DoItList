@@ -39,6 +39,8 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:show_member_form, false)
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
+         |> assign(:editing_initiative?, false)
+         |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
          |> assign(:new_task_title, "")
          |> load_tree()}
@@ -133,10 +135,51 @@ defmodule DoItWeb.InitiativeShowLive do
       task ->
         {:noreply,
          socket
+         |> assign(:editing_initiative?, false)
          |> assign(:selected_task_id, id)
          |> assign(:selected_task, task)
          |> assign(:comments, Tasks.list_comments(id))
          |> assign(:activity, Tasks.list_task_activity(id))}
+    end
+  end
+
+  def handle_event("edit_initiative", _params, socket) do
+    initiative = socket.assigns.initiative
+    form = to_form(Initiatives.change_initiative(initiative))
+
+    {:noreply,
+     socket
+     |> assign(:selected_task_id, nil)
+     |> assign(:editing_initiative?, true)
+     |> assign(:initiative_form, form)}
+  end
+
+  def handle_event("close_initiative", _params, socket) do
+    {:noreply, assign(socket, :editing_initiative?, false)}
+  end
+
+  def handle_event("update_initiative", %{"initiative" => params}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission to edit this initiative.")}
+    else
+      initiative = socket.assigns.initiative
+
+      case Initiatives.update_initiative(initiative, params) do
+        {:ok, updated} ->
+          form = to_form(Initiatives.change_initiative(updated))
+
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> assign(:initiative_form, form)
+           |> assign(:page_title, updated.name)}
+
+        {:error, cs} ->
+          {:noreply,
+           socket
+           |> assign(:initiative_form, to_form(cs, action: :validate))
+           |> put_flash(:error, "Couldn't save: #{summarize_errors(cs)}.")}
+      end
     end
   end
 
@@ -283,10 +326,27 @@ defmodule DoItWeb.InitiativeShowLive do
           <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100">
             ← All initiatives
           </.link>
-          <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 mt-1">{@initiative.name}</h1>
+          <div class="flex items-start gap-2 mt-1">
+            <h1
+              phx-click="edit_initiative"
+              title="Edit initiative"
+              class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white"
+            >
+              {@initiative.name}
+            </h1>
+            <button
+              type="button"
+              phx-click="edit_initiative"
+              aria-label="Edit initiative"
+              title="Edit initiative"
+              class="mt-1 p-1 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              <.icon name="hero-pencil-square" class="w-4 h-4" />
+            </button>
+          </div>
           <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{@initiative.description}</p>
         </div>
-        <div class="text-right text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+        <div class="text-right text-xs text-zinc-500 dark:text-zinc-400">
           Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
         </div>
       </div>
@@ -376,12 +436,16 @@ defmodule DoItWeb.InitiativeShowLive do
             <ul class="space-y-1 text-sm">
               <li :for={m <- @members} class="flex items-center justify-between">
                 <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
-                <span class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{m.role}</span>
+                <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
               </li>
             </ul>
           </div>
 
-          <div :if={@selected_task_id} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div :if={@editing_initiative?} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
+          </div>
+
+          <div :if={@selected_task_id and not @editing_initiative?} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
             <.task_editor
               task={@selected_task}
               comments={@comments}
@@ -438,7 +502,7 @@ defmodule DoItWeb.InitiativeShowLive do
           ]}>
             {@task.title}
           </span>
-          <span :if={@task.assignee} class="ml-2 text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+          <span :if={@task.assignee} class="ml-2 text-xs text-zinc-500 dark:text-zinc-400">
             @{@task.assignee.name}
           </span>
         </button>
@@ -517,6 +581,50 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  attr :form, :map, required: true
+  attr :can_edit, :boolean, required: true
+
+  def initiative_editor(assigns) do
+    ~H"""
+    <div class="space-y-4">
+      <div class="flex items-start justify-between gap-2">
+        <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Initiative details</h3>
+        <button
+          type="button"
+          phx-click="close_initiative"
+          class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+        >
+          Close
+        </button>
+      </div>
+
+      <.form
+        for={@form}
+        id="initiative-form"
+        phx-change="update_initiative"
+        phx-submit="update_initiative"
+        class="space-y-3"
+      >
+        <.input
+          field={@form[:name]}
+          type="text"
+          label="Name"
+          required
+          disabled={not @can_edit}
+          phx-debounce="600"
+        />
+        <.input
+          field={@form[:description]}
+          type="textarea"
+          label="Description"
+          disabled={not @can_edit}
+          phx-debounce="600"
+        />
+      </.form>
+    </div>
+    """
+  end
+
   attr :task, :map, required: true
   attr :comments, :list, required: true
   attr :activity, :list, required: true
@@ -539,7 +647,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <form phx-change="update_task" phx-submit="update_task" class="space-y-3">
         <div>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Title</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400">Title</label>
           <input
             type="text"
             name="task[title]"
@@ -551,7 +659,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Description</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400">Description</label>
           <textarea
             name="task[description]"
             class="w-full textarea textarea-bordered textarea-sm"
@@ -563,7 +671,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Status</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">Status</label>
             <select
               name="task[status]"
               class="w-full select select-bordered select-sm"
@@ -575,7 +683,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Priority</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">Priority</label>
             <select
               name="task[priority]"
               class="w-full select select-bordered select-sm"
@@ -587,7 +695,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Weight</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">Weight</label>
             <input
               type="number"
               name="task[weight]"
@@ -600,7 +708,7 @@ defmodule DoItWeb.InitiativeShowLive do
             />
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Assignee</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">Assignee</label>
             <select
               name="task[assignee_id]"
               class="w-full select select-bordered select-sm"
@@ -619,7 +727,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div :if={leaf?(@task)}>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">Manual progress: {@task.manual_progress}%</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400">Manual progress: {@task.manual_progress}%</label>
           <input
             type="range"
             name="task[manual_progress]"
@@ -639,7 +747,7 @@ defmodule DoItWeb.InitiativeShowLive do
       </form>
 
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
-        <div class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+        <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
             Last updated by <span class="font-medium text-zinc-700 dark:text-zinc-200">{@task.updated_by.name}</span>
             <span title={@task.updated_at}>({Calendar.strftime(@task.updated_at, "%b %-d %H:%M")})</span>
@@ -676,7 +784,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
         <ul class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
-            <div class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+            <div class="text-xs text-zinc-500 dark:text-zinc-400">
               {c.user && c.user.name}
               · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
@@ -705,10 +813,10 @@ defmodule DoItWeb.InitiativeShowLive do
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity}>
-            <span class="text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
+            <span class="text-zinc-500 dark:text-zinc-400">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
             · <span class="font-medium">{e.user && e.user.name || "system"}</span>
             · {e.kind}
-            <span :if={Map.get(e.data, "from") || Map.get(e.data, "to")} class="text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
+            <span :if={Map.get(e.data, "from") || Map.get(e.data, "to")} class="text-zinc-500 dark:text-zinc-400">
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
             </span>
           </li>
