@@ -5,6 +5,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
+  alias Phoenix.LiveView.JS
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -40,6 +41,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
          |> assign(:editing_initiative?, false)
+         |> assign(:editing_title?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
          |> assign(:new_task_title, "")
@@ -156,6 +158,42 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("close_initiative", _params, socket) do
     {:noreply, assign(socket, :editing_initiative?, false)}
+  end
+
+  def handle_event("start_inline_edit_title", _params, socket) do
+    if socket.assigns.can_edit do
+      {:noreply, assign(socket, :editing_title?, true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("save_inline_title", %{"name" => name}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, assign(socket, :editing_title?, false)}
+    else
+      initiative = socket.assigns.initiative
+
+      case Initiatives.update_initiative(initiative, %{"name" => name}) do
+        {:ok, updated} ->
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> assign(:initiative_form, to_form(Initiatives.change_initiative(updated)))
+           |> assign(:page_title, updated.name)
+           |> assign(:editing_title?, false)}
+
+        {:error, cs} ->
+          {:noreply,
+           socket
+           |> assign(:editing_title?, false)
+           |> put_flash(:error, "Couldn't save name: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
+  def handle_event("cancel_inline_edit_title", _params, socket) do
+    {:noreply, assign(socket, :editing_title?, false)}
   end
 
   def handle_event("update_initiative", %{"initiative" => params}, socket) do
@@ -342,21 +380,41 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
             </span>
-            <h1
-              phx-click="edit_initiative"
-              title="Edit initiative"
-              class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white"
-            >
-              {@initiative.name}
-            </h1>
+            <%= if @editing_title? do %>
+              <form
+                phx-submit="save_inline_title"
+                id="inline-title-form"
+                class="flex-1"
+              >
+                <input
+                  type="text"
+                  name="name"
+                  value={@initiative.name}
+                  autofocus
+                  phx-blur={JS.dispatch("submit", to: "#inline-title-form")}
+                  phx-keydown="cancel_inline_edit_title"
+                  phx-key="Escape"
+                  aria-label="Initiative name"
+                  class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 bg-transparent border-b-2 border-emerald-500 outline-none w-full"
+                />
+              </form>
+            <% else %>
+              <h1
+                phx-click="start_inline_edit_title"
+                title="Click to rename"
+                class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white"
+              >
+                {@initiative.name}
+              </h1>
+            <% end %>
             <button
               type="button"
               phx-click="edit_initiative"
-              aria-label="Edit initiative"
-              title="Edit initiative"
+              aria-label="Open Initiative details"
+              title="Initiative details"
               class="mt-1 p-1 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              <.icon name="hero-pencil-square" class="w-4 h-4" />
+              <.icon name="hero-ellipsis-horizontal" class="w-4 h-4" />
             </button>
           </div>
           <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{@initiative.description}</p>
