@@ -94,7 +94,12 @@ defmodule DoItWeb.InitiativeIndexLive do
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} class="block">
             <div class="flex items-center justify-between">
-              <span class="font-medium text-zinc-800 dark:text-zinc-100">{initiative.name}</span>
+              <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2">
+                <span class="text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+                  <.botanical_icon kind={:grove} class="w-5 h-5" />
+                </span>
+                {initiative.name}
+              </span>
               <span class="text-xs text-zinc-500 dark:text-zinc-400">
                 Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
               </span>

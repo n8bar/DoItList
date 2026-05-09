@@ -339,6 +339,9 @@ defmodule DoItWeb.InitiativeShowLive do
             ← All initiatives
           </.link>
           <div class="flex items-start gap-2 mt-1">
+            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+              <.botanical_icon kind={:grove} class="w-6 h-6" />
+            </span>
             <h1
               phx-click="edit_initiative"
               title="Edit initiative"
@@ -545,28 +548,11 @@ defmodule DoItWeb.InitiativeShowLive do
           <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
         </button>
 
-        <%!-- Botanical icon — full set lands in item 10 (Lucide). For now Heroicon stand-ins. --%>
-        <span class="flex-none text-zinc-400 dark:text-zinc-500" aria-hidden="true">
-          <.icon
-            :if={@task.children == [] and @depth == 0}
-            name="hero-document"
-            class="w-4 h-4"
-          />
-          <.icon
-            :if={@task.children != [] and @depth == 0}
-            name="hero-document-text"
-            class="w-4 h-4"
-          />
-          <.icon
-            :if={@task.children != [] and @depth > 0}
-            name="hero-arrows-pointing-out"
-            class="w-4 h-4"
-          />
-          <.icon
-            :if={@task.children == [] and @depth > 0}
-            name="hero-minus"
-            class="w-4 h-4"
-          />
+        <%!-- Botanical icon: tree on Lists, branch on parent tasks, leaf on leaf tasks. --%>
+        <span class="flex-none text-zinc-400 dark:text-zinc-500">
+          <.botanical_icon :if={@depth == 0} kind={:tree} />
+          <.botanical_icon :if={@depth > 0 and @task.children != []} kind={:branch} />
+          <.botanical_icon :if={@depth > 0 and @task.children == []} kind={:leaf} />
         </span>
 
         <span class="flex-1 min-w-0 flex items-baseline gap-2">
