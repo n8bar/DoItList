@@ -349,7 +349,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
-      <div class="flex items-start justify-between mb-6">
+      <div class="relative flex items-start justify-between mb-6 pb-3">
         <div>
           <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100">
             ← All initiatives
@@ -376,6 +376,19 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
         <div class="text-right text-xs text-zinc-500 dark:text-zinc-400">
           Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+        </div>
+
+        <div
+          class="absolute bottom-0 left-0 right-0 h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+          role="progressbar"
+          aria-valuenow={initiative_progress(@tree)}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-label={"Initiative progress: #{initiative_progress(@tree)}%"}
+          title={"#{initiative_progress(@tree)}%"}
+          style={"--progress: #{initiative_progress(@tree)}%"}
+        >
+          <div class="h-full bg-emerald-400 rounded-full" style="width: var(--progress)"></div>
         </div>
       </div>
 
@@ -999,6 +1012,16 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp progress_value(%{status: "done"}), do: 100
   defp progress_value(%{manual_progress: mp}), do: mp || 0
+
+  # Equal-weighted average of root-task progress (custom root weights are
+  # ignored at the Initiative level — the Initiative header is informational,
+  # not itself a task).
+  defp initiative_progress([]), do: 0
+
+  defp initiative_progress(roots) do
+    total = Enum.reduce(roots, 0, fn t, acc -> acc + progress_value(t) end)
+    div(total, length(roots))
+  end
 
   defp summarize_errors(%Ecto.Changeset{errors: errors}) do
     Enum.map_join(errors, "; ", fn {field, {msg, _}} ->
