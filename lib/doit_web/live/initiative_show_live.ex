@@ -441,8 +441,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         <div>
-          <div class="flex items-center justify-between mb-3">
-            <h2 class="text-lg font-medium text-zinc-800 dark:text-zinc-100">Lists & tasks</h2>
+          <div class="flex justify-end mb-3">
             <button
               :if={@can_edit}
               type="button"
@@ -615,7 +614,9 @@ defmodule DoItWeb.InitiativeShowLive do
 
         <span class="flex-1 min-w-0 flex items-baseline gap-2">
           <span class={[
-            "text-sm font-medium flex-none",
+            "flex-none",
+            @depth == 0 && "text-base font-semibold",
+            @depth > 0 && "text-sm font-medium",
             @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
           ]}>
             {@task.title}
