@@ -222,22 +222,6 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("toggle_done", _params, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, socket}
-    else
-      task = socket.assigns.selected_task
-      user = socket.assigns.current_user
-
-      new_status = if task.status == "done", do: "open", else: "done"
-
-      case Tasks.update_task(task, user, %{"status" => new_status}) do
-        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
-        {:error, _} -> {:noreply, socket}
-      end
-    end
-  end
-
   def handle_event("toggle_complete", %{"id" => id}, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
@@ -840,18 +824,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">Status</label>
-            <select
-              name="task[status]"
-              class="w-full select select-bordered select-sm"
-              disabled={not @can_edit}
-            >
-              <option :for={s <- DoIt.Tasks.Task.statuses()} value={s} selected={@task.status == s}>
-                {s}
-              </option>
-            </select>
-          </div>
-          <div>
             <label class="text-xs text-zinc-500 dark:text-zinc-400">Priority</label>
             <select
               name="task[priority]"
@@ -928,18 +900,6 @@ defmodule DoItWeb.InitiativeShowLive do
           <button
             :if={@can_edit}
             type="button"
-            phx-click="toggle_done"
-            class={[
-              "text-xs px-2 py-1 rounded",
-              @task.status == "done" && "bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200",
-              @task.status != "done" && "bg-emerald-600 text-white hover:bg-emerald-700"
-            ]}
-          >
-            {if @task.status == "done", do: "Reopen", else: "Mark done"}
-          </button>
-          <button
-            :if={@can_edit}
-            type="button"
             phx-click="delete_task"
             data-confirm="Delete this task and all its children?"
             class="text-xs text-red-600 hover:underline"
@@ -981,7 +941,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
-          <li :for={e <- @activity}>
+          <li :for={e <- @activity} :if={e.kind != "status_changed"}>
             <span class="text-zinc-500 dark:text-zinc-400">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
             · <span class="font-medium">{e.user && e.user.name || "system"}</span>
             · {e.kind}

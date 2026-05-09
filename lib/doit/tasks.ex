@@ -277,7 +277,6 @@ defmodule DoIt.Tasks do
   defp record_diff_events(%Task{} = old, %Task{} = new, %User{} = actor) do
     [
       {:title, "title_changed"},
-      {:status, "status_changed"},
       {:manual_progress, "progress_changed"},
       {:weight, "weight_changed"},
       {:assignee_id, "assignee_changed"},
