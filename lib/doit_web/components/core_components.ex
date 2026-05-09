@@ -507,14 +507,14 @@ defmodule DoItWeb.CoreComponents do
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      stroke-width="2"
+      stroke-width="1.75"
       stroke-linecap="round"
       stroke-linejoin="round"
       aria-hidden="true"
     >
-      <path d="M15 6a9 9 0 0 0-9 9V3" />
-      <circle cx="18" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
+      <path d="M3 21 C 8 16, 12 13, 21 3" />
+      <path d="M9 14 L 6 10" />
+      <path d="M14 9 L 11 5" />
     </svg>
     """
   end

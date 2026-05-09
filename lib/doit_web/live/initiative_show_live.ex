@@ -605,11 +605,15 @@ defmodule DoItWeb.InitiativeShowLive do
           <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
         </button>
 
-        <%!-- Botanical icon: tree on Lists, branch on parent tasks, leaf on leaf tasks. --%>
-        <span class="flex-none text-zinc-400 dark:text-zinc-500">
-          <.botanical_icon :if={@depth == 0} kind={:tree} />
-          <.botanical_icon :if={@depth > 0 and @task.children != []} kind={:branch} />
-          <.botanical_icon :if={@depth > 0 and @task.children == []} kind={:leaf} />
+        <%!-- Botanical icon: green tree on Lists, brown branch on parent tasks, green leaf on leaf tasks. --%>
+        <span :if={@depth == 0} class="flex-none text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+          <.botanical_icon kind={:tree} />
+        </span>
+        <span :if={@depth > 0 and @task.children != []} class="flex-none text-amber-700 dark:text-amber-600" aria-hidden="true">
+          <.botanical_icon kind={:branch} />
+        </span>
+        <span :if={@depth > 0 and @task.children == []} class="flex-none text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+          <.botanical_icon kind={:leaf} />
         </span>
 
         <span class="flex-1 min-w-0 flex items-baseline gap-2">
