@@ -25,11 +25,41 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/doit"
 import topbar from "../vendor/topbar"
 
+const Hooks = {}
+
+// Per-task collapse/expand toggle for the task tree on /initiatives/:id.
+// Persists state in localStorage keyed by (initiative_id, task_id).
+// Toggling never affects roll-up — it only hides the children <ul>.
+Hooks.CollapseToggle = {
+  mounted() { this.bind(); this.apply() },
+  updated() { this.apply() },
+  storageKey() { return `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}` },
+  childrenEl() { return document.getElementById(`children-${this.el.dataset.taskId}`) },
+  apply() {
+    const ce = this.childrenEl()
+    if (!ce) return
+    const collapsed = localStorage.getItem(this.storageKey()) === "1"
+    ce.classList.toggle("hidden", collapsed)
+    this.el.setAttribute("aria-expanded", String(!collapsed))
+  },
+  bind() {
+    this.el.addEventListener("click", (e) => {
+      e.stopPropagation()
+      const ce = this.childrenEl()
+      if (!ce) return
+      const collapsed = !ce.classList.contains("hidden")
+      ce.classList.toggle("hidden", collapsed)
+      this.el.setAttribute("aria-expanded", String(!collapsed))
+      localStorage.setItem(this.storageKey(), collapsed ? "1" : "0")
+    })
+  },
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, ...Hooks},
 })
 
 // Show progress bar on live navigation and form submits

@@ -513,14 +513,13 @@ defmodule DoItWeb.InitiativeShowLive do
           :if={@task.children != []}
           type="button"
           id={"collapse-#{@task.id}"}
-          phx-hook=".CollapseToggle"
+          phx-hook="CollapseToggle"
           phx-update="ignore"
           data-task-id={@task.id}
           data-initiative-id={@initiative_id}
           aria-controls={"children-#{@task.id}"}
           aria-expanded="true"
           aria-label="Toggle children"
-          onclick="event.stopPropagation()"
           class="flex-none w-5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
         >
           <.icon
@@ -538,7 +537,6 @@ defmodule DoItWeb.InitiativeShowLive do
           data-confirm={if @task.children != [], do: "Mark this task and all its children completed?"}
           aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
           aria-pressed={@task.status == "done"}
-          onclick="event.stopPropagation()"
           class={[
             "flex-none w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
             @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
@@ -600,7 +598,6 @@ defmodule DoItWeb.InitiativeShowLive do
           type="button"
           phx-click="show_add_child"
           phx-value-parent={@task.id}
-          onclick="event.stopPropagation()"
           class="flex-none inline-flex items-center justify-center gap-1 min-h-11 min-w-11 px-2 rounded text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
           aria-label="Add subtask"
           title="Add subtask"
@@ -646,37 +643,6 @@ defmodule DoItWeb.InitiativeShowLive do
         />
       </ul>
     </li>
-
-    <script :type={Phoenix.LiveView.ColocatedHook} name=".CollapseToggle">
-      export default {
-        mounted() { this.bind(); this.apply(); },
-        updated() { this.apply(); },
-        get storageKey() {
-          return `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`;
-        },
-        get childrenEl() {
-          return document.getElementById(`children-${this.el.dataset.taskId}`);
-        },
-        apply() {
-          const ce = this.childrenEl;
-          if (!ce) return;
-          const collapsed = localStorage.getItem(this.storageKey) === "1";
-          ce.classList.toggle("hidden", collapsed);
-          this.el.setAttribute("aria-expanded", String(!collapsed));
-        },
-        bind() {
-          this.el.addEventListener("click", (e) => {
-            e.stopPropagation();
-            const ce = this.childrenEl;
-            if (!ce) return;
-            const collapsed = !ce.classList.contains("hidden");
-            ce.classList.toggle("hidden", collapsed);
-            this.el.setAttribute("aria-expanded", String(!collapsed));
-            localStorage.setItem(this.storageKey, collapsed ? "1" : "0");
-          });
-        }
-      }
-    </script>
     """
   end
 
