@@ -28,7 +28,7 @@ No public release yet. Owner will not release until at least M02 (UX Overhaul) l
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + sixteen design refinements (theme toggle, Initiative rename UI, progress underbar, completion checkbox, collapsible children, row layout, Initiative header bar, signifier rework, drop status from UI, botanical icons + 6 dogfood-driven refinements: inline-edit + Details ellipses, centered % text, drop section h2 + sized List titles, header "+ New List", colored icons + actual-branch SVG, mobile flyout). | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
+| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + sixteen design refinements (theme toggle, Initiative rename UI, progress underbar, completion checkbox, collapsible children, row layout, Initiative header bar, signifier rework, drop status from UI, botanical icons + 6 follow-on refinements from casual testing: inline-edit + Details ellipses, centered % text, drop section h2 + sized List titles, header "+ New List", colored icons + actual-branch SVG, mobile flyout). | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |
