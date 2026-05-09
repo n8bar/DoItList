@@ -35,6 +35,7 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 - Keep docs in sync within the same commit when scope shifts.
 - When the user asks for input/feedback ("what do you think?", "should we…?"), answer first; don't change files until they confirm.
 - Use the system date for any dated docs.
+- Bug fixes are fair game on any branch if they're documented first.
 
 ## Branch & Repo
 - Milestone-scoped work: `M##-<slug>` (uppercase M, no padding). Example: `M02-keyboard-nav`.
