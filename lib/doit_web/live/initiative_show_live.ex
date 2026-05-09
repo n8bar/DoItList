@@ -160,6 +160,13 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply, assign(socket, :editing_initiative?, false)}
   end
 
+  def handle_event("close_panel", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:editing_initiative?, false)
+     |> assign(:selected_task_id, nil)}
+  end
+
   def handle_event("start_inline_edit_title", _params, socket) do
     if socket.assigns.can_edit do
       {:noreply, assign(socket, :editing_title?, true)}
@@ -473,7 +480,30 @@ defmodule DoItWeb.InitiativeShowLive do
           </ul>
         </div>
 
-        <aside class="space-y-4">
+        <%!-- Backdrop on mobile when right-rail flyout is open --%>
+        <div
+          :if={@selected_task_id || @editing_initiative?}
+          class="lg:hidden fixed inset-0 z-20 bg-black/50"
+          phx-click="close_panel"
+          aria-hidden="true"
+        ></div>
+
+        <aside class={[
+          "space-y-4",
+          (@selected_task_id || @editing_initiative?) && "fixed lg:static inset-y-0 right-0 z-30 w-full sm:w-96 lg:w-auto bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
+          !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
+        ]}>
+          <div class="lg:hidden flex justify-end">
+            <button
+              type="button"
+              phx-click="close_panel"
+              aria-label="Close details panel"
+              title="Close"
+              class="p-2 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              <.icon name="hero-x-mark" class="w-5 h-5" />
+            </button>
+          </div>
           <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
             <div class="flex items-center justify-between mb-2">
               <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
