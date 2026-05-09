@@ -117,8 +117,8 @@ defmodule DoItWeb.InitiativeShowLive do
            |> put_flash(:info, "Task added.")
            |> load_tree()}
 
-        {:error, _cs} ->
-          {:noreply, put_flash(socket, :error, "Could not create task.")}
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -159,8 +159,8 @@ defmodule DoItWeb.InitiativeShowLive do
            |> load_tree()
            |> refresh_selected()}
 
-        {:error, _cs} ->
-          {:noreply, put_flash(socket, :error, "Could not save task.")}
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't save task: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -174,7 +174,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       case Tasks.update_task(task, user, %{"manual_progress" => value}) do
         {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
-        {:error, _} -> {:noreply, put_flash(socket, :error, "Invalid progress.")}
+        {:error, cs} -> {:noreply, put_flash(socket, :error, "Invalid progress: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -224,8 +224,8 @@ defmodule DoItWeb.InitiativeShowLive do
            |> put_flash(:info, "Task deleted.")
            |> load_tree()}
 
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "Could not delete task.")}
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't delete task: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -257,8 +257,8 @@ defmodule DoItWeb.InitiativeShowLive do
                |> put_flash(:info, "Added #{user.name}.")
                |> assign(:members, Initiatives.list_members(initiative.id))}
 
-            {:error, _} ->
-              {:noreply, put_flash(socket, :error, "Could not add member.")}
+            {:error, cs} ->
+              {:noreply, put_flash(socket, :error, "Couldn't add member: #{summarize_errors(cs)}.")}
           end
       end
     end
@@ -345,10 +345,11 @@ defmodule DoItWeb.InitiativeShowLive do
                   type="email"
                   name="email"
                   placeholder="email@example.com"
+                  aria-label="Member email"
                   required
                   class="w-full input input-bordered input-sm"
                 />
-                <select name="role" class="w-full select select-bordered select-sm">
+                <select name="role" aria-label="Member role" class="w-full select select-bordered select-sm">
                   <option value="editor">Editor</option>
                   <option value="viewer">Viewer</option>
                   <option value="owner">Owner</option>
@@ -363,6 +364,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   </button>
                   <button
                     type="submit"
+                    phx-disable-with="Adding..."
                     class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
                   >
                     Add
@@ -499,6 +501,7 @@ defmodule DoItWeb.InitiativeShowLive do
       />
       <button
         type="submit"
+        phx-disable-with="Adding..."
         class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"
       >
         Add
@@ -685,10 +688,12 @@ defmodule DoItWeb.InitiativeShowLive do
             type="text"
             name="comment[body]"
             placeholder="Write a comment..."
+            aria-label="Comment text"
             class="flex-1 input input-bordered input-sm"
           />
           <button
             type="submit"
+            phx-disable-with="Posting..."
             class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
           >
             Post
@@ -731,4 +736,12 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp progress_value(%{status: "done"}), do: 100
   defp progress_value(%{manual_progress: mp}), do: mp || 0
+
+  defp summarize_errors(%Ecto.Changeset{errors: errors}) do
+    Enum.map_join(errors, "; ", fn {field, {msg, _}} ->
+      "#{humanize(field)} #{msg}"
+    end)
+  end
+
+  defp humanize(field), do: field |> to_string() |> String.replace("_", " ")
 end

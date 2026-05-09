@@ -80,7 +80,7 @@ defmodule DoItWeb.InitiativeIndexLive do
               >
                 Cancel
               </button>
-              <.button type="submit">Create initiative</.button>
+              <.button type="submit" phx-disable-with="Creating...">Create initiative</.button>
             </div>
           </.form>
         </div>
@@ -90,7 +90,7 @@ defmodule DoItWeb.InitiativeIndexLive do
         <div
           :for={{dom_id, initiative} <- @streams.initiatives}
           id={dom_id}
-          class="rounded border border-zinc-200 bg-white p-4 hover:shadow-sm transition"
+          class="rounded border border-zinc-200 bg-white p-4 hover:shadow-sm transition motion-reduce:transition-none"
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} class="block">
             <div class="flex items-center justify-between">
