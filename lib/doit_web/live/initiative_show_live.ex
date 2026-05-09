@@ -472,24 +472,9 @@ defmodule DoItWeb.InitiativeShowLive do
     ~H"""
     <li class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
       <div class={[
-        "flex items-center gap-2 px-3 py-2",
+        "relative flex items-center gap-2 px-3 pt-2 pb-3",
         @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950"
       ]}>
-        <span class="text-zinc-400 dark:text-zinc-500 text-xs w-10 tabular-nums">
-          {progress_value(@task)}%
-        </span>
-        <div class="w-24 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded overflow-hidden">
-          <div
-            class={[
-              "h-full rounded",
-              @task.status == "done" && "bg-emerald-50 dark:bg-emerald-9500",
-              @task.status != "done" && "bg-emerald-400"
-            ]}
-            style={"width: #{progress_value(@task)}%"}
-          >
-          </div>
-        </div>
-
         <button
           type="button"
           phx-click="select_task"
@@ -517,10 +502,31 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-click="show_add_child"
           phx-value-parent={@task.id}
           class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400"
+          aria-label="Add subtask"
           title="Add subtask"
         >
           +
         </button>
+
+        <div
+          class="absolute bottom-1 left-2 right-2 h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+          role="progressbar"
+          aria-valuenow={progress_value(@task)}
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-label={"Progress: #{progress_value(@task)}%"}
+          title={"#{progress_value(@task)}%"}
+          style={"--progress: #{progress_value(@task)}%"}
+        >
+          <div
+            class={[
+              "h-full rounded-full",
+              @task.status == "done" && "bg-emerald-500",
+              @task.status != "done" && "bg-emerald-400"
+            ]}
+            style="width: var(--progress)"
+          ></div>
+        </div>
       </div>
 
       <div :if={@add_task_for == @task.id} class="px-3 pb-3">
