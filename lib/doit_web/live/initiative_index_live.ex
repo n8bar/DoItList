@@ -99,14 +99,14 @@ defmodule DoItWeb.InitiativeIndexLive do
                 Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
               </span>
             </div>
-            <p :if={initiative.description} class="mt-1 text-sm text-zinc-500 line-clamp-2">
+            <p :if={initiative.description} class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2">
               {initiative.description}
             </p>
           </.link>
         </div>
       </div>
 
-      <p :if={@initiative_count == 0 and not @show_form} class="text-zinc-500 mt-4">
+      <p :if={@initiative_count == 0 and not @show_form} class="text-zinc-500 dark:text-zinc-400 mt-4">
         No initiatives yet. Create one to get started.
       </p>
     </Layouts.app>

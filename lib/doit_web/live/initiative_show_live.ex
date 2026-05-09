@@ -280,11 +280,11 @@ defmodule DoItWeb.InitiativeShowLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex items-start justify-between mb-6">
         <div>
-          <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-100">
+          <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100">
             ← All initiatives
           </.link>
-          <h1 class="text-2xl font-semibold text-zinc-800 mt-1">{@initiative.name}</h1>
-          <p :if={@initiative.description} class="text-sm text-zinc-500 mt-1">{@initiative.description}</p>
+          <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 mt-1">{@initiative.name}</h1>
+          <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{@initiative.description}</p>
         </div>
         <div class="text-right text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
           Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
@@ -309,7 +309,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <.task_form parent_id={nil} />
           </div>
 
-          <div :if={@tree == []} class="text-zinc-500 text-sm">
+          <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
             No lists yet. Create one to start tracking work.
           </div>
 
@@ -411,7 +411,7 @@ defmodule DoItWeb.InitiativeShowLive do
         "flex items-center gap-2 px-3 py-2",
         @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950"
       ]}>
-        <span class="text-zinc-400 text-xs w-10 tabular-nums">
+        <span class="text-zinc-400 dark:text-zinc-500 text-xs w-10 tabular-nums">
           {progress_value(@task)}%
         </span>
         <div class="w-24 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded overflow-hidden">
@@ -452,7 +452,7 @@ defmodule DoItWeb.InitiativeShowLive do
           type="button"
           phx-click="show_add_child"
           phx-value-parent={@task.id}
-          class="text-xs text-zinc-500 hover:text-emerald-700"
+          class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400"
           title="Add subtask"
         >
           +
@@ -633,7 +633,7 @@ defmodule DoItWeb.InitiativeShowLive do
           />
         </div>
 
-        <div :if={not leaf?(@task)} class="text-xs text-zinc-500 italic">
+        <div :if={not leaf?(@task)} class="text-xs text-zinc-500 dark:text-zinc-400 italic">
           Computed from children: {@task.computed_progress}%
         </div>
       </form>
@@ -673,14 +673,14 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
-        <h4 class="text-xs font-medium text-zinc-700 mb-2">Comments</h4>
+        <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
         <ul class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
             <div class="text-xs text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">
               {c.user && c.user.name}
               · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
-            <div class="text-zinc-800 whitespace-pre-wrap">{c.body}</div>
+            <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
           </li>
         </ul>
         <form :if={@can_edit} phx-submit="add_comment" class="flex gap-2">
@@ -702,7 +702,7 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
-        <h4 class="text-xs font-medium text-zinc-700 mb-2">Activity</h4>
+        <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity}>
             <span class="text-zinc-500 dark:text-zinc-400 dark:text-zinc-500">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
