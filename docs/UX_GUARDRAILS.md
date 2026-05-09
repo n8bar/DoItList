@@ -42,4 +42,9 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 7.2 Don't override system color-scheme preference unless the user explicitly opted in.
 
 ## Project-Specific Additions
-_None yet._
+
+### A. Default-hidden attributes
+A.1 Task attributes render only when set to a non-default value. Always-shown: title, progress, completion checkbox, inline description (when present). Default-hidden: weight (≠ 1), priority (≠ normal), assignee (set). Establishes a "show only when meaningful" rule that the task row layout and any future task attributes follow.
+
+### B. No layout shift on collapse/expand or theme toggle
+B.1 Per universal baseline 1.1, expand/collapse and theme toggle must animate or transition in place — never pop content into a new vertical slot that pushes other rows. Reserve space for the collapsed-state placeholder; transition opacity/height from the same origin.
