@@ -416,6 +416,17 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               <.icon name="hero-ellipsis-horizontal" class="w-4 h-4" />
             </button>
+            <button
+              :if={@can_edit}
+              type="button"
+              phx-click="show_add_root"
+              class="mt-1 inline-flex items-center justify-center gap-1 min-h-11 px-3 rounded text-sm text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              aria-label="New list"
+              title="New list"
+            >
+              <.icon name="hero-plus" class="w-4 h-4" />
+              <span>New List</span>
+            </button>
           </div>
           <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{@initiative.description}</p>
         </div>
@@ -441,17 +452,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
         <div>
-          <div class="flex justify-end mb-3">
-            <button
-              :if={@can_edit}
-              type="button"
-              phx-click="show_add_root"
-              class="text-sm px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-            >
-              + New list
-            </button>
-          </div>
-
           <div :if={@add_task_for == :root} class="mb-3">
             <.task_form parent_id={nil} />
           </div>
@@ -664,7 +664,7 @@ defmodule DoItWeb.InitiativeShowLive do
           title="Add subtask"
         >
           <.icon name="hero-plus" class="w-4 h-4" />
-          <span class="hidden sm:inline">Subtask</span>
+          <span class="hidden sm:inline">New Task</span>
         </button>
 
         <div
