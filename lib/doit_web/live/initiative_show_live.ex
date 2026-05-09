@@ -371,7 +371,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
-      <div class="relative flex items-start justify-between mb-6 pb-3">
+      <div class="relative flex items-start justify-between mb-6 pb-6">
         <div>
           <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100">
             ← All initiatives
@@ -424,16 +424,18 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div
-          class="absolute bottom-0 left-0 right-0 h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+          class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
           role="progressbar"
           aria-valuenow={initiative_progress(@tree)}
           aria-valuemin="0"
           aria-valuemax="100"
           aria-label={"Initiative progress: #{initiative_progress(@tree)}%"}
-          title={"#{initiative_progress(@tree)}%"}
           style={"--progress: #{initiative_progress(@tree)}%"}
         >
-          <div class="h-full bg-emerald-400 rounded-full" style="width: var(--progress)"></div>
+          <div class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full" style="width: var(--progress)"></div>
+          <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+            {initiative_progress(@tree)}%
+          </span>
         </div>
       </div>
 
@@ -561,7 +563,7 @@ defmodule DoItWeb.InitiativeShowLive do
     <li class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
       <div
         class={[
-          "relative flex items-center gap-2 px-3 pt-2 pb-3 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
+          "relative flex items-center gap-2 px-3 pt-2 pb-6 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
           @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-50 dark:hover:bg-emerald-950"
         ]}
         phx-click="select_task"
@@ -665,23 +667,25 @@ defmodule DoItWeb.InitiativeShowLive do
         </button>
 
         <div
-          class="absolute bottom-1 left-2 right-2 h-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+          class="absolute bottom-1 left-2 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
           role="progressbar"
           aria-valuenow={progress_value(@task)}
           aria-valuemin="0"
           aria-valuemax="100"
           aria-label={"Progress: #{progress_value(@task)}%"}
-          title={"#{progress_value(@task)}%"}
           style={"--progress: #{progress_value(@task)}%"}
         >
           <div
             class={[
-              "h-full rounded-full",
+              "absolute inset-y-0 left-0 rounded-full",
               @task.status == "done" && "bg-emerald-500",
               @task.status != "done" && "bg-emerald-400"
             ]}
             style="width: var(--progress)"
           ></div>
+          <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+            {progress_value(@task)}%
+          </span>
         </div>
       </div>
 

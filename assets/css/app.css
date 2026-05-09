@@ -102,4 +102,22 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Progress underbar text — high-contrast outline so the percentage stays
+   readable regardless of the fill color behind it. Light-mode text is dark
+   with a white outline; dark-mode flips both. */
+.progress-bar-text {
+  text-shadow:
+    1px 1px 0 rgba(255, 255, 255, 0.95),
+    -1px 1px 0 rgba(255, 255, 255, 0.95),
+    1px -1px 0 rgba(255, 255, 255, 0.95),
+    -1px -1px 0 rgba(255, 255, 255, 0.95);
+}
+[data-theme=dark] .progress-bar-text {
+  text-shadow:
+    1px 1px 0 rgba(0, 0, 0, 0.9),
+    -1px 1px 0 rgba(0, 0, 0, 0.9),
+    1px -1px 0 rgba(0, 0, 0, 0.9),
+    -1px -1px 0 rgba(0, 0, 0, 0.9);
+}
+
 /* This file is for your main application CSS */
