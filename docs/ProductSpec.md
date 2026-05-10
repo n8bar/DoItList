@@ -1,5 +1,5 @@
 # Product Spec
-_Last updated: 2026-05-07_
+_Last updated: 2026-05-09_
 
 The canonical specification of Do It List — what the product is, the vocabulary used to describe it, the principles it must hold to, and the headline behaviors that define it.
 
@@ -57,6 +57,13 @@ sum(child_progress * child_weight) / sum(child_weight)
 ```
 
 Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
+
+## Task completion cascade
+- Marking a parent task done cascades the done state to all descendants. The user confirms first.
+- Unchecking a leaf cascades the undone state up the ancestor chain — any ancestor that was done becomes undone, since a parent can only be done if all its descendants are done. No confirm needed.
+
+## Reorganization
+Tasks can be reordered and reparented via drag-and-drop within an Initiative. Vertical drag drops a task onto another task as its new parent. Horizontal drag changes nesting depth (left dedents toward ancestor level; right indents under the previous sibling).
 
 ## Collaboration Model
 - Multiple users may open the same Initiative simultaneously.
