@@ -274,7 +274,45 @@ defmodule DoItWeb.CoreComponents do
     """
   end
 
-  # All other inputs text, datetime-local, url, password, etc. are handled here...
+  def input(%{type: "password"} = assigns) do
+    assigns = assign_new(assigns, :id, fn -> nil end)
+
+    ~H"""
+    <div class="fieldset mb-2">
+      <label for={@id}>
+        <span :if={@label} class="label mb-1">{@label}</span>
+        <div class="relative">
+          <input
+            type="password"
+            name={@name}
+            id={@id}
+            value={Phoenix.HTML.Form.normalize_value("password", @value)}
+            class={[
+              @class || "w-full input pr-10",
+              @errors != [] && (@error_class || "input-error")
+            ]}
+            {@rest}
+          />
+          <button
+            type="button"
+            id={"#{@id}-toggle"}
+            phx-hook="PasswordToggle"
+            data-input-id={@id}
+            aria-label="Show password"
+            tabindex="-1"
+            class="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            <.icon name="hero-eye" class="w-5 h-5 password-eye" />
+            <.icon name="hero-eye-slash" class="w-5 h-5 password-eye-slash hidden" />
+          </button>
+        </div>
+      </label>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+    """
+  end
+
+  # All other inputs text, datetime-local, url, etc. are handled here...
   def input(assigns) do
     ~H"""
     <div class="fieldset mb-2">
@@ -514,9 +552,14 @@ defmodule DoItWeb.CoreComponents do
       stroke-linejoin="round"
       aria-hidden="true"
     >
-      <path d="M3 21 C 8 16, 12 13, 21 3" />
-      <path d="M9 14 L 6 10" />
-      <path d="M14 9 L 11 5" />
+      <path d="M3 21 C 8 17, 13 12, 21 4" />
+      <path d="M9 14 L 6 10.5" />
+      <path d="M15 8 L 12 4.5" />
+      <g class="text-emerald-600 dark:text-emerald-400" fill="currentColor" stroke="none">
+        <ellipse cx="5.4" cy="10" rx="1.4" ry="2.4" transform="rotate(-35 5.4 10)" />
+        <ellipse cx="11.4" cy="4" rx="1.4" ry="2.4" transform="rotate(-35 11.4 4)" />
+        <ellipse cx="20.6" cy="3.4" rx="1.4" ry="2.4" transform="rotate(-35 20.6 3.4)" />
+      </g>
     </svg>
     """
   end

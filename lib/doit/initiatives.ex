@@ -13,12 +13,20 @@ defmodule DoIt.Initiatives do
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.{Initiative, InitiativeMember}
 
-  @doc "List initiatives the given user can see (any role)."
+  @doc """
+  List initiatives the given user can see, with their role on each loaded
+  into the virtual `:my_role` field. Owner-held initiatives sort first; ties
+  break by `updated_at` descending.
+  """
   def list_visible_initiatives(%User{id: user_id}) do
     from(i in Initiative,
       join: m in InitiativeMember,
       on: m.initiative_id == i.id and m.user_id == ^user_id,
-      order_by: [desc: i.updated_at]
+      select: %{i | my_role: m.role},
+      order_by: [
+        asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
+        desc: i.updated_at
+      ]
     )
     |> Repo.all()
   end

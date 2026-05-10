@@ -31,6 +31,8 @@ defmodule DoItWeb.InitiativeIndexLive do
 
     case Initiatives.create_initiative(user, params) do
       {:ok, initiative} ->
+        initiative = %{initiative | my_role: "owner"}
+
         {:noreply,
          socket
          |> assign(:show_form, false)
@@ -42,6 +44,11 @@ defmodule DoItWeb.InitiativeIndexLive do
         {:noreply, assign(socket, :form, to_form(changeset))}
     end
   end
+
+  defp role_badge_class("owner"), do: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+  defp role_badge_class("editor"), do: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
+  defp role_badge_class("viewer"), do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+  defp role_badge_class(_), do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
 
   defp build_empty_form do
     to_form(Initiatives.change_initiative(%DoIt.Initiatives.Initiative{}))
@@ -93,16 +100,25 @@ defmodule DoItWeb.InitiativeIndexLive do
           class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} class="block p-4">
-            <div class="flex items-center justify-between">
-              <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2">
-                <span class="text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+            <div class="flex items-center justify-between gap-3">
+              <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
+                <span class="text-emerald-600 dark:text-emerald-400 flex-none" aria-hidden="true">
                   <.botanical_icon kind={:grove} class="w-5 h-5" />
                 </span>
-                {initiative.name}
+                <span class="truncate">{initiative.name}</span>
               </span>
-              <span class="text-xs text-zinc-500 dark:text-zinc-400">
-                Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
-              </span>
+              <div class="flex items-center gap-2 flex-none">
+                <span
+                  :if={initiative.my_role}
+                  class={["text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded", role_badge_class(initiative.my_role)]}
+                  title={"Your role: #{initiative.my_role}"}
+                >
+                  {initiative.my_role}
+                </span>
+                <span class="text-xs text-zinc-500 dark:text-zinc-400">
+                  Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
+                </span>
+              </div>
             </div>
             <p :if={initiative.description} class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2">
               {initiative.description}

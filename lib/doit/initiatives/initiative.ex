@@ -9,6 +9,7 @@ defmodule DoIt.Initiatives.Initiative do
   schema "initiatives" do
     field :name, :string
     field :description, :string
+    field :my_role, :string, virtual: true
 
     belongs_to :owner, User
     has_many :memberships, InitiativeMember

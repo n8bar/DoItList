@@ -40,6 +40,26 @@ Hooks.AutoDismissFlash = {
   },
 }
 
+// Show/hide toggle for password inputs. Looks up the associated input by
+// data-input-id, swaps its `type` attribute, and toggles which icon is
+// visible (eye vs. eye-slash).
+Hooks.PasswordToggle = {
+  mounted() {
+    const inputId = this.el.dataset.inputId
+    const input = document.getElementById(inputId)
+    if (!input) return
+    const eye = this.el.querySelector(".password-eye")
+    const eyeSlash = this.el.querySelector(".password-eye-slash")
+    this.el.addEventListener("click", () => {
+      const showing = input.type === "text"
+      input.type = showing ? "password" : "text"
+      eye.classList.toggle("hidden", !showing)
+      eyeSlash.classList.toggle("hidden", showing)
+      this.el.setAttribute("aria-label", showing ? "Show password" : "Hide password")
+    })
+  },
+}
+
 // Per-task collapse/expand toggle for the task tree on /initiatives/:id.
 // Persists state in localStorage keyed by (initiative_id, task_id).
 // Toggling never affects roll-up — it only hides the children <ul>.

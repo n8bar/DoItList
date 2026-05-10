@@ -86,6 +86,16 @@ defmodule DoItWeb.InitiativeShowLive do
      |> assign(:new_task_title, "")}
   end
 
+  def handle_event("show_add_sibling", %{"task" => task_id}, socket) do
+    task = Tasks.get_task!(String.to_integer(task_id))
+    add_for = task.parent_id || :root
+
+    {:noreply,
+     socket
+     |> assign(:add_task_for, add_for)
+     |> assign(:new_task_title, "")}
+  end
+
   def handle_event("cancel_add", _params, socket) do
     {:noreply, assign(socket, :add_task_for, nil)}
   end
@@ -128,18 +138,27 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("select_task", %{"id" => id}, socket) do
     id = String.to_integer(id)
 
-    case Tasks.get_task_with_relations(id) do
-      nil ->
-        {:noreply, socket}
+    if socket.assigns.selected_task_id == id do
+      {:noreply,
+       socket
+       |> assign(:selected_task_id, nil)
+       |> assign(:selected_task, nil)
+       |> assign(:comments, [])
+       |> assign(:activity, [])}
+    else
+      case Tasks.get_task_with_relations(id) do
+        nil ->
+          {:noreply, socket}
 
-      task ->
-        {:noreply,
-         socket
-         |> assign(:editing_initiative?, false)
-         |> assign(:selected_task_id, id)
-         |> assign(:selected_task, task)
-         |> assign(:comments, Tasks.list_comments(id))
-         |> assign(:activity, Tasks.list_task_activity(id))}
+        task ->
+          {:noreply,
+           socket
+           |> assign(:editing_initiative?, false)
+           |> assign(:selected_task_id, id)
+           |> assign(:selected_task, task)
+           |> assign(:comments, Tasks.list_comments(id))
+           |> assign(:activity, Tasks.list_task_activity(id))}
+      end
     end
   end
 
@@ -377,7 +396,7 @@ defmodule DoItWeb.InitiativeShowLive do
               :if={@can_edit}
               type="button"
               phx-click="show_add_root"
-              class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label="New list"
               title="New list"
             >
@@ -461,9 +480,10 @@ defmodule DoItWeb.InitiativeShowLive do
                 :if={@can_admin}
                 type="button"
                 phx-click="show_member_form"
-                class="text-xs text-emerald-700 hover:underline"
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               >
-                + Add
+                <.icon name="hero-plus" class="w-3.5 h-3.5" />
+                <span>Add Member</span>
               </button>
             </div>
 
@@ -652,18 +672,44 @@ defmodule DoItWeb.InitiativeShowLive do
           </span>
         </span>
 
-        <button
-          :if={@can_edit}
-          type="button"
-          phx-click="show_add_child"
-          phx-value-parent={@task.id}
-          class="flex-none inline-flex items-center gap-1 min-w-11 px-2 py-0.5 rounded text-xs text-zinc-500 dark:text-zinc-400 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          aria-label="Add subtask"
-          title="Add subtask"
-        >
-          <.icon name="hero-plus" class="w-4 h-4" />
-          <span class="hidden sm:inline">New Task</span>
-        </button>
+        <div :if={@can_edit} class="flex-none relative">
+          <div class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
+            <button
+              type="button"
+              phx-click="show_add_child"
+              phx-value-parent={@task.id}
+              class="inline-flex items-center gap-1 min-w-11 px-2 py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              aria-label="Add subtask"
+              title="Add subtask"
+            >
+              <.icon name="hero-plus" class="w-4 h-4" />
+              <span class="hidden sm:inline">New Task</span>
+            </button>
+            <button
+              type="button"
+              id={"add-menu-#{@task.id}"}
+              phx-click={Phoenix.LiveView.JS.toggle(to: "#add-menu-panel-#{@task.id}")}
+              aria-label="More add options"
+              title="More add options"
+              class="px-1.5 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+            >
+              ▶
+            </button>
+          </div>
+          <div
+            id={"add-menu-panel-#{@task.id}"}
+            class="hidden absolute right-0 top-full mt-1 z-10 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded shadow-lg"
+          >
+            <button
+              type="button"
+              phx-click={Phoenix.LiveView.JS.push("show_add_sibling") |> Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")}
+              phx-value-task={@task.id}
+              class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            >
+              + New Task at this level
+            </button>
+          </div>
+        </div>
 
         <div
           class="absolute bottom-1 left-2 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
@@ -719,15 +765,6 @@ defmodule DoItWeb.InitiativeShowLive do
         autofocus
         placeholder={if(@parent_id, do: "New subtask...", else: "New list / root task...")}
         class="flex-1 input input-bordered input-sm"
-      />
-      <input
-        type="number"
-        name="weight"
-        value="1"
-        min="0.01"
-        step="0.01"
-        class="w-20 input input-bordered input-sm"
-        title="Weight"
       />
       <button
         type="submit"

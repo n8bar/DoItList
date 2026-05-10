@@ -18,7 +18,7 @@ This is the milestone that earns the first public release.
 | Arc | Doc | Items | Status |
 |---|---|---|---|
 | 1 — Bring M01 to spec | [`m02.01-bring-to-spec.md`](m02.01-bring-to-spec.md) | 2 | complete |
-| 2 — Design Refinements | [`m02.02-design-refinements.md`](m02.02-design-refinements.md) | 26 (16 done, 10 pending owner approval) | in progress |
+| 2 — Design Refinements | [`m02.02-design-refinements.md`](m02.02-design-refinements.md) | 26 | complete |
 | 3 — Drag-and-Drop Reorganization | [`m02.03-drag-and-drop.md`](m02.03-drag-and-drop.md) | 8 (pending owner approval) | scoped |
 | 4 — Collaborators (Wide-Rail) | [`m02.04-collaborators.md`](m02.04-collaborators.md) | 8 (draft — pending owner refinement) | drafted |
 

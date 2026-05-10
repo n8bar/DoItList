@@ -26,7 +26,7 @@ defmodule DoItWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
+    <header class="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
       <div class="mx-auto max-w-6xl flex items-center justify-between px-4 sm:px-6 py-3">
         <a href="/" class="flex items-center gap-2 font-semibold text-zinc-800 dark:text-zinc-100">
           <span class="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>
@@ -34,10 +34,11 @@ defmodule DoItWeb.Layouts do
         </a>
 
         <nav class="flex items-center gap-3 text-sm">
-          <.theme_toggle />
           <%= if @current_user do %>
             <.link navigate={~p"/initiatives"} class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400">Initiatives</.link>
-            <span class="text-zinc-400 dark:text-zinc-600">·</span>
+            <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+            <.theme_toggle />
+            <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
             <span class="text-zinc-600 dark:text-zinc-300">{@current_user.name}</span>
             <.link
               href={~p"/users/log_out"}
@@ -47,6 +48,8 @@ defmodule DoItWeb.Layouts do
               Log out
             </.link>
           <% else %>
+            <.theme_toggle />
+            <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
             <.link navigate={~p"/users/log_in"} class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400">Log in</.link>
             <.link
               navigate={~p"/users/register"}
@@ -59,8 +62,10 @@ defmodule DoItWeb.Layouts do
       </div>
     </header>
 
-    <main class="mx-auto max-w-6xl px-4 sm:px-6 py-8">
-      {render_slot(@inner_block)}
+    <main class="flex-1 overflow-y-auto">
+      <div class="mx-auto max-w-6xl px-4 sm:px-6 py-8">
+        {render_slot(@inner_block)}
+      </div>
     </main>
 
     <.flash_group flash={@flash} />
