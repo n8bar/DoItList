@@ -26,7 +26,7 @@ defmodule DoItWeb.Layouts do
 
   def app(assigns) do
     ~H"""
-    <header class="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900">
+    <header class="border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
       <div class="mx-auto max-w-6xl flex items-center justify-between px-4 sm:px-6 py-3">
         <a href="/" class="flex items-center gap-2 font-semibold text-zinc-800 dark:text-zinc-100">
           <span class="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>

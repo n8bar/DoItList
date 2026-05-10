@@ -5,7 +5,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
-  alias Phoenix.LiveView.JS
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -41,7 +40,6 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
          |> assign(:editing_initiative?, false)
-         |> assign(:editing_title?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
          |> assign(:new_task_title, "")
@@ -165,42 +163,6 @@ defmodule DoItWeb.InitiativeShowLive do
      socket
      |> assign(:editing_initiative?, false)
      |> assign(:selected_task_id, nil)}
-  end
-
-  def handle_event("start_inline_edit_title", _params, socket) do
-    if socket.assigns.can_edit do
-      {:noreply, assign(socket, :editing_title?, true)}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_event("save_inline_title", %{"name" => name}, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, assign(socket, :editing_title?, false)}
-    else
-      initiative = socket.assigns.initiative
-
-      case Initiatives.update_initiative(initiative, %{"name" => name}) do
-        {:ok, updated} ->
-          {:noreply,
-           socket
-           |> assign(:initiative, updated)
-           |> assign(:initiative_form, to_form(Initiatives.change_initiative(updated)))
-           |> assign(:page_title, updated.name)
-           |> assign(:editing_title?, false)}
-
-        {:error, cs} ->
-          {:noreply,
-           socket
-           |> assign(:editing_title?, false)
-           |> put_flash(:error, "Couldn't save name: #{summarize_errors(cs)}.")}
-      end
-    end
-  end
-
-  def handle_event("cancel_inline_edit_title", _params, socket) do
-    {:noreply, assign(socket, :editing_title?, false)}
   end
 
   def handle_event("update_initiative", %{"initiative" => params}, socket) do
@@ -387,33 +349,16 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
             </span>
-            <%= if @editing_title? do %>
-              <form
-                phx-submit="save_inline_title"
-                id="inline-title-form"
-                class="flex-1"
-              >
-                <input
-                  type="text"
-                  name="name"
-                  value={@initiative.name}
-                  autofocus
-                  phx-blur={JS.dispatch("submit", to: "#inline-title-form")}
-                  phx-keydown="cancel_inline_edit_title"
-                  phx-key="Escape"
-                  aria-label="Initiative name"
-                  class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 bg-transparent border-b-2 border-emerald-500 outline-none w-full"
-                />
-              </form>
-            <% else %>
-              <h1
-                phx-click="start_inline_edit_title"
-                title="Click to rename"
-                class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white"
-              >
-                {@initiative.name}
-              </h1>
-            <% end %>
+            <h1
+              phx-click="edit_initiative"
+              title="Click to edit"
+              class={[
+                "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
+                !@editing_initiative? && "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
+              ]}
+            >
+              {@initiative.name}
+            </h1>
             <button
               type="button"
               phx-click="edit_initiative"
@@ -504,7 +449,7 @@ defmodule DoItWeb.InitiativeShowLive do
               <.icon name="hero-x-mark" class="w-5 h-5" />
             </button>
           </div>
-          <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
             <div class="flex items-center justify-between mb-2">
               <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
               <button
@@ -559,11 +504,11 @@ defmodule DoItWeb.InitiativeShowLive do
             </ul>
           </div>
 
-          <div :if={@editing_initiative?} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div :if={@editing_initiative?} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
             <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
           </div>
 
-          <div :if={@selected_task_id && not @editing_initiative?} class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+          <div :if={@selected_task_id && not @editing_initiative?} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
             <.task_editor
               task={@selected_task}
               comments={@comments}
@@ -589,7 +534,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def task_node(assigns) do
     ~H"""
-    <li class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+    <li class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500">
       <div
         class={[
           "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
@@ -609,12 +554,15 @@ defmodule DoItWeb.InitiativeShowLive do
           aria-controls={"children-#{@task.id}"}
           aria-expanded="true"
           aria-label="Toggle children"
-          class="group flex-none w-5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
+          class="group flex-none inline-flex items-center gap-0.5 px-0.5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
         >
           <.icon
             name="hero-chevron-down"
             class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
           />
+          <span class="hidden group-aria-[expanded=false]:inline text-xs tabular-nums">
+            ({length(@task.children)})
+          </span>
         </button>
         <div :if={@task.children == []} class="flex-none w-5 h-5"></div>
 
@@ -649,7 +597,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <span class="flex-1 min-w-0 flex items-baseline gap-2">
           <span class={[
             "flex-none",
-            @depth == 0 && "text-base font-semibold",
+            @depth == 0 && "text-xl font-bold",
             @depth > 0 && "text-sm font-medium",
             @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
           ]}>
@@ -794,9 +742,11 @@ defmodule DoItWeb.InitiativeShowLive do
         <button
           type="button"
           phx-click="close_initiative"
-          class="text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+          aria-label="Close"
+          title="Close"
+          class="font-bold text-red-600 hover:text-red-700"
         >
-          Close
+          <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>
       </div>
 
@@ -841,9 +791,11 @@ defmodule DoItWeb.InitiativeShowLive do
         <button
           type="button"
           phx-click="close_task"
-          class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
+          aria-label="Close"
+          title="Close"
+          class="font-bold text-red-600 hover:text-red-700"
         >
-          Close
+          <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>
       </div>
 
@@ -936,7 +888,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
-      <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+      <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
             Last updated by <span class="font-medium text-zinc-700 dark:text-zinc-200">{@task.updated_by.name}</span>
@@ -958,7 +910,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
-      <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
         <ul class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
@@ -987,7 +939,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div class="border-t border-zinc-100 dark:border-zinc-800 pt-3">
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity} :if={e.kind != "status_changed"}>

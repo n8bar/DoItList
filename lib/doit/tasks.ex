@@ -168,14 +168,43 @@ defmodule DoIt.Tasks do
 
   @doc """
   Toggle a task's done state. Marking done snaps progress to 100 (via
-  maybe_set_done_progress); reopening drops back to open + 0.
+  maybe_set_done_progress); reopening drops back to open + 0 and cascades
+  the undone state up the ancestor chain (per ProductSpec.md "Task
+  completion cascade" — a parent can only be done if all descendants are).
   """
   def toggle_complete(%Task{status: "done"} = task, %User{} = actor) do
-    update_task(task, actor, %{"status" => "open", "manual_progress" => 0})
+    Repo.transaction(fn ->
+      case update_task(task, actor, %{"status" => "open", "manual_progress" => 0}) do
+        {:ok, updated} ->
+          uncheck_done_ancestors(updated.parent_id, actor)
+          updated
+
+        {:error, cs} ->
+          Repo.rollback(cs)
+      end
+    end)
   end
 
   def toggle_complete(%Task{} = task, %User{} = actor) do
     update_task(task, actor, %{"status" => "done"})
+  end
+
+  defp uncheck_done_ancestors(nil, _actor), do: :ok
+
+  defp uncheck_done_ancestors(parent_id, actor) do
+    case Repo.get(Task, parent_id) do
+      nil ->
+        :ok
+
+      %Task{status: "done"} = parent ->
+        case update_task(parent, actor, %{"status" => "open"}) do
+          {:ok, updated} -> uncheck_done_ancestors(updated.parent_id, actor)
+          {:error, cs} -> Repo.rollback(cs)
+        end
+
+      parent ->
+        uncheck_done_ancestors(parent.parent_id, actor)
+    end
   end
 
   @doc """
