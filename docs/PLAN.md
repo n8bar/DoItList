@@ -28,7 +28,7 @@ No public release yet. Owner will not release until at least M02 (UX Overhaul) l
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + twenty-six design refinements (original ten + six casual-test follow-ons + ten more from continued review: fixed-height layout w/ main-scrollable content, nav reorder, add-button borders + bold green, branch icon w/ leaves, click-to-deselect, password eyeball, drop weight from new-task line, sibling split-button, own-first index + role badge). | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
+| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + design refinements. Arc 1 (bring-to-spec) complete; Arc 2 (design refinements) — 16 of 26 done, items 17-26 pending owner approval. Per-arc detail in linked arc files. | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |
