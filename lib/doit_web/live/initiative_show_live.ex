@@ -539,7 +539,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def task_node(assigns) do
     ~H"""
-    <li class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500 data-[collapsed=true]:border-b-4 data-[collapsed=true]:border-b-zinc-400 dark:data-[collapsed=true]:border-b-zinc-500">
+    <li class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500">
       <div
         class={[
           "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
@@ -557,7 +557,6 @@ defmodule DoItWeb.InitiativeShowLive do
           data-task-id={@task.id}
           data-initiative-id={@initiative_id}
           aria-controls={"children-#{@task.id}"}
-          aria-expanded="true"
           aria-label="Toggle children"
           class="group flex-none inline-flex items-center gap-0.5 px-0.5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
         >

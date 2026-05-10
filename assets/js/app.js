@@ -52,7 +52,7 @@ Hooks.CollapseToggle = {
     const ce = this.childrenEl()
     if (!ce) return
     const collapsed = localStorage.getItem(this.storageKey()) === "1"
-    ce.classList.toggle("hidden", collapsed)
+    ce.classList.toggle("collapsed-peek", collapsed)
     this.el.setAttribute("aria-expanded", String(!collapsed))
   },
   bind() {
@@ -60,8 +60,8 @@ Hooks.CollapseToggle = {
       e.stopPropagation()
       const ce = this.childrenEl()
       if (!ce) return
-      const collapsed = !ce.classList.contains("hidden")
-      ce.classList.toggle("hidden", collapsed)
+      const collapsed = !ce.classList.contains("collapsed-peek")
+      ce.classList.toggle("collapsed-peek", collapsed)
       this.el.setAttribute("aria-expanded", String(!collapsed))
       localStorage.setItem(this.storageKey(), collapsed ? "1" : "0")
     })
