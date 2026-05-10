@@ -29,13 +29,17 @@ defmodule DoItWeb.Layouts do
     <header class="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
       <div class="mx-auto max-w-6xl flex items-center justify-between px-4 sm:px-6 py-3">
         <a href="/" class="flex items-center gap-2 font-semibold text-zinc-800 dark:text-zinc-100">
-          <span class="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500"></span>
-          Do It List
+          <span class="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Do It List
         </a>
 
         <nav class="flex items-center gap-3 text-sm">
           <%= if @current_user do %>
-            <.link navigate={~p"/initiatives"} class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400">Initiatives</.link>
+            <.link
+              navigate={~p"/initiatives"}
+              class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+            >
+              Initiatives
+            </.link>
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
             <.theme_toggle />
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
@@ -50,7 +54,12 @@ defmodule DoItWeb.Layouts do
           <% else %>
             <.theme_toggle />
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-            <.link navigate={~p"/users/log_in"} class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400">Log in</.link>
+            <.link
+              navigate={~p"/users/log_in"}
+              class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+            >
+              Log in
+            </.link>
             <.link
               navigate={~p"/users/register"}
               class="px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"

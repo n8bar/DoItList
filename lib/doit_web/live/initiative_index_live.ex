@@ -45,9 +45,15 @@ defmodule DoItWeb.InitiativeIndexLive do
     end
   end
 
-  defp role_badge_class("owner"), do: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-  defp role_badge_class("editor"), do: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
-  defp role_badge_class("viewer"), do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+  defp role_badge_class("owner"),
+    do: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+
+  defp role_badge_class("editor"),
+    do: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
+
+  defp role_badge_class("viewer"),
+    do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+
   defp role_badge_class(_), do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
 
   defp build_empty_form do
@@ -110,7 +116,10 @@ defmodule DoItWeb.InitiativeIndexLive do
               <div class="flex items-center gap-2 flex-none">
                 <span
                   :if={initiative.my_role}
-                  class={["text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded", role_badge_class(initiative.my_role)]}
+                  class={[
+                    "text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded",
+                    role_badge_class(initiative.my_role)
+                  ]}
                   title={"Your role: #{initiative.my_role}"}
                 >
                   {initiative.my_role}
@@ -120,7 +129,10 @@ defmodule DoItWeb.InitiativeIndexLive do
                 </span>
               </div>
             </div>
-            <p :if={initiative.description} class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2">
+            <p
+              :if={initiative.description}
+              class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2"
+            >
               {initiative.description}
             </p>
           </.link>
