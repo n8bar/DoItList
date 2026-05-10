@@ -19,12 +19,12 @@ This is the milestone that earns the first public release.
 |---|---|---|---|
 | 1 — Bring M01 to spec | [`m02.01-bring-to-spec.md`](m02.01-bring-to-spec.md) | 2 | complete |
 | 2 — Design Refinements | [`m02.02-design-refinements.md`](m02.02-design-refinements.md) | 26 (16 done, 10 pending owner approval) | in progress |
-
-Arcs 3 (drag-and-drop reorganization) and 4 (Collaborators wide-rail) are scoped at the discussion level; arc files will be created when their items are approved.
+| 3 — Drag-and-Drop Reorganization | [`m02.03-drag-and-drop.md`](m02.03-drag-and-drop.md) | 8 (pending owner approval) | scoped |
+| 4 — Collaborators (Wide-Rail) | [`m02.04-collaborators.md`](m02.04-collaborators.md) | 8 (draft — pending owner refinement) | drafted |
 
 ## Non-Goals
 
-- Drag-and-drop reordering — split into Arc 3 (separate file once approved). Not blocking the rest of M02.
+_(Arcs 3 and 4 moved out of Non-Goals and into the Arcs table above as scoped/drafted respectively.)_
 - Status field redesign — explicitly removed from UI; revisit later as a fuller idea.
 - Renaming List/Task to Tree/Leaf in vocabulary — the metaphor stays icon-only.
 - Notifications, attachments, board/calendar views, public sharing, AI features — unchanged from M01 non-goals.
