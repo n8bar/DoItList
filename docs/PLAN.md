@@ -28,7 +28,7 @@ No public release yet. Owner will not release until at least M02 (UX Overhaul) l
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + design refinements. Arc 1 (bring-to-spec) complete; Arc 2 (design refinements) complete (26 items); Arc 3 (drag-and-drop) scoped; Arc 4 (Collaborators wide-rail) drafted. Per-arc detail in linked arc files. | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
+| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + design refinements. Arc 1 (bring-to-spec) complete; Arc 2 (design refinements) complete (27 items); Arc 3 (drag-and-drop) scoped; Arc 4 (Collaborators wide-rail) drafted. Per-arc detail in linked arc files. | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |

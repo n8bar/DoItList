@@ -255,8 +255,11 @@ defmodule DoItWeb.InitiativeShowLive do
       user = socket.assigns.current_user
 
       case Tasks.update_task(task, user, %{"manual_progress" => value}) do
-        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
-        {:error, cs} -> {:noreply, put_flash(socket, :error, "Invalid progress: #{summarize_errors(cs)}.")}
+        {:ok, _} ->
+          {:noreply, socket |> load_tree() |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Invalid progress: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -269,8 +272,11 @@ defmodule DoItWeb.InitiativeShowLive do
       user = socket.assigns.current_user
 
       case Tasks.toggle_complete(task, user) do
-        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
-        {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
+        {:ok, _} ->
+          {:noreply, socket |> load_tree() |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -283,8 +289,11 @@ defmodule DoItWeb.InitiativeShowLive do
       user = socket.assigns.current_user
 
       case Tasks.cascade_complete(task, user) do
-        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
-        {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
+        {:ok, _} ->
+          {:noreply, socket |> load_tree() |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -297,8 +306,11 @@ defmodule DoItWeb.InitiativeShowLive do
       user = socket.assigns.current_user
 
       case Tasks.cascade_incomplete(task, user) do
-        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
-        {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
+        {:ok, _} ->
+          {:noreply, socket |> load_tree() |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -366,7 +378,8 @@ defmodule DoItWeb.InitiativeShowLive do
                |> assign(:members, Initiatives.list_members(initiative.id))}
 
             {:error, cs} ->
-              {:noreply, put_flash(socket, :error, "Couldn't add member: #{summarize_errors(cs)}.")}
+              {:noreply,
+               put_flash(socket, :error, "Couldn't add member: #{summarize_errors(cs)}.")}
           end
       end
     end
@@ -376,7 +389,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
   @impl true
   def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
-  def handle_info({:task_updated, _id}, socket), do: {:noreply, socket |> load_tree() |> refresh_selected()}
+
+  def handle_info({:task_updated, _id}, socket),
+    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+
   def handle_info({:task_deleted, _id}, socket), do: {:noreply, load_tree(socket)}
   def handle_info({:comment_added, _id}, socket), do: {:noreply, refresh_selected(socket)}
 
@@ -388,7 +404,10 @@ defmodule DoItWeb.InitiativeShowLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="relative flex items-start justify-between mb-6 pb-6">
         <div>
-          <.link navigate={~p"/initiatives"} class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100">
+          <.link
+            navigate={~p"/initiatives"}
+            class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+          >
             ← All initiatives
           </.link>
           <div class="flex items-start gap-2 mt-1">
@@ -400,7 +419,8 @@ defmodule DoItWeb.InitiativeShowLive do
               title="Click to edit"
               class={[
                 "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
-                !@editing_initiative? && "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
+                !@editing_initiative? &&
+                  "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
               ]}
             >
               {@initiative.name}
@@ -417,7 +437,9 @@ defmodule DoItWeb.InitiativeShowLive do
               <span>New List</span>
             </button>
           </div>
-          <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">{@initiative.description}</p>
+          <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            {@initiative.description}
+          </p>
         </div>
         <div class="text-right text-xs text-zinc-500 dark:text-zinc-400">
           Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
@@ -432,7 +454,11 @@ defmodule DoItWeb.InitiativeShowLive do
           aria-label={"Initiative progress: #{initiative_progress(@tree)}%"}
           style={"--progress: #{initiative_progress(@tree)}%"}
         >
-          <div class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full" style="width: var(--progress)"></div>
+          <div
+            class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+            style="width: var(--progress)"
+          >
+          </div>
           <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
             {initiative_progress(@tree)}%
           </span>
@@ -475,11 +501,13 @@ defmodule DoItWeb.InitiativeShowLive do
           class="lg:hidden fixed inset-0 z-20 bg-black/50"
           phx-click="close_panel"
           aria-hidden="true"
-        ></div>
+        >
+        </div>
 
         <aside class={[
           "space-y-4",
-          (@selected_task_id || @editing_initiative?) && "fixed lg:static inset-y-0 right-0 z-30 w-full sm:w-96 lg:w-auto bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
+          (@selected_task_id || @editing_initiative?) &&
+            "fixed lg:static inset-y-0 right-0 z-30 w-full sm:w-96 lg:w-auto bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
           !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
         ]}>
           <div class="lg:hidden flex justify-end">
@@ -517,7 +545,11 @@ defmodule DoItWeb.InitiativeShowLive do
                   required
                   class="w-full input input-bordered input-sm"
                 />
-                <select name="role" aria-label="Member role" class="w-full select select-bordered select-sm">
+                <select
+                  name="role"
+                  aria-label="Member role"
+                  class="w-full select select-bordered select-sm"
+                >
                   <option value="editor">Editor</option>
                   <option value="viewer">Viewer</option>
                   <option value="owner">Owner</option>
@@ -549,11 +581,17 @@ defmodule DoItWeb.InitiativeShowLive do
             </ul>
           </div>
 
-          <div :if={@editing_initiative?} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+          <div
+            :if={@editing_initiative?}
+            class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+          >
             <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
           </div>
 
-          <div :if={@selected_task_id && not @editing_initiative?} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+          <div
+            :if={@selected_task_id && not @editing_initiative?}
+            class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+          >
             <.task_editor
               task={@selected_task}
               comments={@comments}
@@ -584,7 +622,8 @@ defmodule DoItWeb.InitiativeShowLive do
       <div
         class={[
           "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
-          @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+          @selected_id == @task.id &&
+            "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-50 dark:hover:bg-emerald-950"
         ]}
         phx-click="select_task"
         phx-value-id={@task.id}
@@ -641,13 +680,25 @@ defmodule DoItWeb.InitiativeShowLive do
         </button>
 
         <%!-- Botanical icon: green tree on Lists, brown branch on parent tasks, green leaf on leaf tasks. --%>
-        <span :if={@depth == 0} class="flex-none text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+        <span
+          :if={@depth == 0}
+          class="flex-none text-emerald-600 dark:text-emerald-400"
+          aria-hidden="true"
+        >
           <.botanical_icon kind={:tree} />
         </span>
-        <span :if={@depth > 0 and @task.children != []} class="flex-none text-amber-700 dark:text-amber-600" aria-hidden="true">
+        <span
+          :if={@depth > 0 and @task.children != []}
+          class="flex-none text-amber-700 dark:text-amber-600"
+          aria-hidden="true"
+        >
           <.botanical_icon kind={:branch} />
         </span>
-        <span :if={@depth > 0 and @task.children == []} class="flex-none text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+        <span
+          :if={@depth > 0 and @task.children == []}
+          class="flex-none text-emerald-600 dark:text-emerald-400"
+          aria-hidden="true"
+        >
           <.botanical_icon kind={:leaf} />
         </span>
 
@@ -700,11 +751,13 @@ defmodule DoItWeb.InitiativeShowLive do
               phx-click="show_add_child"
               phx-value-parent={@task.id}
               class="inline-flex items-center gap-1 min-w-11 px-2 py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-              aria-label="Add subtask"
-              title="Add subtask"
+              aria-label={if(@depth == 0, do: "New task", else: "New subtask")}
+              title={if(@depth == 0, do: "New task", else: "New subtask")}
             >
               <.icon name="hero-plus" class="w-4 h-4" />
-              <span class="hidden sm:inline">New Task</span>
+              <span class="hidden sm:inline">
+                {if(@depth == 0, do: "New Task", else: "New Subtask")}
+              </span>
             </button>
             <button
               type="button"
@@ -723,11 +776,14 @@ defmodule DoItWeb.InitiativeShowLive do
           >
             <button
               type="button"
-              phx-click={Phoenix.LiveView.JS.push("show_add_sibling") |> Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")}
+              phx-click={
+                Phoenix.LiveView.JS.push("show_add_sibling")
+                |> Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")
+              }
               phx-value-task={@task.id}
               class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              + New Task at this level
+              + Add Sibling
             </button>
           </div>
         </div>
@@ -748,7 +804,8 @@ defmodule DoItWeb.InitiativeShowLive do
               @task.status != "done" && "bg-emerald-400"
             ]}
             style="width: var(--progress)"
-          ></div>
+          >
+          </div>
           <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
             {progress_value(@task)}%
           </span>
@@ -912,7 +969,11 @@ defmodule DoItWeb.InitiativeShowLive do
               class="w-full select select-bordered select-sm"
               disabled={not @can_edit}
             >
-              <option :for={p <- DoIt.Tasks.Task.priorities()} value={p} selected={@task.priority == p}>
+              <option
+                :for={p <- DoIt.Tasks.Task.priorities()}
+                value={p}
+                selected={@task.priority == p}
+              >
                 {p}
               </option>
             </select>
@@ -950,7 +1011,9 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div :if={leaf?(@task)}>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400">Manual progress: {@task.manual_progress}%</label>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400">
+            Manual progress: {@task.manual_progress}%
+          </label>
           <input
             type="range"
             name="task[manual_progress]"
@@ -972,8 +1035,11 @@ defmodule DoItWeb.InitiativeShowLive do
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
-            Last updated by <span class="font-medium text-zinc-700 dark:text-zinc-200">{@task.updated_by.name}</span>
-            <span title={@task.updated_at}>({Calendar.strftime(@task.updated_at, "%b %-d %H:%M")})</span>
+            Last updated by
+            <span class="font-medium text-zinc-700 dark:text-zinc-200">{@task.updated_by.name}</span>
+            <span title={@task.updated_at}>
+              ({Calendar.strftime(@task.updated_at, "%b %-d %H:%M")})
+            </span>
           <% else %>
             Updated {Calendar.strftime(@task.updated_at, "%b %-d %H:%M")}
           <% end %>
@@ -996,8 +1062,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <ul class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
             <div class="text-xs text-zinc-500 dark:text-zinc-400">
-              {c.user && c.user.name}
-              · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
+              {c.user && c.user.name} · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
             <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
           </li>
@@ -1024,10 +1089,15 @@ defmodule DoItWeb.InitiativeShowLive do
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity} :if={e.kind != "status_changed"}>
-            <span class="text-zinc-500 dark:text-zinc-400">{Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}</span>
-            · <span class="font-medium">{e.user && e.user.name || "system"}</span>
+            <span class="text-zinc-500 dark:text-zinc-400">
+              {Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}
+            </span>
+            · <span class="font-medium">{(e.user && e.user.name) || "system"}</span>
             · {e.kind}
-            <span :if={Map.get(e.data, "from") || Map.get(e.data, "to")} class="text-zinc-500 dark:text-zinc-400">
+            <span
+              :if={Map.get(e.data, "from") || Map.get(e.data, "to")}
+              class="text-zinc-500 dark:text-zinc-400"
+            >
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
             </span>
           </li>
@@ -1043,9 +1113,7 @@ defmodule DoItWeb.InitiativeShowLive do
         children == []
 
       _ ->
-        Repo.one(
-          from t in Task, where: t.parent_id == ^task.id, select: count(t.id)
-        ) == 0
+        Repo.one(from t in Task, where: t.parent_id == ^task.id, select: count(t.id)) == 0
     end
   end
 
