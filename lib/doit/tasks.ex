@@ -167,10 +167,14 @@ defmodule DoIt.Tasks do
   defp maybe_set_done_progress(updated, _prev), do: updated
 
   @doc """
-  Toggle a task's done state. Marking done snaps progress to 100 (via
-  maybe_set_done_progress); reopening drops back to open + 0 and cascades
-  the undone state up the ancestor chain (per ProductSpec.md "Task
-  completion cascade" — a parent can only be done if all descendants are).
+  Toggle a task's done state. Both directions cascade up to keep the
+  ProductSpec invariant intact — a parent can only be done if all
+  descendants are:
+
+  - done -> open: reopens the task and walks the ancestor chain,
+    unchecking any ancestor that was done.
+  - open -> done: marks the task done and walks the ancestor chain,
+    auto-checking each ancestor whose entire child set is now done.
   """
   def toggle_complete(%Task{status: "done"} = task, %User{} = actor) do
     Repo.transaction(fn ->
@@ -186,7 +190,38 @@ defmodule DoIt.Tasks do
   end
 
   def toggle_complete(%Task{} = task, %User{} = actor) do
-    update_task(task, actor, %{"status" => "done"})
+    Repo.transaction(fn ->
+      case update_task(task, actor, %{"status" => "done"}) do
+        {:ok, updated} ->
+          check_completed_ancestors(updated.parent_id, actor)
+          updated
+
+        {:error, cs} ->
+          Repo.rollback(cs)
+      end
+    end)
+  end
+
+  defp check_completed_ancestors(nil, _actor), do: :ok
+
+  defp check_completed_ancestors(parent_id, actor) do
+    case Repo.get(Task, parent_id) do
+      nil ->
+        :ok
+
+      parent ->
+        siblings = Repo.all(from t in Task, where: t.parent_id == ^parent.id)
+        all_done? = siblings != [] and Enum.all?(siblings, &(&1.status == "done"))
+
+        if all_done? and parent.status != "done" do
+          case update_task(parent, actor, %{"status" => "done"}) do
+            {:ok, updated} -> check_completed_ancestors(updated.parent_id, actor)
+            {:error, cs} -> Repo.rollback(cs)
+          end
+        else
+          :ok
+        end
+    end
   end
 
   defp uncheck_done_ancestors(nil, _actor), do: :ok
