@@ -27,6 +27,19 @@ import topbar from "../vendor/topbar"
 
 const Hooks = {}
 
+// Auto-dismiss :info flash messages after 4s. :error flashes stay until the
+// user dismisses them (those usually need attention).
+Hooks.AutoDismissFlash = {
+  mounted() {
+    if (this.el.dataset.kind === "info") {
+      this.timer = setTimeout(() => this.el.click(), 4000)
+    }
+  },
+  destroyed() {
+    if (this.timer) clearTimeout(this.timer)
+  },
+}
+
 // Per-task collapse/expand toggle for the task tree on /initiatives/:id.
 // Persists state in localStorage keyed by (initiative_id, task_id).
 // Toggling never affects roll-up — it only hides the children <ul>.

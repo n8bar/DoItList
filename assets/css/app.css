@@ -107,14 +107,10 @@
    with a white outline; dark-mode flips both. */
 .progress-bar-text {
   text-shadow:
-    2px 2px 0 rgba(255, 255, 255, 0.95),
-    -2px 2px 0 rgba(255, 255, 255, 0.95),
-    2px -2px 0 rgba(255, 255, 255, 0.95),
-    -2px -2px 0 rgba(255, 255, 255, 0.95),
-    0 2px 0 rgba(255, 255, 255, 0.95),
-    0 -2px 0 rgba(255, 255, 255, 0.95),
-    2px 0 0 rgba(255, 255, 255, 0.95),
-    -2px 0 0 rgba(255, 255, 255, 0.95);
+    1px 1px 0 rgba(255, 255, 255, 0.95),
+    -1px 1px 0 rgba(255, 255, 255, 0.95),
+    1px -1px 0 rgba(255, 255, 255, 0.95),
+    -1px -1px 0 rgba(255, 255, 255, 0.95);
 }
 [data-theme=dark] .progress-bar-text {
   text-shadow:

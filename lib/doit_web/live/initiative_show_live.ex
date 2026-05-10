@@ -458,7 +458,7 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-        <div>
+        <div class="min-w-0">
           <div :if={@add_task_for == :root} class="mb-3">
             <.task_form parent_id={nil} />
           </div>
@@ -592,7 +592,7 @@ defmodule DoItWeb.InitiativeShowLive do
     <li class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
       <div
         class={[
-          "relative flex items-center gap-2 px-3 pt-2 pb-6 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
+          "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
           @selected_id == @task.id && "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-50 dark:hover:bg-emerald-950"
         ]}
         phx-click="select_task"
@@ -609,11 +609,11 @@ defmodule DoItWeb.InitiativeShowLive do
           aria-controls={"children-#{@task.id}"}
           aria-expanded="true"
           aria-label="Toggle children"
-          class="flex-none w-5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
+          class="group flex-none w-5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center justify-center"
         >
           <.icon
             name="hero-chevron-down"
-            class="w-4 h-4 transition-transform motion-reduce:transition-none aria-[expanded=false]:-rotate-90"
+            class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
           />
         </button>
         <div :if={@task.children == []} class="flex-none w-5 h-5"></div>
@@ -682,7 +682,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <%!-- Em-dash + description: hidden on very narrow; ellipsis on overflow --%>
           <span
             :if={@task.description && @task.description != ""}
-            class="hidden sm:inline text-sm text-zinc-400 dark:text-zinc-500 truncate min-w-0"
+            class="hidden sm:inline-block flex-1 min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
           >
             {" — " <> @task.description}
           </span>

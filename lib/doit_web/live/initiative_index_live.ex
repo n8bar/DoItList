@@ -90,9 +90,9 @@ defmodule DoItWeb.InitiativeIndexLive do
         <div
           :for={{dom_id, initiative} <- @streams.initiatives}
           id={dom_id}
-          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 hover:shadow-sm transition motion-reduce:transition-none"
+          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
         >
-          <.link navigate={~p"/initiatives/#{initiative.id}"} class="block">
+          <.link navigate={~p"/initiatives/#{initiative.id}"} class="block p-4">
             <div class="flex items-center justify-between">
               <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2">
                 <span class="text-emerald-600 dark:text-emerald-400" aria-hidden="true">
