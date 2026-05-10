@@ -257,6 +257,20 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  def handle_event("cascade_incomplete", %{"id" => id}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      task = Tasks.get_task!(String.to_integer(id))
+      user = socket.assigns.current_user
+
+      case Tasks.cascade_incomplete(task, user) do
+        {:ok, _} -> {:noreply, socket |> load_tree() |> refresh_selected()}
+        {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
   def handle_event("add_comment", %{"comment" => %{"body" => body}}, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
@@ -360,15 +374,6 @@ defmodule DoItWeb.InitiativeShowLive do
               {@initiative.name}
             </h1>
             <button
-              type="button"
-              phx-click="edit_initiative"
-              aria-label="Open Initiative details"
-              title="Initiative details"
-              class="mt-1 p-1 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              <.icon name="hero-ellipsis-horizontal" class="w-4 h-4" />
-            </button>
-            <button
               :if={@can_edit}
               type="button"
               phx-click="show_add_root"
@@ -444,7 +449,7 @@ defmodule DoItWeb.InitiativeShowLive do
               phx-click="close_panel"
               aria-label="Close details panel"
               title="Close"
-              class="p-2 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
             >
               <.icon name="hero-x-mark" class="w-5 h-5" />
             </button>
@@ -534,7 +539,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def task_node(assigns) do
     ~H"""
-    <li class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500">
+    <li class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500 data-[collapsed=true]:border-b-4 data-[collapsed=true]:border-b-zinc-400 dark:data-[collapsed=true]:border-b-zinc-500">
       <div
         class={[
           "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
@@ -569,9 +574,21 @@ defmodule DoItWeb.InitiativeShowLive do
         <button
           :if={@can_edit}
           type="button"
-          phx-click={if @task.children == [], do: "toggle_complete", else: "cascade_complete"}
+          phx-click={
+            cond do
+              @task.children == [] -> "toggle_complete"
+              @task.status == "done" -> "cascade_incomplete"
+              true -> "cascade_complete"
+            end
+          }
           phx-value-id={@task.id}
-          data-confirm={if @task.children != [], do: "Mark this task and all its children completed?"}
+          data-confirm={
+            cond do
+              @task.children == [] -> nil
+              @task.status == "done" -> "Uncheck this task and all its children?"
+              true -> "Mark this task and all its children completed?"
+            end
+          }
           aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
           aria-pressed={@task.status == "done"}
           class={[
@@ -744,7 +761,7 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-click="close_initiative"
           aria-label="Close"
           title="Close"
-          class="font-bold text-red-600 hover:text-red-700"
+          class="inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
         >
           <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>
@@ -793,7 +810,7 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-click="close_task"
           aria-label="Close"
           title="Close"
-          class="font-bold text-red-600 hover:text-red-700"
+          class="inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
         >
           <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>

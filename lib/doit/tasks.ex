@@ -208,24 +208,41 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Mark this task and every descendant as done. Uses `update_task/3` per node
-  so each gets activity events and ancestor recompute. Wrapped in a single
-  transaction so the cascade is atomic.
+  Cascade a status change to a task and every descendant. Used for the
+  parent-checkbox interaction: marking a parent done cascades down to all
+  descendants; unchecking a parent cascades undone to all descendants and
+  also walks up the ancestor chain (since unchecking might invalidate
+  ancestors that were done). Wrapped in a single transaction.
   """
   def cascade_complete(%Task{} = task, %User{} = actor) do
+    cascade_status(task, actor, "done")
+  end
+
+  def cascade_incomplete(%Task{} = task, %User{} = actor) do
+    cascade_status(task, actor, "open")
+  end
+
+  defp cascade_status(%Task{} = task, %User{} = actor, status) do
     Repo.transaction(fn ->
       task.id
       |> list_descendants()
       |> Enum.each(fn descendant ->
-        case update_task(descendant, actor, %{"status" => "done"}) do
+        case update_task(descendant, actor, %{"status" => status}) do
           {:ok, _} -> :ok
           {:error, cs} -> Repo.rollback(cs)
         end
       end)
 
-      case update_task(task, actor, %{"status" => "done"}) do
-        {:ok, updated} -> updated
-        {:error, cs} -> Repo.rollback(cs)
+      case update_task(task, actor, %{"status" => status}) do
+        {:ok, updated} ->
+          if status == "open" do
+            uncheck_done_ancestors(updated.parent_id, actor)
+          end
+
+          updated
+
+        {:error, cs} ->
+          Repo.rollback(cs)
       end
     end)
   end
