@@ -42,6 +42,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
+         |> assign(:add_task_after, nil)
          |> assign(:new_task_title, "")
          |> load_tree()}
     end
@@ -76,13 +77,20 @@ defmodule DoItWeb.InitiativeShowLive do
 
   @impl true
   def handle_event("show_add_root", _params, socket) do
-    {:noreply, socket |> assign(:add_task_for, :root) |> assign(:new_task_title, "")}
+    {:noreply,
+     socket
+     |> assign(:add_task_for, :root)
+     |> assign(:add_task_after, nil)
+     |> assign(:new_task_title, "")}
   end
 
   def handle_event("show_add_child", %{"parent" => parent_id}, socket) do
+    parent_id = String.to_integer(parent_id)
+
     {:noreply,
      socket
-     |> assign(:add_task_for, String.to_integer(parent_id))
+     |> assign(:add_task_for, parent_id)
+     |> assign(:add_task_after, parent_id)
      |> assign(:new_task_title, "")}
   end
 
@@ -93,11 +101,15 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply,
      socket
      |> assign(:add_task_for, add_for)
+     |> assign(:add_task_after, task.id)
      |> assign(:new_task_title, "")}
   end
 
   def handle_event("cancel_add", _params, socket) do
-    {:noreply, assign(socket, :add_task_for, nil)}
+    {:noreply,
+     socket
+     |> assign(:add_task_for, nil)
+     |> assign(:add_task_after, nil)}
   end
 
   def handle_event("create_task", %{"title" => title} = params, socket) do
@@ -125,6 +137,7 @@ defmodule DoItWeb.InitiativeShowLive do
           {:noreply,
            socket
            |> assign(:add_task_for, nil)
+           |> assign(:add_task_after, nil)
            |> assign(:new_task_title, "")
            |> put_flash(:info, "Task added.")
            |> load_tree()}
@@ -437,15 +450,22 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
 
           <ul class="space-y-2">
-            <.task_node
-              :for={t <- @tree}
-              task={t}
-              depth={0}
-              add_task_for={@add_task_for}
-              can_edit={@can_edit}
-              selected_id={@selected_task_id}
-              initiative_id={@initiative.id}
-            />
+            <%= for t <- @tree do %>
+              <.task_node
+                task={t}
+                depth={0}
+                add_task_for={@add_task_for}
+                add_task_after={@add_task_after}
+                can_edit={@can_edit}
+                selected_id={@selected_task_id}
+                initiative_id={@initiative.id}
+              />
+              <%= if @add_task_after == t.id and @add_task_for != t.id do %>
+                <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
+                  <.task_form parent_id={if(@add_task_for == :root, do: nil, else: @add_task_for)} />
+                </li>
+              <% end %>
+            <% end %>
           </ul>
         </div>
 
@@ -553,6 +573,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :task, :map, required: true
   attr :depth, :integer, required: true
   attr :add_task_for, :any, required: true
+  attr :add_task_after, :any, required: true
   attr :can_edit, :boolean, required: true
   attr :selected_id, :any, required: true
   attr :initiative_id, :integer, required: true
@@ -691,9 +712,9 @@ defmodule DoItWeb.InitiativeShowLive do
               phx-click={Phoenix.LiveView.JS.toggle(to: "#add-menu-panel-#{@task.id}")}
               aria-label="More add options"
               title="More add options"
-              class="px-1.5 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              class="inline-flex items-center px-1 text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
             >
-              ▶
+              <.icon name="hero-chevron-down" class="w-3.5 h-3.5" />
             </button>
           </div>
           <div
@@ -734,20 +755,27 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
-      <div :if={@add_task_for == @task.id} class="px-3 pb-3">
+      <div :if={@add_task_for == @task.id and @add_task_after == @task.id} class="px-3 pb-3">
         <.task_form parent_id={@task.id} />
       </div>
 
       <ul :if={@task.children != []} id={"children-#{@task.id}"} class="pl-6 pb-2 space-y-1">
-        <.task_node
-          :for={c <- @task.children}
-          task={c}
-          depth={@depth + 1}
-          add_task_for={@add_task_for}
-          can_edit={@can_edit}
-          selected_id={@selected_id}
-          initiative_id={@initiative_id}
-        />
+        <%= for c <- @task.children do %>
+          <.task_node
+            task={c}
+            depth={@depth + 1}
+            add_task_for={@add_task_for}
+            add_task_after={@add_task_after}
+            can_edit={@can_edit}
+            selected_id={@selected_id}
+            initiative_id={@initiative_id}
+          />
+          <%= if @add_task_after == c.id and @add_task_for != c.id do %>
+            <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
+              <.task_form parent_id={@add_task_for} />
+            </li>
+          <% end %>
+        <% end %>
       </ul>
     </li>
     """
