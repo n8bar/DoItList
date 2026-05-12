@@ -137,6 +137,183 @@ defmodule DoIt.Tasks do
     end)
   end
 
+  @sort_gap 1000
+
+  @doc """
+  Moves a task to a new parent and/or position within an Initiative.
+  Cross-Initiative moves are not supported and return an error.
+
+  `attrs` is a map (string or atom keys) with:
+    * `"parent_id"` — the new parent's id, or `nil` for a root-level task.
+      Defaults to the task's current `parent_id` if omitted.
+    * `"position"` — 0-based insertion index among the new siblings. `nil`
+      (or omitted) appends to the end.
+
+  Runs in a single transaction:
+    1. Validates the move (same Initiative, no cycle).
+    2. Updates the moved task's `parent_id` + `sort_order`.
+    3. Re-numbers siblings under the destination parent (and the source
+       parent, when different) using a fixed gap so future single-row
+       updates are cheap.
+    4. Records a `parent_changed` and/or `reordered` activity event.
+    5. Recomputes ancestor progress for both the OLD and NEW parent chains.
+    6. Broadcasts `{:task_moved, id}` on the Initiative topic.
+
+  Returns `{:ok, task}` or `{:error, reason}` where `reason` is one of
+  `:cross_initiative`, `:cycle`, or an `Ecto.Changeset.t()`.
+  """
+  def move_task(%Task{} = task, %User{} = actor, attrs) do
+    attrs = stringify_keys(attrs)
+
+    new_parent_id =
+      if Map.has_key?(attrs, "parent_id"),
+        do: normalize_id(attrs["parent_id"]),
+        else: task.parent_id
+
+    position = normalize_position(Map.get(attrs, "position"))
+
+    Repo.transaction(fn ->
+      with :ok <- validate_move(task, new_parent_id) do
+        old_parent_id = task.parent_id
+        moved = perform_move(task, new_parent_id, position, actor)
+
+        if old_parent_id != new_parent_id do
+          record_event(moved, actor, "parent_changed", %{
+            from: old_parent_id,
+            to: new_parent_id
+          })
+        else
+          record_event(moved, actor, "reordered", %{parent_id: new_parent_id})
+        end
+
+        if old_parent_id && old_parent_id != new_parent_id,
+          do: recompute_ancestors(old_parent_id)
+
+        if new_parent_id, do: recompute_ancestors(new_parent_id)
+
+        moved = Repo.get!(Task, moved.id)
+        broadcast_change(moved.initiative_id, {:task_moved, moved.id})
+        moved
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp validate_move(_task, nil), do: :ok
+
+  defp validate_move(%Task{id: id}, new_parent_id) when new_parent_id == id,
+    do: {:error, :cycle}
+
+  defp validate_move(%Task{} = task, new_parent_id) do
+    case Repo.get(Task, new_parent_id) do
+      nil ->
+        {:error, :cycle}
+
+      %Task{initiative_id: pid_initiative} when pid_initiative != task.initiative_id ->
+        {:error, :cross_initiative}
+
+      _parent ->
+        descendant_ids = task.id |> list_descendants() |> Enum.map(& &1.id) |> MapSet.new()
+
+        if MapSet.member?(descendant_ids, new_parent_id),
+          do: {:error, :cycle},
+          else: :ok
+    end
+  end
+
+  defp perform_move(%Task{} = task, new_parent_id, position, actor) do
+    # Re-number existing siblings of the destination parent (excluding the moved
+    # task) into a fresh sequence with @sort_gap spacing, then slot the moved
+    # task in at `position` (or at the end when nil).
+    siblings =
+      from(t in Task,
+        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id,
+        order_by: [asc: t.sort_order, asc: t.inserted_at]
+      )
+      |> with_parent(new_parent_id)
+      |> Repo.all()
+
+    insert_index =
+      case position do
+        nil -> length(siblings)
+        n when n < 0 -> 0
+        n -> min(n, length(siblings))
+      end
+
+    new_sort_order = (insert_index + 1) * @sort_gap
+
+    {:ok, moved} =
+      task
+      |> Task.update_changeset(%{
+        "parent_id" => new_parent_id,
+        "sort_order" => new_sort_order,
+        "updated_by_id" => actor.id
+      })
+      |> Repo.update()
+
+    # Renumber destination siblings around the inserted position.
+    siblings
+    |> Enum.with_index()
+    |> Enum.each(fn {sibling, idx} ->
+      new_order = if idx < insert_index, do: (idx + 1) * @sort_gap, else: (idx + 2) * @sort_gap
+      if sibling.sort_order != new_order, do: persist_sort_order(sibling, new_order)
+    end)
+
+    # If the source parent differs, also renumber the (now-reduced) source
+    # siblings to keep their ordering tidy.
+    if task.parent_id != new_parent_id do
+      source_siblings =
+        from(t in Task,
+          where: t.initiative_id == ^task.initiative_id and t.id != ^task.id,
+          order_by: [asc: t.sort_order, asc: t.inserted_at]
+        )
+        |> with_parent(task.parent_id)
+        |> Repo.all()
+
+      source_siblings
+      |> Enum.with_index()
+      |> Enum.each(fn {sibling, idx} ->
+        new_order = (idx + 1) * @sort_gap
+        if sibling.sort_order != new_order, do: persist_sort_order(sibling, new_order)
+      end)
+    end
+
+    moved
+  end
+
+  defp with_parent(query, nil), do: from(t in query, where: is_nil(t.parent_id))
+  defp with_parent(query, id), do: from(t in query, where: t.parent_id == ^id)
+
+  defp persist_sort_order(%Task{} = task, value) do
+    task
+    |> Ecto.Changeset.change(sort_order: value)
+    |> Repo.update!()
+  end
+
+  defp normalize_id(nil), do: nil
+  defp normalize_id(""), do: nil
+  defp normalize_id(id) when is_integer(id), do: id
+
+  defp normalize_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp normalize_position(nil), do: nil
+  defp normalize_position(n) when is_integer(n), do: n
+
+  defp normalize_position(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp normalize_position(_), do: nil
+
   def delete_task(%Task{} = task, %User{} = actor) do
     Repo.transaction(fn ->
       parent_id = task.parent_id

@@ -350,6 +350,50 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  def handle_event("move_task", %{"task_id" => task_id} = params, socket) do
+    if not socket.assigns.can_edit do
+      {:reply, %{ok: false, error: "forbidden"},
+       put_flash(socket, :error, "You don't have permission to move tasks.")}
+    else
+      task = Tasks.get_task!(task_id)
+      user = socket.assigns.current_user
+
+      attrs = %{
+        "parent_id" => Map.get(params, "parent_id"),
+        "position" => Map.get(params, "position")
+      }
+
+      case Tasks.move_task(task, user, attrs) do
+        {:ok, _moved} ->
+          {:reply, %{ok: true}, socket |> load_tree() |> refresh_selected()}
+
+        {:error, reason} ->
+          {:reply, %{ok: false, error: format_move_error(reason)},
+           put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
+      end
+    end
+  end
+
+  # Keyboard alternative for task reorganization (M02 Arc 3 item 6).
+  # When a task is selected (Details panel open) and the user has edit rights,
+  # Alt+↑/↓ reorder among siblings; Alt+←/→ dedent / indent.
+  def handle_event("kbd_move", %{"key" => key, "altKey" => true}, socket)
+      when key in ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"] do
+    cond do
+      is_nil(socket.assigns.selected_task_id) ->
+        {:noreply, socket}
+
+      not socket.assigns.can_edit ->
+        {:noreply, socket}
+
+      true ->
+        do_kbd_move(key, socket)
+    end
+  end
+
+  # Permissive fallthrough: ignore non-arrow keys, missing modifiers, etc.
+  def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
+
   def handle_event("show_member_form", _params, socket) do
     {:noreply, socket |> assign(:show_member_form, true) |> assign(:member_email, "")}
   end
@@ -396,211 +440,237 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_info({:task_deleted, _id}, socket), do: {:noreply, load_tree(socket)}
   def handle_info({:comment_added, _id}, socket), do: {:noreply, refresh_selected(socket)}
 
+  def handle_info({:task_moved, _id}, socket),
+    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+
   # --- Render ---------------------------------------------------------------
 
   @impl true
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
-      <div class="relative flex items-start justify-between mb-6 pb-6">
-        <div>
-          <.link
-            navigate={~p"/initiatives"}
-            class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
-          >
-            ← All initiatives
-          </.link>
-          <div class="flex items-start gap-2 mt-1">
-            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
-              <.botanical_icon kind={:grove} class="w-6 h-6" />
-            </span>
-            <h1
-              phx-click="edit_initiative"
-              title="Click to edit"
-              class={[
-                "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
-                !@editing_initiative? &&
-                  "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
-              ]}
+      <div
+        id="initiative-show-root"
+        phx-hook=".KbdAltArrowGuard"
+        phx-window-keydown="kbd_move"
+        phx-throttle="100"
+      >
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".KbdAltArrowGuard">
+          export default {
+            mounted() {
+              this._handler = (e) => {
+                if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown" ||
+                                 e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+                  e.preventDefault();
+                }
+              };
+              window.addEventListener("keydown", this._handler);
+            },
+            destroyed() {
+              window.removeEventListener("keydown", this._handler);
+            }
+          }
+        </script>
+        <div class="relative flex items-start justify-between mb-6 pb-6">
+          <div>
+            <.link
+              navigate={~p"/initiatives"}
+              class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
             >
-              {@initiative.name}
-            </h1>
-            <button
-              :if={@can_edit}
-              type="button"
-              phx-click="show_add_root"
-              class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-              aria-label="New list"
-              title="New list"
-            >
-              <.icon name="hero-plus" class="w-4 h-4" />
-              <span>New List</span>
-            </button>
-          </div>
-          <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            {@initiative.description}
-          </p>
-        </div>
-        <div class="text-right text-xs text-zinc-500 dark:text-zinc-400">
-          Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
-        </div>
-
-        <div
-          class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
-          role="progressbar"
-          aria-valuenow={initiative_progress(@tree)}
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-label={"Initiative progress: #{initiative_progress(@tree)}%"}
-          style={"--progress: #{initiative_progress(@tree)}%"}
-        >
-          <div
-            class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
-            style="width: var(--progress)"
-          >
-          </div>
-          <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
-            {initiative_progress(@tree)}%
-          </span>
-        </div>
-      </div>
-
-      <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-        <div class="min-w-0">
-          <div :if={@add_task_for == :root} class="mb-3">
-            <.task_form parent_id={nil} />
-          </div>
-
-          <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
-            No lists yet. Create one to start tracking work.
-          </div>
-
-          <ul class="space-y-2">
-            <%= for t <- @tree do %>
-              <.task_node
-                task={t}
-                depth={0}
-                add_task_for={@add_task_for}
-                add_task_after={@add_task_after}
-                can_edit={@can_edit}
-                selected_id={@selected_task_id}
-                initiative_id={@initiative.id}
-              />
-              <%= if @add_task_after == t.id and @add_task_for != t.id do %>
-                <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
-                  <.task_form parent_id={if(@add_task_for == :root, do: nil, else: @add_task_for)} />
-                </li>
-              <% end %>
-            <% end %>
-          </ul>
-        </div>
-
-        <%!-- Backdrop on mobile when right-rail flyout is open --%>
-        <div
-          :if={@selected_task_id || @editing_initiative?}
-          class="lg:hidden fixed inset-0 z-20 bg-black/50"
-          phx-click="close_panel"
-          aria-hidden="true"
-        >
-        </div>
-
-        <aside class={[
-          "space-y-4",
-          (@selected_task_id || @editing_initiative?) &&
-            "fixed lg:static inset-y-0 right-0 z-30 w-full sm:w-96 lg:w-auto bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
-          !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
-        ]}>
-          <div class="lg:hidden flex justify-end">
-            <button
-              type="button"
-              phx-click="close_panel"
-              aria-label="Close details panel"
-              title="Close"
-              class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
-            >
-              <.icon name="hero-x-mark" class="w-5 h-5" />
-            </button>
-          </div>
-          <div class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
-            <div class="flex items-center justify-between mb-2">
-              <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
-              <button
-                :if={@can_admin}
-                type="button"
-                phx-click="show_member_form"
-                class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              ← All initiatives
+            </.link>
+            <div class="flex items-start gap-2 mt-1">
+              <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+                <.botanical_icon kind={:grove} class="w-6 h-6" />
+              </span>
+              <h1
+                phx-click="edit_initiative"
+                title="Click to edit"
+                class={[
+                  "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
+                  !@editing_initiative? &&
+                    "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
+                ]}
               >
-                <.icon name="hero-plus" class="w-3.5 h-3.5" />
-                <span>Add Member</span>
+                {@initiative.name}
+              </h1>
+              <button
+                :if={@can_edit}
+                type="button"
+                phx-click="show_add_root"
+                class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                aria-label="New list"
+                title="New list"
+              >
+                <.icon name="hero-plus" class="w-4 h-4" />
+                <span>New List</span>
               </button>
             </div>
+            <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+              {@initiative.description}
+            </p>
+          </div>
+          <div class="text-right text-xs text-zinc-500 dark:text-zinc-400">
+            Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+          </div>
 
-            <div :if={@show_member_form} class="mb-3">
-              <form phx-submit="add_member" class="flex flex-col gap-2">
-                <input
-                  type="email"
-                  name="email"
-                  placeholder="email@example.com"
-                  aria-label="Member email"
-                  required
-                  class="w-full input input-bordered input-sm"
-                />
-                <select
-                  name="role"
-                  aria-label="Member role"
-                  class="w-full select select-bordered select-sm"
-                >
-                  <option value="editor">Editor</option>
-                  <option value="viewer">Viewer</option>
-                  <option value="owner">Owner</option>
-                </select>
-                <div class="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    phx-click="cancel_member"
-                    class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    phx-disable-with="Adding..."
-                    class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                  >
-                    Add
-                  </button>
-                </div>
-              </form>
+          <div
+            class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+            role="progressbar"
+            aria-valuenow={initiative_progress(@tree)}
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-label={"Initiative progress: #{initiative_progress(@tree)}%"}
+            style={"--progress: #{initiative_progress(@tree)}%"}
+          >
+            <div
+              class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+              style="width: var(--progress)"
+            >
+            </div>
+            <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+              {initiative_progress(@tree)}%
+            </span>
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+          <div class="min-w-0">
+            <div :if={@add_task_for == :root} class="mb-3">
+              <.task_form parent_id={nil} />
             </div>
 
-            <ul class="space-y-1 text-sm">
-              <li :for={m <- @members} class="flex items-center justify-between">
-                <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
-                <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
-              </li>
+            <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
+              No lists yet. Create one to start tracking work.
+            </div>
+
+            <ul class="space-y-2">
+              <%= for t <- @tree do %>
+                <.task_node
+                  task={t}
+                  depth={0}
+                  add_task_for={@add_task_for}
+                  add_task_after={@add_task_after}
+                  can_edit={@can_edit}
+                  selected_id={@selected_task_id}
+                  initiative_id={@initiative.id}
+                />
+                <%= if @add_task_after == t.id and @add_task_for != t.id do %>
+                  <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
+                    <.task_form parent_id={if(@add_task_for == :root, do: nil, else: @add_task_for)} />
+                  </li>
+                <% end %>
+              <% end %>
             </ul>
           </div>
 
+          <%!-- Backdrop on mobile when right-rail flyout is open --%>
           <div
-            :if={@editing_initiative?}
-            class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+            :if={@selected_task_id || @editing_initiative?}
+            class="lg:hidden fixed inset-0 z-20 bg-black/50"
+            phx-click="close_panel"
+            aria-hidden="true"
           >
-            <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
           </div>
 
-          <div
-            :if={@selected_task_id && not @editing_initiative?}
-            class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-          >
-            <.task_editor
-              task={@selected_task}
-              comments={@comments}
-              activity={@activity}
-              members={@members}
-              can_edit={@can_edit}
-            />
-          </div>
-        </aside>
+          <aside class={[
+            "space-y-4",
+            (@selected_task_id || @editing_initiative?) &&
+              "fixed lg:static inset-y-0 right-0 z-30 w-full sm:w-96 lg:w-auto bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
+            !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
+          ]}>
+            <div class="lg:hidden flex justify-end">
+              <button
+                type="button"
+                phx-click="close_panel"
+                aria-label="Close details panel"
+                title="Close"
+                class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+              >
+                <.icon name="hero-x-mark" class="w-5 h-5" />
+              </button>
+            </div>
+            <div class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
+                <button
+                  :if={@can_admin}
+                  type="button"
+                  phx-click="show_member_form"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                >
+                  <.icon name="hero-plus" class="w-3.5 h-3.5" />
+                  <span>Add Member</span>
+                </button>
+              </div>
+
+              <div :if={@show_member_form} class="mb-3">
+                <form phx-submit="add_member" class="flex flex-col gap-2">
+                  <input
+                    type="email"
+                    name="email"
+                    placeholder="email@example.com"
+                    aria-label="Member email"
+                    required
+                    class="w-full input input-bordered input-sm"
+                  />
+                  <select
+                    name="role"
+                    aria-label="Member role"
+                    class="w-full select select-bordered select-sm"
+                  >
+                    <option value="editor">Editor</option>
+                    <option value="viewer">Viewer</option>
+                    <option value="owner">Owner</option>
+                  </select>
+                  <div class="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      phx-click="cancel_member"
+                      class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      phx-disable-with="Adding..."
+                      class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+                </form>
+              </div>
+
+              <ul class="space-y-1 text-sm">
+                <li :for={m <- @members} class="flex items-center justify-between">
+                  <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
+                  <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+                </li>
+              </ul>
+            </div>
+
+            <div
+              :if={@editing_initiative?}
+              class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+            >
+              <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
+            </div>
+
+            <div
+              :if={@selected_task_id && not @editing_initiative?}
+              class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+            >
+              <.task_editor
+                task={@selected_task}
+                comments={@comments}
+                activity={@activity}
+                members={@members}
+                can_edit={@can_edit}
+              />
+            </div>
+          </aside>
+        </div>
       </div>
     </Layouts.app>
     """
@@ -618,7 +688,11 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def task_node(assigns) do
     ~H"""
-    <li class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500">
+    <li
+      data-task-id={@task.id}
+      data-depth={@depth}
+      class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500"
+    >
       <div
         class={[
           "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
@@ -628,6 +702,19 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-click="select_task"
         phx-value-id={@task.id}
       >
+        <span
+          :if={@can_edit}
+          id={"drag-#{@task.id}"}
+          phx-hook="DragReorder"
+          aria-hidden="true"
+          data-task-id={@task.id}
+          data-parent-id={@task.parent_id}
+          data-depth={@depth}
+          data-initiative-id={@initiative_id}
+          class="flex-none -my-2 w-11 h-11 flex items-center justify-center text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-grab active:cursor-grabbing touch-none"
+        >
+          <.icon name="hero-ellipsis-vertical" class="w-4 h-4" />
+        </span>
         <button
           :if={@task.children != []}
           type="button"
@@ -1133,6 +1220,105 @@ defmodule DoItWeb.InitiativeShowLive do
     total = Enum.reduce(roots, 0, fn t, acc -> acc + progress_value(t) end)
     div(total, length(roots))
   end
+
+  # --- Keyboard move helpers ------------------------------------------------
+
+  # Compute and execute the right move_task call for the selected task given
+  # an Alt+Arrow key. Returns {:noreply, socket}.
+  defp do_kbd_move(key, socket) do
+    user = socket.assigns.current_user
+    task = Tasks.get_task!(socket.assigns.selected_task_id)
+    siblings = sibling_ids(task)
+    idx = Enum.find_index(siblings, &(&1 == task.id)) || 0
+
+    move_attrs =
+      case key do
+        "ArrowUp" -> kbd_move_up(siblings, idx, task)
+        "ArrowDown" -> kbd_move_down(siblings, idx, task)
+        "ArrowRight" -> kbd_indent(siblings, idx, task)
+        "ArrowLeft" -> kbd_dedent(task)
+      end
+
+    case move_attrs do
+      :noop ->
+        {:noreply, socket}
+
+      attrs ->
+        case Tasks.move_task(task, user, attrs) do
+          {:ok, _moved} ->
+            {:noreply, socket}
+
+          {:error, reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
+        end
+    end
+  end
+
+  # Sibling task IDs (same parent_id, same initiative) ordered by sort_order.
+  defp sibling_ids(%Task{} = task) do
+    base =
+      from(t in Task,
+        where: t.initiative_id == ^task.initiative_id,
+        order_by: [asc: t.sort_order, asc: t.inserted_at],
+        select: t.id
+      )
+
+    query =
+      case task.parent_id do
+        nil -> from(t in base, where: is_nil(t.parent_id))
+        pid -> from(t in base, where: t.parent_id == ^pid)
+      end
+
+    Repo.all(query)
+  end
+
+  # Alt+↑: swap with previous sibling. No-op at index 0.
+  defp kbd_move_up(_siblings, 0, _task), do: :noop
+
+  defp kbd_move_up(_siblings, idx, %Task{} = task) do
+    %{"parent_id" => task.parent_id, "position" => idx - 1}
+  end
+
+  # Alt+↓: swap with next sibling. No-op at last index.
+  defp kbd_move_down(siblings, idx, %Task{} = task) do
+    if idx >= length(siblings) - 1 do
+      :noop
+    else
+      %{"parent_id" => task.parent_id, "position" => idx + 1}
+    end
+  end
+
+  # Alt+→: become last child of previous sibling. No-op if no previous sibling.
+  defp kbd_indent(_siblings, 0, _task), do: :noop
+
+  defp kbd_indent(siblings, idx, _task) do
+    new_parent_id = Enum.at(siblings, idx - 1)
+    %{"parent_id" => new_parent_id, "position" => nil}
+  end
+
+  # Alt+←: become a sibling of the parent, inserted right after the parent
+  # within the grandparent's children. No-op for root tasks.
+  defp kbd_dedent(%Task{parent_id: nil}), do: :noop
+
+  defp kbd_dedent(%Task{parent_id: parent_id} = task) do
+    parent = Tasks.get_task!(parent_id)
+    grandparent_id = parent.parent_id
+
+    grand_sibling_ids =
+      sibling_ids(%Task{parent_id: grandparent_id, initiative_id: task.initiative_id})
+
+    parent_idx = Enum.find_index(grand_sibling_ids, &(&1 == parent.id)) || 0
+
+    # Inserting "right after the parent" — among grand-siblings excluding the
+    # moved task itself, that's parent_idx + 1.
+    %{"parent_id" => grandparent_id, "position" => parent_idx + 1}
+  end
+
+  defp format_move_error(:cycle), do: "would create a cycle"
+  defp format_move_error(:cross_initiative), do: "can't move across initiatives"
+  defp format_move_error(%Ecto.Changeset{} = cs), do: summarize_errors(cs)
+  defp format_move_error(other), do: inspect(other)
 
   defp summarize_errors(%Ecto.Changeset{errors: errors}) do
     Enum.map_join(errors, "; ", fn {field, {msg, _}} ->

@@ -133,4 +133,45 @@ ul.collapsed-peek {
   margin-bottom: 0.25rem;
 }
 
+/* Drag-reorder visuals (Hooks.DragReorder).
+   - .dragging-source: dim the row being dragged so the user can see what's
+     moving without losing it visually.
+   - .drop-target: ring around the row currently under the cursor.
+   - .drag-indent-guide: thin vertical line tracking the resulting depth. */
+li.dragging-source > div:first-child {
+  opacity: 0.55;
+  outline: 2px dashed rgba(16, 185, 129, 0.6); /* emerald-500 @ 60% */
+  outline-offset: -2px;
+}
+li.drop-target > div:first-child {
+  background-color: rgba(16, 185, 129, 0.08);
+  box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.7);
+}
+[data-theme=dark] li.drop-target > div:first-child {
+  background-color: rgba(16, 185, 129, 0.18);
+  box-shadow: inset 0 0 0 2px rgba(52, 211, 153, 0.85); /* emerald-400 */
+}
+.drag-indent-guide {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 2px;
+  pointer-events: none;
+  z-index: 9999;
+  background-color: rgb(16, 185, 129); /* emerald-500 */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6);
+  transition: transform 80ms linear, opacity 120ms linear;
+  will-change: transform;
+}
+[data-theme=dark] .drag-indent-guide {
+  background-color: rgb(52, 211, 153); /* emerald-400 */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+.drag-indent-guide[data-kind="snap-back"] {
+  background-color: rgb(161, 161, 170); /* zinc-400 */
+}
+@media (prefers-reduced-motion: reduce) {
+  .drag-indent-guide { transition: none; }
+}
+
 /* This file is for your main application CSS */
