@@ -19,7 +19,7 @@ This is the milestone that earns the first public release.
 |---|---|---|---|
 | 1 — Bring M01 to spec | [`m02.01-bring-to-spec.md`](m02.01-bring-to-spec.md) | 2 | complete |
 | 2 — Design Refinements | [`m02.02-design-refinements.md`](m02.02-design-refinements.md) | 27 | complete |
-| 3 — Drag-and-Drop Reorganization | [`m02.03-drag-and-drop.md`](m02.03-drag-and-drop.md) | 10 | approved |
+| 3 — Drag-and-Drop Reorganization | [`m02.03-drag-and-drop.md`](m02.03-drag-and-drop.md) | 11 | approved (item 11 testing draft) |
 | 4 — Wide-Width Layout | [`m02.04-wide-width-layout.md`](m02.04-wide-width-layout.md) | 12 | approved |
 | 5 — Undo / Redo | [`m02.05-undo-redo.md`](m02.05-undo-redo.md) | 9 | drafted |
 
