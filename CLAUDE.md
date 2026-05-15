@@ -32,7 +32,7 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 
 ## Working Style
 - Specs first: align on milestone scope in `docs/milestones/m##-<slug>/m##-<slug>.md` before writing code. If asked to code before a spec exists, pause and recommend writing it first.
-- Keep docs in sync within the same commit when scope shifts.
+- Keep docs in sync as scope shifts. Same commit is fine, separate commits are fine — what matters is they don't drift.
 - When the user asks for input/feedback ("what do you think?", "should we…?"), answer first; don't change files until they confirm.
 - Use the system date for any dated docs.
 - Bug fixes are fair game on any branch if they're documented first.
