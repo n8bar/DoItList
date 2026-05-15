@@ -7,12 +7,17 @@ defmodule DoIt.Tasks.Progress do
   hand-built structs.
 
   Rules:
-    * Leaf  → `manual_progress` (clamped to 0..100).
-    * Branch → weighted average of child rolled-up progress:
+    * Leaf  → `manual_progress` (clamped to 0..100). Leaf `status: "done"`
+      snaps to 100.
+    * Branch (has at least one usable child) → weighted average of child
+      rolled-up progress:
           sum(child_progress * child_weight) / sum(child_weight)
-    * Status `done` snaps the result to 100, regardless of children.
+      Branch status does NOT snap to 100; progress is always derived from
+      children so a `done` parent that gains an incomplete child reflects
+      the truth. Status reconciliation lives in `DoIt.Tasks` (the
+      check/uncheck-ancestors helpers), not here.
     * Children with non-positive weight are ignored.
-    * If no usable children exist, falls back to `manual_progress`.
+    * If no usable children exist, treat as a leaf.
 
   Result is always an integer in 0..100.
   """
@@ -20,20 +25,15 @@ defmodule DoIt.Tasks.Progress do
   alias DoIt.Tasks.Task
 
   @spec compute(Task.t()) :: integer()
-  def compute(%Task{status: "done"}), do: 100
-
   def compute(%Task{children: children} = task) when is_list(children) do
     case usable_children(children) do
-      [] ->
-        clamp(task.manual_progress)
-
-      kids ->
-        weighted_average(kids, &compute/1)
+      [] -> leaf_progress(task)
+      kids -> weighted_average(kids, &compute/1)
     end
   end
 
   # When :children is not preloaded, treat as leaf.
-  def compute(%Task{} = task), do: clamp(task.manual_progress)
+  def compute(%Task{} = task), do: leaf_progress(task)
 
   @doc """
   Compute progress for a task whose direct `:children` are loaded but whose
@@ -43,19 +43,17 @@ defmodule DoIt.Tasks.Progress do
   already had its progress refreshed.
   """
   @spec compute_for_branch(Task.t()) :: integer()
-  def compute_for_branch(%Task{status: "done"}), do: 100
-
   def compute_for_branch(%Task{children: children} = task) when is_list(children) do
     case usable_children(children) do
-      [] ->
-        clamp(task.manual_progress)
-
-      kids ->
-        weighted_average(kids, &child_persisted_progress/1)
+      [] -> leaf_progress(task)
+      kids -> weighted_average(kids, &child_persisted_progress/1)
     end
   end
 
-  def compute_for_branch(%Task{} = task), do: clamp(task.manual_progress)
+  def compute_for_branch(%Task{} = task), do: leaf_progress(task)
+
+  defp leaf_progress(%Task{status: "done"}), do: 100
+  defp leaf_progress(%Task{manual_progress: mp}), do: clamp(mp)
 
   defp child_persisted_progress(%Task{status: "done"}), do: 100
   defp child_persisted_progress(%Task{computed_progress: cp}) when is_integer(cp), do: clamp(cp)

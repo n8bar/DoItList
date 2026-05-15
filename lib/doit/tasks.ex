@@ -76,9 +76,26 @@ defmodule DoIt.Tasks do
   """
   def create_task(%User{} = actor, attrs) do
     attrs = stringify_keys(attrs)
+
+    Repo.transaction(fn ->
+      case create_task_body(actor, attrs) do
+        {:ok, task} ->
+          reconcile_after_create(task, actor)
+          task = Repo.get!(Task, task.id)
+          broadcast_change(task.initiative_id, {:task_created, task.id})
+          task
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Body shared by `create_task` and `preview_create`. Does the insert + the
+  # progress recompute, but NOT the status reconcile (which broadcasts).
+  defp create_task_body(%User{} = actor, attrs) do
     initiative_id = attrs["initiative_id"]
     parent_id = attrs["parent_id"]
-
     sort_order = next_sort_order(initiative_id, parent_id)
 
     attrs =
@@ -87,18 +104,21 @@ defmodule DoIt.Tasks do
       |> Map.put("updated_by_id", actor.id)
       |> Map.put_new("sort_order", sort_order)
 
-    Repo.transaction(fn ->
-      with {:ok, task} <- %Task{} |> Task.create_changeset(attrs) |> Repo.insert(),
-           task <- maybe_set_done_progress(task) do
-        record_event(task, actor, "created", %{title: task.title})
-        task = recompute_self_and_ancestors(task)
-        broadcast_change(task.initiative_id, {:task_created, task.id})
-        task
-      else
-        {:error, cs} -> Repo.rollback(cs)
-      end
-    end)
+    with {:ok, task} <- %Task{} |> Task.create_changeset(attrs) |> Repo.insert(),
+         task <- maybe_set_done_progress(task) do
+      record_event(task, actor, "created", %{title: task.title})
+      task = recompute_self_and_ancestors(task)
+      {:ok, task}
+    end
   end
+
+  defp reconcile_after_create(%Task{parent_id: nil}, _actor), do: :ok
+
+  defp reconcile_after_create(%Task{parent_id: parent_id, status: "done"}, actor),
+    do: check_completed_ancestors(parent_id, actor)
+
+  defp reconcile_after_create(%Task{parent_id: parent_id}, actor),
+    do: uncheck_done_ancestors(parent_id, actor)
 
   @doc """
   Updates a task's editable fields. Records granular activity events for any
@@ -163,6 +183,26 @@ defmodule DoIt.Tasks do
   `:cross_initiative`, `:cycle`, or an `Ecto.Changeset.t()`.
   """
   def move_task(%Task{} = task, %User{} = actor, attrs) do
+    Repo.transaction(fn ->
+      case move_task_body(task, actor, attrs) do
+        {:ok, {moved, old_parent_id, new_parent_id}} ->
+          reconcile_after_move(moved, old_parent_id, new_parent_id, actor)
+          moved = Repo.get!(Task, moved.id)
+          broadcast_change(moved.initiative_id, {:task_moved, moved.id})
+          moved
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Body shared by `move_task` and `preview_move`. Does the structural move
+  # and the computed_progress recompute, but NOT the status reconcile (which
+  # broadcasts via update_task and so can't run inside a preview rollback).
+  # Returns `{:ok, {moved, old_parent_id, new_parent_id}}` so the caller has
+  # the context needed to reconcile or to compare before/after.
+  defp move_task_body(%Task{} = task, %User{} = actor, attrs) do
     attrs = stringify_keys(attrs)
 
     new_parent_id =
@@ -171,33 +211,165 @@ defmodule DoIt.Tasks do
         else: task.parent_id
 
     position = normalize_position(Map.get(attrs, "position"))
+    old_parent_id = task.parent_id
 
-    Repo.transaction(fn ->
-      with :ok <- validate_move(task, new_parent_id) do
-        old_parent_id = task.parent_id
-        moved = perform_move(task, new_parent_id, position, actor)
+    with :ok <- validate_move(task, new_parent_id) do
+      moved = perform_move(task, new_parent_id, position, actor)
 
-        if old_parent_id != new_parent_id do
-          record_event(moved, actor, "parent_changed", %{
-            from: old_parent_id,
-            to: new_parent_id
-          })
-        else
-          record_event(moved, actor, "reordered", %{parent_id: new_parent_id})
-        end
-
-        if old_parent_id && old_parent_id != new_parent_id,
-          do: recompute_ancestors(old_parent_id)
-
-        if new_parent_id, do: recompute_ancestors(new_parent_id)
-
-        moved = Repo.get!(Task, moved.id)
-        broadcast_change(moved.initiative_id, {:task_moved, moved.id})
-        moved
+      if old_parent_id != new_parent_id do
+        record_event(moved, actor, "parent_changed", %{
+          from: old_parent_id,
+          to: new_parent_id
+        })
       else
-        {:error, reason} -> Repo.rollback(reason)
+        record_event(moved, actor, "reordered", %{parent_id: new_parent_id})
       end
-    end)
+
+      if old_parent_id && old_parent_id != new_parent_id,
+        do: recompute_ancestors(old_parent_id)
+
+      if new_parent_id, do: recompute_ancestors(new_parent_id)
+
+      {:ok, {Repo.get!(Task, moved.id), old_parent_id, new_parent_id}}
+    end
+  end
+
+  # Auto-flip ancestor `status` to match the new child set, both chains.
+  # Source chain may *gain* completeness (lost an incomplete child); destination
+  # chain may *lose* it (gained an incomplete child).
+  defp reconcile_after_move(moved, old_parent_id, new_parent_id, actor) do
+    if old_parent_id && old_parent_id != new_parent_id,
+      do: check_completed_ancestors(old_parent_id, actor)
+
+    if new_parent_id do
+      if moved.status == "done",
+        do: check_completed_ancestors(new_parent_id, actor),
+        else: uncheck_done_ancestors(new_parent_id, actor)
+    end
+
+    :ok
+  end
+
+  @doc """
+  Dry-run a move. Runs `move_task_body` in a transaction, snapshots the
+  ancestor chain progress before and after, rolls the transaction back, and
+  classifies any completion-state flips it *would* cause.
+
+  Returns `{:ok, %{scenario: 1 | 2 | 3 | nil, titles: [String.t()]}}` or
+  `{:error, reason}` where reason matches `move_task/3`.
+
+  Scenarios:
+    1 — only previously-completed ancestors would become incomplete
+    2 — only previously-incomplete ancestors would become completed
+    3 — both directions happen in the same move
+    nil — no completion-state changes
+  """
+  def preview_move(%Task{} = task, %User{} = actor, attrs) do
+    attrs = stringify_keys(attrs)
+
+    new_parent_id =
+      if Map.has_key?(attrs, "parent_id"),
+        do: normalize_id(attrs["parent_id"]),
+        else: task.parent_id
+
+    ancestor_ids =
+      MapSet.union(
+        ancestor_chain_ids(task.parent_id),
+        ancestor_chain_ids(new_parent_id)
+      )
+
+    run_preview(ancestor_ids, fn -> move_task_body(task, actor, attrs) end)
+  end
+
+  @doc """
+  Dry-run a create. Same shape as `preview_move/3`.
+  """
+  def preview_create(%User{} = actor, attrs) do
+    attrs = stringify_keys(attrs)
+    parent_id = normalize_id(attrs["parent_id"])
+    ancestor_ids = ancestor_chain_ids(parent_id)
+
+    run_preview(ancestor_ids, fn -> create_task_body(actor, attrs) end)
+  end
+
+  defp run_preview(ancestor_ids, body_fun) do
+    result =
+      Repo.transaction(fn ->
+        before = snapshot_ancestors(ancestor_ids)
+
+        case body_fun.() do
+          {:ok, _} ->
+            after_progress = snapshot_progress(ancestor_ids)
+            Repo.rollback({:preview, before, after_progress})
+
+          {:error, reason} ->
+            Repo.rollback({:body_error, reason})
+        end
+      end)
+
+    case result do
+      {:error, {:preview, before, after_progress}} ->
+        {:ok, classify_flips(before, after_progress)}
+
+      {:error, {:body_error, reason}} ->
+        {:error, reason}
+    end
+  end
+
+  defp ancestor_chain_ids(nil), do: MapSet.new()
+
+  defp ancestor_chain_ids(task_id) when is_integer(task_id) do
+    case Repo.get(Task, task_id) do
+      nil -> MapSet.new()
+      %Task{parent_id: parent_id} -> MapSet.put(ancestor_chain_ids(parent_id), task_id)
+    end
+  end
+
+  defp snapshot_ancestors(ancestor_ids) do
+    ids = MapSet.to_list(ancestor_ids)
+
+    from(t in Task,
+      where: t.id in ^ids,
+      select: %{id: t.id, status: t.status, progress: t.computed_progress, title: t.title}
+    )
+    |> Repo.all()
+    |> Map.new(fn row -> {row.id, row} end)
+  end
+
+  defp snapshot_progress(ancestor_ids) do
+    ids = MapSet.to_list(ancestor_ids)
+
+    from(t in Task, where: t.id in ^ids, select: {t.id, t.computed_progress})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # A flip is what the status helpers WOULD do once this move commits:
+  #   was open + progress will be 100  → would auto-complete
+  #   was done + progress will be < 100 → would auto-uncomplete
+  defp classify_flips(before, after_progress) do
+    flips =
+      Enum.flat_map(before, fn {id, %{status: status, title: title}} ->
+        after_p = Map.get(after_progress, id)
+
+        cond do
+          status != "done" and after_p == 100 -> [{:complete, title}]
+          status == "done" and after_p != 100 -> [{:uncomplete, title}]
+          true -> []
+        end
+      end)
+
+    kinds = flips |> Enum.map(fn {kind, _} -> kind end) |> Enum.uniq()
+
+    scenario =
+      case kinds do
+        [] -> nil
+        [:uncomplete] -> 1
+        [:complete] -> 2
+        _ -> 3
+      end
+
+    %{scenario: scenario, titles: Enum.map(flips, fn {_, t} -> t end)}
   end
 
   defp validate_move(_task, nil), do: :ok

@@ -44,6 +44,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:add_task_for, nil)
          |> assign(:add_task_after, nil)
          |> assign(:new_task_title, "")
+         |> assign(:pending_action, nil)
          |> load_tree()}
     end
   end
@@ -132,15 +133,18 @@ defmodule DoItWeb.InitiativeShowLive do
         "weight" => Map.get(params, "weight", "1.0")
       }
 
-      case Tasks.create_task(user, attrs) do
-        {:ok, _task} ->
+      case Tasks.preview_create(user, attrs) do
+        {:ok, %{scenario: nil}} ->
+          {:noreply, commit_create(socket, attrs)}
+
+        {:ok, %{scenario: scenario, titles: titles}} ->
           {:noreply,
-           socket
-           |> assign(:add_task_for, nil)
-           |> assign(:add_task_after, nil)
-           |> assign(:new_task_title, "")
-           |> put_flash(:info, "Task added.")
-           |> load_tree()}
+           assign(socket, :pending_action, %{
+             kind: :create,
+             attrs: attrs,
+             scenario: scenario,
+             titles: titles
+           })}
 
         {:error, cs} ->
           {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
@@ -363,15 +367,53 @@ defmodule DoItWeb.InitiativeShowLive do
         "position" => Map.get(params, "position")
       }
 
-      case Tasks.move_task(task, user, attrs) do
-        {:ok, _moved} ->
-          {:reply, %{ok: true}, socket |> load_tree() |> refresh_selected()}
+      case Tasks.preview_move(task, user, attrs) do
+        {:ok, %{scenario: nil}} ->
+          case commit_move(socket, task, attrs) do
+            {:ok, socket} ->
+              {:reply, %{ok: true}, socket}
+
+            {:error, reason, socket} ->
+              {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+          end
+
+        {:ok, %{scenario: scenario, titles: titles}} ->
+          {:reply, %{ok: true},
+           assign(socket, :pending_action, %{
+             kind: :move,
+             task_id: task.id,
+             attrs: attrs,
+             scenario: scenario,
+             titles: titles
+           })}
 
         {:error, reason} ->
           {:reply, %{ok: false, error: format_move_error(reason)},
            put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
       end
     end
+  end
+
+  def handle_event("confirm_pending", _params, socket) do
+    case socket.assigns.pending_action do
+      %{kind: :move, task_id: task_id, attrs: attrs} ->
+        task = Tasks.get_task!(task_id)
+
+        case commit_move(socket, task, attrs) do
+          {:ok, socket} -> {:noreply, socket}
+          {:error, _reason, socket} -> {:noreply, socket}
+        end
+
+      %{kind: :create, attrs: attrs} ->
+        {:noreply, commit_create(socket, attrs)}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_pending", _params, socket) do
+    {:noreply, assign(socket, :pending_action, nil)}
   end
 
   # Keyboard alternative for task reorganization (M02 Arc 3 item 6).
@@ -426,6 +468,45 @@ defmodule DoItWeb.InitiativeShowLive do
                put_flash(socket, :error, "Couldn't add member: #{summarize_errors(cs)}.")}
           end
       end
+    end
+  end
+
+  # --- Pending-action commits -----------------------------------------------
+
+  defp commit_create(socket, attrs) do
+    case Tasks.create_task(socket.assigns.current_user, attrs) do
+      {:ok, _task} ->
+        socket
+        |> assign(:add_task_for, nil)
+        |> assign(:add_task_after, nil)
+        |> assign(:new_task_title, "")
+        |> assign(:pending_action, nil)
+        |> put_flash(:info, "Task added.")
+        |> load_tree()
+
+      {:error, cs} ->
+        socket
+        |> assign(:pending_action, nil)
+        |> put_flash(:error, "Couldn't create task: #{summarize_errors(cs)}.")
+    end
+  end
+
+  defp commit_move(socket, task, attrs) do
+    user = socket.assigns.current_user
+
+    case Tasks.move_task(task, user, attrs) do
+      {:ok, _moved} ->
+        {:ok,
+         socket
+         |> assign(:pending_action, nil)
+         |> load_tree()
+         |> refresh_selected()}
+
+      {:error, reason} ->
+        {:error, reason,
+         socket
+         |> assign(:pending_action, nil)
+         |> put_flash(:error, "Couldn't move task: #{format_move_error(reason)}.")}
     end
   end
 
@@ -672,9 +753,73 @@ defmodule DoItWeb.InitiativeShowLive do
           </aside>
         </div>
       </div>
+
+      <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
     </Layouts.app>
     """
   end
+
+  defp pending_verb(%{kind: :create}), do: "new task"
+  defp pending_verb(%{kind: :move}), do: "move"
+  defp pending_verb(_), do: "change"
+
+  attr :pending, :map, default: nil
+  attr :verb, :string, default: "change"
+
+  defp completion_confirm(assigns) do
+    ~H"""
+    <div
+      :if={@pending}
+      id="completion-confirm"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      phx-click="cancel_pending"
+    >
+      <div
+        class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900"
+        phx-click-away="cancel_pending"
+        onclick="event.stopPropagation()"
+      >
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Confirm completion change
+        </h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          {completion_confirm_message(@pending.scenario, @verb)}
+        </p>
+        <ul
+          :if={Map.get(@pending, :titles, []) != []}
+          class="mt-3 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+        >
+          <li :for={title <- @pending.titles} class="truncate">{title}</li>
+        </ul>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            phx-click="cancel_pending"
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            phx-click="confirm_pending"
+            class="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+          >
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp completion_confirm_message(1, verb),
+    do: "This #{verb} will mark previously completed task(s) as incomplete."
+
+  defp completion_confirm_message(2, verb),
+    do: "This #{verb} will mark previously incomplete task(s) as complete."
+
+  defp completion_confirm_message(3, verb),
+    do: "This #{verb} will mark some tasks complete and others incomplete."
 
   # --- Components -----------------------------------------------------------
 

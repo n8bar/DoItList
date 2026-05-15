@@ -125,9 +125,16 @@ defmodule DoIt.Tasks.ProgressTest do
       assert Progress.compute(tree) == 33
     end
 
-    test "branch with status done is forced to 100 regardless of children" do
+    test "branch with status done derives from children — status does NOT snap to 100" do
+      # Branches always reflect their children's progress. A stale `status: done`
+      # on a branch (e.g. a leaf that just gained children via a move) no longer
+      # masks the truth. Status reconciliation lives in `DoIt.Tasks`.
       tree = branch([leaf(0), leaf(0)], status: "done")
-      assert Progress.compute(tree) == 100
+      assert Progress.compute(tree) == 0
+    end
+
+    test "leaf with status done still snaps to 100" do
+      assert Progress.compute(leaf(0, status: "done")) == 100
     end
   end
 
