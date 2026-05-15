@@ -29,6 +29,7 @@ No public release yet. Owner will not release until at least M02 (UX Overhaul) l
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
 | [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + design refinements. Arc 1 (bring-to-spec) complete; Arc 2 (design refinements) complete (27 items); Arc 3 (drag-and-drop) scoped; Arc 4 (Wide-Width Layout — responsive groundwork at xl/2xl, then a unified triple-pane at ultrawide where the left rail IS the Initiatives index plus a cross-Initiative people pane; click or drag people onto Initiatives to add them) drafted. Per-arc detail in linked arc files. | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
+| [ ] | M03 | API | Programmatic API for Initiatives / Tasks / membership so external clients can integrate. Stub only — transport, auth, versioning, push-API surface all TBD. | TBD | [`milestones/m03-api/m03-api.md`](milestones/m03-api/m03-api.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |
