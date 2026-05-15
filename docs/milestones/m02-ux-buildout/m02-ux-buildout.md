@@ -1,4 +1,4 @@
-# M02-UX-Overhaul
+# M02-UX-Buildout
 _Status: in progress · Target: 2026-05-22_
 
 > Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). This milestone doc owns M02 scope and acceptance criteria; per-arc detail lives in the arc files linked below.
@@ -43,4 +43,4 @@ _(Arcs 3 and 4 moved out of Non-Goals and into the Arcs table above; both approv
 
 ## Branch
 
-`M02-ux-overhaul`
+`M02-ux-buildout` (renamed 2026-05-15 from `M02-ux-overhaul`)

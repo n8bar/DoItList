@@ -13,7 +13,7 @@ Stub — to be expanded. Not yet scoped into arcs.
 
 ## Preconditions
 
-- M02 (UX Overhaul) lands so the LiveView paths the API will mirror are stable.
+- M02 (UX Buildout) lands so the LiveView paths the API will mirror are stable.
 
 ## Open Questions
 
