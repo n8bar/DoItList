@@ -364,6 +364,12 @@ Hooks.DragReorder = {
       return
     }
 
+    // pointerup is followed by a synthetic click on whatever element is
+    // under the cursor. Without this, the checkbox / chevron / row body
+    // would fire its own phx-click handler on top of (or instead of) our
+    // drop. Applies to both commit and snap-back paths.
+    this.suppressNextClick()
+
     const plan = this.dropPlan
     if (!plan || plan.kind === "snap-back" || !this.sourceLi) {
       this.cleanup()
@@ -390,6 +396,21 @@ Hooks.DragReorder = {
 
   abort() {
     this.cleanup()
+  },
+
+  suppressNextClick() {
+    const swallow = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      e.stopImmediatePropagation()
+      document.removeEventListener("click", swallow, true)
+      clearTimeout(timeout)
+    }
+    document.addEventListener("click", swallow, true)
+    // Fallback in case no click fires (pointerup over a non-clickable spot).
+    const timeout = setTimeout(() => {
+      document.removeEventListener("click", swallow, true)
+    }, 300)
   },
 
   cleanup() {
