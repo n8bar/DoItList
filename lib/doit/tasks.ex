@@ -20,6 +20,7 @@ defmodule DoIt.Tasks do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
+  alias DoIt.Initiatives.Initiative
   alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Task}
 
   # --- Queries ---------------------------------------------------------------
@@ -635,6 +636,42 @@ defmodule DoIt.Tasks do
     immediate = Repo.all(from t in Task, where: t.parent_id == ^task_id)
     Enum.flat_map(immediate, fn t -> [t | list_descendants(t.id)] end)
   end
+
+  @doc """
+  Resolves the effective sort mode for a task's children.
+
+  Walks the inheritance chain: the task's own `sort_mode`, then up through
+  parents to the root task, then the owning Initiative's `sort_mode`, and
+  finally falls back to `"manual"` when every level is `nil`.
+
+  Accepts a `%Task{}`, a task id, or `nil`. When `nil`, only the Initiative
+  level is consulted — useful for root-level sorting where there is no
+  parent task. Pass `{:initiative, id}` to resolve directly from an
+  Initiative without any task context.
+  """
+  def resolve_sort_mode(nil), do: "manual"
+
+  def resolve_sort_mode({:initiative, initiative_id}) do
+    case Repo.get(Initiative, initiative_id) do
+      %Initiative{sort_mode: mode} when is_binary(mode) -> mode
+      _ -> "manual"
+    end
+  end
+
+  def resolve_sort_mode(task_id) when is_integer(task_id) do
+    case Repo.get(Task, task_id) do
+      nil -> "manual"
+      %Task{} = task -> resolve_sort_mode(task)
+    end
+  end
+
+  def resolve_sort_mode(%Task{sort_mode: mode}) when is_binary(mode), do: mode
+
+  def resolve_sort_mode(%Task{parent_id: nil, initiative_id: initiative_id}),
+    do: resolve_sort_mode({:initiative, initiative_id})
+
+  def resolve_sort_mode(%Task{parent_id: parent_id}),
+    do: resolve_sort_mode(parent_id)
 
   defp next_sort_order(initiative_id, parent_id) do
     query =
