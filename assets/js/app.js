@@ -61,9 +61,8 @@ Hooks.PasswordToggle = {
 }
 
 // Drag-and-drop reorganization for tasks. Attached to each row's drag handle.
-// Uses pointer events (not HTML5 drag-and-drop) so we can render a custom
-// indent-guide and so the same gesture loop works for mobile (item 8) and
-// the cross-pane gesture in Arc 4 item 11.
+// Uses pointer events (not HTML5 drag-and-drop) so the same gesture loop
+// works for mobile (item 8) and the cross-pane gesture in Arc 4 item 11.
 //
 // State machine:
 //
@@ -74,32 +73,22 @@ Hooks.PasswordToggle = {
 //     -- pointerup before threshold --> IDLE  (treated as click, no event)
 //     -- pointercancel / Escape --> IDLE
 //   DRAGGING
-//     -- pointermove --> update anchor row + indent-guide + drop semantic
-//     -- pointerup in snap-back band --> IDLE (no commit)
-//     -- pointerup elsewhere --> push "move_task" event, then IDLE
+//     -- pointermove --> resolve the row under the cursor as the anchor
+//     -- pointerup over a valid anchor --> push "move_task" event, then IDLE
+//     -- pointerup over source / descendant / no row --> IDLE (no commit)
 //     -- pointercancel / Escape --> IDLE (no commit)
 //
-// Drop-target resolution:
+// Drop-target resolution (single-mode; item 13 rolled back the horizontal
+// mode added in items 4–5 on 2026-05-19):
 //
-//   Two modes, selected by the cursor's vertical distance from the source row:
-//
-//     HORIZONTAL MODE (cursor still within the source's vertical slot,
-//                      ±~one row height):
-//       Horizontal cursor position relative to the SOURCE's natural indent
-//       picks indent/dedent (item 4):
-//         left band  → sibling-of-ancestor (dedent)
-//         middle     → SNAP-BACK (no commit, item 5)
-//         right band → child-of-previous-sibling (indent)
-//
-//     VERTICAL MODE (cursor has moved off the source's vertical slot):
-//       The row under the cursor is the anchor; dropping makes the source
-//       a child of that anchor (item 3). Horizontal cursor position is
-//       ignored — the only thing that matters is which row you're over.
-//       Anchor = source / descendant / nothing → no commit.
-const SNAP_BAND_PX = 64 // half-width of the snap-back band (horizontal mode)
-const DEDENT_STEP_PX = 48 // px of further leftward travel per dedent level
-const VISUAL_INDENT_PX = 24 // matches CSS `pl-6` on the children `<ul>` — used only for the indent-guide visual
-const SOURCE_SLOT_TOLERANCE = 1.5 // how many row-heights of vertical leeway counts as "still on source"
+//   The cursor's position picks the row under it via elementFromPoint;
+//   that row is the anchor. Dropping makes the source a child of the
+//   anchor, appended to the anchor's children. Horizontal cursor
+//   position is ignored. Anchor = source row, descendant of source, or
+//   no row → no commit. Sibling reorder via drag is intentionally out of
+//   scope here — keyboard Alt+↑/↓ (item 6) handles it for now; a future
+//   Arc 3 item will add drag-based sibling reorder paired with a
+//   sibling sort-order toolset.
 const DRAG_THRESHOLD_PX = 4 // mouse/pen must move this far before drag activates
 const LONG_PRESS_MS = 400 // touch must hold this long without significant motion to begin drag
 const TOUCH_MOVE_TOLERANCE_PX = 8 // touch jitter allowed during the long-press wait before we treat it as scroll
@@ -200,11 +189,6 @@ Hooks.DragReorder = {
     // the tree share the same initiative id.
     this.initiativeId = this.el.dataset.initiativeId
 
-    // Indent guide: a thin vertical line that tracks resulting depth.
-    this.guide = document.createElement("div")
-    this.guide.className = "drag-indent-guide"
-    document.body.appendChild(this.guide)
-
     document.body.style.userSelect = "none"
     document.body.style.cursor = "grabbing"
   },
@@ -240,26 +224,9 @@ Hooks.DragReorder = {
 
     this.clearAnchorHighlight()
 
-    // Mode = horizontal (still in source's vertical slot) or vertical (moved off).
-    const sourceRect = this.sourceLi.getBoundingClientRect()
-    const sourceCenterY = sourceRect.top + sourceRect.height / 2
-    const verticalDelta = e.clientY - sourceCenterY
-    const inSourceSlot = Math.abs(verticalDelta) <= sourceRect.height * SOURCE_SLOT_TOLERANCE
-
-    if (inSourceSlot) {
-      // HORIZONTAL MODE — indent/dedent relative to source's own indent.
-      // `sourceRect.left` is already the rendered left edge of the row (nested
-      // `<ul>` padding has done the indenting), so it IS the natural indent
-      // reference. No depth-multiplied offset.
-      this.anchorLi = null
-      const cursorOffsetX = e.clientX - sourceRect.left
-      this.dropPlan = this.computeHorizontalPlan(cursorOffsetX)
-      this.renderGuide(sourceRect, this.dropPlan)
-      return
-    }
-
-    // VERTICAL MODE — anchor = row under cursor; drop = child of anchor.
-    // Hide the source briefly so elementFromPoint skips it.
+    // Anchor = the row under the cursor. Hide the source briefly so
+    // elementFromPoint skips it (otherwise we'd always anchor on ourselves
+    // when the cursor stays near the source row).
     const prev = this.sourceLi.style.pointerEvents
     this.sourceLi.style.pointerEvents = "none"
     const target = document.elementFromPoint(e.clientX, e.clientY)
@@ -269,84 +236,15 @@ Hooks.DragReorder = {
     if (!anchorLi || anchorLi === this.sourceLi || this.isDescendantOfSource(anchorLi)) {
       this.anchorLi = null
       this.dropPlan = null
-      this.guide.style.opacity = "0"
       return
     }
 
     this.anchorLi = anchorLi
     this.anchorLi.classList.add("drop-target")
     const anchorId = parseInt(anchorLi.dataset.taskId, 10)
-    const anchorDepth = parseInt(anchorLi.dataset.depth || "0", 10)
     this.dropPlan = {
       kind: "child",
-      depth: anchorDepth + 1,
       parentId: anchorId,
-      position: null,
-    }
-    this.renderGuide(anchorLi.getBoundingClientRect(), this.dropPlan)
-  },
-
-  renderGuide(refRect, plan) {
-    const guideX = refRect.left + plan.depth * VISUAL_INDENT_PX
-    this.guide.style.opacity = plan.kind === "snap-back" ? "0.25" : "1"
-    this.guide.style.transform = `translate(${guideX}px, ${refRect.top}px)`
-    this.guide.style.height = `${refRect.height}px`
-    this.guide.dataset.kind = plan.kind
-  },
-
-  // Horizontal-mode plan: cursor is still over the source's vertical slot,
-  // so it's interpreted as "change my depth without changing my neighborhood."
-  // Returns {kind, depth, parentId, position}.
-  computeHorizontalPlan(cursorOffsetX) {
-    const sourceDepth = parseInt(this.sourceLi.dataset.depth || "0", 10)
-
-    // Middle band — no change.
-    if (Math.abs(cursorOffsetX) <= SNAP_BAND_PX) {
-      return { kind: "snap-back", depth: sourceDepth, parentId: null, position: null }
-    }
-
-    if (cursorOffsetX >= SNAP_BAND_PX) {
-      // RIGHT — indent: become child of source's previous sibling.
-      const prevSibling = this.previousSibling(this.sourceLi)
-      if (!prevSibling) {
-        // No previous sibling to indent under — no-op.
-        return { kind: "snap-back", depth: sourceDepth, parentId: null, position: null }
-      }
-      const prevId = parseInt(prevSibling.dataset.taskId, 10)
-      const prevDepth = parseInt(prevSibling.dataset.depth || "0", 10)
-      return {
-        kind: "child",
-        depth: prevDepth + 1,
-        parentId: prevId,
-        position: null,
-      }
-    }
-
-    // LEFT — dedent: become sibling of an ancestor (one level out per step).
-    const stepsLeft = Math.floor((-cursorOffsetX - SNAP_BAND_PX) / DEDENT_STEP_PX) + 1
-    let ancestor = this.sourceLi
-    for (let i = 0; i < stepsLeft && ancestor; i++) {
-      const parentLi = ancestor.parentElement && ancestor.parentElement.closest("li[data-task-id]")
-      if (!parentLi) {
-        ancestor = null
-        break
-      }
-      ancestor = parentLi
-    }
-    if (!ancestor) {
-      if (sourceDepth === 0) {
-        // Already at root, can't dedent further.
-        return { kind: "snap-back", depth: 0, parentId: null, position: null }
-      }
-      // Clamped at root.
-      return { kind: "sibling", depth: 0, parentId: null, position: null }
-    }
-    const ancestorParent = this.parentTaskOf(ancestor)
-    const ancestorDepth = parseInt(ancestor.dataset.depth || "0", 10)
-    return {
-      kind: "sibling",
-      depth: ancestorDepth,
-      parentId: ancestorParent,
       position: null,
     }
   },
@@ -371,7 +269,7 @@ Hooks.DragReorder = {
     this.suppressNextClick()
 
     const plan = this.dropPlan
-    if (!plan || plan.kind === "snap-back" || !this.sourceLi) {
+    if (!plan || !this.sourceLi) {
       this.cleanup()
       return
     }
@@ -426,8 +324,6 @@ Hooks.DragReorder = {
     this.clearAnchorHighlight()
     if (this.sourceLi) this.sourceLi.classList.remove("dragging-source")
     this.sourceLi = null
-    if (this.guide && this.guide.parentNode) this.guide.parentNode.removeChild(this.guide)
-    this.guide = null
 
     document.body.style.userSelect = ""
     document.body.style.cursor = ""
@@ -448,20 +344,6 @@ Hooks.DragReorder = {
   // ---- Tree helpers ------------------------------------------------------
   isDescendantOfSource(li) {
     return this.sourceLi && this.sourceLi.contains(li)
-  },
-
-  // Previous sibling task <li> in the same <ul>, skipping non-task nodes
-  // (e.g. inline "add task" forms).
-  previousSibling(li) {
-    let n = li.previousElementSibling
-    while (n && !n.dataset.taskId) n = n.previousElementSibling
-    return n
-  },
-
-  // The parent task id of a row's <li>, or null if it's a root task.
-  parentTaskOf(li) {
-    const parentLi = li.parentElement && li.parentElement.closest("li[data-task-id]")
-    return parentLi ? parseInt(parentLi.dataset.taskId, 10) : null
   },
 }
 
