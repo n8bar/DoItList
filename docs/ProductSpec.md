@@ -59,7 +59,7 @@ sum(child_progress * child_weight) / sum(child_weight)
 Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 
 ## Reorganization
-_Draft — pending owner approval. Added 2026-05-19._
+_Added 2026-05-19; owner-approved 2026-05-20._
 
 The user reshapes the tree as work evolves. Four concepts:
 
@@ -118,7 +118,7 @@ A visual placeholder appears in the destination position during drag so the user
 - **Task moved in from a different parent.** Lands at the top of the new parent, unless the new parent's auto-sort overrides.
 
 ### Optional / future
-- **Cross-Initiative reorganization.** Not currently supported. Not foreclosed either; if/when it lands, it'll require deciding whether the Initiative is a strict boundary or a soft default.
+- **Cross-Initiative reorganization.** Not currently supported.
 
 ## Collaboration Model
 - Multiple users may open the same Initiative simultaneously.
