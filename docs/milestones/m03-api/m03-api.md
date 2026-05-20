@@ -1,5 +1,5 @@
 # M03-API
-_Status: stub · Target: TBD_
+_Status: stub · Planned start: 2026-05-29 (= M02 target) · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
