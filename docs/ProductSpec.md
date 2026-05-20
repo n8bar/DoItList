@@ -1,5 +1,5 @@
 # Product Spec
-_Last updated: 2026-05-07_
+_Last updated: 2026-05-19_
 
 The canonical specification of Do It List — what the product is, the vocabulary used to describe it, the principles it must hold to, and the headline behaviors that define it.
 
@@ -57,6 +57,49 @@ sum(child_progress * child_weight) / sum(child_weight)
 ```
 
 Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
+
+## Reorganization
+_Draft — pending owner approval. Added 2026-05-19._
+
+The user reshapes the tree as work evolves. Three concepts:
+
+### Reparent
+Change a task's parent.
+
+- Allowed within an Initiative, including cross-List moves — a task in one List can become a child of a task in a different List of the same Initiative.
+- Cross-Initiative moves are not supported. The Initiative is the boundary of every reorganization.
+- After a reparent, roll-up progress recomputes for both the old and new ancestor chains. Status reconciliation may also flip ancestors' completion state when the new child set crosses a completeness boundary.
+
+### Sibling reorder
+Change a task's position among its current siblings without changing its parent.
+
+- User-driven. The order is meaningful — it's how the user prioritizes their work within a single parent.
+- Includes **promotion to root** via dragging to overlay drop zones at the top (above the first root) or bottom (below the last root) of the Initiative's tree. The drop zones are overlays so the existing list doesn't visually shift until after the drop commits.
+- Does not affect roll-up progress (the math is order-independent).
+
+### Sibling sort
+Apply an ordering rule to one parent's children.
+
+- Available criteria: alphabetical (by title), by status, by computed progress, by priority, by weight, by created date, by updated date.
+- The relationship to manual reorder is an open design question (see below).
+
+### Constraints
+- No cycles. A task cannot become its own ancestor.
+- Same Initiative on both sides of every reorganization.
+- Roll-up progress recomputes after every reparent; sibling reorder and sibling sort do not change the math.
+- Status reconciliation (auto-flip of ancestors' completion state when the child set changes completeness) fires on reparent, not on reorder or sort.
+
+### Affordances
+- **Drag.** Vertical drag → reparent (drop = child-of-anchor). Overlay drop zones at the top and bottom of the root list → promote to root. Drag-based sibling reorder within a parent is planned and not yet specified.
+- **Keyboard.** `Alt+↑/↓` for sibling reorder; `Alt+←/→` for dedent / indent (which IS reparent).
+- **Sort menu.** Per-parent "Sort children by…" trigger surfacing the criteria listed under Sibling sort above.
+
+### Open design questions
+1. **Manual reorder vs. auto-sort relationship.** Is auto-sort one-shot ("sort by name, then I can manually nudge") or pinned ("this parent is sorted by name — manual reorder reverts to sort")? Affects whether the parent persists a sort mode and whether the sort menu has an "Unsort / manual" option.
+2. **Sort scope.** Per-parent (default assumption) or global per-Initiative?
+3. **Cross-Initiative reorg.** Permanently out of scope, or eventual / future-arc?
+4. **Default order on insert.** Today: end of siblings. Should auto-sort override this on parents that have a sort mode set?
+5. **Drag-based sibling reorder gesture.** TBD; planned for the same Arc 3 item that adds the root-promotion drop zones.
 
 ## Collaboration Model
 - Multiple users may open the same Initiative simultaneously.
