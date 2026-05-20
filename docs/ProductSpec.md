@@ -61,45 +61,64 @@ Roll-up is recursive through ancestors. Edge cases (non-positive weights, status
 ## Reorganization
 _Draft — pending owner approval. Added 2026-05-19._
 
-The user reshapes the tree as work evolves. Three concepts:
+The user reshapes the tree as work evolves. Four concepts:
 
 ### Reparent
 Change a task's parent.
 
 - Allowed within an Initiative, including cross-List moves — a task in one List can become a child of a task in a different List of the same Initiative.
-- Cross-Initiative moves are not supported. The Initiative is the boundary of every reorganization.
-- After a reparent, roll-up progress recomputes for both the old and new ancestor chains. Status reconciliation may also flip ancestors' completion state when the new child set crosses a completeness boundary.
+- After a Reparent, roll-up progress recomputes for both the old and new ancestor chains. Status reconciliation may also flip ancestors' completion state when the new child set crosses a completeness boundary.
+
+### Promotion
+Make a non-root task a root task (a task whose `parent_id` is null). The reverse direction — a root task becoming a non-root child — is just Reparent.
+
+- Same Initiative.
+- Old ancestor chain recomputes per Reparent's rules; the new "chain" is the root level (no ancestors).
+- Triggered by dragging a non-root task into the top or bottom drop-zone overlay at the root level (see Drag mechanics).
 
 ### Sibling reorder
 Change a task's position among its current siblings without changing its parent.
 
-- User-driven. The order is meaningful — it's how the user prioritizes their work within a single parent.
-- Includes **promotion to root** via dragging to overlay drop zones at the top (above the first root) or bottom (below the last root) of the Initiative's tree. The drop zones are overlays so the existing list doesn't visually shift until after the drop commits.
+- The order is meaningful — it's how the user prioritizes work within a single parent.
 - Does not affect roll-up progress (the math is order-independent).
+- A Sibling reorder action (drag or keyboard) automatically switches the parent's sort mode to manual and overwrites the manual order with the new child sequence.
+- At the root level, the top and bottom drop-zone overlays serve double duty: dragging a root task into them reorders the root list, placing the task at the top or bottom of the roots.
 
 ### Sibling sort
 Apply an ordering rule to one parent's children.
 
 - Available criteria: alphabetical (by title), by status, by computed progress, by priority, by weight, by created date, by updated date.
-- The relationship to manual reorder is an open design question (see below).
+- The sort mode is a preference that cascades from User → Initiative → List → each parent task, with "inherit from ancestor" as the implicit default at every level. Any level may explicitly override; the closest explicit setting wins. (User-level preferences are not yet specified; when user preferences arrive, sort mode is one of them.)
+- An optional **resort all posterity** helper lets the owner of a parent propagate the current sort mode down its subtree. Non-mandatory; not automatic.
 
 ### Constraints
 - No cycles. A task cannot become its own ancestor.
-- Same Initiative on both sides of every reorganization.
-- Roll-up progress recomputes after every reparent; sibling reorder and sibling sort do not change the math.
-- Status reconciliation (auto-flip of ancestors' completion state when the child set changes completeness) fires on reparent, not on reorder or sort.
+- Same Initiative on both sides of every Reorganization.
+- Roll-up progress recomputes after every Reparent and Promotion; Sibling reorder and Sibling sort do not change the math.
+- Status reconciliation fires on Reparent and Promotion, not on reorder or sort.
 
-### Affordances
-- **Drag.** Vertical drag → reparent (drop = child-of-anchor). Overlay drop zones at the top and bottom of the root list → promote to root. Drag-based sibling reorder within a parent is planned and not yet specified.
-- **Keyboard.** `Alt+↑/↓` for sibling reorder; `Alt+←/→` for dedent / indent (which IS reparent).
-- **Sort menu.** Per-parent "Sort children by…" trigger surfacing the criteria listed under Sibling sort above.
+### Drag mechanics
+Drop-band semantics differentiate the four concepts within a single drag gesture. The cursor's vertical position over a target row picks the intent:
 
-### Open design questions
-1. **Manual reorder vs. auto-sort relationship.** Is auto-sort one-shot ("sort by name, then I can manually nudge") or pinned ("this parent is sorted by name — manual reorder reverts to sort")? Affects whether the parent persists a sort mode and whether the sort menu has an "Unsort / manual" option.
-2. **Sort scope.** Per-parent (default assumption) or global per-Initiative?
-3. **Cross-Initiative reorg.** Permanently out of scope, or eventual / future-arc?
-4. **Default order on insert.** Today: end of siblings. Should auto-sort override this on parents that have a sort mode set?
-5. **Drag-based sibling reorder gesture.** TBD; planned for the same Arc 3 item that adds the root-promotion drop zones.
+- **Center band** (~middle 50% of the row) → Reparent. The dragged task becomes a child of the row's task.
+- **Top edge band** (~upper 25% of the row) → Sibling reorder, landing *above* that row.
+- **Bottom edge band** (~lower 25% of the row) → Sibling reorder, landing *below* that row.
+- **Top overlay** (above the first root) → Promotion if the dragged task is non-root; root-list reorder to the top if the dragged task is already a root.
+- **Bottom overlay** (below the last root) → Promotion if non-root; root-list reorder to the bottom if already a root.
+
+A visual placeholder appears in the destination position during drag so the user sees where the drop will land. The drop-zone overlays render only while a drag is active.
+
+### Keyboard
+- `Alt+↑/↓` — Sibling reorder.
+- `Alt+←/→` — Dedent / indent (which IS Reparent).
+
+### New-task placement defaults
+- **Auto-sorted parent.** New task lands wherever the parent's sort places it.
+- **Manual parent, created via the new-task entry form.** New task lands at the form's position — which is wherever the user invoked "+ New Sibling" or "+ New Subtask," so it can be anywhere in the sibling list.
+- **Task moved in from a different parent.** Lands at the top of the new parent, unless the new parent's auto-sort overrides.
+
+### Optional / future
+- **Cross-Initiative reorganization.** Not currently supported. Not foreclosed either; if/when it lands, it'll require deciding whether the Initiative is a strict boundary or a soft default.
 
 ## Collaboration Model
 - Multiple users may open the same Initiative simultaneously.
