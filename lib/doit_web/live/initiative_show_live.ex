@@ -251,6 +251,24 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  def handle_event("set_sort_mode", %{"mode" => mode}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      task = socket.assigns.selected_task
+      user = socket.assigns.current_user
+      mode = if mode == "", do: nil, else: mode
+
+      case Tasks.set_sort_mode(task, user, mode) do
+        {:ok, _updated} ->
+          {:noreply, socket |> load_tree() |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply, put_flash(socket, :error, "Couldn't change sort: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
   def handle_event("set_progress", %{"value" => value}, socket) do
     if not socket.assigns.can_edit do
       {:noreply, socket}
@@ -1264,6 +1282,34 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
+      <div :if={not leaf?(@task)} class="space-y-1">
+        <label
+          for={"sort-mode-#{@task.id}"}
+          class="text-xs text-zinc-500 dark:text-zinc-400"
+        >
+          Sort children by
+        </label>
+        <form phx-change="set_sort_mode">
+          <select
+            id={"sort-mode-#{@task.id}"}
+            name="mode"
+            class="w-full select select-bordered select-sm"
+            disabled={not @can_edit}
+          >
+            <option value="" selected={is_nil(@task.sort_mode)}>
+              {sort_mode_inherit_label(@task)}
+            </option>
+            <option
+              :for={m <- DoIt.Tasks.Task.sort_modes()}
+              value={m}
+              selected={@task.sort_mode == m}
+            >
+              {sort_mode_label(m)}
+            </option>
+          </select>
+        </form>
+      </div>
+
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
@@ -1348,6 +1394,24 @@ defmodule DoItWeb.InitiativeShowLive do
         Repo.one(from t in Task, where: t.parent_id == ^task.id, select: count(t.id)) == 0
     end
   end
+
+  defp sort_mode_label("manual"), do: "Manual"
+  defp sort_mode_label("alphabetical"), do: "Alphabetical (A→Z)"
+  defp sort_mode_label("status"), do: "Status (incomplete first)"
+  defp sort_mode_label("computed_progress"), do: "Progress (most done first)"
+  defp sort_mode_label("priority"), do: "Priority (high first)"
+  defp sort_mode_label("weight"), do: "Weight (heaviest first)"
+  defp sort_mode_label("created"), do: "Created (oldest first)"
+  defp sort_mode_label("updated"), do: "Updated (most recent first)"
+
+  defp sort_mode_inherit_label(%Task{sort_mode: nil} = task) do
+    case Tasks.resolve_sort_mode(task) do
+      "manual" -> "Inherit"
+      mode -> "Inherit (#{sort_mode_label(mode)})"
+    end
+  end
+
+  defp sort_mode_inherit_label(_), do: "Inherit"
 
   defp progress_value(%{children: children, computed_progress: cp})
        when is_list(children) and children != [],

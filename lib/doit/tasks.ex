@@ -21,7 +21,7 @@ defmodule DoIt.Tasks do
   alias DoIt.Repo
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.Initiative
-  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Task}
+  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Sort, Task}
 
   # --- Queries ---------------------------------------------------------------
 
@@ -672,6 +672,65 @@ defmodule DoIt.Tasks do
 
   def resolve_sort_mode(%Task{parent_id: parent_id}),
     do: resolve_sort_mode(parent_id)
+
+  @doc """
+  Set the `sort_mode` on a branch task. When `mode` names an explicit
+  non-manual criterion, re-sorts the immediate children via `Tasks.Sort.apply/2`
+  and persists the new `sort_order` values in the same transaction.
+
+  `mode` may be `nil` (inherit), `"manual"`, or any value in
+  `DoIt.Tasks.Task.sort_modes/0`. `nil` and `"manual"` leave child order
+  untouched per ProductSpec — they only set the field. Logs a
+  `sort_mode_changed` activity event when the field changes.
+  """
+  def set_sort_mode(%Task{} = task, %User{} = actor, mode) do
+    Repo.transaction(fn ->
+      changeset =
+        Task.update_changeset(task, %{
+          "sort_mode" => mode,
+          "updated_by_id" => actor.id
+        })
+
+      case Repo.update(changeset) do
+        {:ok, updated} ->
+          if task.sort_mode != updated.sort_mode do
+            record_event(updated, actor, "sort_mode_changed", %{
+              from: task.sort_mode,
+              to: updated.sort_mode
+            })
+          end
+
+          if is_binary(mode) and mode != "manual" do
+            resort_children(updated.id, mode)
+          end
+
+          broadcast_change(updated.initiative_id, {:task_updated, updated.id})
+          updated
+
+        {:error, cs} ->
+          Repo.rollback(cs)
+      end
+    end)
+  end
+
+  defp resort_children(parent_id, mode) do
+    children = immediate_children(parent_id)
+    sorted = Sort.apply(children, mode)
+    new_orders = Map.new(sorted, fn c -> {c.id, c.sort_order} end)
+
+    Enum.each(children, fn orig ->
+      new_so = Map.fetch!(new_orders, orig.id)
+      if orig.sort_order != new_so, do: persist_sort_order(orig, new_so)
+    end)
+  end
+
+  defp immediate_children(parent_id) do
+    from(t in Task,
+      where: t.parent_id == ^parent_id,
+      order_by: [asc: t.sort_order, asc: t.inserted_at]
+    )
+    |> Repo.all()
+  end
 
   defp next_sort_order(initiative_id, parent_id) do
     query =
