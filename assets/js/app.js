@@ -423,14 +423,15 @@ Hooks.CollapseChildren = {
 
 // Per-(task, mode) memory for the Reverse checkbox in the Sort menu.
 // localStorage is per-browser/per-user; the actual sort_reverse on the
-// task is still server-side and shared. Listener runs in the capture
-// phase on the form so we fire BEFORE LiveView's delegated phx-change
-// reads the form values — a single round-trip carries the restored
-// {mode, reverse} pair.
+// task is still server-side and shared. Listener runs in capture phase
+// on the form for both `input` AND `change` — LiveView's delegated
+// handler fires on window-bubble for both event types, and `input`
+// fires first on a <select>, so we have to beat it on `input`.
 Hooks.SortRecall = {
   mounted() {
-    // v2: clears stale entries left over from the v1 capture-phase fix
-    // window (broken-hook test session).
+    // v2: clears stale entries left over from the broken-hook test
+    // session that wrote keys before the capture-phase + input-event
+    // fix landed.
     ensureStorageVersion("phx:sortrev", 2)
     this.taskId = this.el.dataset.taskId
 
@@ -446,6 +447,7 @@ Hooks.SortRecall = {
         this.save(select.value, checkbox.checked)
       }
     }
+    this.el.addEventListener("input", this.onChange, true)
     this.el.addEventListener("change", this.onChange, true)
 
     // Seed localStorage from the current server state so the first
@@ -457,7 +459,10 @@ Hooks.SortRecall = {
     }
   },
   destroyed() {
-    if (this.onChange) this.el.removeEventListener("change", this.onChange, true)
+    if (this.onChange) {
+      this.el.removeEventListener("input", this.onChange, true)
+      this.el.removeEventListener("change", this.onChange, true)
+    }
   },
   isInheritOrManual(mode) { return mode === "" || mode === "manual" },
   key(mode) { return `phx:sortrev:${this.taskId}:${mode}` },
