@@ -27,6 +27,27 @@ import topbar from "../vendor/topbar"
 
 const Hooks = {}
 
+// localStorage versioning. See .agents/localstorage.md.
+// Each feature owns a `<namespace>:_v` sentinel; mismatch (or absent)
+// drops every key under the namespace and writes the current version.
+// Hooks that persist client-side state must call this in mounted()
+// before any reads or writes to their namespace.
+function ensureStorageVersion(namespace, currentVersion) {
+  const sentinel = `${namespace}:_v`
+  const stored = localStorage.getItem(sentinel)
+  const target = String(currentVersion)
+  if (stored === target) return
+
+  const prefix = `${namespace}:`
+  const drop = []
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i)
+    if (k && k.startsWith(prefix)) drop.push(k)
+  }
+  drop.forEach(k => localStorage.removeItem(k))
+  localStorage.setItem(sentinel, target)
+}
+
 // Auto-dismiss :info flash messages after 4s. :error flashes stay until the
 // user dismisses them (those usually need attention).
 Hooks.AutoDismissFlash = {
@@ -351,7 +372,7 @@ Hooks.DragReorder = {
 // Persists state in localStorage keyed by (initiative_id, task_id).
 // Toggling never affects roll-up — it only hides the children <ul>.
 Hooks.CollapseToggle = {
-  mounted() { this.bind(); this.apply() },
+  mounted() { ensureStorageVersion("phx:collapse", 1); this.bind(); this.apply() },
   updated() { this.apply() },
   storageKey() { return `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}` },
   childrenEl() { return document.getElementById(`children-${this.el.dataset.taskId}`) },
@@ -380,7 +401,7 @@ Hooks.CollapseToggle = {
 // phx-update="ignore", so its updated() never fires after a tree refresh —
 // without this hook, morphdom strips the JS-added class on every diff.
 Hooks.CollapseChildren = {
-  mounted() { this.apply() },
+  mounted() { ensureStorageVersion("phx:collapse", 1); this.apply() },
   updated() { this.apply() },
   apply() {
     const key = `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`
@@ -397,6 +418,9 @@ Hooks.CollapseChildren = {
 // {mode, reverse} pair.
 Hooks.SortRecall = {
   mounted() {
+    // v2: clears stale entries left over from the v1 capture-phase fix
+    // window (broken-hook test session).
+    ensureStorageVersion("phx:sortrev", 2)
     this.taskId = this.el.dataset.taskId
 
     this.onChange = (e) => {
