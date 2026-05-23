@@ -797,12 +797,10 @@ defmodule DoItWeb.InitiativeShowLive do
       :if={@pending}
       id="completion-confirm"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-      phx-click="cancel_pending"
     >
       <div
         class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900"
         phx-click-away="cancel_pending"
-        onclick="event.stopPropagation()"
       >
         <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
           Confirm completion change
