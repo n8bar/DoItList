@@ -375,6 +375,20 @@ Hooks.CollapseToggle = {
   },
 }
 
+// Re-applies the persisted collapsed-peek class to a children <ul> whenever
+// LiveView re-renders it. The toggle button (CollapseToggle) carries
+// phx-update="ignore", so its updated() never fires after a tree refresh —
+// without this hook, morphdom strips the JS-added class on every diff.
+Hooks.CollapseChildren = {
+  mounted() { this.apply() },
+  updated() { this.apply() },
+  apply() {
+    const key = `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`
+    const collapsed = localStorage.getItem(key) === "1"
+    this.el.classList.toggle("collapsed-peek", collapsed)
+  },
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,

@@ -407,49 +407,46 @@ defmodule DoIt.TasksTest do
     end
   end
 
-  describe "resolve_sort_mode/1" do
-    # Persist a sort_mode directly via Repo.update to bypass any public-API
-    # changeset churn — the helper walks the DB, so values must really persist.
-    defp set_sort_mode(%Task{} = task, mode) do
+  describe "resolve_sort/1" do
+    # Persist sort fields directly via Repo.update so the helper actually
+    # sees them — set_sort/4 is exercised in its own context tests.
+    defp set_sort_fields(%Task{} = task, mode, reverse) do
       task
-      |> Ecto.Changeset.change(sort_mode: mode)
+      |> Ecto.Changeset.change(sort_mode: mode, sort_reverse: reverse)
       |> Repo.update!()
     end
 
-    defp set_sort_mode(%Initiative{} = initiative, mode) do
+    defp set_sort_fields(%Initiative{} = initiative, mode, reverse) do
       initiative
-      |> Ecto.Changeset.change(sort_mode: mode)
+      |> Ecto.Changeset.change(sort_mode: mode, sort_reverse: reverse)
       |> Repo.update!()
     end
 
-    test "nil returns \"manual\"" do
-      assert Tasks.resolve_sort_mode(nil) == "manual"
+    test "nil returns {\"manual\", false}" do
+      assert Tasks.resolve_sort(nil) == {"manual", false}
     end
 
-    test "{:initiative, id} returns the initiative's sort_mode when set", %{
-      initiative: initiative
-    } do
-      set_sort_mode(initiative, "alphabetical")
-      assert Tasks.resolve_sort_mode({:initiative, initiative.id}) == "alphabetical"
+    test "{:initiative, id} returns the initiative's {mode, reverse}", %{initiative: initiative} do
+      set_sort_fields(initiative, "alphabetical", true)
+      assert Tasks.resolve_sort({:initiative, initiative.id}) == {"alphabetical", true}
     end
 
-    test "{:initiative, id} with sort_mode: nil falls back to \"manual\"", %{
+    test "{:initiative, id} with sort_mode: nil falls back to {\"manual\", false}", %{
       initiative: initiative
     } do
-      # The setup creates initiatives with sort_mode left nil by default.
       assert initiative.sort_mode == nil
-      assert Tasks.resolve_sort_mode({:initiative, initiative.id}) == "manual"
+      assert Tasks.resolve_sort({:initiative, initiative.id}) == {"manual", false}
     end
 
-    test "{:initiative, id} with a nonexistent id returns \"manual\"" do
-      assert Tasks.resolve_sort_mode({:initiative, -1}) == "manual"
+    test "{:initiative, id} with a nonexistent id returns {\"manual\", false}" do
+      assert Tasks.resolve_sort({:initiative, -1}) == {"manual", false}
     end
 
-    test "task with explicit sort_mode returns its own mode (does not walk up)", %{
+    test "task with explicit sort_mode returns its own pair (no walk-up)", %{
       user: user,
       initiative: initiative
     } do
-      set_sort_mode(initiative, "weight")
+      set_sort_fields(initiative, "priority", false)
 
       {:ok, root} =
         Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
@@ -461,13 +458,13 @@ defmodule DoIt.TasksTest do
           "title" => "Child"
         })
 
-      set_sort_mode(root, "priority")
-      child = set_sort_mode(child, "alphabetical")
+      set_sort_fields(root, "priority", false)
+      child = set_sort_fields(child, "alphabetical", true)
 
-      assert Tasks.resolve_sort_mode(child) == "alphabetical"
+      assert Tasks.resolve_sort(child) == {"alphabetical", true}
     end
 
-    test "task with sort_mode: nil walks up to parent's explicit mode", %{
+    test "task with sort_mode: nil walks up to parent's pair", %{
       user: user,
       initiative: initiative
     } do
@@ -481,18 +478,36 @@ defmodule DoIt.TasksTest do
           "title" => "Child"
         })
 
-      set_sort_mode(root, "status")
-      # child.sort_mode stays nil → walks up to root.
-
+      set_sort_fields(root, "completion", true)
       assert child.sort_mode == nil
-      assert Tasks.resolve_sort_mode(child) == "status"
+      assert Tasks.resolve_sort(child) == {"completion", true}
     end
 
-    test "task with entire chain nil walks to root, then to initiative's mode", %{
+    test "direction always rides with the mode that owns it", %{
       user: user,
       initiative: initiative
     } do
-      set_sort_mode(initiative, "created")
+      # Root explicitly sets mode = "alphabetical", reverse = true.
+      # Child has sort_mode: nil but sort_reverse: false (the default).
+      # Resolve should return root's (mode, reverse), NOT mix-and-match.
+      {:ok, root} =
+        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
+
+      {:ok, child} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => root.id,
+          "title" => "Child"
+        })
+
+      set_sort_fields(root, "alphabetical", true)
+      child = set_sort_fields(child, nil, false)
+
+      assert Tasks.resolve_sort(child) == {"alphabetical", true}
+    end
+
+    test "chain all nil walks to initiative's pair", %{user: user, initiative: initiative} do
+      set_sort_fields(initiative, "created", true)
 
       {:ok, root} =
         Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
@@ -511,15 +526,13 @@ defmodule DoIt.TasksTest do
           "title" => "Leaf"
         })
 
-      # Whole chain has sort_mode: nil. Initiative has "created".
       assert root.sort_mode == nil
       assert mid.sort_mode == nil
       assert leaf.sort_mode == nil
-
-      assert Tasks.resolve_sort_mode(leaf) == "created"
+      assert Tasks.resolve_sort(leaf) == {"created", true}
     end
 
-    test "task with chain all nil and initiative nil falls back to \"manual\"", %{
+    test "chain all nil and initiative nil falls back to {\"manual\", false}", %{
       user: user,
       initiative: initiative
     } do
@@ -535,7 +548,7 @@ defmodule DoIt.TasksTest do
           "title" => "Child"
         })
 
-      assert Tasks.resolve_sort_mode(child) == "manual"
+      assert Tasks.resolve_sort(child) == {"manual", false}
     end
 
     test "integer id resolves equivalently to passing the struct", %{
@@ -545,12 +558,11 @@ defmodule DoIt.TasksTest do
       {:ok, root} =
         Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
-      root = set_sort_mode(root, "updated")
+      root = set_sort_fields(root, "updated", false)
 
-      assert Tasks.resolve_sort_mode(root) == "updated"
-      assert Tasks.resolve_sort_mode(root.id) == "updated"
+      assert Tasks.resolve_sort(root) == {"updated", false}
+      assert Tasks.resolve_sort(root.id) == {"updated", false}
 
-      # Inheritance via integer id also works.
       {:ok, child} =
         Tasks.create_task(user, %{
           "initiative_id" => initiative.id,
@@ -558,11 +570,11 @@ defmodule DoIt.TasksTest do
           "title" => "Child"
         })
 
-      assert Tasks.resolve_sort_mode(child.id) == "updated"
+      assert Tasks.resolve_sort(child.id) == {"updated", false}
     end
 
-    test "integer id with no such task returns \"manual\"" do
-      assert Tasks.resolve_sort_mode(-1) == "manual"
+    test "integer id with no such task returns {\"manual\", false}" do
+      assert Tasks.resolve_sort(-1) == {"manual", false}
     end
   end
 end

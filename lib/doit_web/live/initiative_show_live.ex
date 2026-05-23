@@ -251,15 +251,22 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("set_sort_mode", %{"mode" => mode}, socket) do
+  def handle_event("set_sort", params, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
     else
       task = socket.assigns.selected_task
       user = socket.assigns.current_user
-      mode = if mode == "", do: nil, else: mode
 
-      case Tasks.set_sort_mode(task, user, mode) do
+      mode =
+        case params["mode"] do
+          "" -> nil
+          m -> m
+        end
+
+      reverse = params["reverse"] == "true"
+
+      case Tasks.set_sort(task, user, mode, reverse) do
         {:ok, _updated} ->
           {:noreply, socket |> load_tree() |> refresh_selected()}
 
@@ -858,9 +865,11 @@ defmodule DoItWeb.InitiativeShowLive do
     >
       <div
         class={[
-          "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
-          @selected_id == @task.id &&
-            "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-50 dark:hover:bg-emerald-950"
+          "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer",
+          if(@selected_id == @task.id,
+            do: "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900",
+            else: "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
+          )
         ]}
         phx-click="select_task"
         phx-value-id={@task.id}
@@ -1066,7 +1075,14 @@ defmodule DoItWeb.InitiativeShowLive do
         <.task_form parent_id={@task.id} />
       </div>
 
-      <ul :if={@task.children != []} id={"children-#{@task.id}"} class="pl-6 pb-2 space-y-1">
+      <ul
+        :if={@task.children != []}
+        id={"children-#{@task.id}"}
+        phx-hook="CollapseChildren"
+        data-task-id={@task.id}
+        data-initiative-id={@initiative_id}
+        class="pl-6 pb-2 space-y-1"
+      >
         <%= for c <- @task.children do %>
           <.task_node
             task={c}
@@ -1289,24 +1305,43 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           Sort children by
         </label>
-        <form phx-change="set_sort_mode">
+        <form phx-change="set_sort" class="flex items-center gap-2">
           <select
             id={"sort-mode-#{@task.id}"}
             name="mode"
-            class="w-full select select-bordered select-sm"
+            class="flex-1 select select-bordered select-sm"
             disabled={not @can_edit}
           >
             <option value="" selected={is_nil(@task.sort_mode)}>
               {sort_mode_inherit_label(@task)}
             </option>
             <option
-              :for={m <- DoIt.Tasks.Task.sort_modes()}
+              :for={m <- sort_mode_options()}
               value={m}
               selected={@task.sort_mode == m}
             >
               {sort_mode_label(m)}
             </option>
           </select>
+          <label
+            for={"sort-reverse-#{@task.id}"}
+            class={[
+              "flex items-center gap-1 text-xs select-none",
+              reverse_disabled?(@task) && "text-zinc-400 dark:text-zinc-500",
+              not reverse_disabled?(@task) && "text-zinc-600 dark:text-zinc-300"
+            ]}
+            title="Reverse the sort direction"
+          >
+            <input
+              id={"sort-reverse-#{@task.id}"}
+              type="checkbox"
+              name="reverse"
+              value="true"
+              checked={@task.sort_reverse}
+              disabled={not @can_edit or reverse_disabled?(@task)}
+              class="checkbox checkbox-xs"
+            /> Reverse
+          </label>
         </form>
       </div>
 
@@ -1395,23 +1430,31 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Dropdown ordering: criteria first, then Manual at the bottom. "weight"
+  # is intentionally absent from the menu but still supported by the engine
+  # for a possible future re-enable.
+  @sort_mode_options ~w(alphabetical completion computed_progress priority created updated manual)
+
+  defp sort_mode_options, do: @sort_mode_options
+
   defp sort_mode_label("manual"), do: "Manual"
-  defp sort_mode_label("alphabetical"), do: "Alphabetical (A→Z)"
-  defp sort_mode_label("status"), do: "Status (incomplete first)"
-  defp sort_mode_label("computed_progress"), do: "Progress (most done first)"
-  defp sort_mode_label("priority"), do: "Priority (high first)"
-  defp sort_mode_label("weight"), do: "Weight (heaviest first)"
-  defp sort_mode_label("created"), do: "Created (oldest first)"
-  defp sort_mode_label("updated"), do: "Updated (most recent first)"
+  defp sort_mode_label("alphabetical"), do: "Alphabetical"
+  defp sort_mode_label("completion"), do: "Completion"
+  defp sort_mode_label("computed_progress"), do: "Progress"
+  defp sort_mode_label("priority"), do: "Priority"
+  defp sort_mode_label("created"), do: "First Created"
+  defp sort_mode_label("updated"), do: "Last Updated"
 
   defp sort_mode_inherit_label(%Task{sort_mode: nil} = task) do
-    case Tasks.resolve_sort_mode(task) do
-      "manual" -> "Inherit"
-      mode -> "Inherit (#{sort_mode_label(mode)})"
+    case Tasks.resolve_sort(task) do
+      {"manual", _} -> "Inherit"
+      {mode, _} -> "Inherit (#{sort_mode_label(mode)})"
     end
   end
 
   defp sort_mode_inherit_label(_), do: "Inherit"
+
+  defp reverse_disabled?(%Task{sort_mode: mode}), do: mode in [nil, "manual"]
 
   defp progress_value(%{children: children, computed_progress: cp})
        when is_list(children) and children != [],

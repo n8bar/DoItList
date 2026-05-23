@@ -8,7 +8,7 @@ defmodule DoIt.Tasks.Task do
 
   @statuses ~w(open in_progress done)
   @priorities ~w(low normal high)
-  @sort_modes ~w(manual alphabetical status computed_progress priority weight created updated)
+  @sort_modes ~w(manual alphabetical completion computed_progress priority created updated)
 
   schema "tasks" do
     field :title, :string
@@ -20,6 +20,7 @@ defmodule DoIt.Tasks.Task do
     field :weight, :decimal, default: Decimal.new("1.0")
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
+    field :sort_reverse, :boolean, default: false
 
     belongs_to :initiative, Initiative
     belongs_to :parent, Task
@@ -48,6 +49,7 @@ defmodule DoIt.Tasks.Task do
       :weight,
       :sort_order,
       :sort_mode,
+      :sort_reverse,
       :initiative_id,
       :parent_id,
       :assignee_id,
@@ -75,6 +77,7 @@ defmodule DoIt.Tasks.Task do
       :weight,
       :sort_order,
       :sort_mode,
+      :sort_reverse,
       :parent_id,
       :assignee_id,
       :updated_by_id

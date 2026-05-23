@@ -638,70 +638,72 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Resolves the effective sort mode for a task's children.
+  Resolves the effective sort `{mode, reverse}` pair for a task's children.
 
-  Walks the inheritance chain: the task's own `sort_mode`, then up through
-  parents to the root task, then the owning Initiative's `sort_mode`, and
-  finally falls back to `"manual"` when every level is `nil`.
+  Walks the inheritance chain — the task's own `sort_mode`, up through
+  parents to the root task, then the owning Initiative — and returns the
+  `(mode, reverse)` pair from the first node with an explicit `sort_mode`.
+  Falls back to `{"manual", false}` when every level is `nil`. Direction
+  always travels with the mode that owns it, so a child cannot inherit
+  the mode while overriding direction.
 
-  Accepts a `%Task{}`, a task id, or `nil`. When `nil`, only the Initiative
-  level is consulted — useful for root-level sorting where there is no
-  parent task. Pass `{:initiative, id}` to resolve directly from an
-  Initiative without any task context.
+  Accepts a `%Task{}`, a task id, `nil`, or `{:initiative, id}`.
   """
-  def resolve_sort_mode(nil), do: "manual"
+  def resolve_sort(nil), do: {"manual", false}
 
-  def resolve_sort_mode({:initiative, initiative_id}) do
+  def resolve_sort({:initiative, initiative_id}) do
     case Repo.get(Initiative, initiative_id) do
-      %Initiative{sort_mode: mode} when is_binary(mode) -> mode
-      _ -> "manual"
+      %Initiative{sort_mode: mode, sort_reverse: rev} when is_binary(mode) -> {mode, rev}
+      _ -> {"manual", false}
     end
   end
 
-  def resolve_sort_mode(task_id) when is_integer(task_id) do
+  def resolve_sort(task_id) when is_integer(task_id) do
     case Repo.get(Task, task_id) do
-      nil -> "manual"
-      %Task{} = task -> resolve_sort_mode(task)
+      nil -> {"manual", false}
+      %Task{} = task -> resolve_sort(task)
     end
   end
 
-  def resolve_sort_mode(%Task{sort_mode: mode}) when is_binary(mode), do: mode
+  def resolve_sort(%Task{sort_mode: mode, sort_reverse: rev}) when is_binary(mode),
+    do: {mode, rev}
 
-  def resolve_sort_mode(%Task{parent_id: nil, initiative_id: initiative_id}),
-    do: resolve_sort_mode({:initiative, initiative_id})
+  def resolve_sort(%Task{parent_id: nil, initiative_id: initiative_id}),
+    do: resolve_sort({:initiative, initiative_id})
 
-  def resolve_sort_mode(%Task{parent_id: parent_id}),
-    do: resolve_sort_mode(parent_id)
+  def resolve_sort(%Task{parent_id: parent_id}), do: resolve_sort(parent_id)
 
   @doc """
-  Set the `sort_mode` on a branch task. When `mode` names an explicit
-  non-manual criterion, re-sorts the immediate children via `Tasks.Sort.apply/2`
-  and persists the new `sort_order` values in the same transaction.
+  Set the sort mode and direction on a branch task. When `mode` names an
+  explicit non-manual criterion, re-sorts immediate children via
+  `Tasks.Sort.apply/3` and persists the new `sort_order` values in the
+  same transaction.
 
   `mode` may be `nil` (inherit), `"manual"`, or any value in
-  `DoIt.Tasks.Task.sort_modes/0`. `nil` and `"manual"` leave child order
-  untouched per ProductSpec — they only set the field. Logs a
-  `sort_mode_changed` activity event when the field changes.
+  `DoIt.Tasks.Task.sort_modes/0`. `reverse` is a boolean. `nil` and
+  `"manual"` skip the re-sort — they only set the field. Logs a
+  `sort_changed` activity event when either field changes.
   """
-  def set_sort_mode(%Task{} = task, %User{} = actor, mode) do
+  def set_sort(%Task{} = task, %User{} = actor, mode, reverse) do
     Repo.transaction(fn ->
       changeset =
         Task.update_changeset(task, %{
           "sort_mode" => mode,
+          "sort_reverse" => !!reverse,
           "updated_by_id" => actor.id
         })
 
       case Repo.update(changeset) do
         {:ok, updated} ->
-          if task.sort_mode != updated.sort_mode do
-            record_event(updated, actor, "sort_mode_changed", %{
-              from: task.sort_mode,
-              to: updated.sort_mode
+          if task.sort_mode != updated.sort_mode or task.sort_reverse != updated.sort_reverse do
+            record_event(updated, actor, "sort_changed", %{
+              from: %{mode: task.sort_mode, reverse: task.sort_reverse},
+              to: %{mode: updated.sort_mode, reverse: updated.sort_reverse}
             })
           end
 
-          if is_binary(mode) and mode != "manual" do
-            resort_children(updated.id, mode)
+          if is_binary(updated.sort_mode) and updated.sort_mode != "manual" do
+            resort_children(updated.id, updated.sort_mode, updated.sort_reverse)
           end
 
           broadcast_change(updated.initiative_id, {:task_updated, updated.id})
@@ -713,9 +715,9 @@ defmodule DoIt.Tasks do
     end)
   end
 
-  defp resort_children(parent_id, mode) do
+  defp resort_children(parent_id, mode, reverse) do
     children = immediate_children(parent_id)
-    sorted = Sort.apply(children, mode)
+    sorted = Sort.apply(children, mode, reverse)
     new_orders = Map.new(sorted, fn c -> {c.id, c.sort_order} end)
 
     Enum.each(children, fn orig ->
