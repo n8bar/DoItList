@@ -391,29 +391,38 @@ Hooks.CollapseChildren = {
 
 // Per-(task, mode) memory for the Reverse checkbox in the Sort menu.
 // localStorage is per-browser/per-user; the actual sort_reverse on the
-// task is still server-side and shared. On dropdown change, we restore
-// the saved direction for the new mode BEFORE the form's phx-change
-// fires, so a single round-trip carries the {mode, reverse} pair.
+// task is still server-side and shared. Listener runs in the capture
+// phase on the form so we fire BEFORE LiveView's delegated phx-change
+// reads the form values — a single round-trip carries the restored
+// {mode, reverse} pair.
 Hooks.SortRecall = {
   mounted() {
     this.taskId = this.el.dataset.taskId
-    this.select = this.el.querySelector("select[name='mode']")
-    this.checkbox = this.el.querySelector("input[name='reverse']")
-    if (!this.select || !this.checkbox) return
 
-    this.checkbox.addEventListener("change", () => {
-      this.save(this.select.value, this.checkbox.checked)
-    })
+    this.onChange = (e) => {
+      const select = this.el.querySelector("select[name='mode']")
+      const checkbox = this.el.querySelector("input[name='reverse']")
+      if (!select || !checkbox) return
 
-    this.select.addEventListener("change", () => {
-      const m = this.select.value
-      this.checkbox.checked = this.isInheritOrManual(m) ? false : this.recall(m)
-    })
+      if (e.target === select) {
+        const m = select.value
+        checkbox.checked = this.isInheritOrManual(m) ? false : this.recall(m)
+      } else if (e.target === checkbox) {
+        this.save(select.value, checkbox.checked)
+      }
+    }
+    this.el.addEventListener("change", this.onChange, true)
 
     // Seed localStorage from the current server state so the first
     // mode-switch-and-back lands on the user's last actual choice.
-    const m = this.select.value
-    if (!this.isInheritOrManual(m)) this.save(m, this.checkbox.checked)
+    const select = this.el.querySelector("select[name='mode']")
+    const checkbox = this.el.querySelector("input[name='reverse']")
+    if (select && checkbox && !this.isInheritOrManual(select.value)) {
+      this.save(select.value, checkbox.checked)
+    }
+  },
+  destroyed() {
+    if (this.onChange) this.el.removeEventListener("change", this.onChange, true)
   },
   isInheritOrManual(mode) { return mode === "" || mode === "manual" },
   key(mode) { return `phx:sortrev:${this.taskId}:${mode}` },
