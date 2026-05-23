@@ -97,6 +97,46 @@ defmodule DoIt.Tasks.PreviewTest do
       assert before_count == length(snapshot_initiative(initiative.id))
     end
 
+    test "returns scenario nil when an ancestor already sits at progress=100 with status=open (no crossing)",
+         %{user: user, initiative: initiative} do
+      # Legitimate transient state per ProductSpec: branches reach 100 once
+      # all leaves do, but status may not have flipped yet. A subsequent
+      # no-op or unrelated move must NOT be classified as "would complete"
+      # — the threshold isn't being crossed, the parent was already there.
+      {:ok, parent} =
+        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "P"})
+
+      {:ok, _l1} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "l1",
+          "status" => "done"
+        })
+
+      {:ok, l2} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "l2",
+          "status" => "done"
+        })
+
+      # Auto-reconcile flipped parent to done. Manually revert to mimic
+      # the (status=open, progress=100) transient.
+      Tasks.get_task!(parent.id)
+      |> Ecto.Changeset.change(status: "open")
+      |> DoIt.Repo.update!()
+
+      parent = Tasks.get_task!(parent.id)
+      assert parent.status == "open"
+      assert parent.computed_progress == 100
+
+      # Drop l2 onto its current parent — true no-op semantically.
+      assert {:ok, %{scenario: nil, titles: []}} =
+               Tasks.preview_move(l2, user, %{"parent_id" => parent.id})
+    end
+
     test "returns scenario 1 (uncomplete) when moving an incomplete leaf into a done parent chain",
          %{user: user, initiative: initiative} do
       # Destination chain: root_b → done leaf. Parent root_b is currently done

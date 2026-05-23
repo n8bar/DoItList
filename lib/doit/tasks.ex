@@ -348,14 +348,19 @@ defmodule DoIt.Tasks do
   # A flip is what the status helpers WOULD do once this move commits:
   #   was open + progress will be 100  → would auto-complete
   #   was done + progress will be < 100 → would auto-uncomplete
+  # A flip requires a true crossing of the 100 threshold, not just an
+  # end-state observation. A branch can legitimately sit at progress=100
+  # with status="open" between leaf completion and the next status
+  # reconcile pass — that pre-existing state must not be classified as
+  # "would complete" by a no-op move.
   defp classify_flips(before, after_progress) do
     flips =
-      Enum.flat_map(before, fn {id, %{status: status, title: title}} ->
+      Enum.flat_map(before, fn {id, %{status: status, progress: before_p, title: title}} ->
         after_p = Map.get(after_progress, id)
 
         cond do
-          status != "done" and after_p == 100 -> [{:complete, title}]
-          status == "done" and after_p != 100 -> [{:uncomplete, title}]
+          status != "done" and before_p != 100 and after_p == 100 -> [{:complete, title}]
+          status == "done" and before_p == 100 and after_p != 100 -> [{:uncomplete, title}]
           true -> []
         end
       end)
