@@ -12,7 +12,11 @@ Browser localStorage usage in this project follows a per-feature versioning sche
 
 ## Helper
 
-`assets/js/app.js` exports `ensureStorageVersion(namespace, currentVersion)`. Use it; don't reimplement.
+`assets/js/app.js` exports `ensureStorageVersion(namespace, currentVersion, opts)`. Use it; don't reimplement.
+
+`opts.grandfather: true` — when introducing the version check to a namespace whose existing keys already match the version you're declaring, pass this so an absent sentinel is stamped without wiping. Real version mismatches still wipe. Only valid at the introduction event; once stamped, future bumps go through the strict path.
+
+Set `grandfather: true` only when you've personally read the existing key shape and value encoding and confirmed both match the version you're declaring. When unsure, omit it and accept the one-time wipe.
 
 ## Adding a new feature
 
@@ -23,5 +27,5 @@ Browser localStorage usage in this project follows a per-feature versioning sche
 
 ## Notes
 
-- Introducing the version check on a namespace that already has unversioned data wipes that data on first mount. Accepted cost: users see a one-time reset of that feature's preferences.
+- Introducing the version check on a namespace that already has unversioned data wipes that data on first mount unless `grandfather: true` is set. Use the flag only when you've verified shape compatibility.
 - A future global wipe across all features (e.g. renaming the `phx:` prefix) would need its own top-level sentinel. Not needed today.

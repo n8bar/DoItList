@@ -28,15 +28,26 @@ import topbar from "../vendor/topbar"
 const Hooks = {}
 
 // localStorage versioning. See .agents/localstorage.md.
-// Each feature owns a `<namespace>:_v` sentinel; mismatch (or absent)
-// drops every key under the namespace and writes the current version.
-// Hooks that persist client-side state must call this in mounted()
-// before any reads or writes to their namespace.
-function ensureStorageVersion(namespace, currentVersion) {
+// Each feature owns a `<namespace>:_v` sentinel; mismatch drops every
+// key under the namespace and writes the current version. Hooks that
+// persist client-side state must call this in mounted() before any
+// reads or writes to their namespace.
+//
+// Pass `{ grandfather: true }` when introducing the version check to a
+// namespace whose existing key shape and value encoding already match
+// the version you're declaring — `null` sentinel will be stamped
+// without wiping. Only the *introduction* event benefits; real version
+// mismatches still wipe.
+function ensureStorageVersion(namespace, currentVersion, opts = {}) {
   const sentinel = `${namespace}:_v`
   const stored = localStorage.getItem(sentinel)
   const target = String(currentVersion)
   if (stored === target) return
+
+  if (stored === null && opts.grandfather) {
+    localStorage.setItem(sentinel, target)
+    return
+  }
 
   const prefix = `${namespace}:`
   const drop = []
@@ -372,7 +383,7 @@ Hooks.DragReorder = {
 // Persists state in localStorage keyed by (initiative_id, task_id).
 // Toggling never affects roll-up — it only hides the children <ul>.
 Hooks.CollapseToggle = {
-  mounted() { ensureStorageVersion("phx:collapse", 1); this.bind(); this.apply() },
+  mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.bind(); this.apply() },
   updated() { this.apply() },
   storageKey() { return `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}` },
   childrenEl() { return document.getElementById(`children-${this.el.dataset.taskId}`) },
@@ -401,7 +412,7 @@ Hooks.CollapseToggle = {
 // phx-update="ignore", so its updated() never fires after a tree refresh —
 // without this hook, morphdom strips the JS-added class on every diff.
 Hooks.CollapseChildren = {
-  mounted() { ensureStorageVersion("phx:collapse", 1); this.apply() },
+  mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.apply() },
   updated() { this.apply() },
   apply() {
     const key = `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`
