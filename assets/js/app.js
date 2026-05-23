@@ -266,11 +266,23 @@ Hooks.DragReorder = {
 
     const anchorLi = target && target.closest("li[data-task-id]")
     if (!anchorLi || anchorLi === this.sourceLi || this.isDescendantOfSource(anchorLi)) {
+      this.clearForbidden()
       this.anchorLi = null
       this.dropPlan = null
       return
     }
 
+    // Source's own parent — a drop there is semantically a no-op (the
+    // source is already a child of this row). Render the forbidden
+    // signifier instead of letting the move fire on pointerup.
+    if (anchorLi === this.sourceParentLi()) {
+      this.setForbidden(anchorLi)
+      this.anchorLi = null
+      this.dropPlan = null
+      return
+    }
+
+    this.clearForbidden()
     this.anchorLi = anchorLi
     this.anchorLi.classList.add("drop-target")
     const anchorId = parseInt(anchorLi.dataset.taskId, 10)
@@ -279,6 +291,28 @@ Hooks.DragReorder = {
       parentId: anchorId,
       position: null,
     }
+  },
+
+  sourceParentLi() {
+    return (this.sourceLi && this.sourceLi.parentElement &&
+            this.sourceLi.parentElement.closest("li[data-task-id]")) || null
+  },
+
+  setForbidden(li) {
+    if (this.forbiddenLi && this.forbiddenLi !== li) {
+      this.forbiddenLi.classList.remove("drop-forbidden")
+    }
+    this.forbiddenLi = li
+    li.classList.add("drop-forbidden")
+    document.body.style.cursor = "not-allowed"
+  },
+
+  clearForbidden() {
+    if (this.forbiddenLi) {
+      this.forbiddenLi.classList.remove("drop-forbidden")
+      this.forbiddenLi = null
+    }
+    document.body.style.cursor = ""
   },
 
   // ---- Phase 3: COMMIT / ABORT -------------------------------------------
@@ -337,10 +371,13 @@ Hooks.DragReorder = {
       clearTimeout(timeout)
     }
     document.addEventListener("click", swallow, true)
-    // Fallback in case no click fires (pointerup over a non-clickable spot).
+    // Synthetic clicks after pointerup fire essentially synchronously;
+    // 50ms is comfortably above that and well below the server-roundtrip
+    // + modal-render + user-react path. The old 300ms fallback could
+    // swallow the Cancel click on a freshly-opened confirm modal.
     const timeout = setTimeout(() => {
       document.removeEventListener("click", swallow, true)
-    }, 300)
+    }, 50)
   },
 
   cleanup() {
@@ -371,6 +408,7 @@ Hooks.DragReorder = {
   clearAnchorHighlight() {
     if (this.anchorLi) this.anchorLi.classList.remove("drop-target")
     this.anchorLi = null
+    this.clearForbidden()
   },
 
   // ---- Tree helpers ------------------------------------------------------
