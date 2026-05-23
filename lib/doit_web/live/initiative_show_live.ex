@@ -251,6 +251,28 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  def handle_event("cascade_sort", _params, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      task = socket.assigns.selected_task
+      branch_count = 1 + Tasks.count_descendant_branches(task.id)
+
+      if branch_count > 10 do
+        {:noreply,
+         assign(socket, :pending_action, %{
+           kind: :cascade_sort,
+           task_id: task.id,
+           mode: task.sort_mode,
+           reverse: task.sort_reverse,
+           branch_count: branch_count
+         })}
+      else
+        {:noreply, commit_cascade_sort(socket, task, task.sort_mode, task.sort_reverse)}
+      end
+    end
+  end
+
   def handle_event("set_sort", params, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
@@ -432,6 +454,10 @@ defmodule DoItWeb.InitiativeShowLive do
       %{kind: :create, attrs: attrs} ->
         {:noreply, commit_create(socket, attrs)}
 
+      %{kind: :cascade_sort, task_id: task_id, mode: mode, reverse: reverse} ->
+        task = Tasks.get_task!(task_id)
+        {:noreply, commit_cascade_sort(socket, task, mode, reverse)}
+
       _ ->
         {:noreply, socket}
     end
@@ -513,6 +539,24 @@ defmodule DoItWeb.InitiativeShowLive do
         socket
         |> assign(:pending_action, nil)
         |> put_flash(:error, "Couldn't create task: #{summarize_errors(cs)}.")
+    end
+  end
+
+  defp commit_cascade_sort(socket, task, mode, reverse) do
+    user = socket.assigns.current_user
+
+    case Tasks.cascade_sort(task, user, mode, reverse) do
+      {:ok, %{branch_count: n}} ->
+        socket
+        |> assign(:pending_action, nil)
+        |> put_flash(:info, "Sort applied to #{n} branch(es).")
+        |> load_tree()
+        |> refresh_selected()
+
+      {:error, _reason} ->
+        socket
+        |> assign(:pending_action, nil)
+        |> put_flash(:error, "Couldn't apply sort to descendants.")
     end
   end
 
@@ -803,10 +847,10 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-click-away="cancel_pending"
       >
         <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-          Confirm completion change
+          {confirm_title(@pending)}
         </h2>
         <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
-          {completion_confirm_message(@pending.scenario, @verb)}
+          {confirm_body(@pending, @verb)}
         </p>
         <ul
           :if={Map.get(@pending, :titles, []) != []}
@@ -834,6 +878,19 @@ defmodule DoItWeb.InitiativeShowLive do
     </div>
     """
   end
+
+  defp confirm_title(%{kind: :cascade_sort}), do: "Apply sort to all descendants"
+  defp confirm_title(_), do: "Confirm completion change"
+
+  defp confirm_body(%{kind: :cascade_sort, branch_count: n}, _verb) do
+    "This will overwrite the sort settings on #{n} descendant branch(es). " <>
+      "The change is only reversible via Undo (Arc 5)."
+  end
+
+  defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
+    do: completion_confirm_message(scenario, verb)
+
+  defp confirm_body(_, _), do: ""
 
   defp completion_confirm_message(1, verb),
     do: "This #{verb} will mark previously completed task(s) as incomplete."
@@ -1347,6 +1404,15 @@ defmodule DoItWeb.InitiativeShowLive do
             /> Reverse
           </label>
         </form>
+        <button
+          :if={@can_edit}
+          type="button"
+          phx-click="cascade_sort"
+          class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
+          title="Apply this sort_mode and direction to every descendant branch"
+        >
+          Apply to all descendants
+        </button>
       </div>
 
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">

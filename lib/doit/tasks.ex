@@ -721,26 +721,8 @@ defmodule DoIt.Tasks do
   """
   def set_sort(%Task{} = task, %User{} = actor, mode, reverse) do
     Repo.transaction(fn ->
-      changeset =
-        Task.update_changeset(task, %{
-          "sort_mode" => mode,
-          "sort_reverse" => !!reverse,
-          "updated_by_id" => actor.id
-        })
-
-      case Repo.update(changeset) do
+      case set_sort_body(task, actor, mode, reverse) do
         {:ok, updated} ->
-          if task.sort_mode != updated.sort_mode or task.sort_reverse != updated.sort_reverse do
-            record_event(updated, actor, "sort_changed", %{
-              from: %{mode: task.sort_mode, reverse: task.sort_reverse},
-              to: %{mode: updated.sort_mode, reverse: updated.sort_reverse}
-            })
-          end
-
-          if is_binary(updated.sort_mode) and updated.sort_mode != "manual" do
-            resort_children(updated.id, updated.sort_mode, updated.sort_reverse)
-          end
-
           broadcast_change(updated.initiative_id, {:task_updated, updated.id})
           updated
 
@@ -748,6 +730,81 @@ defmodule DoIt.Tasks do
           Repo.rollback(cs)
       end
     end)
+  end
+
+  @doc """
+  Set the same sort mode + direction on `root` and every branch
+  descendant in a single transaction. Used by item 14's "Apply to all
+  descendants" menu action. Records ONE `sort_cascaded` activity event
+  on the root (not per-descendant) and broadcasts once.
+
+  Returns `{:ok, %{root_id: id, branch_count: n}}` or `{:error, ...}`.
+  """
+  def cascade_sort(%Task{} = root, %User{} = actor, mode, reverse) do
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        branches = [root | descendant_branches(root.id)]
+
+        Enum.each(branches, fn t ->
+          case set_sort_body(t, actor, mode, reverse) do
+            {:ok, _} -> :ok
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end)
+
+        record_event(root, actor, "sort_cascaded", %{
+          mode: mode,
+          reverse: !!reverse,
+          branch_count: length(branches)
+        })
+
+        broadcast_change(root.initiative_id, {:task_updated, root.id})
+        %{root_id: root.id, branch_count: length(branches)}
+      end)
+    end)
+  end
+
+  @doc "Count branch descendants of `task_id` (descendants that themselves have children)."
+  def count_descendant_branches(task_id) when is_integer(task_id) do
+    length(descendant_branches(task_id))
+  end
+
+  # All descendants of `task_id` that are themselves parents (have children).
+  # Returned as full task structs ordered by id for stable iteration.
+  defp descendant_branches(task_id) do
+    task_id
+    |> list_descendants()
+    |> Enum.filter(fn t ->
+      Repo.exists?(from c in Task, where: c.parent_id == ^t.id)
+    end)
+  end
+
+  # Shared body for `set_sort/4` and `cascade_sort/4`. Updates the field
+  # pair, records a sort_changed event when either field changed, runs
+  # the engine if mode is non-manual. Does NOT broadcast — callers
+  # decide when to fan out.
+  defp set_sort_body(%Task{} = task, %User{} = actor, mode, reverse) do
+    changeset =
+      Task.update_changeset(task, %{
+        "sort_mode" => mode,
+        "sort_reverse" => !!reverse,
+        "updated_by_id" => actor.id
+      })
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      if task.sort_mode != updated.sort_mode or task.sort_reverse != updated.sort_reverse do
+        record_event(updated, actor, "sort_changed", %{
+          from: %{mode: task.sort_mode, reverse: task.sort_reverse},
+          to: %{mode: updated.sort_mode, reverse: updated.sort_reverse}
+        })
+      end
+
+      if is_binary(updated.sort_mode) and updated.sort_mode != "manual" do
+        resort_children(updated.id, updated.sort_mode, updated.sort_reverse)
+      end
+
+      {:ok, updated}
+    end
   end
 
   defp resort_children(parent_id, mode, reverse) do

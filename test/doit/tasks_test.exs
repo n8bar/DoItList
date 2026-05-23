@@ -407,6 +407,66 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "cascade_sort/4" do
+    test "sets sort_mode + sort_reverse on root and every branch descendant", %{
+      user: user,
+      initiative: initiative
+    } do
+      # Build: root -> mid -> leaf1, leaf2
+      #            \-> mid2 -> leaf3
+      {:ok, root} =
+        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
+
+      {:ok, mid} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => root.id,
+          "title" => "Mid"
+        })
+
+      {:ok, _leaf1} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => mid.id,
+          "title" => "Leaf1"
+        })
+
+      {:ok, _leaf2} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => mid.id,
+          "title" => "Leaf2"
+        })
+
+      {:ok, mid2} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => root.id,
+          "title" => "Mid2"
+        })
+
+      {:ok, _leaf3} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => mid2.id,
+          "title" => "Leaf3"
+        })
+
+      # Branches under root: mid, mid2 (root itself counts too, so 3 total).
+      assert Tasks.count_descendant_branches(root.id) == 2
+
+      assert {:ok, %{branch_count: 3}} =
+               Tasks.cascade_sort(root, user, "alphabetical", true)
+
+      # Root + both mid-level branches got the pair set.
+      for id <- [root.id, mid.id, mid2.id] do
+        t = Tasks.get_task!(id)
+        assert t.sort_mode == "alphabetical"
+        assert t.sort_reverse == true
+      end
+    end
+  end
+
   describe "auto-resort on child mutation" do
     test "branch sorted by completion re-sorts when a child's status changes", %{
       user: user,
