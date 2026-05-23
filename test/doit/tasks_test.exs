@@ -407,6 +407,57 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "auto-resort on child mutation" do
+    test "branch sorted by completion re-sorts when a child's status changes", %{
+      user: user,
+      initiative: initiative
+    } do
+      {:ok, parent} =
+        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "P"})
+
+      # Three children, all open. After we set parent to sort by completion
+      # they'll be ordered by id (stable tiebreaker) since all share status=open.
+      {:ok, a} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "A"
+        })
+
+      {:ok, b} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "B"
+        })
+
+      {:ok, c} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "C"
+        })
+
+      {:ok, _parent} = Tasks.set_sort(parent, user, "completion", false)
+
+      # Flip B to done. Completion sort puts done last, so the order
+      # should become [A, C, B] — without auto-resort, sort_order would
+      # leave it as [A, B, C].
+      b = Tasks.get_task!(b.id)
+      {:ok, _} = Tasks.update_task(b, user, %{"status" => "done"})
+
+      ordered =
+        from(t in Task,
+          where: t.parent_id == ^parent.id,
+          order_by: [asc: t.sort_order, asc: t.inserted_at],
+          select: t.id
+        )
+        |> DoIt.Repo.all()
+
+      assert ordered == [a.id, c.id, b.id]
+    end
+  end
+
   describe "resolve_sort/1" do
     # Persist sort fields directly via Repo.update so the helper actually
     # sees them — set_sort/4 is exercised in its own context tests.

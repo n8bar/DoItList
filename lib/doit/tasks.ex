@@ -83,6 +83,7 @@ defmodule DoIt.Tasks do
         {:ok, task} ->
           reconcile_after_create(task, actor)
           task = Repo.get!(Task, task.id)
+          maybe_resort_children(task.parent_id)
           broadcast_change(task.initiative_id, {:task_created, task.id})
           task
 
@@ -149,6 +150,14 @@ defmodule DoIt.Tasks do
 
           # Always recompute self in case manual_progress changed
           updated = recompute_self_and_ancestors(updated)
+
+          # Auto-sorted parents need their children re-ordered when any
+          # sort-key field on a child changes (status, priority, title,
+          # progress). Recompute walk-ups handle deeper ancestors via
+          # recompute_ancestors.
+          maybe_resort_children(updated.parent_id)
+          if old_parent && old_parent != new_parent, do: maybe_resort_children(old_parent)
+
           broadcast_change(updated.initiative_id, {:task_updated, updated.id})
           updated
 
@@ -189,6 +198,13 @@ defmodule DoIt.Tasks do
         {:ok, {moved, old_parent_id, new_parent_id}} ->
           reconcile_after_move(moved, old_parent_id, new_parent_id, actor)
           moved = Repo.get!(Task, moved.id)
+
+          # Auto-sorted parents on both ends need to re-order their children.
+          maybe_resort_children(new_parent_id)
+
+          if old_parent_id && old_parent_id != new_parent_id,
+            do: maybe_resort_children(old_parent_id)
+
           broadcast_change(moved.initiative_id, {:task_moved, moved.id})
           moved
 
@@ -731,6 +747,28 @@ defmodule DoIt.Tasks do
     end)
   end
 
+  # Resort a parent's immediate children if the resolved sort mode is
+  # non-manual. Call after any mutation that changes a child's sort-key
+  # (status, computed_progress, priority, title, etc.) so an auto-sorted
+  # parent's children stay in order. No-op when the resolved mode is
+  # "manual" or when `parent_id` is nil (root level).
+  defp maybe_resort_children(nil), do: :ok
+
+  defp maybe_resort_children(parent_id) when is_integer(parent_id) do
+    case Repo.get(Task, parent_id) do
+      nil ->
+        :ok
+
+      %Task{} = parent ->
+        case resolve_sort(parent) do
+          {"manual", _} -> :ok
+          {mode, reverse} -> resort_children(parent.id, mode, reverse)
+        end
+
+        :ok
+    end
+  end
+
   defp immediate_children(parent_id) do
     from(t in Task,
       where: t.parent_id == ^parent_id,
@@ -880,7 +918,12 @@ defmodule DoIt.Tasks do
         task = preload_subtree(task)
         progress = Progress.compute_for_branch(task)
 
-        if progress != task.computed_progress, do: persist_progress(task, progress)
+        if progress != task.computed_progress do
+          persist_progress(task, progress)
+          # task's progress changed; if task.parent has an auto-sort mode
+          # keyed on computed_progress, the siblings need to resort.
+          maybe_resort_children(task.parent_id)
+        end
 
         recompute_ancestors(task.parent_id)
     end
@@ -889,7 +932,12 @@ defmodule DoIt.Tasks do
   defp recompute_self_and_ancestors(%Task{id: id} = task) do
     task = preload_subtree(task)
     progress = Progress.compute_for_branch(task)
-    if progress != task.computed_progress, do: persist_progress(task, progress)
+
+    if progress != task.computed_progress do
+      persist_progress(task, progress)
+      maybe_resort_children(task.parent_id)
+    end
+
     recompute_ancestors(task.parent_id)
     Repo.get!(Task, id)
   end
