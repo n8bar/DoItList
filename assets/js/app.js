@@ -389,6 +389,41 @@ Hooks.CollapseChildren = {
   },
 }
 
+// Per-(task, mode) memory for the Reverse checkbox in the Sort menu.
+// localStorage is per-browser/per-user; the actual sort_reverse on the
+// task is still server-side and shared. On dropdown change, we restore
+// the saved direction for the new mode BEFORE the form's phx-change
+// fires, so a single round-trip carries the {mode, reverse} pair.
+Hooks.SortRecall = {
+  mounted() {
+    this.taskId = this.el.dataset.taskId
+    this.select = this.el.querySelector("select[name='mode']")
+    this.checkbox = this.el.querySelector("input[name='reverse']")
+    if (!this.select || !this.checkbox) return
+
+    this.checkbox.addEventListener("change", () => {
+      this.save(this.select.value, this.checkbox.checked)
+    })
+
+    this.select.addEventListener("change", () => {
+      const m = this.select.value
+      this.checkbox.checked = this.isInheritOrManual(m) ? false : this.recall(m)
+    })
+
+    // Seed localStorage from the current server state so the first
+    // mode-switch-and-back lands on the user's last actual choice.
+    const m = this.select.value
+    if (!this.isInheritOrManual(m)) this.save(m, this.checkbox.checked)
+  },
+  isInheritOrManual(mode) { return mode === "" || mode === "manual" },
+  key(mode) { return `phx:sortrev:${this.taskId}:${mode}` },
+  save(mode, reverse) {
+    if (this.isInheritOrManual(mode)) return
+    localStorage.setItem(this.key(mode), reverse ? "1" : "0")
+  },
+  recall(mode) { return localStorage.getItem(this.key(mode)) === "1" },
+}
+
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,

@@ -1305,7 +1305,13 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           Sort children by
         </label>
-        <form phx-change="set_sort" class="flex items-center gap-2">
+        <form
+          id={"sort-form-#{@task.id}"}
+          phx-hook="SortRecall"
+          data-task-id={@task.id}
+          phx-change="set_sort"
+          class="flex items-center gap-2"
+        >
           <select
             id={"sort-mode-#{@task.id}"}
             name="mode"
