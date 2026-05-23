@@ -78,18 +78,20 @@ defmodule DoIt.Tasks do
   def create_task(%User{} = actor, attrs) do
     attrs = stringify_keys(attrs)
 
-    Repo.transaction(fn ->
-      case create_task_body(actor, attrs) do
-        {:ok, task} ->
-          reconcile_after_create(task, actor)
-          task = Repo.get!(Task, task.id)
-          maybe_resort_children(task.parent_id)
-          broadcast_change(task.initiative_id, {:task_created, task.id})
-          task
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        case create_task_body(actor, attrs) do
+          {:ok, task} ->
+            reconcile_after_create(task, actor)
+            task = Repo.get!(Task, task.id)
+            maybe_resort_children(task.parent_id)
+            broadcast_change(task.initiative_id, {:task_created, task.id})
+            task
 
-        {:error, reason} ->
-          Repo.rollback(reason)
-      end
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
     end)
   end
 
@@ -133,37 +135,39 @@ defmodule DoIt.Tasks do
       |> stringify_keys()
       |> Map.put("updated_by_id", actor.id)
 
-    Repo.transaction(fn ->
-      changeset = Task.update_changeset(task, attrs)
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        changeset = Task.update_changeset(task, attrs)
 
-      case Repo.update(changeset) do
-        {:ok, updated} ->
-          updated = maybe_set_done_progress(updated, task)
-          record_diff_events(task, updated, actor)
+        case Repo.update(changeset) do
+          {:ok, updated} ->
+            updated = maybe_set_done_progress(updated, task)
+            record_diff_events(task, updated, actor)
 
-          # Re-compute progress for old and new parents (parent reparent)
-          old_parent = task.parent_id
-          new_parent = updated.parent_id
+            # Re-compute progress for old and new parents (parent reparent)
+            old_parent = task.parent_id
+            new_parent = updated.parent_id
 
-          if old_parent && old_parent != new_parent, do: recompute_ancestors(old_parent)
-          if new_parent, do: recompute_ancestors(new_parent)
+            if old_parent && old_parent != new_parent, do: recompute_ancestors(old_parent)
+            if new_parent, do: recompute_ancestors(new_parent)
 
-          # Always recompute self in case manual_progress changed
-          updated = recompute_self_and_ancestors(updated)
+            # Always recompute self in case manual_progress changed
+            updated = recompute_self_and_ancestors(updated)
 
-          # Auto-sorted parents need their children re-ordered when any
-          # sort-key field on a child changes (status, priority, title,
-          # progress). Recompute walk-ups handle deeper ancestors via
-          # recompute_ancestors.
-          maybe_resort_children(updated.parent_id)
-          if old_parent && old_parent != new_parent, do: maybe_resort_children(old_parent)
+            # Auto-sorted parents need their children re-ordered when any
+            # sort-key field on a child changes (status, priority, title,
+            # progress). Dedup via with_resort_batching so the walk-up's
+            # per-level fires don't repeat work for the same parent.
+            maybe_resort_children(updated.parent_id)
+            if old_parent && old_parent != new_parent, do: maybe_resort_children(old_parent)
 
-          broadcast_change(updated.initiative_id, {:task_updated, updated.id})
-          updated
+            broadcast_change(updated.initiative_id, {:task_updated, updated.id})
+            updated
 
-        {:error, cs} ->
-          Repo.rollback(cs)
-      end
+          {:error, cs} ->
+            Repo.rollback(cs)
+        end
+      end)
     end)
   end
 
@@ -193,24 +197,26 @@ defmodule DoIt.Tasks do
   `:cross_initiative`, `:cycle`, or an `Ecto.Changeset.t()`.
   """
   def move_task(%Task{} = task, %User{} = actor, attrs) do
-    Repo.transaction(fn ->
-      case move_task_body(task, actor, attrs) do
-        {:ok, {moved, old_parent_id, new_parent_id}} ->
-          reconcile_after_move(moved, old_parent_id, new_parent_id, actor)
-          moved = Repo.get!(Task, moved.id)
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        case move_task_body(task, actor, attrs) do
+          {:ok, {moved, old_parent_id, new_parent_id}} ->
+            reconcile_after_move(moved, old_parent_id, new_parent_id, actor)
+            moved = Repo.get!(Task, moved.id)
 
-          # Auto-sorted parents on both ends need to re-order their children.
-          maybe_resort_children(new_parent_id)
+            # Auto-sorted parents on both ends need to re-order their children.
+            maybe_resort_children(new_parent_id)
 
-          if old_parent_id && old_parent_id != new_parent_id,
-            do: maybe_resort_children(old_parent_id)
+            if old_parent_id && old_parent_id != new_parent_id,
+              do: maybe_resort_children(old_parent_id)
 
-          broadcast_change(moved.initiative_id, {:task_moved, moved.id})
-          moved
+            broadcast_change(moved.initiative_id, {:task_moved, moved.id})
+            moved
 
-        {:error, reason} ->
-          Repo.rollback(reason)
-      end
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
     end)
   end
 
@@ -509,20 +515,22 @@ defmodule DoIt.Tasks do
   defp normalize_position(_), do: nil
 
   def delete_task(%Task{} = task, %User{} = actor) do
-    Repo.transaction(fn ->
-      parent_id = task.parent_id
-      initiative_id = task.initiative_id
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        parent_id = task.parent_id
+        initiative_id = task.initiative_id
 
-      case Repo.delete(task) do
-        {:ok, deleted} ->
-          record_event(deleted, actor, "deleted", %{title: deleted.title})
-          if parent_id, do: recompute_ancestors(parent_id)
-          broadcast_change(initiative_id, {:task_deleted, task.id})
-          deleted
+        case Repo.delete(task) do
+          {:ok, deleted} ->
+            record_event(deleted, actor, "deleted", %{title: deleted.title})
+            if parent_id, do: recompute_ancestors(parent_id)
+            broadcast_change(initiative_id, {:task_deleted, task.id})
+            deleted
 
-        {:error, cs} ->
-          Repo.rollback(cs)
-      end
+          {:error, cs} ->
+            Repo.rollback(cs)
+        end
+      end)
     end)
   end
 
@@ -548,28 +556,32 @@ defmodule DoIt.Tasks do
     auto-checking each ancestor whose entire child set is now done.
   """
   def toggle_complete(%Task{status: "done"} = task, %User{} = actor) do
-    Repo.transaction(fn ->
-      case update_task(task, actor, %{"status" => "open", "manual_progress" => 0}) do
-        {:ok, updated} ->
-          uncheck_done_ancestors(updated.parent_id, actor)
-          updated
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        case update_task(task, actor, %{"status" => "open", "manual_progress" => 0}) do
+          {:ok, updated} ->
+            uncheck_done_ancestors(updated.parent_id, actor)
+            updated
 
-        {:error, cs} ->
-          Repo.rollback(cs)
-      end
+          {:error, cs} ->
+            Repo.rollback(cs)
+        end
+      end)
     end)
   end
 
   def toggle_complete(%Task{} = task, %User{} = actor) do
-    Repo.transaction(fn ->
-      case update_task(task, actor, %{"status" => "done"}) do
-        {:ok, updated} ->
-          check_completed_ancestors(updated.parent_id, actor)
-          updated
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        case update_task(task, actor, %{"status" => "done"}) do
+          {:ok, updated} ->
+            check_completed_ancestors(updated.parent_id, actor)
+            updated
 
-        {:error, cs} ->
-          Repo.rollback(cs)
-      end
+          {:error, cs} ->
+            Repo.rollback(cs)
+        end
+      end)
     end)
   end
 
@@ -629,27 +641,29 @@ defmodule DoIt.Tasks do
   end
 
   defp cascade_status(%Task{} = task, %User{} = actor, status) do
-    Repo.transaction(fn ->
-      task.id
-      |> list_descendants()
-      |> Enum.each(fn descendant ->
-        case update_task(descendant, actor, %{"status" => status}) do
-          {:ok, _} -> :ok
-          {:error, cs} -> Repo.rollback(cs)
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        task.id
+        |> list_descendants()
+        |> Enum.each(fn descendant ->
+          case update_task(descendant, actor, %{"status" => status}) do
+            {:ok, _} -> :ok
+            {:error, cs} -> Repo.rollback(cs)
+          end
+        end)
+
+        case update_task(task, actor, %{"status" => status}) do
+          {:ok, updated} ->
+            if status == "open" do
+              uncheck_done_ancestors(updated.parent_id, actor)
+            end
+
+            updated
+
+          {:error, cs} ->
+            Repo.rollback(cs)
         end
       end)
-
-      case update_task(task, actor, %{"status" => status}) do
-        {:ok, updated} ->
-          if status == "open" do
-            uncheck_done_ancestors(updated.parent_id, actor)
-          end
-
-          updated
-
-        {:error, cs} ->
-          Repo.rollback(cs)
-      end
     end)
   end
 
@@ -752,20 +766,61 @@ defmodule DoIt.Tasks do
   # (status, computed_progress, priority, title, etc.) so an auto-sorted
   # parent's children stay in order. No-op when the resolved mode is
   # "manual" or when `parent_id` is nil (root level).
+  #
+  # Within a `with_resort_batching/1` scope, repeat calls for the same
+  # parent_id deduplicate — a deep recompute that fires this at every
+  # ancestor level pays for each unique parent exactly once.
   defp maybe_resort_children(nil), do: :ok
 
   defp maybe_resort_children(parent_id) when is_integer(parent_id) do
-    case Repo.get(Task, parent_id) do
-      nil ->
-        :ok
+    if mark_resorted(parent_id) == :already_resorted do
+      :ok
+    else
+      case Repo.get(Task, parent_id) do
+        nil ->
+          :ok
 
-      %Task{} = parent ->
-        case resolve_sort(parent) do
-          {"manual", _} -> :ok
-          {mode, reverse} -> resort_children(parent.id, mode, reverse)
+        %Task{} = parent ->
+          case resolve_sort(parent) do
+            {"manual", _} -> :ok
+            {mode, reverse} -> resort_children(parent.id, mode, reverse)
+          end
+
+          :ok
+      end
+    end
+  end
+
+  # Per-operation dedup scope for maybe_resort_children. Wraps a public
+  # API entry point so a single user action (with its cascading recompute
+  # walk-up) resorts each affected parent at most once.
+  defp with_resort_batching(fun) do
+    if Process.get(:resort_dedup) do
+      fun.()
+    else
+      Process.put(:resort_dedup, MapSet.new())
+
+      try do
+        fun.()
+      after
+        Process.delete(:resort_dedup)
+      end
+    end
+  end
+
+  defp mark_resorted(parent_id) do
+    case Process.get(:resort_dedup) do
+      %MapSet{} = seen ->
+        if MapSet.member?(seen, parent_id) do
+          :already_resorted
+        else
+          Process.put(:resort_dedup, MapSet.put(seen, parent_id))
+          :fresh
         end
 
-        :ok
+      _ ->
+        # No dedup scope — every call resorts.
+        :fresh
     end
   end
 
