@@ -24,6 +24,29 @@ defmodule DoIt.TasksTest do
 
   setup :setup_user_and_initiative
 
+  defp new_task(user, initiative, attrs) do
+    {:ok, task} = Tasks.create_task(user, Map.put(attrs, "initiative_id", initiative.id))
+    task
+  end
+
+  defp child_titles(initiative_id, nil) do
+    from(t in Task,
+      where: t.initiative_id == ^initiative_id and is_nil(t.parent_id),
+      order_by: [asc: t.sort_order, asc: t.inserted_at],
+      select: t.title
+    )
+    |> Repo.all()
+  end
+
+  defp child_titles(_initiative_id, parent_id) do
+    from(t in Task,
+      where: t.parent_id == ^parent_id,
+      order_by: [asc: t.sort_order, asc: t.inserted_at],
+      select: t.title
+    )
+    |> Repo.all()
+  end
+
   test "creating a leaf records its manual progress as 0", %{user: user, initiative: initiative} do
     {:ok, task} =
       Tasks.create_task(user, %{
@@ -515,6 +538,112 @@ defmodule DoIt.TasksTest do
         |> DoIt.Repo.all()
 
       assert ordered == [a.id, c.id, b.id]
+    end
+  end
+
+  describe "reorder mode flip (item 16)" do
+    test "an explicit sibling reorder pins an auto-sorted parent to manual", %{
+      user: user,
+      initiative: initiative
+    } do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "A"})
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "B"})
+      c = new_task(user, initiative, %{"parent_id" => parent.id, "title" => "C"})
+      {:ok, _} = Tasks.set_sort(parent, user, "alphabetical", false)
+
+      # Reorder C to the top with the reorder flag. The parent flips to manual
+      # before the resort, so the manual placement survives.
+      {:ok, _} =
+        Tasks.move_task(c, user, %{"parent_id" => parent.id, "position" => 0, "reorder" => true})
+
+      assert Tasks.get_task!(parent.id).sort_mode == "manual"
+      assert child_titles(initiative.id, parent.id) == ["C", "A", "B"]
+    end
+
+    test "a root reorder pins the Initiative to manual", %{user: user, initiative: initiative} do
+      new_task(user, initiative, %{"title" => "A"})
+      b = new_task(user, initiative, %{"title" => "B"})
+
+      assert Repo.get!(Initiative, initiative.id).sort_mode == nil
+
+      {:ok, _} =
+        Tasks.move_task(b, user, %{"parent_id" => nil, "position" => 0, "reorder" => true})
+
+      assert Repo.get!(Initiative, initiative.id).sort_mode == "manual"
+      assert child_titles(initiative.id, nil) == ["B", "A"]
+    end
+
+    test "a plain reparent leaves the destination parent's sort mode intact", %{
+      user: user,
+      initiative: initiative
+    } do
+      dest = new_task(user, initiative, %{"title" => "Dest"})
+      {:ok, _} = Tasks.set_sort(dest, user, "alphabetical", false)
+      src = new_task(user, initiative, %{"title" => "Src"})
+      m = new_task(user, initiative, %{"parent_id" => src.id, "title" => "M"})
+
+      {:ok, _} = Tasks.move_task(m, user, %{"parent_id" => dest.id})
+
+      assert Tasks.get_task!(dest.id).sort_mode == "alphabetical"
+    end
+  end
+
+  describe "new-task placement defaults (item 18)" do
+    test "move-in to a different parent lands at the top by default", %{
+      user: user,
+      initiative: initiative
+    } do
+      dest = new_task(user, initiative, %{"title" => "Dest"})
+      new_task(user, initiative, %{"parent_id" => dest.id, "title" => "X"})
+      new_task(user, initiative, %{"parent_id" => dest.id, "title" => "Y"})
+      src = new_task(user, initiative, %{"title" => "Src"})
+      z = new_task(user, initiative, %{"parent_id" => src.id, "title" => "Z"})
+
+      {:ok, _} = Tasks.move_task(z, user, %{"parent_id" => dest.id})
+
+      assert child_titles(initiative.id, dest.id) == ["Z", "X", "Y"]
+    end
+
+    test "move-in to an auto-sorted parent is placed by the engine, not the top", %{
+      user: user,
+      initiative: initiative
+    } do
+      dest = new_task(user, initiative, %{"title" => "Dest"})
+      new_task(user, initiative, %{"parent_id" => dest.id, "title" => "A"})
+      new_task(user, initiative, %{"parent_id" => dest.id, "title" => "C"})
+      {:ok, _} = Tasks.set_sort(dest, user, "alphabetical", false)
+      src = new_task(user, initiative, %{"title" => "Src"})
+      d = new_task(user, initiative, %{"parent_id" => src.id, "title" => "D"})
+
+      {:ok, _} = Tasks.move_task(d, user, %{"parent_id" => dest.id})
+
+      # Top default would give [D, A, C]; the engine sorts D to the end.
+      assert child_titles(initiative.id, dest.id) == ["A", "C", "D"]
+    end
+
+    test "create honors an explicit position (form slot)", %{user: user, initiative: initiative} do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "A"})
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "B"})
+
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "X", "position" => 1})
+
+      assert child_titles(initiative.id, parent.id) == ["A", "X", "B"]
+    end
+
+    test "create into an auto-sorted parent lands in sorted position", %{
+      user: user,
+      initiative: initiative
+    } do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "A"})
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "C"})
+      {:ok, _} = Tasks.set_sort(parent, user, "alphabetical", false)
+
+      new_task(user, initiative, %{"parent_id" => parent.id, "title" => "B"})
+
+      assert child_titles(initiative.id, parent.id) == ["A", "B", "C"]
     end
   end
 

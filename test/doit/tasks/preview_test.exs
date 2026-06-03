@@ -398,5 +398,34 @@ defmodule DoIt.Tasks.PreviewTest do
 
       assert snapshot_initiative(initiative.id) == before
     end
+
+    test "tolerates a slot position (item 18) and persists nothing", %{
+      user: user,
+      initiative: initiative
+    } do
+      {:ok, root} =
+        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
+
+      {:ok, _a} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => root.id,
+          "title" => "A"
+        })
+
+      before = snapshot_initiative(initiative.id)
+
+      # The position param drives insert_at_position inside the preview's
+      # rollback; it must not error and must leave nothing behind.
+      assert {:ok, %{scenario: nil}} =
+               Tasks.preview_create(user, %{
+                 "initiative_id" => initiative.id,
+                 "parent_id" => root.id,
+                 "title" => "slotted",
+                 "position" => 0
+               })
+
+      assert snapshot_initiative(initiative.id) == before
+    end
   end
 end

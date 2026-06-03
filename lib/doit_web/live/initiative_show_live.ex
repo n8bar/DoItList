@@ -130,7 +130,8 @@ defmodule DoItWeb.InitiativeShowLive do
         "initiative_id" => initiative.id,
         "parent_id" => parent_id,
         "title" => title,
-        "weight" => Map.get(params, "weight", "1.0")
+        "weight" => Map.get(params, "weight", "1.0"),
+        "position" => new_task_position(socket.assigns)
       }
 
       case Tasks.preview_create(user, attrs) do
@@ -1544,6 +1545,28 @@ defmodule DoItWeb.InitiativeShowLive do
     div(total, length(roots))
   end
 
+  # New-task placement (item 18): the inline form sits in a slot, so the
+  # created task lands there. Root/child "add" forms render at the top of
+  # their list → index 0; an "add sibling after X" form → just after X. For an
+  # auto-sorted parent the backend re-sorts afterward, overriding this.
+  defp new_task_position(%{add_task_for: add_for, add_task_after: after_id}) do
+    cond do
+      is_nil(after_id) -> 0
+      after_id == add_for -> 0
+      true -> sibling_after_position(after_id)
+    end
+  end
+
+  defp sibling_after_position(after_id) do
+    anchor = Tasks.get_task!(after_id)
+    sibs = sibling_ids(anchor)
+
+    case Enum.find_index(sibs, &(&1 == anchor.id)) do
+      nil -> nil
+      idx -> idx + 1
+    end
+  end
+
   # --- Keyboard move helpers ------------------------------------------------
 
   # Compute and execute the right move_task call for the selected task given
@@ -1612,7 +1635,8 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  # Alt+→: become last child of previous sibling. No-op if no previous sibling.
+  # Alt+→: become first child of previous sibling (move-in defaults to the top
+  # of the new parent, item 18). No-op if no previous sibling.
   defp kbd_indent(_siblings, 0, _task), do: :noop
 
   defp kbd_indent(siblings, idx, _task) do

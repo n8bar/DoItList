@@ -72,8 +72,10 @@ defmodule DoIt.Tasks do
 
   @doc """
   Creates a task. The next sort_order within the parent (or among root tasks)
-  is assigned automatically. Records an `:created` activity event and
-  recalculates ancestor progress.
+  is assigned automatically, unless `attrs["position"]` gives a 0-based index
+  among the siblings (item 18, form-slot placement). Records an `:created`
+  activity event and recalculates ancestor progress. An auto-sorted parent is
+  re-sorted afterward, overriding any requested position.
   """
   def create_task(%User{} = actor, attrs) do
     attrs = stringify_keys(attrs)
@@ -100,16 +102,24 @@ defmodule DoIt.Tasks do
   defp create_task_body(%User{} = actor, attrs) do
     initiative_id = attrs["initiative_id"]
     parent_id = attrs["parent_id"]
+    position = normalize_position(Map.get(attrs, "position"))
     sort_order = next_sort_order(initiative_id, parent_id)
 
     attrs =
       attrs
+      |> Map.delete("position")
       |> Map.put("created_by_id", actor.id)
       |> Map.put("updated_by_id", actor.id)
       |> Map.put_new("sort_order", sort_order)
 
     with {:ok, task} <- %Task{} |> Task.create_changeset(attrs) |> Repo.insert(),
          task <- maybe_set_done_progress(task) do
+      # Item 18: place the new task in the form's slot when the caller gives a
+      # position (manual parent); otherwise it stays appended. An auto-sorted
+      # parent gets re-sorted by the caller (maybe_resort_children), overriding.
+      task =
+        if is_integer(position), do: insert_at_position(task, parent_id, position), else: task
+
       record_event(task, actor, "created", %{title: task.title})
       task = recompute_self_and_ancestors(task)
       {:ok, task}
@@ -181,7 +191,11 @@ defmodule DoIt.Tasks do
     * `"parent_id"` — the new parent's id, or `nil` for a root-level task.
       Defaults to the task's current `parent_id` if omitted.
     * `"position"` — 0-based insertion index among the new siblings. `nil`
-      (or omitted) appends to the end.
+      (or omitted) appends to the end, except a plain reparent into a
+      different parent defaults to the top (index 0) per item 18.
+    * `"reorder"` — truthy marks an explicit sibling/root reorder: pins the
+      destination container to manual sort (item 16) and opts out of the
+      reparent top default above.
 
   Runs in a single transaction:
     1. Validates the move (same Initiative, no cycle).
@@ -242,8 +256,22 @@ defmodule DoIt.Tasks do
         do: normalize_id(attrs["parent_id"]),
         else: task.parent_id
 
-    position = normalize_position(Map.get(attrs, "position"))
     old_parent_id = task.parent_id
+
+    # Item 18: a plain reparent into a different parent with no explicit
+    # position lands at the TOP of the new parent (position 0), not appended.
+    # Reorder actions (sibling bands, root zones, Alt+↑/↓) carry their own
+    # position — the root bottom-zone relies on nil meaning "append" — so the
+    # top default is skipped for them. Auto-sorted parents get re-sorted by
+    # the caller and override this default either way.
+    position =
+      case normalize_position(Map.get(attrs, "position")) do
+        nil ->
+          if new_parent_id != old_parent_id and not reorder_flag(attrs), do: 0, else: nil
+
+        n ->
+          n
+      end
 
     with :ok <- validate_move(task, new_parent_id) do
       moved = perform_move(task, new_parent_id, position, actor)
@@ -489,6 +517,36 @@ defmodule DoIt.Tasks do
     end
 
     moved
+  end
+
+  # Slot a just-created task at `index` among its parent's children,
+  # renumbering the existing siblings into a fresh @sort_gap sequence (item
+  # 18, form-slot placement). Mirrors perform_move/4's destination renumber.
+  defp insert_at_position(%Task{} = task, parent_id, index) do
+    siblings =
+      from(t in Task,
+        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id,
+        order_by: [asc: t.sort_order, asc: t.inserted_at]
+      )
+      |> with_parent(parent_id)
+      |> Repo.all()
+
+    insert_index = max(0, min(index, length(siblings)))
+    new_sort_order = (insert_index + 1) * @sort_gap
+
+    {:ok, placed} =
+      task
+      |> Ecto.Changeset.change(sort_order: new_sort_order)
+      |> Repo.update()
+
+    siblings
+    |> Enum.with_index()
+    |> Enum.each(fn {sibling, idx} ->
+      new_order = if idx < insert_index, do: (idx + 1) * @sort_gap, else: (idx + 2) * @sort_gap
+      if sibling.sort_order != new_order, do: persist_sort_order(sibling, new_order)
+    end)
+
+    placed
   end
 
   defp with_parent(query, nil), do: from(t in query, where: is_nil(t.parent_id))
