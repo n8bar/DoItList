@@ -486,6 +486,47 @@ defmodule DoItWeb.CoreComponents do
   end
 
   @doc """
+  A small info icon that reveals an explanatory popover on click and
+  light-dismisses on click-away. Reusable for "explain a UI rule" moments —
+  why a control is disabled, how a value is derived, what weight means.
+
+  ## Examples
+
+      <.info_hint id="weight-hint" label="What is weight?">
+        Weight scales how much a subtask contributes to its parent's progress.
+      </.info_hint>
+  """
+  attr :id, :string, required: true
+  attr :label, :string, default: "More information"
+  attr :class, :any, default: nil
+  slot :inner_block, required: true
+
+  def info_hint(assigns) do
+    ~H"""
+    <span
+      class="relative inline-flex items-center"
+      phx-click-away={JS.hide(to: "##{@id}-pop")}
+    >
+      <button
+        type="button"
+        aria-label={@label}
+        class={["text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200", @class]}
+        phx-click={JS.toggle(to: "##{@id}-pop")}
+      >
+        <.icon name="hero-information-circle" class="w-4 h-4" />
+      </button>
+      <div
+        id={"#{@id}-pop"}
+        role="tooltip"
+        class="hidden absolute left-6 top-0 z-50 w-64 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3 text-xs font-normal not-italic text-zinc-600 dark:text-zinc-300 shadow-lg"
+      >
+        {render_slot(@inner_block)}
+      </div>
+    </span>
+    """
+  end
+
+  @doc """
   Botanical icon set (Lucide source). Tree on Lists, branch on parent tasks,
   leaf on leaf tasks, grove on Initiatives. Used by M02's row layout to
   carry the visual metaphor reserved in `docs/ProductSpec.md` § Visual

@@ -326,4 +326,43 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert sibling_order(initiative.id, nil) == [a.id, b.id]
     end
   end
+
+  describe "manual-progress on branches (item 19)" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      branch = create_task(user, initiative, nil, "Branch")
+      child = create_task(user, initiative, branch, "Child")
+
+      %{conn: conn, initiative: initiative, branch: branch, child: child}
+    end
+
+    test "selecting a branch shows a disabled slider, hint, and info popover", %{
+      conn: conn,
+      initiative: initiative,
+      branch: branch
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      select_task(view, branch.id)
+
+      assert has_element?(view, "input[type=range][disabled]")
+      assert has_element?(view, "#mp-hint-#{branch.id}-pop")
+      assert render(view) =~ "Ignored — this task has subtasks."
+      assert render(view) =~ "Computed from children:"
+    end
+
+    test "selecting a leaf shows the editable slider, no branch hint", %{
+      conn: conn,
+      initiative: initiative,
+      child: child
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      select_task(view, child.id)
+
+      refute render(view) =~ "Ignored — this task has subtasks."
+      refute has_element?(view, "#mp-hint-#{child.id}-pop")
+    end
+  end
 end

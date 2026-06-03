@@ -1350,8 +1350,33 @@ defmodule DoItWeb.InitiativeShowLive do
           />
         </div>
 
-        <div :if={not leaf?(@task)} class="text-xs text-zinc-500 dark:text-zinc-400 italic">
-          Computed from children: {@task.computed_progress}%
+        <div :if={not leaf?(@task)} class="space-y-1">
+          <div class="flex items-center gap-1">
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+              Manual progress: {@task.manual_progress}%
+            </label>
+            <.info_hint id={"mp-hint-#{@task.id}"} label="Why is this disabled?">
+              Progress on a task with subtasks is calculated from its subtasks instead of
+              being set manually. Your manual value is kept and will start being used again
+              if you remove all subtasks.
+            </.info_hint>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={@task.manual_progress}
+            class="w-full"
+            disabled
+            aria-label="Manual progress (disabled — computed from subtasks)"
+          />
+          <p class="text-xs text-zinc-400 dark:text-zinc-500 italic">
+            Ignored — this task has subtasks.
+          </p>
+          <div class="text-xs text-zinc-500 dark:text-zinc-400 italic">
+            Computed from children: {@task.computed_progress}%
+          </div>
         </div>
       </form>
 
