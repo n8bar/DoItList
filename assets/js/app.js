@@ -110,17 +110,23 @@ Hooks.PasswordToggle = {
 //     -- pointerup over source / descendant / no row --> IDLE (no commit)
 //     -- pointercancel / Escape --> IDLE (no commit)
 //
-// Drop-target resolution (single-mode; item 13 rolled back the horizontal
-// mode added in items 4–5 on 2026-05-19):
+// Drop-target resolution (item 15 drop bands):
 //
-//   The cursor's position picks the row under it via elementFromPoint;
-//   that row is the anchor. Dropping makes the source a child of the
-//   anchor, appended to the anchor's children. Horizontal cursor
-//   position is ignored. Anchor = source row, descendant of source, or
-//   no row → no commit. Sibling reorder via drag is intentionally out of
-//   scope here — keyboard Alt+↑/↓ (item 6) handles it for now; a future
-//   Arc 3 item will add drag-based sibling reorder paired with a
-//   sibling sort-order toolset.
+//   elementFromPoint picks the row under the cursor — the anchor. Which
+//   vertical band of that row the cursor is in decides the gesture:
+//     - top 25%    → sibling reorder ABOVE the anchor
+//     - middle 50% → reparent: source becomes a child of the anchor
+//     - bottom 25% → sibling reorder BELOW the anchor
+//   Reparent appends to the anchor's children. Sibling reorders carry an
+//   explicit position plus a `reorder` flag (item 16: the server pins the
+//   destination container to manual sort so the placement sticks). Anchor =
+//   source row, a descendant of source, or no row → no commit; horizontal
+//   cursor position is ignored. A center drop onto the source's own parent
+//   is a no-op (already a child) and shows the forbidden signifier — but
+//   that same row's edge bands stay valid (reorder relative to the parent).
+//   Two root-level overlay zones (item 17) bracket the root list during a
+//   drag and take priority over row anchoring: a hit promotes a non-root
+//   source to, or reorders a root source within, the top/bottom of the list.
 const DRAG_THRESHOLD_PX = 4 // mouse/pen must move this far before drag activates
 const LONG_PRESS_MS = 400 // touch must hold this long without significant motion to begin drag
 const TOUCH_MOVE_TOLERANCE_PX = 8 // touch jitter allowed during the long-press wait before we treat it as scroll
@@ -223,6 +229,8 @@ Hooks.DragReorder = {
 
     document.body.style.userSelect = "none"
     document.body.style.cursor = "grabbing"
+
+    this.mountRootZones()
   },
 
   handleMove(e) {
@@ -256,6 +264,24 @@ Hooks.DragReorder = {
 
     this.clearAnchorHighlight()
 
+    // Root-level overlay zones (item 17) take priority over row anchoring.
+    // A hit promotes a non-root source to the root list, or reorders a root
+    // source within it: top zone → front, bottom zone → end. Either way the
+    // destination is the root list, flagged reorder (item 16 pins the
+    // Initiative to manual).
+    const zone = this.rootZoneAt(e.clientX, e.clientY)
+    if (zone) {
+      this.clearForbidden()
+      this.anchorLi = null
+      this.setZoneActive(zone)
+      this.dropPlan = {
+        parentId: null,
+        position: zone === this.topZone ? 0 : null,
+        reorder: true,
+      }
+      return
+    }
+
     // Anchor = the row under the cursor. Hide the source briefly so
     // elementFromPoint skips it (otherwise we'd always anchor on ourselves
     // when the cursor stays near the source row).
@@ -272,25 +298,42 @@ Hooks.DragReorder = {
       return
     }
 
-    // Source's own parent — a drop there is semantically a no-op (the
-    // source is already a child of this row). Render the forbidden
-    // signifier instead of letting the move fire on pointerup.
-    if (anchorLi === this.sourceParentLi()) {
-      this.setForbidden(anchorLi)
-      this.anchorLi = null
-      this.dropPlan = null
+    // Which vertical band of the row the cursor is in decides the gesture
+    // (item 15). Measured against the row strip only, not the subtree.
+    const band = this.bandFor(anchorLi, e.clientY)
+
+    if (band === "center") {
+      // Center drop onto the source's own parent is a no-op (already a
+      // child). Show the forbidden signifier instead of committing.
+      if (anchorLi === this.sourceParentLi()) {
+        this.setForbidden(anchorLi)
+        this.anchorLi = null
+        this.dropPlan = null
+        return
+      }
+
+      this.clearForbidden()
+      this.anchorLi = anchorLi
+      this.anchorLi.classList.add("drop-target")
+      this.dropPlan = {
+        parentId: parseInt(anchorLi.dataset.taskId, 10),
+        position: null,
+        reorder: false,
+      }
       return
     }
 
+    // Edge band → sibling reorder above/below the anchor. Destination parent
+    // is the anchor's parent; position is the anchor's index among its
+    // siblings (adjusted for the source when they share that parent).
     this.clearForbidden()
     this.anchorLi = anchorLi
-    this.anchorLi.classList.add("drop-target")
-    const anchorId = parseInt(anchorLi.dataset.taskId, 10)
     this.dropPlan = {
-      kind: "child",
-      parentId: anchorId,
-      position: null,
+      parentId: this.anchorParentId(anchorLi),
+      position: this.siblingPosition(anchorLi, band),
+      reorder: true,
     }
+    this.showPlaceholder(anchorLi, band)
   },
 
   sourceParentLi() {
@@ -345,6 +388,7 @@ Hooks.DragReorder = {
       task_id: taskId,
       parent_id: plan.parentId,
       position: plan.position,
+      reorder: !!plan.reorder,
     }
 
     // Optimistic UI: leave the source where it is; LiveView will re-render
@@ -391,6 +435,7 @@ Hooks.DragReorder = {
     this.onMove = this.onUp = this.onCancel = this.onKeyDown = null
 
     this.clearAnchorHighlight()
+    this.unmountRootZones()
     if (this.sourceLi) this.sourceLi.classList.remove("dragging-source")
     this.sourceLi = null
 
@@ -409,11 +454,129 @@ Hooks.DragReorder = {
     if (this.anchorLi) this.anchorLi.classList.remove("drop-target")
     this.anchorLi = null
     this.clearForbidden()
+    this.clearPlaceholder()
+    this.clearZoneActive()
   },
 
   // ---- Tree helpers ------------------------------------------------------
   isDescendantOfSource(li) {
     return this.sourceLi && this.sourceLi.contains(li)
+  },
+
+  // Vertical band of a row under clientY: "above" | "center" | "below".
+  // Measures the row strip (li > first child div), not the nested subtree,
+  // and clamps implicitly via the threshold checks.
+  bandFor(li, clientY) {
+    const row = li.firstElementChild || li
+    const rect = row.getBoundingClientRect()
+    const rel = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5
+    if (rel < 0.25) return "above"
+    if (rel > 0.75) return "below"
+    return "center"
+  },
+
+  // The anchor's parent task id, read from its drag handle's data-parent-id.
+  // Root rows omit the attribute (nil → no attr in HEEx) → null.
+  anchorParentId(li) {
+    const handle = li.querySelector(":scope > div [data-parent-id]")
+    const raw = handle && handle.dataset.parentId
+    return raw ? parseInt(raw, 10) : null
+  },
+
+  // 0-based insertion index for a sibling reorder, in the server's terms:
+  // an index into the destination sibling list EXCLUDING the source.
+  // `band` is "above" or "below" the anchor.
+  siblingPosition(anchorLi, band) {
+    const sibs = this.siblingLis(anchorLi)
+    const anchorIdx = sibs.indexOf(anchorLi)
+    const sourceIdx = sibs.indexOf(this.sourceLi)
+    // When the source shares this list and sits before the anchor, removing
+    // it shifts the anchor's index down by one.
+    let base = anchorIdx
+    if (sourceIdx !== -1 && sourceIdx < anchorIdx) base -= 1
+    return band === "above" ? base : base + 1
+  },
+
+  // Task <li> siblings of the given li (direct children of its <ul> that
+  // carry data-task-id), in DOM order. Excludes form rows and the like.
+  siblingLis(li) {
+    const ul = li.parentElement
+    if (!ul) return [li]
+    return Array.from(ul.children).filter(
+      (c) => c.matches && c.matches("li[data-task-id]"),
+    )
+  },
+
+  // Insert a thin drop-indicator bar above/below the anchor row. One element
+  // reused across moves; clearPlaceholder() detaches it (cleanup runs before
+  // the server's re-render arrives, so morphdom never sees it).
+  showPlaceholder(anchorLi, band) {
+    if (!this.placeholderEl) {
+      this.placeholderEl = document.createElement("li")
+      this.placeholderEl.className = "drop-placeholder"
+      this.placeholderEl.setAttribute("aria-hidden", "true")
+    }
+    const ul = anchorLi.parentElement
+    if (!ul) return
+    if (band === "above") ul.insertBefore(this.placeholderEl, anchorLi)
+    else ul.insertBefore(this.placeholderEl, anchorLi.nextSibling)
+  },
+
+  clearPlaceholder() {
+    if (this.placeholderEl && this.placeholderEl.parentElement) {
+      this.placeholderEl.parentElement.removeChild(this.placeholderEl)
+    }
+  },
+
+  // ---- Root overlay zones (item 17) --------------------------------------
+  // Two slim drop targets bracketing the root list, present only during a
+  // drag. The first li[data-task-id] in the document is the first root, so
+  // its <ul> is the root list. Idempotent against the touch begin-drag race.
+  mountRootZones() {
+    if (this.topZone) return
+    const firstRoot = document.querySelector("li[data-task-id]")
+    const rootUl = firstRoot && firstRoot.parentElement
+    if (!rootUl) return
+    this.topZone = this.makeRootZone("top")
+    this.bottomZone = this.makeRootZone("bottom")
+    rootUl.insertBefore(this.topZone, rootUl.firstChild)
+    rootUl.appendChild(this.bottomZone)
+  },
+
+  makeRootZone(which) {
+    const el = document.createElement("li")
+    el.className = "drop-root-zone"
+    el.dataset.zone = which
+    el.setAttribute("aria-hidden", "true")
+    return el
+  },
+
+  unmountRootZones() {
+    if (this.topZone && this.topZone.parentElement) this.topZone.remove()
+    if (this.bottomZone && this.bottomZone.parentElement) this.bottomZone.remove()
+    this.topZone = this.bottomZone = null
+  },
+
+  rootZoneAt(x, y) {
+    if (this.topZone && this.pointIn(this.topZone, x, y)) return this.topZone
+    if (this.bottomZone && this.pointIn(this.bottomZone, x, y)) return this.bottomZone
+    return null
+  },
+
+  pointIn(el, x, y) {
+    const r = el.getBoundingClientRect()
+    return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
+  },
+
+  setZoneActive(zone) {
+    this.clearZoneActive()
+    zone.classList.add("is-over")
+    this.activeZone = zone
+  },
+
+  clearZoneActive() {
+    if (this.activeZone) this.activeZone.classList.remove("is-over")
+    this.activeZone = null
   },
 }
 

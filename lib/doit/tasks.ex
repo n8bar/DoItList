@@ -197,10 +197,19 @@ defmodule DoIt.Tasks do
   `:cross_initiative`, `:cycle`, or an `Ecto.Changeset.t()`.
   """
   def move_task(%Task{} = task, %User{} = actor, attrs) do
+    reorder? = reorder_flag(attrs)
+
     with_resort_batching(fn ->
       Repo.transaction(fn ->
         case move_task_body(task, actor, attrs) do
           {:ok, {moved, old_parent_id, new_parent_id}} ->
+            # Item 16: an explicit sibling reorder pins the destination
+            # container to manual so the placement survives the next
+            # auto-resort. Must precede maybe_resort_children/1 below so that
+            # resort sees the manual mode and becomes a no-op. A plain
+            # reparent (append, no reorder flag) leaves the mode alone.
+            if reorder?, do: pin_container_manual(new_parent_id, moved)
+
             reconcile_after_move(moved, old_parent_id, new_parent_id, actor)
             moved = Repo.get!(Task, moved.id)
 
@@ -513,6 +522,37 @@ defmodule DoIt.Tasks do
   end
 
   defp normalize_position(_), do: nil
+
+  defp reorder_flag(attrs) do
+    Map.get(attrs, "reorder") in [true, "true"] or
+      Map.get(attrs, :reorder) in [true, "true"]
+  end
+
+  # Item 16: quietly flip the destination container's sort_mode to "manual"
+  # after an explicit reorder, so an auto-sort criterion doesn't immediately
+  # undo the placement. A task parent flips the parent task; a root-level
+  # reorder (nil parent) flips the Initiative. No activity event — the move's
+  # own "reordered" event already records the user action; no updated_by bump,
+  # mirroring persist_sort_order/2.
+  defp pin_container_manual(nil, %Task{initiative_id: initiative_id}) do
+    initiative = Repo.get!(Initiative, initiative_id)
+
+    if initiative.sort_mode != "manual" do
+      initiative |> Ecto.Changeset.change(sort_mode: "manual") |> Repo.update!()
+    end
+
+    :ok
+  end
+
+  defp pin_container_manual(parent_id, _moved) when is_integer(parent_id) do
+    parent = Repo.get!(Task, parent_id)
+
+    if parent.sort_mode != "manual" do
+      parent |> Ecto.Changeset.change(sort_mode: "manual") |> Repo.update!()
+    end
+
+    :ok
+  end
 
   def delete_task(%Task{} = task, %User{} = actor) do
     with_resort_batching(fn ->

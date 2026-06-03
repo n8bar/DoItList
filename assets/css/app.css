@@ -158,5 +158,40 @@ li.drop-forbidden > div:first-child {
   background-color: rgba(239, 68, 68, 0.18);
   box-shadow: inset 0 0 0 2px rgba(248, 113, 113, 0.85); /* red-400 */
 }
+/* .drop-placeholder: an inserted sliver marking the destination slot for an
+   edge-band sibling reorder (item 15). Lives in the tree's <ul> between rows
+   only during a drag. */
+li.drop-placeholder {
+  height: 3px;
+  margin: -1px 0;
+  border-radius: 9999px;
+  background-color: rgba(16, 185, 129, 0.85); /* emerald-500 */
+  list-style: none;
+}
+[data-theme=dark] li.drop-placeholder {
+  background-color: rgba(52, 211, 153, 0.9); /* emerald-400 */
+}
+/* .drop-root-zone: slim drop targets bracketing the root list during a drag
+   (item 17). Promote a non-root source or reorder a root to the list's
+   top/bottom. .is-over while the cursor is inside the zone. */
+li.drop-root-zone {
+  height: 0.875rem;
+  margin: 0.125rem 0;
+  border: 2px dashed rgba(16, 185, 129, 0.45); /* emerald-500 */
+  border-radius: 9999px;
+  list-style: none;
+}
+li.drop-root-zone.is-over {
+  border-style: solid;
+  border-color: rgba(16, 185, 129, 0.85);
+  background-color: rgba(16, 185, 129, 0.14);
+}
+[data-theme=dark] li.drop-root-zone {
+  border-color: rgba(52, 211, 153, 0.5); /* emerald-400 */
+}
+[data-theme=dark] li.drop-root-zone.is-over {
+  border-color: rgba(52, 211, 153, 0.9);
+  background-color: rgba(52, 211, 153, 0.22);
+}
 
 /* This file is for your main application CSS */

@@ -411,7 +411,8 @@ defmodule DoItWeb.InitiativeShowLive do
 
       attrs = %{
         "parent_id" => Map.get(params, "parent_id"),
-        "position" => Map.get(params, "position")
+        "position" => Map.get(params, "position"),
+        "reorder" => Map.get(params, "reorder")
       }
 
       case Tasks.preview_move(task, user, attrs) do
@@ -1599,7 +1600,7 @@ defmodule DoItWeb.InitiativeShowLive do
   defp kbd_move_up(_siblings, 0, _task), do: :noop
 
   defp kbd_move_up(_siblings, idx, %Task{} = task) do
-    %{"parent_id" => task.parent_id, "position" => idx - 1}
+    %{"parent_id" => task.parent_id, "position" => idx - 1, "reorder" => true}
   end
 
   # Alt+↓: swap with next sibling. No-op at last index.
@@ -1607,7 +1608,7 @@ defmodule DoItWeb.InitiativeShowLive do
     if idx >= length(siblings) - 1 do
       :noop
     else
-      %{"parent_id" => task.parent_id, "position" => idx + 1}
+      %{"parent_id" => task.parent_id, "position" => idx + 1, "reorder" => true}
     end
   end
 
