@@ -23,7 +23,7 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 - Branch: `M02-ux-buildout`.
 
 ## Release Target
-No public release yet. Owner will not release until at least M02 (UX Buildout) lands and the app feels presentable.
+No public release yet. Operator will not release until at least M02 (UX Buildout) lands and the app feels presentable.
 
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |

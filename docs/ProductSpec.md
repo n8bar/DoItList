@@ -59,7 +59,7 @@ sum(child_progress * child_weight) / sum(child_weight)
 Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 
 ## Reorganization
-_Added 2026-05-19; owner-approved 2026-05-20._
+_Added 2026-05-19; operator-approved 2026-05-20._
 
 The user reshapes the tree as work evolves. Four concepts:
 
@@ -89,7 +89,7 @@ Apply an ordering rule to one parent's children.
 
 - Available criteria: alphabetical (by title), by status, by computed progress, by priority, by weight, by created date, by updated date.
 - The sort mode is a preference that cascades from User → Initiative → List → each parent task, with "inherit from ancestor" as the implicit default at every level. Any level may explicitly override; the closest explicit setting wins. (User-level preferences are not yet specified; when user preferences arrive, sort mode is one of them.)
-- An optional **resort all posterity** helper lets the owner of a parent propagate the current sort mode down its subtree. Non-mandatory; not automatic.
+- An optional **resort all posterity** helper propagates a parent's current sort mode down its subtree. Non-mandatory; not automatic.
 
 ### Constraints
 - No cycles. A task cannot become its own ancestor.

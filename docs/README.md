@@ -71,8 +71,8 @@ Adding Subitems to an Arc-level Item decompresses the shortcut: that Item should
 5.1 Subitems under a Testing item carry an assignee tag marking who performs that verification:
    - `[Agent]` — the primary agent (Claude) working solo.
    - `[Subagent]` — Claude fanning the work out to parallel-forked subagents.
-   - `[Human]` — the owner only.
-   - `[Guided]` — Claude and the owner together.
+   - `[Human]` — the operator only.
+   - `[Guided]` — Claude and the operator together.
 5.2 The tag prefixes the subitem text. Define them only here — don't repeat the key in arc docs.
 
 > Branch naming and repo workflow rules (specs-first, don't-merge-dirty, `main` canonical) live in [`../CLAUDE.md`](../CLAUDE.md) since they apply regardless of doc context.
