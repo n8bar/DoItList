@@ -779,7 +779,7 @@ defmodule DoItWeb.InitiativeShowLive do
                     <button
                       type="button"
                       phx-click="cancel_member"
-                      class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
+                      class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
                     >
                       Cancel
                     </button>
@@ -1184,7 +1184,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <button
         type="button"
         phx-click="cancel_add"
-        class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100"
+        class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
       >
         Cancel
       </button>
