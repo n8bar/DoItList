@@ -35,3 +35,8 @@ doit-*.tar
 npm-debug.log
 /assets/node_modules/
 
+
+# Local, host-specific Docker dev config — not portable, never committed.
+# (LAN IP / port bindings live here so the base compose stays portable.)
+/compose.override.yaml
+/.env
