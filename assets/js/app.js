@@ -290,6 +290,29 @@ Hooks.DragReorder = {
     const target = document.elementFromPoint(e.clientX, e.clientY)
     this.sourceLi.style.pointerEvents = prev || ""
 
+    // Tail zone (item 21) → drop as the LAST child of that branch. Takes
+    // priority over row anchoring; the strip sits inside the branch's child
+    // <ul>, so it's only reachable when the branch is expanded.
+    const tailLi = target && target.closest("li.drop-tail")
+    if (tailLi) {
+      const branchLi = tailLi.closest("li[data-task-id]")
+      if (!branchLi || branchLi === this.sourceLi || this.isDescendantOfSource(branchLi)) {
+        this.anchorLi = null
+        this.dropPlan = null
+        if (branchLi) this.setForbidden(branchLi)
+        return
+      }
+      this.clearForbidden()
+      this.anchorLi = null
+      this.setTailActive(tailLi)
+      this.dropPlan = {
+        parentId: parseInt(branchLi.dataset.taskId, 10),
+        position: this.lastChildPosition(branchLi),
+        reorder: true,
+      }
+      return
+    }
+
     const anchorLi = target && target.closest("li[data-task-id]")
     if (!anchorLi || anchorLi === this.sourceLi || this.isDescendantOfSource(anchorLi)) {
       this.clearForbidden()
@@ -456,6 +479,7 @@ Hooks.DragReorder = {
     this.clearForbidden()
     this.clearPlaceholder()
     this.clearZoneActive()
+    this.clearTailActive()
   },
 
   // ---- Tree helpers ------------------------------------------------------
@@ -463,16 +487,38 @@ Hooks.DragReorder = {
     return this.sourceLi && this.sourceLi.contains(li)
   },
 
-  // Vertical band of a row under clientY: "above" | "center" | "below".
-  // Measures the row strip (li > first child div), not the nested subtree,
-  // and clamps implicitly via the threshold checks.
+  // Vertical band of a row under clientY: "above" | "center" | "below" (item
+  // 21). Edge bands are thin strips at the content edges; the progress underbar
+  // (pinned at the row's bottom) counts as center, so it lights up the task
+  // like the rest of the row. An expanded branch has NO "below" band — its
+  // lower area is all center; use its tail zone for "last child" instead.
   bandFor(li, clientY) {
     const row = li.firstElementChild || li
     const rect = row.getBoundingClientRect()
-    const rel = rect.height > 0 ? (clientY - rect.top) / rect.height : 0.5
-    if (rel < 0.25) return "above"
-    if (rel > 0.75) return "below"
+    // The progress underbar marks the effective content bottom — everything
+    // from there down is center.
+    const bar = row.querySelector(":scope > [role=progressbar]")
+    const contentBottom = bar ? bar.getBoundingClientRect().top : rect.bottom
+    const EDGE = 9 // px strip at each content edge
+
+    if (clientY < rect.top + EDGE) return "above"
+
+    if (
+      !this.hasVisibleChildren(li) &&
+      clientY >= contentBottom - EDGE &&
+      clientY < contentBottom
+    ) {
+      return "below"
+    }
+
     return "center"
+  },
+
+  // True when the row's children are rendered and not collapsed — an expanded
+  // branch. Such rows get no "below" band (their tail zone handles last-child).
+  hasVisibleChildren(li) {
+    const ul = li.querySelector(":scope > ul[id^='children-']")
+    return !!ul && !ul.classList.contains("collapsed-peek")
   },
 
   // The anchor's parent task id, read from its drag handle's data-parent-id.
@@ -526,6 +572,31 @@ Hooks.DragReorder = {
     if (this.placeholderEl && this.placeholderEl.parentElement) {
       this.placeholderEl.parentElement.removeChild(this.placeholderEl)
     }
+  },
+
+  // ---- Tail zones (item 21: "last child of this branch") -----------------
+  // 0-based position that appends the source as the branch's last child:
+  // the count of its existing task children, less the source if already among
+  // them (the server's sibling list excludes the moved task).
+  lastChildPosition(branchLi) {
+    const ul = branchLi.querySelector(":scope > ul[id^='children-']")
+    const kids = ul
+      ? Array.from(ul.children).filter((c) => c.matches && c.matches("li[data-task-id]"))
+      : []
+    let pos = kids.length
+    if (this.sourceLi && kids.includes(this.sourceLi)) pos -= 1
+    return pos
+  },
+
+  setTailActive(tailLi) {
+    this.clearTailActive()
+    tailLi.classList.add("is-over")
+    this.activeTail = tailLi
+  },
+
+  clearTailActive() {
+    if (this.activeTail) this.activeTail.classList.remove("is-over")
+    this.activeTail = null
   },
 
   // ---- Root overlay zones (item 17) --------------------------------------

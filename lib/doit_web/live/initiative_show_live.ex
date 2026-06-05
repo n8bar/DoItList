@@ -1156,6 +1156,10 @@ defmodule DoItWeb.InitiativeShowLive do
             </li>
           <% end %>
         <% end %>
+        <%!-- Item 21: tail drop-zone — "last child of this branch." Sits at the
+             child indent (inside this <ul>), so nested tails stack into a
+             leftward staircase. Clipped away when the branch is collapsed. --%>
+        <li :if={@can_edit} class="drop-tail" data-tail-for={@task.id} aria-hidden="true"></li>
       </ul>
     </li>
     """
