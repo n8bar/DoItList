@@ -41,7 +41,7 @@ defmodule DoItWeb.Layouts do
               Initiatives
             </.link>
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-            <.theme_toggle />
+            <.theme_toggle current_user={@current_user} />
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
             <span class="text-zinc-600 dark:text-zinc-300">{@current_user.name}</span>
             <.link
@@ -52,7 +52,7 @@ defmodule DoItWeb.Layouts do
               Log out
             </.link>
           <% else %>
-            <.theme_toggle />
+            <.theme_toggle current_user={@current_user} />
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
             <.link
               navigate={~p"/users/log_in"}
@@ -88,9 +88,41 @@ defmodule DoItWeb.Layouts do
   to the LiveView for server-side persistence on the user record (handled
   globally via the on_mount hook in `DoItWeb.UserAuth`).
   """
+  attr :current_user, :map, default: nil
+
   def theme_toggle(assigns) do
+    state =
+      case assigns[:current_user] do
+        %{theme: t} when t in ["light", "dark", "system"] -> t
+        _ -> "system"
+      end
+
+    assigns = assign(assigns, :state, state)
+
     ~H"""
-    <div class="join" role="group" aria-label="Theme">
+    <%!-- Mobile: one icon for the current theme; tap cycles System → Light → Dark.
+         The ThemeCycle hook owns the icon display (phx-update="ignore"). --%>
+    <button
+      type="button"
+      id="theme-cycle"
+      phx-hook="ThemeCycle"
+      phx-update="ignore"
+      aria-label="Switch theme"
+      title="Switch theme"
+      class="btn btn-xs sm:hidden"
+    >
+      <span data-theme-icon="system" class={@state != "system" && "hidden"}>
+        <.icon name="hero-computer-desktop" class="w-4 h-4" />
+      </span>
+      <span data-theme-icon="light" class={@state != "light" && "hidden"}>
+        <.icon name="hero-sun" class="w-4 h-4" />
+      </span>
+      <span data-theme-icon="dark" class={@state != "dark" && "hidden"}>
+        <.icon name="hero-moon" class="w-4 h-4" />
+      </span>
+    </button>
+
+    <div class="join hidden sm:inline-flex" role="group" aria-label="Theme">
       <button
         type="button"
         data-phx-theme="system"

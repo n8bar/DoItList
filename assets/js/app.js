@@ -92,6 +92,39 @@ Hooks.PasswordToggle = {
   },
 }
 
+// Mobile theme toggle: one icon for the current theme; click cycles
+// system → light → dark. Mirrors the desktop group — dispatches phx:set-theme
+// (client theme + localStorage) and pushes set_theme for server persistence.
+const THEME_ORDER = ["system", "light", "dark"]
+Hooks.ThemeCycle = {
+  mounted() {
+    this.sync()
+    this.onClick = () => this.cycle()
+    this.el.addEventListener("click", this.onClick)
+    this.onStorage = (e) => { if (e.key === "phx:theme") this.sync() }
+    window.addEventListener("storage", this.onStorage)
+  },
+  destroyed() {
+    this.el.removeEventListener("click", this.onClick)
+    window.removeEventListener("storage", this.onStorage)
+  },
+  themeState() {
+    return localStorage.getItem("phx:theme") || "system"
+  },
+  sync() {
+    const cur = this.themeState()
+    this.el.querySelectorAll("[data-theme-icon]").forEach((s) => {
+      s.classList.toggle("hidden", s.dataset.themeIcon !== cur)
+    })
+  },
+  cycle() {
+    const next = THEME_ORDER[(THEME_ORDER.indexOf(this.themeState()) + 1) % THEME_ORDER.length]
+    window.dispatchEvent(new CustomEvent("phx:set-theme", { detail: { theme: next } }))
+    this.pushEvent("set_theme", { theme: next })
+    this.sync()
+  },
+}
+
 // Drag-and-drop reorganization for tasks. Attached to each row's drag handle.
 // Uses pointer events (not HTML5 drag-and-drop) so the same gesture loop
 // works for mobile (item 8) and the cross-pane gesture in Arc 4 item 11.
