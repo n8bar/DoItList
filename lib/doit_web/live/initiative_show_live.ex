@@ -992,71 +992,7 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <.botanical_icon kind={botanical_kind(@task, @depth)} />
         </span>
-        <%!-- Chevron glued to the title: drops to the title's own line on mobile. --%>
-        <div class="w-full sm:w-auto flex items-baseline gap-1 min-w-0">
-          <button
-            :if={@task.children != []}
-            type="button"
-            id={"collapse-#{@task.id}"}
-            phx-hook="CollapseToggle"
-            phx-update="ignore"
-            data-task-id={@task.id}
-            data-initiative-id={@initiative_id}
-            aria-controls={"children-#{@task.id}"}
-            aria-label="Toggle children"
-            class="group flex-none inline-flex items-center gap-0.5 px-0.5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-          >
-            <.icon
-              name="hero-chevron-down"
-              class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
-            />
-            <span class="hidden group-aria-[expanded=false]:inline text-xs tabular-nums">
-              ({length(@task.children)})
-            </span>
-          </button>
-          <div :if={@task.children == []} class="hidden sm:block flex-none w-5 h-5"></div>
-
-          <button
-            :if={@can_edit}
-            type="button"
-            phx-click={
-              cond do
-                @task.children == [] -> "toggle_complete"
-                @task.status == "done" -> "cascade_incomplete"
-                true -> "cascade_complete"
-              end
-            }
-            phx-value-id={@task.id}
-            data-confirm={
-              cond do
-                @task.children == [] -> nil
-                @task.status == "done" -> "Uncheck this task and all its children?"
-                true -> "Mark this task and all its children completed?"
-              end
-            }
-            aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
-            aria-pressed={@task.status == "done"}
-            class={[
-              "absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
-              @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
-              @task.status != "done" &&
-                "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 hover:border-emerald-500"
-            ]}
-          >
-            <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
-          </button>
-
-          <span class={[
-            "flex-1 sm:flex-none min-w-0",
-            @depth == 0 && "text-xl font-bold",
-            @depth > 0 && "text-sm font-medium",
-            @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
-          ]}>
-            {@task.title}
-          </span>
-        </div>
-
-        <%!-- Custom-attribute chips: weight (≠ 1), priority (≠ normal), assignee (set) --%>
+        <%!-- Row 1: attribute chips (weight ≠ 1 / priority ≠ normal / assignee). --%>
         <span
           :if={not Decimal.equal?(@task.weight, Decimal.new(1))}
           class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
@@ -1079,18 +1015,8 @@ defmodule DoItWeb.InitiativeShowLive do
           @{@task.assignee.name}
         </span>
 
-        <%!-- Description: its own line on mobile (wraps); em-dashed inline on desktop. --%>
-        <span
-          :if={@task.description && @task.description != ""}
-          class="w-full sm:w-auto sm:max-w-md min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
-        >
-          <span class="hidden sm:inline">— </span>{@task.description}
-        </span>
-
-        <div
-          :if={@can_edit}
-          class="absolute top-2 right-3 z-10 sm:relative sm:inset-auto sm:z-auto sm:ml-auto sm:flex-none"
-        >
+        <%!-- Row 1, pinned right: the new-task button. --%>
+        <div :if={@can_edit} class="relative flex-none ml-auto">
           <div class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
             <button
               type="button"
@@ -1133,6 +1059,77 @@ defmodule DoItWeb.InitiativeShowLive do
             </button>
           </div>
         </div>
+
+        <%!-- Row 2: title with its glued chevron. --%>
+        <div class="w-full flex items-baseline gap-1 min-w-0">
+          <button
+            :if={@task.children != []}
+            type="button"
+            id={"collapse-#{@task.id}"}
+            phx-hook="CollapseToggle"
+            phx-update="ignore"
+            data-task-id={@task.id}
+            data-initiative-id={@initiative_id}
+            aria-controls={"children-#{@task.id}"}
+            aria-label="Toggle children"
+            class="group flex-none inline-flex items-center gap-0.5 px-0.5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
+            />
+            <span class="hidden group-aria-[expanded=false]:inline text-xs tabular-nums">
+              ({length(@task.children)})
+            </span>
+          </button>
+
+          <button
+            :if={@can_edit}
+            type="button"
+            phx-click={
+              cond do
+                @task.children == [] -> "toggle_complete"
+                @task.status == "done" -> "cascade_incomplete"
+                true -> "cascade_complete"
+              end
+            }
+            phx-value-id={@task.id}
+            data-confirm={
+              cond do
+                @task.children == [] -> nil
+                @task.status == "done" -> "Uncheck this task and all its children?"
+                true -> "Mark this task and all its children completed?"
+              end
+            }
+            aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
+            aria-pressed={@task.status == "done"}
+            class={[
+              "absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+              @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
+              @task.status != "done" &&
+                "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 hover:border-emerald-500"
+            ]}
+          >
+            <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
+          </button>
+
+          <span class={[
+            "flex-1 min-w-0",
+            @depth == 0 && "text-xl font-bold",
+            @depth > 0 && "text-sm font-medium",
+            @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
+          ]}>
+            {@task.title}
+          </span>
+        </div>
+
+        <%!-- Row 3: description, its own truncated line. --%>
+        <span
+          :if={@task.description && @task.description != ""}
+          class="w-full min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
+        >
+          {@task.description}
+        </span>
 
         <div
           class={[
