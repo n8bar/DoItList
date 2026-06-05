@@ -957,9 +957,21 @@ defmodule DoItWeb.InitiativeShowLive do
           data-parent-id={@task.parent_id}
           data-depth={@depth}
           data-initiative-id={@initiative_id}
-          class="flex-none -my-2 w-11 h-11 flex items-center justify-center text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-grab active:cursor-grabbing touch-none"
+          class="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-300 dark:text-zinc-600 hover:text-zinc-500 dark:hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none"
         >
-          <.icon name="hero-ellipsis-vertical" class="w-4 h-4" />
+          <.icon name="hero-ellipsis-vertical" class="w-3 h-3" />
+          <span class={botanical_color(@task, @depth)}>
+            <.botanical_icon kind={botanical_kind(@task, @depth)} />
+          </span>
+          <.icon name="hero-ellipsis-vertical" class="w-3 h-3" />
+        </span>
+        <%!-- Viewers (no drag handle): the type icon alone. --%>
+        <span
+          :if={not @can_edit}
+          class={["flex-none", botanical_color(@task, @depth)]}
+          aria-hidden="true"
+        >
+          <.botanical_icon kind={botanical_kind(@task, @depth)} />
         </span>
         <button
           :if={@task.children != []}
@@ -1011,29 +1023,6 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
         </button>
-
-        <%!-- Botanical icon: green tree on Lists, brown branch on parent tasks, green leaf on leaf tasks. --%>
-        <span
-          :if={@depth == 0}
-          class="flex-none text-emerald-600 dark:text-emerald-400"
-          aria-hidden="true"
-        >
-          <.botanical_icon kind={:tree} />
-        </span>
-        <span
-          :if={@depth > 0 and @task.children != []}
-          class="flex-none text-amber-700 dark:text-amber-600"
-          aria-hidden="true"
-        >
-          <.botanical_icon kind={:branch} />
-        </span>
-        <span
-          :if={@depth > 0 and @task.children == []}
-          class="flex-none text-emerald-600 dark:text-emerald-400"
-          aria-hidden="true"
-        >
-          <.botanical_icon kind={:leaf} />
-        </span>
 
         <span class="flex-1 min-w-0 flex items-baseline gap-2">
           <span class={[
@@ -1536,6 +1525,21 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
     </div>
     """
+  end
+
+  # Botanical type icon for a task row: tree at the root (Lists), branch for
+  # parents, leaf for childless tasks. Tree/leaf are green, branch amber.
+  defp botanical_kind(_task, 0), do: :tree
+
+  defp botanical_kind(%{children: children}, _depth) when is_list(children) and children != [],
+    do: :branch
+
+  defp botanical_kind(_task, _depth), do: :leaf
+
+  defp botanical_color(task, depth) do
+    if botanical_kind(task, depth) == :branch,
+      do: "text-amber-700 dark:text-amber-600",
+      else: "text-emerald-600 dark:text-emerald-400"
   end
 
   defp leaf?(%Task{} = task) do
