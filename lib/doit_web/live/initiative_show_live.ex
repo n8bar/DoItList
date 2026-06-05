@@ -541,7 +541,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # handle instead of holding to drag (item 8). Rate-limited client-side.
   def handle_event("drag_hint", _params, socket) do
     {:noreply,
-     put_flash(socket, :info, "Tap and hold a task's handle (the ⋮ at its left edge) to drag it.")}
+     put_flash(socket, :info, "Tap and hold the handle at a task's left edge to drag it.")}
   end
 
   # --- Pending-action commits -----------------------------------------------
