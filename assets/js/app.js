@@ -472,7 +472,30 @@ Hooks.DragReorder = {
     const shown = parseInt(sessionStorage.getItem(KEY) || "0", 10)
     if (shown >= 3) return
     sessionStorage.setItem(KEY, String(shown + 1))
-    this.pushEvent("drag_hint", {})
+    this.showDragHintToast()
+  },
+
+  // A self-dismissing toast that embeds THIS row's actual handle (grip dots +
+  // its type icon) inline, so "tap and hold the handle" is unambiguous — the
+  // user sees exactly what to grab. Pure client-side; the handle markup is
+  // ours (no user input), so cloning innerHTML is safe.
+  showDragHintToast() {
+    const prev = document.getElementById("drag-hint-toast")
+    if (prev) prev.remove()
+
+    const toast = document.createElement("div")
+    toast.id = "drag-hint-toast"
+    toast.setAttribute("role", "status")
+    toast.className =
+      "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-xs px-3 py-2 rounded-lg " +
+      "border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 " +
+      "text-sm text-zinc-700 dark:text-zinc-200 shadow-lg"
+    toast.innerHTML =
+      `Tap and hold a task's handle (<span class="inline-flex items-center align-middle">` +
+      `${this.el.innerHTML}</span>) to drag it to a different position.`
+
+    document.body.appendChild(toast)
+    setTimeout(() => toast.remove(), 5000)
   },
 
   suppressNextClick() {
