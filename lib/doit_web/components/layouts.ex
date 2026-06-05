@@ -56,7 +56,7 @@ defmodule DoItWeb.Layouts do
             </div>
 
             <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too). --%>
-            <details class="relative sm:hidden">
+            <details class="relative sm:hidden" data-menu>
               <summary
                 class="btn btn-sm btn-ghost cursor-pointer list-none [&::-webkit-details-marker]:hidden"
                 aria-label="Menu"

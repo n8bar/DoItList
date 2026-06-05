@@ -33,6 +33,15 @@
           const theme = (e.detail && e.detail.theme) || (e.target && e.target.dataset && e.target.dataset.phxTheme);
           if (theme) setTheme(theme);
         });
+
+        // Light-dismiss for <details data-menu> (e.g. the mobile hamburger):
+        // close on an outside click or Escape. Global so it survives LiveView
+        // navigation and also works on non-LiveView (dead-view) pages.
+        const closeMenus = (pred) => document
+          .querySelectorAll("details[data-menu][open]")
+          .forEach((d) => { if (pred(d)) d.removeAttribute("open"); });
+        document.addEventListener("click", (e) => closeMenus((d) => !d.contains(e.target)));
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenus(() => true); });
       })();
     </script>
   </head>
