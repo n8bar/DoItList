@@ -195,6 +195,19 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply, assign(socket, :editing_initiative?, false)}
   end
 
+  def handle_event("delete_initiative", _params, socket) do
+    if not socket.assigns.can_admin do
+      {:noreply, put_flash(socket, :error, "Only the owner can delete this initiative.")}
+    else
+      {:ok, _} = Initiatives.delete_initiative(socket.assigns.initiative)
+
+      {:noreply,
+       socket
+       |> put_flash(:info, "Initiative deleted.")
+       |> push_navigate(to: ~p"/initiatives")}
+    end
+  end
+
   def handle_event("close_panel", _params, socket) do
     {:noreply,
      socket
@@ -829,7 +842,12 @@ defmodule DoItWeb.InitiativeShowLive do
               :if={@editing_initiative?}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
-              <.initiative_editor form={@initiative_form} can_edit={@can_edit} />
+              <.initiative_editor
+                form={@initiative_form}
+                can_edit={@can_edit}
+                can_admin={@can_admin}
+                initiative={@initiative}
+              />
             </div>
 
             <div
@@ -1214,6 +1232,8 @@ defmodule DoItWeb.InitiativeShowLive do
 
   attr :form, :map, required: true
   attr :can_edit, :boolean, required: true
+  attr :can_admin, :boolean, required: true
+  attr :initiative, :map, required: true
 
   def initiative_editor(assigns) do
     ~H"""
@@ -1254,6 +1274,17 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-debounce="600"
         />
       </.form>
+
+      <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+        <button
+          type="button"
+          phx-click="delete_initiative"
+          data-confirm={"Delete the initiative \"#{@initiative.name}\" and everything in it? This can't be undone."}
+          class="text-xs text-red-600 hover:underline"
+        >
+          Delete initiative
+        </button>
+      </div>
     </div>
     """
   end

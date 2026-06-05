@@ -365,4 +365,29 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       refute has_element?(view, "#mp-hint-#{child.id}-pop")
     end
   end
+
+  describe "delete initiative" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      create_task(user, initiative, nil, "A list")
+      %{conn: conn, initiative: initiative}
+    end
+
+    test "owner deletes from the details pane and is redirected", %{
+      conn: conn,
+      initiative: initiative
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      render_click(view, "edit_initiative", %{})
+
+      assert has_element?(view, "button[phx-click=delete_initiative]")
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               view |> element("button[phx-click=delete_initiative]") |> render_click()
+
+      assert to == ~p"/initiatives"
+      refute Initiatives.get_initiative(initiative.id)
+    end
+  end
 end

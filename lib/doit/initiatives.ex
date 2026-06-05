@@ -66,6 +66,15 @@ defmodule DoIt.Initiatives do
     |> Repo.update()
   end
 
+  @doc """
+  Deletes an initiative. Its tasks, members, and activity cascade away via the
+  database FK constraints (ON DELETE CASCADE). Caller must enforce that the
+  actor is the owner.
+  """
+  def delete_initiative(%Initiative{} = initiative) do
+    Repo.delete(initiative)
+  end
+
   def list_members(initiative_id) do
     from(m in InitiativeMember,
       where: m.initiative_id == ^initiative_id,
