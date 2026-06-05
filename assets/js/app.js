@@ -488,29 +488,17 @@ Hooks.DragReorder = {
   },
 
   // Vertical band of a row under clientY: "above" | "center" | "below" (item
-  // 21). Edge bands are thin strips at the content edges; the progress underbar
-  // (pinned at the row's bottom) counts as center, so it lights up the task
-  // like the rest of the row. An expanded branch has NO "below" band — its
-  // lower area is all center; use its tail zone for "last child" instead.
+  // 21). Edge bands are thin strips at the row's top/bottom edges; everything
+  // between is center/reparent — so most of the row (the progress underbar
+  // included) is a stable highlight, with no special-casing for the bar. An
+  // expanded branch has NO "below" band — its tail zone handles "last child".
   bandFor(li, clientY) {
     const row = li.firstElementChild || li
     const rect = row.getBoundingClientRect()
-    // The progress underbar marks the effective content bottom — everything
-    // from there down is center.
-    const bar = row.querySelector(":scope > [role=progressbar]")
-    const contentBottom = bar ? bar.getBoundingClientRect().top : rect.bottom
-    const EDGE = 9 // px strip at each content edge
+    const EDGE = 9 // px strip at each edge
 
     if (clientY < rect.top + EDGE) return "above"
-
-    if (
-      !this.hasVisibleChildren(li) &&
-      clientY >= contentBottom - EDGE &&
-      clientY < contentBottom
-    ) {
-      return "below"
-    }
-
+    if (!this.hasVisibleChildren(li) && clientY >= rect.bottom - EDGE) return "below"
     return "center"
   },
 
