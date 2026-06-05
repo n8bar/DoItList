@@ -1078,7 +1078,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- Description: its own line on mobile (wraps); em-dashed inline on desktop. --%>
         <span
           :if={@task.description && @task.description != ""}
-          class="w-full sm:w-auto sm:max-w-md min-w-0 text-sm text-zinc-400 dark:text-zinc-500 break-words sm:truncate"
+          class="w-full sm:w-auto sm:max-w-md min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
         >
           <span class="hidden sm:inline">— </span>{@task.description}
         </span>
@@ -1240,7 +1240,7 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-click="close_initiative"
           aria-label="Close"
           title="Close"
-          class="inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+          class="hidden lg:inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
         >
           <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>
@@ -1300,7 +1300,7 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-click="close_task"
           aria-label="Close"
           title="Close"
-          class="inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+          class="hidden lg:inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
         >
           <.icon name="hero-x-mark" class="w-5 h-5" />
         </button>
