@@ -957,7 +957,7 @@ defmodule DoItWeb.InitiativeShowLive do
     >
       <div
         class={[
-          "relative flex items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer",
+          "relative flex items-start sm:items-center gap-2 px-3 pt-2 pb-6 min-w-0 cursor-pointer",
           if(@selected_id == @task.id,
             do: "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900",
             else: "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
@@ -1011,7 +1011,7 @@ defmodule DoItWeb.InitiativeShowLive do
             ({length(@task.children)})
           </span>
         </button>
-        <div :if={@task.children == []} class="flex-none w-5 h-5"></div>
+        <div :if={@task.children == []} class="hidden sm:block flex-none w-5 h-5"></div>
 
         <button
           :if={@can_edit}
@@ -1043,9 +1043,9 @@ defmodule DoItWeb.InitiativeShowLive do
           <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
         </button>
 
-        <span class="flex-1 min-w-0 flex items-baseline gap-2">
+        <div class="flex-1 min-w-0 flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span class={[
-            "flex-none",
+            "w-full sm:w-auto",
             @depth == 0 && "text-xl font-bold",
             @depth > 0 && "text-sm font-medium",
             @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
@@ -1076,56 +1076,56 @@ defmodule DoItWeb.InitiativeShowLive do
             @{@task.assignee.name}
           </span>
 
-          <%!-- Em-dash + description: hidden on very narrow; ellipsis on overflow --%>
+          <%!-- Description: its own line on mobile (wraps); em-dashed inline on desktop. --%>
           <span
             :if={@task.description && @task.description != ""}
-            class="hidden sm:inline-block flex-1 min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
+            class="w-full sm:w-auto sm:flex-1 min-w-0 text-sm text-zinc-400 dark:text-zinc-500 break-words sm:truncate"
           >
-            {" — " <> @task.description}
+            <span class="hidden sm:inline">— </span>{@task.description}
           </span>
-        </span>
 
-        <div :if={@can_edit} class="flex-none relative">
-          <div class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
-            <button
-              type="button"
-              phx-click="show_add_child"
-              phx-value-parent={@task.id}
-              class="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-              aria-label={if(@depth == 0, do: "New task", else: "New subtask")}
-              title={if(@depth == 0, do: "New task", else: "New subtask")}
+          <div :if={@can_edit} class="flex-none relative">
+            <div class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
+              <button
+                type="button"
+                phx-click="show_add_child"
+                phx-value-parent={@task.id}
+                class="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                aria-label={if(@depth == 0, do: "New task", else: "New subtask")}
+                title={if(@depth == 0, do: "New task", else: "New subtask")}
+              >
+                <.icon name="hero-plus" class="w-4 h-4" />
+                <span class="hidden sm:inline">
+                  {if(@depth == 0, do: "New Task", else: "New Subtask")}
+                </span>
+              </button>
+              <button
+                type="button"
+                id={"add-menu-#{@task.id}"}
+                phx-click={Phoenix.LiveView.JS.toggle(to: "#add-menu-panel-#{@task.id}")}
+                aria-label="More add options"
+                title="More add options"
+                class="hidden sm:inline-flex items-center px-1 text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              >
+                <.icon name="hero-chevron-down" class="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div
+              id={"add-menu-panel-#{@task.id}"}
+              class="hidden absolute right-0 top-full mt-1 z-10 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded shadow-lg"
             >
-              <.icon name="hero-plus" class="w-4 h-4" />
-              <span class="hidden sm:inline">
-                {if(@depth == 0, do: "New Task", else: "New Subtask")}
-              </span>
-            </button>
-            <button
-              type="button"
-              id={"add-menu-#{@task.id}"}
-              phx-click={Phoenix.LiveView.JS.toggle(to: "#add-menu-panel-#{@task.id}")}
-              aria-label="More add options"
-              title="More add options"
-              class="hidden sm:inline-flex items-center px-1 text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-            >
-              <.icon name="hero-chevron-down" class="w-3.5 h-3.5" />
-            </button>
-          </div>
-          <div
-            id={"add-menu-panel-#{@task.id}"}
-            class="hidden absolute right-0 top-full mt-1 z-10 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded shadow-lg"
-          >
-            <button
-              type="button"
-              phx-click={
-                Phoenix.LiveView.JS.push("show_add_sibling")
-                |> Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")
-              }
-              phx-value-task={@task.id}
-              class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-            >
-              + Add Sibling
-            </button>
+              <button
+                type="button"
+                phx-click={
+                  Phoenix.LiveView.JS.push("show_add_sibling")
+                  |> Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")
+                }
+                phx-value-task={@task.id}
+                class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                + Add Sibling
+              </button>
+            </div>
           </div>
         </div>
 
