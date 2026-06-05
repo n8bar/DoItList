@@ -1022,9 +1022,10 @@ defmodule DoItWeb.InitiativeShowLive do
           aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
           aria-pressed={@task.status == "done"}
           class={[
-            "flex-none w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+            "absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
             @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
-            @task.status != "done" && "border-zinc-300 dark:border-zinc-600 hover:border-emerald-500"
+            @task.status != "done" &&
+              "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 hover:border-emerald-500"
           ]}
         >
           <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
@@ -1093,7 +1094,7 @@ defmodule DoItWeb.InitiativeShowLive do
               phx-click={Phoenix.LiveView.JS.toggle(to: "#add-menu-panel-#{@task.id}")}
               aria-label="More add options"
               title="More add options"
-              class="inline-flex items-center px-1 text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              class="hidden sm:inline-flex items-center px-1 text-emerald-700 dark:text-emerald-400 border-l border-emerald-600 dark:border-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
             >
               <.icon name="hero-chevron-down" class="w-3.5 h-3.5" />
             </button>
@@ -1117,7 +1118,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div
-          class="absolute bottom-1 left-2 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+          class={[
+            "absolute bottom-1 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden",
+            if(@can_edit, do: "left-9", else: "left-2")
+          ]}
           role="progressbar"
           aria-valuenow={progress_value(@task)}
           aria-valuemin="0"
