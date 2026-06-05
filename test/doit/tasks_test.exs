@@ -647,6 +647,25 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "reopen resets snapped progress" do
+    test "unchecking a completed branch drops progress from 100 back to 0", %{
+      user: user,
+      initiative: initiative
+    } do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      leaf = new_task(user, initiative, %{"parent_id" => parent.id, "title" => "L"})
+
+      {:ok, _} = Tasks.cascade_complete(Tasks.get_task!(parent.id), user)
+      assert Tasks.get_task!(leaf.id).manual_progress == 100
+      assert Tasks.get_task!(parent.id).computed_progress == 100
+
+      {:ok, _} = Tasks.cascade_incomplete(Tasks.get_task!(parent.id), user)
+      assert Tasks.get_task!(leaf.id).status == "open"
+      assert Tasks.get_task!(leaf.id).manual_progress == 0
+      assert Tasks.get_task!(parent.id).computed_progress == 0
+    end
+  end
+
   describe "resolve_sort/1" do
     # Persist sort fields directly via Repo.update so the helper actually
     # sees them — set_sort/4 is exercised in its own context tests.

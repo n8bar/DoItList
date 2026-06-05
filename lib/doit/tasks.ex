@@ -641,6 +641,17 @@ defmodule DoIt.Tasks do
     |> Repo.update!()
   end
 
+  # Reopening (done -> open / in_progress) drops the snapped 100 back to 0, so
+  # progress reflects the reopen instead of staying stuck at 100. Symmetric with
+  # the snap above, and covers the cascade path (branch uncheck), which only
+  # flipped status and left descendants pinned at 100.
+  defp maybe_set_done_progress(%Task{status: status} = updated, %Task{status: "done"})
+       when status != "done" do
+    updated
+    |> Task.update_changeset(%{"manual_progress" => 0})
+    |> Repo.update!()
+  end
+
   defp maybe_set_done_progress(updated, _prev), do: updated
 
   @doc """

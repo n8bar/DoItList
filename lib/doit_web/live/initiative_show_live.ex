@@ -951,6 +951,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def task_node(assigns) do
     ~H"""
     <li
+      id={"task-#{@task.id}"}
       data-task-id={@task.id}
       data-depth={@depth}
       class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500"
