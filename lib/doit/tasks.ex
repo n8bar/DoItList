@@ -1047,7 +1047,7 @@ defmodule DoIt.Tasks do
   def list_task_activity(task_id, limit \\ 50) do
     from(e in ActivityEvent,
       where: e.task_id == ^task_id,
-      order_by: [desc: e.inserted_at],
+      order_by: [desc: e.inserted_at, desc: e.id],
       limit: ^limit,
       preload: [:user]
     )
