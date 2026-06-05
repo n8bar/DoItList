@@ -16,3 +16,6 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 - **Leave an initiative.** Drop your own membership entirely — distinct from Hidden.
 - **Duplicate a non-owned initiative.** Copy it into a brand-new initiative you own — new tasks, fresh timestamps, _not_ a clone of the original's history. Owners can disable duplication per-initiative, but it's a soft barrier only (manual recreation is always possible; make owners aware).
 - **Trash ↔ duplicate interplay.** An owner-trashed initiative shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
+
+### Membership (M4 or later)
+- **Invite-by-email for non-users.** Adding a member by an email that matches no account prompts to send an invitation instead. The pending add is tracked; if and when that person creates an account, they're added to the initiative automatically. Pending invitees show as **pending** in the member list and can be removed while still pending (cancels the tracked add, so they're not joined if no longer needed).
