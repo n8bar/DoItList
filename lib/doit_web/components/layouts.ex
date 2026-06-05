@@ -34,23 +34,62 @@ defmodule DoItWeb.Layouts do
 
         <nav class="flex items-center gap-3 text-sm">
           <%= if @current_user do %>
-            <.link
-              navigate={~p"/initiatives"}
-              class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
-            >
-              Initiatives
-            </.link>
-            <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-            <.theme_toggle current_user={@current_user} />
-            <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-            <span class="text-zinc-600 dark:text-zinc-300">{@current_user.name}</span>
-            <.link
-              href={~p"/users/log_out"}
-              method="delete"
-              class="text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
-            >
-              Log out
-            </.link>
+            <%!-- Desktop: inline nav. --%>
+            <div class="hidden sm:flex items-center gap-3">
+              <.link
+                navigate={~p"/initiatives"}
+                class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+              >
+                Initiatives
+              </.link>
+              <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+              <.theme_toggle variant={:group} current_user={@current_user} />
+              <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+              <span class="text-zinc-600 dark:text-zinc-300">{@current_user.name}</span>
+              <.link
+                href={~p"/users/log_out"}
+                method="delete"
+                class="text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+              >
+                Log out
+              </.link>
+            </div>
+
+            <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too). --%>
+            <details class="relative sm:hidden">
+              <summary
+                class="btn btn-sm btn-ghost cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+                aria-label="Menu"
+              >
+                <.icon name="hero-bars-3" class="w-6 h-6" />
+              </summary>
+              <ul class="absolute right-0 mt-2 w-56 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+                <li class="px-2 py-1 font-medium text-zinc-600 dark:text-zinc-300">
+                  {@current_user.name}
+                </li>
+                <li>
+                  <.link
+                    navigate={~p"/initiatives"}
+                    class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    Initiatives
+                  </.link>
+                </li>
+                <li class="flex items-center justify-between px-2 py-1.5">
+                  <span class="text-zinc-600 dark:text-zinc-300">Theme</span>
+                  <.theme_toggle variant={:group} current_user={@current_user} />
+                </li>
+                <li>
+                  <.link
+                    href={~p"/users/log_out"}
+                    method="delete"
+                    class="block rounded px-2 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Log out
+                  </.link>
+                </li>
+              </ul>
+            </details>
           <% else %>
             <.theme_toggle current_user={@current_user} />
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
@@ -89,6 +128,7 @@ defmodule DoItWeb.Layouts do
   globally via the on_mount hook in `DoItWeb.UserAuth`).
   """
   attr :current_user, :map, default: nil
+  attr :variant, :atom, values: [:auto, :group], default: :auto
 
   def theme_toggle(assigns) do
     state =
@@ -100,9 +140,11 @@ defmodule DoItWeb.Layouts do
     assigns = assign(assigns, :state, state)
 
     ~H"""
-    <%!-- Mobile: one icon for the current theme; tap cycles System → Light → Dark.
-         The ThemeCycle hook owns the icon display (phx-update="ignore"). --%>
+    <%!-- :auto (login screens) shows a single cycling icon on mobile + the group
+         on desktop; :group (logged-in hamburger / desktop nav) is just the group.
+         The ThemeCycle hook owns the single icon's display (phx-update="ignore"). --%>
     <button
+      :if={@variant == :auto}
       type="button"
       id="theme-cycle"
       phx-hook="ThemeCycle"
@@ -122,7 +164,11 @@ defmodule DoItWeb.Layouts do
       </span>
     </button>
 
-    <div class="join hidden sm:inline-flex" role="group" aria-label="Theme">
+    <div
+      class={["join", @variant == :auto && "hidden sm:inline-flex"]}
+      role="group"
+      aria-label="Theme"
+    >
       <button
         type="button"
         data-phx-theme="system"

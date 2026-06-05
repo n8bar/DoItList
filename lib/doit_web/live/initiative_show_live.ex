@@ -623,48 +623,65 @@ defmodule DoItWeb.InitiativeShowLive do
             }
           }
         </script>
-        <div class="relative flex items-start justify-between mb-6 pb-6">
-          <div>
+        <div class="relative mb-6 pb-6">
+          <%!-- Back link + role on the same row. --%>
+          <div class="flex items-center justify-between gap-2">
             <.link
               navigate={~p"/initiatives"}
               class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
             >
               ← All initiatives
             </.link>
-            <div class="flex items-start gap-2 mt-1">
-              <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
-                <.botanical_icon kind={:grove} class="w-6 h-6" />
-              </span>
-              <h1
-                phx-click="edit_initiative"
-                title="Click to edit"
-                class={[
-                  "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
-                  !@editing_initiative? &&
-                    "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
-                ]}
-              >
-                {@initiative.name}
-              </h1>
-              <button
-                :if={@can_edit}
-                type="button"
-                phx-click="show_add_root"
-                class="mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                aria-label="New list"
-                title="New list"
-              >
-                <.icon name="hero-plus" class="w-4 h-4" />
-                <span>New List</span>
-              </button>
+            <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+              Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
             </div>
-            <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-              {@initiative.description}
-            </p>
           </div>
-          <div class="text-right text-xs text-zinc-500 dark:text-zinc-400">
-            Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+
+          <%!-- Title row (dedicated): grove icon + name. New List inline on desktop only. --%>
+          <div class="flex items-start gap-2 mt-2">
+            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+              <.botanical_icon kind={:grove} class="w-6 h-6" />
+            </span>
+            <h1
+              phx-click="edit_initiative"
+              title="Click to edit"
+              class={[
+                "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
+                !@editing_initiative? &&
+                  "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
+              ]}
+            >
+              {@initiative.name}
+            </h1>
+            <button
+              :if={@can_edit}
+              type="button"
+              phx-click="show_add_root"
+              class="mt-1 hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              aria-label="New list"
+              title="New list"
+            >
+              <.icon name="hero-plus" class="w-4 h-4" />
+              <span>New List</span>
+            </button>
           </div>
+
+          <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+            {@initiative.description}
+          </p>
+
+          <%!-- New List after the description on mobile. --%>
+          <button
+            :if={@can_edit}
+            type="button"
+            phx-click="show_add_root"
+            class="mt-3 sm:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+            aria-label="New list"
+            title="New list"
+          >
+            <.icon name="hero-plus" class="w-4 h-4" />
+            <span>New List</span>
+          </button>
 
           <div
             class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
