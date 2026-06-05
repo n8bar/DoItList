@@ -1138,7 +1138,7 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-hook="CollapseChildren"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}
-        class="pl-6 pb-2 space-y-1"
+        class="pl-6 space-y-1"
       >
         <%= for c <- @task.children do %>
           <.task_node

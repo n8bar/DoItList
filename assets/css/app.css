@@ -198,7 +198,7 @@ li.drop-root-zone.is-over {
    little breathing room); lights up while a drag hovers it. Clipped to nothing
    when the parent branch is collapsed (lives inside the collapsed <ul>). */
 li.drop-tail {
-  height: 0.5rem;
+  height: 1rem;
   border-radius: 9999px;
   list-style: none;
 }
