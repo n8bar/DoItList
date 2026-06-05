@@ -1044,7 +1044,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </button>
 
         <span class={[
-          "w-full sm:flex-none",
+          "w-full sm:w-auto sm:flex-none",
           @depth == 0 && "text-xl font-bold",
           @depth > 0 && "text-sm font-medium",
           @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
