@@ -1,5 +1,5 @@
 # BACKLOG
-_Last updated: 2026-05-06_
+_Last updated: 2026-06-05_
 
 Work for releases _after_ the upcoming one. The currently-targeted release and its milestones live in [`PLAN.md`](PLAN.md); this file is for everything beyond that.
 
@@ -9,4 +9,10 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 3. Don't catalog implementation detail here; one or two lines per item is enough. Scope and acceptance criteria belong in the milestone doc, not in BACKLOG.
 
 ## Items
-_None yet._
+
+### Initiative lifecycle (M4 or later)
+- **Trash — owner-only soft-delete.** Delete routes to a recoverable Trash first; permanent deletion from Trash stays owner-only (today's hard delete becomes that final step). Global — a trashed initiative leaves every member's dashboard. Manual purge only for now (auto-purge TBD).
+- **Hidden — per-member.** Any member can hide an initiative from their own dashboard without touching anyone else's; restorable. Separate mechanism from Trash.
+- **Leave an initiative.** Drop your own membership entirely — distinct from Hidden.
+- **Duplicate a non-owned initiative.** Copy it into a brand-new initiative you own — new tasks, fresh timestamps, _not_ a clone of the original's history. Owners can disable duplication per-initiative, but it's a soft barrier only (manual recreation is always possible; make owners aware).
+- **Trash ↔ duplicate interplay.** An owner-trashed initiative shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
