@@ -540,7 +540,8 @@ defmodule DoItWeb.InitiativeShowLive do
   # Touch discoverability: the drag hook fires this when a user swipes the
   # handle instead of holding to drag (item 8). Rate-limited client-side.
   def handle_event("drag_hint", _params, socket) do
-    {:noreply, put_flash(socket, :info, "Tap and hold to reposition a task.")}
+    {:noreply,
+     put_flash(socket, :info, "Tap and hold a task's handle (the ⋮ at its left edge) to drag it.")}
   end
 
   # --- Pending-action commits -----------------------------------------------
@@ -1097,7 +1098,7 @@ defmodule DoItWeb.InitiativeShowLive do
               type="button"
               phx-click="show_add_child"
               phx-value-parent={@task.id}
-              class="inline-flex items-center gap-1 min-w-11 px-2 py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              class="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label={if(@depth == 0, do: "New task", else: "New subtask")}
               title={if(@depth == 0, do: "New task", else: "New subtask")}
             >
