@@ -524,6 +524,12 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Touch discoverability: the drag hook fires this when a user swipes the
+  # handle instead of holding to drag (item 8). Rate-limited client-side.
+  def handle_event("drag_hint", _params, socket) do
+    {:noreply, put_flash(socket, :info, "Tap and hold to reposition a task.")}
+  end
+
   # --- Pending-action commits -----------------------------------------------
 
   defp commit_create(socket, attrs) do

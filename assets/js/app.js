@@ -282,6 +282,7 @@ Hooks.DragReorder = {
         // swiping, not priming a drag. Cancel and fully release the
         // gesture so the browser can take over.
         if (dist >= TOUCH_MOVE_TOLERANCE_PX) {
+          this.maybeDragHint()
           this.abort()
         }
         return
@@ -460,6 +461,18 @@ Hooks.DragReorder = {
 
   abort() {
     this.cleanup()
+  },
+
+  // Touch only: the user swiped the handle instead of holding to drag. Nudge
+  // them with a one-line flash explaining the gesture — capped per browser
+  // session (not lifetime) so an occasional / PC-primary user gets re-taught
+  // each time they return to mobile, without nagging within a session.
+  maybeDragHint() {
+    const KEY = "doit:drag-hint-count"
+    const shown = parseInt(sessionStorage.getItem(KEY) || "0", 10)
+    if (shown >= 3) return
+    sessionStorage.setItem(KEY, String(shown + 1))
+    this.pushEvent("drag_hint", {})
   },
 
   suppressNextClick() {
