@@ -992,20 +992,32 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <.botanical_icon kind={botanical_kind(@task, @depth)} />
         </span>
-        <%!-- Row 1: attribute chips (weight ≠ 1 / priority ≠ normal / assignee). --%>
+        <%!-- Row 1: attribute chips. Priority + weight always occupy a slot;
+             defaults (normal, w=1) render as an empty dashed placeholder of the
+             same size so customized values stand out and stay column-aligned. --%>
         <span
-          :if={not Decimal.equal?(@task.weight, Decimal.new(1))}
-          class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
-          title={"Weight #{Decimal.to_string(@task.weight)}"}
-        >
-          w={Decimal.to_string(@task.weight)}
-        </span>
-        <span
-          :if={@task.priority != "normal"}
-          class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
+          class={[
+            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none",
+            if(@task.priority == "normal",
+              do: "border border-dashed border-zinc-300 dark:border-zinc-600",
+              else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+            )
+          ]}
           title={"Priority: #{@task.priority}"}
         >
-          {@task.priority}
+          {if @task.priority != "normal", do: @task.priority}
+        </span>
+        <span
+          class={[
+            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none",
+            if(Decimal.equal?(@task.weight, Decimal.new(1)),
+              do: "border border-dashed border-zinc-300 dark:border-zinc-600",
+              else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+            )
+          ]}
+          title={"Weight #{Decimal.to_string(@task.weight)}"}
+        >
+          {if not Decimal.equal?(@task.weight, Decimal.new(1)), do: "w=" <> Decimal.to_string(@task.weight)}
         </span>
         <span
           :if={@task.assignee_id && @task.assignee}
