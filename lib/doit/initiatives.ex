@@ -12,6 +12,7 @@ defmodule DoIt.Initiatives do
   alias DoIt.Repo
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.{Initiative, InitiativeMember}
+  alias DoIt.Tasks.Task
 
   @doc """
   List initiatives the given user can see, with their role on each loaded
@@ -47,12 +48,35 @@ defmodule DoIt.Initiatives do
                user_id: owner.id,
                role: "owner"
              })
-             |> Repo.insert() do
+             |> Repo.insert(),
+           {:ok, root} <- insert_root_task(initiative, owner),
+           {:ok, initiative} <-
+             initiative |> Ecto.Changeset.change(root_task_id: root.id) |> Repo.update() do
         initiative
       else
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  # The Initiative's system-managed root task: parent_id nil, title a single
+  # space. Inserted as a struct (not a changeset) on purpose — Ecto's cast trims
+  # whitespace-only strings to empty and validate_required would reject " ", but
+  # the root title doubles as the (initially empty) subtitle and the column is
+  # min-1. No activity event or broadcast for a system row.
+  defp insert_root_task(%Initiative{} = initiative, %User{} = owner) do
+    Repo.insert(%Task{
+      initiative_id: initiative.id,
+      created_by_id: owner.id,
+      title: " ",
+      status: "open",
+      priority: "normal",
+      manual_progress: 0,
+      computed_progress: 0,
+      weight: Decimal.new("1.0"),
+      sort_order: 0,
+      sort_reverse: false
+    })
   end
 
   def change_initiative(%Initiative{} = initiative, attrs \\ %{}) do

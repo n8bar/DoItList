@@ -58,7 +58,14 @@ defmodule DoIt.Tasks do
 
   defp assemble_tree(tasks) do
     by_parent = Enum.group_by(tasks, & &1.parent_id)
-    build_subtree(Map.get(by_parent, nil, []), by_parent)
+
+    # Single-root model: the sole `parent_id IS NULL` task is the Initiative's
+    # system root; render its children as the top level (the root itself is not
+    # a tree row). Fall back to the nil group if there's no root task yet.
+    case Map.get(by_parent, nil, []) do
+      [root] -> build_subtree(Map.get(by_parent, root.id, []), by_parent)
+      roots -> build_subtree(roots, by_parent)
+    end
   end
 
   defp build_subtree(tasks, by_parent) do

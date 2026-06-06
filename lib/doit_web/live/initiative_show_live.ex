@@ -122,7 +122,8 @@ defmodule DoItWeb.InitiativeShowLive do
     else
       parent_id =
         case socket.assigns.add_task_for do
-          :root -> nil
+          # "Root level" now means a child of the Initiative's root task.
+          :root -> initiative.root_task_id
           id when is_integer(id) -> id
         end
 
@@ -435,7 +436,9 @@ defmodule DoItWeb.InitiativeShowLive do
       user = socket.assigns.current_user
 
       attrs = %{
-        "parent_id" => Map.get(params, "parent_id"),
+        # A root-zone drop (promotion) carries no parent → it lands under the
+        # Initiative's root task, the new meaning of "root level".
+        "parent_id" => Map.get(params, "parent_id") || socket.assigns.initiative.root_task_id,
         "position" => Map.get(params, "position"),
         "reorder" => Map.get(params, "reorder")
       }
@@ -1801,21 +1804,28 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   # Alt+←: become a sibling of the parent, inserted right after the parent
-  # within the grandparent's children. No-op for root tasks.
+  # within the grandparent's children. No-op at the top level — i.e. when the
+  # parent is the Initiative's root task (grandparent is nil), or the root task
+  # itself (defensive).
   defp kbd_dedent(%Task{parent_id: nil}), do: :noop
 
   defp kbd_dedent(%Task{parent_id: parent_id} = task) do
     parent = Tasks.get_task!(parent_id)
     grandparent_id = parent.parent_id
 
-    grand_sibling_ids =
-      sibling_ids(%Task{parent_id: grandparent_id, initiative_id: task.initiative_id})
+    if is_nil(grandparent_id) do
+      # Parent is the root task → the task is already top-level; can't dedent.
+      :noop
+    else
+      grand_sibling_ids =
+        sibling_ids(%Task{parent_id: grandparent_id, initiative_id: task.initiative_id})
 
-    parent_idx = Enum.find_index(grand_sibling_ids, &(&1 == parent.id)) || 0
+      parent_idx = Enum.find_index(grand_sibling_ids, &(&1 == parent.id)) || 0
 
-    # Inserting "right after the parent" — among grand-siblings excluding the
-    # moved task itself, that's parent_idx + 1.
-    %{"parent_id" => grandparent_id, "position" => parent_idx + 1}
+      # Inserting "right after the parent" — among grand-siblings excluding the
+      # moved task itself, that's parent_idx + 1.
+      %{"parent_id" => grandparent_id, "position" => parent_idx + 1}
+    end
   end
 
   defp format_move_error(:cycle), do: "would create a cycle"

@@ -16,6 +16,10 @@ defmodule DoIt.Initiatives.Initiative do
     field :my_role, :string, virtual: true
 
     belongs_to :owner, User
+    # The system-managed root task: the Initiative IS this task (its title is the
+    # Initiative's optional subtitle, its children are the rendered tree). Not a
+    # tree row. See m02.03 worklist 5.
+    belongs_to :root_task, Task
     has_many :memberships, InitiativeMember
     has_many :tasks, Task
 

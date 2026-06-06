@@ -24,18 +24,25 @@ defmodule DoIt.TasksTest do
 
   setup :setup_user_and_initiative
 
+  # Single-root model: a task with no explicit parent is "top level", i.e. a
+  # child of the Initiative's system root task.
   defp new_task(user, initiative, attrs) do
-    {:ok, task} = Tasks.create_task(user, Map.put(attrs, "initiative_id", initiative.id))
+    parent_id = Map.get(attrs, "parent_id") || initiative.root_task_id
+
+    attrs =
+      attrs |> Map.put("initiative_id", initiative.id) |> Map.put("parent_id", parent_id)
+
+    {:ok, task} = Tasks.create_task(user, attrs)
     task
   end
 
+  # "Top level" titles = the root task's children (not the parent_id-nil set,
+  # which is now just the system root itself).
   defp child_titles(initiative_id, nil) do
-    from(t in Task,
-      where: t.initiative_id == ^initiative_id and is_nil(t.parent_id),
-      order_by: [asc: t.sort_order, asc: t.inserted_at],
-      select: t.title
-    )
-    |> Repo.all()
+    root_id =
+      Repo.one(from i in Initiative, where: i.id == ^initiative_id, select: i.root_task_id)
+
+    child_titles(initiative_id, root_id)
   end
 
   defp child_titles(_initiative_id, parent_id) do
@@ -561,16 +568,22 @@ defmodule DoIt.TasksTest do
       assert child_titles(initiative.id, parent.id) == ["C", "A", "B"]
     end
 
-    test "a root reorder pins the Initiative to manual", %{user: user, initiative: initiative} do
+    test "a root reorder pins the root task to manual", %{user: user, initiative: initiative} do
       new_task(user, initiative, %{"title" => "A"})
       b = new_task(user, initiative, %{"title" => "B"})
 
-      assert Repo.get!(Initiative, initiative.id).sort_mode == nil
+      assert Tasks.get_task!(initiative.root_task_id).sort_mode == nil
 
       {:ok, _} =
-        Tasks.move_task(b, user, %{"parent_id" => nil, "position" => 0, "reorder" => true})
+        Tasks.move_task(b, user, %{
+          "parent_id" => initiative.root_task_id,
+          "position" => 0,
+          "reorder" => true
+        })
 
-      assert Repo.get!(Initiative, initiative.id).sort_mode == "manual"
+      # Single-root model: "root level" is the root task's child list, so a root
+      # reorder pins the root task (not the Initiative) to manual.
+      assert Tasks.get_task!(initiative.root_task_id).sort_mode == "manual"
       assert child_titles(initiative.id, nil) == ["B", "A"]
     end
 

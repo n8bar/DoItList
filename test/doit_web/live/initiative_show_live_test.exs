@@ -35,8 +35,10 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     initiative
   end
 
+  # Single-root model: no explicit parent means "top level" = a child of the
+  # Initiative's system root task.
   defp create_task(user, initiative, parent, title) do
-    parent_id = parent && parent.id
+    parent_id = (parent && parent.id) || initiative.root_task_id
 
     {:ok, task} =
       Tasks.create_task(user, %{
@@ -48,16 +50,18 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     task
   end
 
-  # Order siblings of `parent_id` (or roots when nil) by current sort_order.
+  # Order siblings of `parent_id` (or the root task's children when nil) by sort_order.
   defp sibling_order(initiative_id, nil) do
     import Ecto.Query
 
-    DoIt.Repo.all(
-      from t in DoIt.Tasks.Task,
-        where: t.initiative_id == ^initiative_id and is_nil(t.parent_id),
-        order_by: [asc: t.sort_order, asc: t.inserted_at],
-        select: t.id
-    )
+    root_id =
+      DoIt.Repo.one(
+        from i in DoIt.Initiatives.Initiative,
+          where: i.id == ^initiative_id,
+          select: i.root_task_id
+      )
+
+    sibling_order(initiative_id, root_id)
   end
 
   defp sibling_order(initiative_id, parent_id) do
@@ -209,7 +213,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       send_kbd(view, "ArrowRight")
 
       assert sibling_order(initiative.id, nil) == [a.id, b.id]
-      assert Tasks.get_task!(a.id).parent_id == nil
+      assert Tasks.get_task!(a.id).parent_id == initiative.root_task_id
     end
   end
 
@@ -256,7 +260,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert sibling_order(initiative.id, parent.id) == []
 
       moved = Tasks.get_task!(child.id)
-      assert moved.parent_id == nil
+      assert moved.parent_id == initiative.root_task_id
     end
 
     test "Alt+ArrowLeft on a root task is a no-op", %{
@@ -271,7 +275,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       send_kbd(view, "ArrowLeft")
 
       assert sibling_order(initiative.id, nil) == [parent.id, sibling_root.id]
-      assert Tasks.get_task!(parent.id).parent_id == nil
+      assert Tasks.get_task!(parent.id).parent_id == initiative.root_task_id
     end
   end
 
