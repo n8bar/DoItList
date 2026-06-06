@@ -42,6 +42,15 @@ Reserved for future use — the names are claimed now to prevent vocabulary drif
 
 These are reserved only; no Fruit/Crop concept exists today.
 
+## Task Tree Display
+The task tree stays readable at any viewport and degrades by scrolling, never by crushing content.
+
+- **Readability floor.** A task's content never compresses below a usable minimum width; chips and title stay legible regardless of nesting depth or screen size.
+- **Scroll over squeeze.** When the tree needs more width than is available — deep nesting, a narrow screen, or both — the task area scrolls horizontally rather than squeezing content into an unreadable sliver.
+- **Uniform top-level width.** All top-level tasks in an Initiative render at the same width, so the tree reads as one coherent column instead of a ragged stack.
+- **Titles wrap, never truncate.** A long title wraps to as many lines as it needs at its row's width; it is never clipped with an ellipsis. (Descriptions may truncate; titles do not.)
+- **Depth drives width, not text.** How far the tree extends horizontally follows its visible nesting depth — a single long title never widens the whole tree. Collapsing a branch reduces that depth.
+
 ## Durable Principles
 - **Nested work is first-class.** The tree is the point.
 - **Progress is useful by default.** A user who never touches weights still gets meaningful roll-up.
