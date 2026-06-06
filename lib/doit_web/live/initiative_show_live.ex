@@ -1055,7 +1055,7 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-value-id={@task.id}
           phx-value-focus="assignee"
           class={[
-            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
+            "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded text-xs flex-none cursor-pointer",
             if(@task.assignee_id && @task.assignee,
               do: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300",
               else: "border border-dashed border-zinc-300 dark:border-zinc-600"
@@ -1068,7 +1068,9 @@ defmodule DoItWeb.InitiativeShowLive do
             )
           }
         >
-          {if @task.assignee_id && @task.assignee, do: "@" <> @task.assignee.name}
+          <span :if={@task.assignee_id && @task.assignee} class="truncate">
+            @{@task.assignee.name}
+          </span>
         </button>
 
         <%!-- Row 1, pinned right: the new-task button. --%>
