@@ -15,20 +15,13 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 | Branch protection on `main` (require PR, status checks, etc.) | A second contributor joins the repo | Solo dev — protection is friction with no review benefit. |
 | GitHub Actions CI (`mix test`, build, etc.) | A second contributor joins the repo | Tests run locally in the dev container; remote CI is overhead until shared review matters. |
 
-## Current
-- Active milestone: **M02-UX-Buildout** — scoped 2026-05-06; target 2026-05-29.
-- Status: `scoped, not yet started`
-- Next action: Land m02.02.01 (theme toggle) so the audit in m02.01.01 can cover both light and dark modes.
-- Primary next doc: [`milestones/m02-ux-buildout/m02-ux-buildout.md`](milestones/m02-ux-buildout/m02-ux-buildout.md).
-- Branch: `M02-ux-buildout`.
-
 ## Release Target
 No public release yet. Operator will not release until at least M02 (UX Buildout) lands and the app feels presentable.
 
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Buildout | Bring M01 to UX_GUARDRAILS + design refinements. Arc 1 (bring-to-spec) complete; Arc 2 (design refinements) complete (27 items); Arc 3 (drag-and-drop) scoped; Arc 4 (Account Details — self-service account page) stub; Arc 5 (Wide-Width Layout — responsive groundwork at xl/2xl, then a unified triple-pane at ultrawide where the left rail IS the Initiatives index plus a cross-Initiative people pane; click or drag people onto Initiatives to add them) drafted; Arc 6 (Undo / Redo) drafted. Per-arc detail in linked arc files. | 2026-05-29 | [`milestones/m02-ux-buildout/m02-ux-buildout.md`](milestones/m02-ux-buildout/m02-ux-buildout.md) |
+| [ ] | M02 | UX Buildout | Bring M01 to UX_GUARDRAILS + targeted design refinements so the app feels presentable. Arc scope and status live in the linked milestone doc's Arcs table. | 2026-05-29 | [`milestones/m02-ux-buildout/m02-ux-buildout.md`](milestones/m02-ux-buildout/m02-ux-buildout.md) |
 | [ ] | M03 | API | Programmatic API for Initiatives / Tasks / membership so external clients can integrate. Stub only — transport, auth, versioning, push-API surface all TBD. | TBD | [`milestones/m03-api/m03-api.md`](milestones/m03-api/m03-api.md) |
 
 ## Completed Milestones

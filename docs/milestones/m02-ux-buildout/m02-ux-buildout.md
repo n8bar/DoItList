@@ -11,7 +11,7 @@ This is the milestone that earns the first public release.
 
 ## Preconditions
 
-- The vocabulary rename of Project → Initiative (two chore branches on 2026-05-07; see [`CHANGELOG.log`](../../CHANGELOG.log)) is complete. M02 items reference the final vocabulary.
+- The vocabulary rename of Project → Initiative is complete. M02 items reference the final vocabulary.
 
 ## Arcs
 
@@ -26,7 +26,6 @@ This is the milestone that earns the first public release.
 
 ## Non-Goals
 
-_(Arcs 3 and 4 moved out of Non-Goals and into the Arcs table above; both approved 2026-05-09.)_
 - Status field redesign — explicitly removed from UI; revisit later as a fuller idea.
 - Renaming List/Task to Tree/Leaf in vocabulary — the metaphor stays icon-only.
 - Notifications, attachments, board/calendar views, public sharing, AI features — unchanged from M01 non-goals.
@@ -44,4 +43,4 @@ _(Arcs 3 and 4 moved out of Non-Goals and into the Arcs table above; both approv
 
 ## Branch
 
-`M02-ux-buildout` (renamed 2026-05-15 from `M02-ux-overhaul`)
+`M02-ux-buildout`
