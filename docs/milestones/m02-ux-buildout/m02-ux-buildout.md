@@ -19,7 +19,7 @@ This is the milestone that earns the first public release.
 |---|---|---|---|
 | 1 — Bring M01 to spec | [`m02.01-bring-to-spec.md`](m02.01-bring-to-spec.md) | 2 | complete |
 | 2 — Design Refinements | [`m02.02-design-refinements.md`](m02.02-design-refinements.md) | 27 | complete |
-| 3 — Task Tree: Reorganization & Layout | [`m02.03-drag-and-drop.md`](m02.03-drag-and-drop.md) | 6 worklists | approved |
+| 3 — Task Tree: Reorganization & Layout | [`m02.03-task-tree.md`](m02.03-task-tree.md) | 6 worklists | approved |
 | 4 — Account Details | [`m02.04-account-details.md`](m02.04-account-details.md) | 11 | draft |
 | 5 — Wide-Width Layout | [`m02.05-wide-width-layout.md`](m02.05-wide-width-layout.md) | 12 | approved |
 | 6 — Undo / Redo | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 9 | drafted |
