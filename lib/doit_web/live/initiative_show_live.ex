@@ -740,7 +740,7 @@ defmodule DoItWeb.InitiativeShowLive do
               No lists yet. Create one to start tracking work.
             </div>
 
-            <ul class="space-y-2">
+            <ul id="task-tree" phx-hook="TreeWidth" class="space-y-2">
               <%= for t <- @tree do %>
                 <.task_node
                   task={t}
@@ -980,6 +980,7 @@ defmodule DoItWeb.InitiativeShowLive do
       class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500"
     >
       <div
+        data-task-row
         class={[
           "relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
           if(@selected_id == @task.id,

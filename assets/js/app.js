@@ -824,6 +824,53 @@ Hooks.CollapseChildren = {
   },
 }
 
+// Sizes the whole task tree to one width so every row — roots included —
+// renders uniformly and the tree scrolls horizontally only when depth genuinely
+// needs it (ProductSpec § Task Tree Display). The width is driven by the deepest
+// *visible* row: min-width = (that row's indentation) + FLOOR, applied to the
+// root <ul>. Rows inside a collapsed branch (ul.collapsed-peek) are excluded, so
+// collapsing a deep branch shrinks the tree. Indentation is measured (not
+// computed from depth) so it's robust to the responsive nest-padding.
+const TREE_WIDTH_FLOOR_PX = 240
+Hooks.TreeWidth = {
+  mounted() {
+    this.schedule = () => {
+      if (this.raf) return
+      this.raf = requestAnimationFrame(() => { this.raf = null; this.recompute() })
+    }
+    this.onResize = () => this.schedule()
+    window.addEventListener("resize", this.onResize)
+    // Collapse/expand toggles a class with no LiveView render; tree edits change
+    // the DOM. One observer (class + childList) catches both. style writes on
+    // the <ul> aren't in the filter, so setting min-width can't self-trigger.
+    this.observer = new MutationObserver(() => this.schedule())
+    this.observer.observe(this.el, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["class"],
+    })
+    this.recompute()
+  },
+  updated() { this.schedule() },
+  destroyed() {
+    window.removeEventListener("resize", this.onResize)
+    if (this.observer) this.observer.disconnect()
+    if (this.raf) cancelAnimationFrame(this.raf)
+  },
+  recompute() {
+    const ulLeft = this.el.getBoundingClientRect().left
+    let maxLeft = 0
+    this.el.querySelectorAll("[data-task-row]").forEach((row) => {
+      if (row.closest("ul.collapsed-peek")) return // hidden by a collapsed ancestor
+      const left = row.getBoundingClientRect().left - ulLeft // scroll-invariant indent
+      if (left > maxLeft) maxLeft = left
+    })
+    const next = Math.ceil(maxLeft + TREE_WIDTH_FLOOR_PX) + "px"
+    if (this.el.style.minWidth !== next) this.el.style.minWidth = next
+  },
+}
+
 // Focuses a Details-panel field on request from the server. Tapping a task's
 // priority / weight / assignee chip selects the task and pushes "focus-field"
 // with the target id; we focus it once the editor is in the DOM. rAF lets the
