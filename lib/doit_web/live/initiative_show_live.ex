@@ -728,7 +728,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
-          <div class="min-w-0">
+          <%!-- min-w-0 keeps this grid column from expanding to fit deep rows;
+               overflow-x-auto lets the tree scroll horizontally inside it when
+               indentation + the row's min width exceed the column. --%>
+          <div class="min-w-0 overflow-x-auto">
             <div :if={@add_task_for == :root} class="mb-3">
               <.task_form parent_id={nil} />
             </div>
@@ -978,7 +981,7 @@ defmodule DoItWeb.InitiativeShowLive do
     >
       <div
         class={[
-          "relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-0 cursor-pointer",
+          "relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
           if(@selected_id == @task.id,
             do: "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900",
             else: "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"

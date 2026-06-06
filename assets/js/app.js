@@ -163,6 +163,8 @@ Hooks.ThemeCycle = {
 const DRAG_THRESHOLD_PX = 4 // mouse/pen must move this far before drag activates
 const LONG_PRESS_MS = 400 // touch must hold this long without significant motion to begin drag
 const TOUCH_MOVE_TOLERANCE_PX = 8 // touch jitter allowed during the long-press wait before we treat it as scroll
+const EDGE_SCROLL_ZONE_PX = 64 // dragging within this many px of the scroll container's top/bottom edge auto-scrolls
+const EDGE_SCROLL_MAX_PX = 16 // max auto-scroll step per animation frame, at the very edge
 
 Hooks.DragReorder = {
   mounted() {
@@ -264,6 +266,12 @@ Hooks.DragReorder = {
     document.body.style.cursor = "grabbing"
 
     this.mountRootZones()
+
+    // Edge auto-scroll: cache the scroll container and run a loop that scrolls
+    // it while the pointer sits near its top/bottom edge — so drops onto
+    // off-screen rows are reachable without letting go.
+    this.scrollEl = this.scrollContainer()
+    this.startEdgeScroll()
   },
 
   handleMove(e) {
@@ -296,6 +304,16 @@ Hooks.DragReorder = {
       this.beginDrag()
     }
 
+    this.lastClientX = e.clientX
+    this.lastClientY = e.clientY
+    this.updateDropTarget(e.clientX, e.clientY)
+  },
+
+  // Resolve what a drop at (clientX, clientY) would do: update the highlight /
+  // forbidden signifiers and this.dropPlan. Called on every pointermove and —
+  // so a pointer held still inside an edge-scroll zone keeps tracking the rows
+  // sliding under it — on each auto-scroll frame.
+  updateDropTarget(clientX, clientY) {
     this.clearAnchorHighlight()
 
     // Root-level overlay zones (item 17) take priority over row anchoring.
@@ -303,7 +321,7 @@ Hooks.DragReorder = {
     // source within it: top zone → front, bottom zone → end. Either way the
     // destination is the root list, flagged reorder (item 16 pins the
     // Initiative to manual).
-    const zone = this.rootZoneAt(e.clientX, e.clientY)
+    const zone = this.rootZoneAt(clientX, clientY)
     if (zone) {
       this.clearForbidden()
       this.anchorLi = null
@@ -321,7 +339,7 @@ Hooks.DragReorder = {
     // when the cursor stays near the source row).
     const prev = this.sourceLi.style.pointerEvents
     this.sourceLi.style.pointerEvents = "none"
-    const target = document.elementFromPoint(e.clientX, e.clientY)
+    const target = document.elementFromPoint(clientX, clientY)
     this.sourceLi.style.pointerEvents = prev || ""
 
     // Tail zone (item 21) → drop as the LAST child of that branch. Takes
@@ -357,7 +375,7 @@ Hooks.DragReorder = {
 
     // Which vertical band of the row the cursor is in decides the gesture
     // (item 15). Measured against the row strip only, not the subtree.
-    const band = this.bandFor(anchorLi, e.clientY)
+    const band = this.bandFor(anchorLi, clientY)
 
     if (band === "center") {
       // Center drop onto the source's own parent is a no-op (already a
@@ -391,6 +409,58 @@ Hooks.DragReorder = {
       reorder: true,
     }
     this.showPlaceholder(anchorLi, band)
+  },
+
+  // The nearest scrollable ancestor of the dragged row — normally
+  // <main class="flex-1 overflow-y-auto">. Falls back to the document scroller.
+  scrollContainer() {
+    let el = this.el.parentElement
+    while (el) {
+      const oy = getComputedStyle(el).overflowY
+      if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight) return el
+      el = el.parentElement
+    }
+    return document.scrollingElement || document.documentElement
+  },
+
+  startEdgeScroll() {
+    if (this.edgeRAF) return
+    const tick = () => {
+      if (!this.dragging) { this.edgeRAF = null; return }
+      this.edgeScrollStep()
+      this.edgeRAF = requestAnimationFrame(tick)
+    }
+    this.edgeRAF = requestAnimationFrame(tick)
+  },
+
+  // Scroll the container when the pointer sits within EDGE_SCROLL_ZONE_PX of
+  // its top/bottom edge; speed ramps with depth into the zone. After a scroll,
+  // re-resolve the drop target so the highlight tracks rows sliding under a
+  // pointer that isn't moving.
+  edgeScrollStep() {
+    const el = this.scrollEl
+    if (!el || this.lastClientY == null) return
+
+    const docScroller = el === document.scrollingElement ||
+      el === document.documentElement || el === document.body
+    const rect = docScroller ? null : el.getBoundingClientRect()
+    const top = docScroller ? 0 : rect.top
+    const bottom = docScroller ? window.innerHeight : rect.bottom
+
+    const y = this.lastClientY
+    let delta = 0
+    if (y < top + EDGE_SCROLL_ZONE_PX) {
+      const f = Math.min((top + EDGE_SCROLL_ZONE_PX - y) / EDGE_SCROLL_ZONE_PX, 1)
+      delta = -Math.ceil(EDGE_SCROLL_MAX_PX * f)
+    } else if (y > bottom - EDGE_SCROLL_ZONE_PX) {
+      const f = Math.min((y - (bottom - EDGE_SCROLL_ZONE_PX)) / EDGE_SCROLL_ZONE_PX, 1)
+      delta = Math.ceil(EDGE_SCROLL_MAX_PX * f)
+    }
+    if (!delta) return
+
+    const before = el.scrollTop
+    el.scrollTop = before + delta
+    if (el.scrollTop !== before) this.updateDropTarget(this.lastClientX, this.lastClientY)
   },
 
   sourceParentLi() {
@@ -530,6 +600,10 @@ Hooks.DragReorder = {
     this.unmountRootZones()
     if (this.sourceLi) this.sourceLi.classList.remove("dragging-source")
     this.sourceLi = null
+
+    if (this.edgeRAF) { cancelAnimationFrame(this.edgeRAF); this.edgeRAF = null }
+    this.scrollEl = null
+    this.lastClientX = this.lastClientY = null
 
     document.body.style.userSelect = ""
     document.body.style.cursor = ""

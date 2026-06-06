@@ -111,7 +111,7 @@ defmodule DoItWeb.Layouts do
     </header>
 
     <main class="flex-1 overflow-y-auto">
-      <div class="mx-auto max-w-6xl px-4 sm:px-6 py-8">
+      <div class="mx-auto max-w-6xl px-1 sm:px-6 py-8">
         {render_slot(@inner_block)}
       </div>
     </main>
