@@ -750,6 +750,25 @@ Hooks.CollapseChildren = {
   },
 }
 
+// Focuses a Details-panel field on request from the server. Tapping a task's
+// priority / weight / assignee chip selects the task and pushes "focus-field"
+// with the target id; we focus it once the editor is in the DOM. rAF lets the
+// just-patched pane lay out first; scrollIntoView handles the mobile case where
+// the field sits below the fold.
+Hooks.FocusField = {
+  mounted() {
+    this.handleEvent("focus-field", ({ id }) => {
+      requestAnimationFrame(() => {
+        const el = document.getElementById(id)
+        if (el) {
+          el.focus()
+          el.scrollIntoView({ block: "nearest" })
+        }
+      })
+    })
+  },
+}
+
 // Per-(task, mode) memory for the Reverse checkbox in the Sort menu.
 // localStorage is per-browser/per-user; the actual sort_reverse on the
 // task is still server-side and shared. Listener runs in capture phase

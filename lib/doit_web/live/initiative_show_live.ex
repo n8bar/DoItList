@@ -153,30 +153,41 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("select_task", %{"id" => id}, socket) do
+  def handle_event("select_task", %{"id" => id} = params, socket) do
     id = String.to_integer(id)
+    focus = params["focus"]
 
-    if socket.assigns.selected_task_id == id do
-      {:noreply,
-       socket
-       |> assign(:selected_task_id, nil)
-       |> assign(:selected_task, nil)
-       |> assign(:comments, [])
-       |> assign(:activity, [])}
-    else
-      case Tasks.get_task_with_relations(id) do
-        nil ->
-          {:noreply, socket}
+    cond do
+      # A pill tap on the already-open task: don't toggle closed — just jump to
+      # the field it points at.
+      focus && socket.assigns.selected_task_id == id ->
+        {:noreply, push_focus(socket, focus)}
 
-        task ->
-          {:noreply,
-           socket
-           |> assign(:editing_initiative?, false)
-           |> assign(:selected_task_id, id)
-           |> assign(:selected_task, task)
-           |> assign(:comments, Tasks.list_comments(id))
-           |> assign(:activity, Tasks.list_task_activity(id))}
-      end
+      # Plain row tap on the open task toggles it closed.
+      socket.assigns.selected_task_id == id ->
+        {:noreply,
+         socket
+         |> assign(:selected_task_id, nil)
+         |> assign(:selected_task, nil)
+         |> assign(:comments, [])
+         |> assign(:activity, [])}
+
+      true ->
+        case Tasks.get_task_with_relations(id) do
+          nil ->
+            {:noreply, socket}
+
+          task ->
+            socket =
+              socket
+              |> assign(:editing_initiative?, false)
+              |> assign(:selected_task_id, id)
+              |> assign(:selected_task, task)
+              |> assign(:comments, Tasks.list_comments(id))
+              |> assign(:activity, Tasks.list_task_activity(id))
+
+            {:noreply, push_focus(socket, focus)}
+        end
     end
   end
 
@@ -846,6 +857,8 @@ defmodule DoItWeb.InitiativeShowLive do
 
             <div
               :if={@selected_task_id && not @editing_initiative?}
+              id="task-editor-pane"
+              phx-hook="FocusField"
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.task_editor
@@ -864,6 +877,13 @@ defmodule DoItWeb.InitiativeShowLive do
     </Layouts.app>
     """
   end
+
+  # Whitelist the field so a client can't push an arbitrary DOM id to focus.
+  defp push_focus(socket, field) when field in ~w(priority weight assignee) do
+    push_event(socket, "focus-field", %{id: "task-field-#{field}"})
+  end
+
+  defp push_focus(socket, _field), do: socket
 
   defp pending_verb(%{kind: :create}), do: "new task"
   defp pending_verb(%{kind: :move}), do: "move"
@@ -992,12 +1012,17 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <.botanical_icon kind={botanical_kind(@task, @depth)} />
         </span>
-        <%!-- Row 1: attribute chips. Priority + weight always occupy a slot;
-             defaults (normal, w=1) render as an empty dashed placeholder of the
-             same size so customized values stand out and stay column-aligned. --%>
-        <span
+        <%!-- Row 1: attribute chips. Priority + weight + assignee always occupy
+             a slot; defaults render as an empty dashed placeholder of the same
+             size so customized values stand out and stay column-aligned. Each
+             chip taps through to its Details field (item: select + focus). --%>
+        <button
+          type="button"
+          phx-click="select_task"
+          phx-value-id={@task.id}
+          phx-value-focus="priority"
           class={[
-            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none",
+            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
             if(@task.priority == "normal",
               do: "border border-dashed border-zinc-300 dark:border-zinc-600",
               else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
@@ -1006,10 +1031,14 @@ defmodule DoItWeb.InitiativeShowLive do
           title={"Priority: #{@task.priority}"}
         >
           {if @task.priority != "normal", do: @task.priority}
-        </span>
-        <span
+        </button>
+        <button
+          type="button"
+          phx-click="select_task"
+          phx-value-id={@task.id}
+          phx-value-focus="weight"
           class={[
-            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none",
+            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
             if(Decimal.equal?(@task.weight, Decimal.new(1)),
               do: "border border-dashed border-zinc-300 dark:border-zinc-600",
               else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
@@ -1017,15 +1046,30 @@ defmodule DoItWeb.InitiativeShowLive do
           ]}
           title={"Weight #{Decimal.to_string(@task.weight)}"}
         >
-          {if not Decimal.equal?(@task.weight, Decimal.new(1)), do: "w=" <> Decimal.to_string(@task.weight)}
-        </span>
-        <span
-          :if={@task.assignee_id && @task.assignee}
-          class="text-xs px-1.5 py-0.5 rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex-none"
-          title="Assignee"
+          {if not Decimal.equal?(@task.weight, Decimal.new(1)),
+            do: "w=" <> Decimal.to_string(@task.weight)}
+        </button>
+        <button
+          type="button"
+          phx-click="select_task"
+          phx-value-id={@task.id}
+          phx-value-focus="assignee"
+          class={[
+            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
+            if(@task.assignee_id && @task.assignee,
+              do: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300",
+              else: "border border-dashed border-zinc-300 dark:border-zinc-600"
+            )
+          ]}
+          title={
+            if(@task.assignee_id && @task.assignee,
+              do: "Assignee: #{@task.assignee.name}",
+              else: "Unassigned"
+            )
+          }
         >
-          @{@task.assignee.name}
-        </span>
+          {if @task.assignee_id && @task.assignee, do: "@" <> @task.assignee.name}
+        </button>
 
         <%!-- Row 1, pinned right: the new-task button. --%>
         <div :if={@can_edit} class="relative flex-none ml-auto">
@@ -1347,6 +1391,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div>
             <label class="text-xs text-zinc-500 dark:text-zinc-400">Priority</label>
             <select
+              id="task-field-priority"
               name="task[priority]"
               class="w-full select select-bordered select-sm"
               disabled={not @can_edit}
@@ -1363,6 +1408,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div>
             <label class="text-xs text-zinc-500 dark:text-zinc-400">Weight</label>
             <input
+              id="task-field-weight"
               type="number"
               name="task[weight]"
               value={Decimal.to_string(@task.weight)}
@@ -1376,6 +1422,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div>
             <label class="text-xs text-zinc-500 dark:text-zinc-400">Assignee</label>
             <select
+              id="task-field-assignee"
               name="task[assignee_id]"
               class="w-full select select-bordered select-sm"
               disabled={not @can_edit}
