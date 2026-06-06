@@ -1015,63 +1015,67 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- Row 1: attribute chips. Priority + weight + assignee always occupy
              a slot; defaults render as an empty dashed placeholder of the same
              size so customized values stand out and stay column-aligned. Each
-             chip taps through to its Details field (item: select + focus). --%>
-        <button
-          type="button"
-          phx-click="select_task"
-          phx-value-id={@task.id}
-          phx-value-focus="priority"
-          class={[
-            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
-            if(@task.priority == "normal",
-              do: "border border-dashed border-zinc-300 dark:border-zinc-600",
-              else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-            )
-          ]}
-          title={"Priority: #{@task.priority}"}
-        >
-          {if @task.priority != "normal", do: @task.priority}
-        </button>
-        <button
-          type="button"
-          phx-click="select_task"
-          phx-value-id={@task.id}
-          phx-value-focus="weight"
-          class={[
-            "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
-            if(Decimal.equal?(@task.weight, Decimal.new(1)),
-              do: "border border-dashed border-zinc-300 dark:border-zinc-600",
-              else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-            )
-          ]}
-          title={"Weight #{Decimal.to_string(@task.weight)}"}
-        >
-          {if not Decimal.equal?(@task.weight, Decimal.new(1)),
-            do: "w=" <> Decimal.to_string(@task.weight)}
-        </button>
-        <button
-          type="button"
-          phx-click="select_task"
-          phx-value-id={@task.id}
-          phx-value-focus="assignee"
-          class={[
-            "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded text-xs flex-none cursor-pointer",
-            if(@task.assignee_id && @task.assignee,
-              do: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300",
-              else: "border border-dashed border-zinc-300 dark:border-zinc-600"
-            )
-          ]}
-          title={
-            if(@task.assignee_id && @task.assignee,
-              do: "Assignee: #{@task.assignee.name}",
-              else: "Unassigned"
-            )
-          }
-        >
-          <span :if={@task.assignee_id && @task.assignee} class="truncate">
-            @{@task.assignee.name}
-          </span>
-        </button>
+             chip taps through to its Details field (item: select + focus). The
+             three live in a min-w-0 overflow-hidden group so they clip together
+             (rightmost first) instead of wrapping Row 1 when depth narrows it. --%>
+        <div class="flex flex-1 items-center gap-2 min-w-0 overflow-hidden">
+          <button
+            type="button"
+            phx-click="select_task"
+            phx-value-id={@task.id}
+            phx-value-focus="priority"
+            class={[
+              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
+              if(@task.priority == "normal",
+                do: "border border-dashed border-zinc-300 dark:border-zinc-600",
+                else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+              )
+            ]}
+            title={"Priority: #{@task.priority}"}
+          >
+            {if @task.priority != "normal", do: @task.priority}
+          </button>
+          <button
+            type="button"
+            phx-click="select_task"
+            phx-value-id={@task.id}
+            phx-value-focus="weight"
+            class={[
+              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
+              if(Decimal.equal?(@task.weight, Decimal.new(1)),
+                do: "border border-dashed border-zinc-300 dark:border-zinc-600",
+                else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
+              )
+            ]}
+            title={"Weight #{Decimal.to_string(@task.weight)}"}
+          >
+            {if not Decimal.equal?(@task.weight, Decimal.new(1)),
+              do: "w=" <> Decimal.to_string(@task.weight)}
+          </button>
+          <button
+            type="button"
+            phx-click="select_task"
+            phx-value-id={@task.id}
+            phx-value-focus="assignee"
+            class={[
+              "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded text-xs flex-none cursor-pointer",
+              if(@task.assignee_id && @task.assignee,
+                do: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300",
+                else: "border border-dashed border-zinc-300 dark:border-zinc-600"
+              )
+            ]}
+            title={
+              if(@task.assignee_id && @task.assignee,
+                do: "Assignee: #{@task.assignee.name}",
+                else: "Unassigned"
+              )
+            }
+          >
+            <span :if={@task.assignee_id && @task.assignee} class="truncate">
+              @{@task.assignee.name}
+            </span>
+          </button>
+        </div>
 
         <%!-- Row 1, pinned right: the new-task button. --%>
         <div :if={@can_edit} class="relative flex-none ml-auto">
