@@ -20,7 +20,6 @@ defmodule DoIt.Tasks do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
-  alias DoIt.Initiatives.Initiative
   alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Sort, Task}
 
   # --- Queries ---------------------------------------------------------------
@@ -599,15 +598,9 @@ defmodule DoIt.Tasks do
   # reorder (nil parent) flips the Initiative. No activity event — the move's
   # own "reordered" event already records the user action; no updated_by bump,
   # mirroring persist_sort_order/2.
-  defp pin_container_manual(nil, %Task{initiative_id: initiative_id}) do
-    initiative = Repo.get!(Initiative, initiative_id)
-
-    if initiative.sort_mode != "manual" do
-      initiative |> Ecto.Changeset.change(sort_mode: "manual") |> Repo.update!()
-    end
-
-    :ok
-  end
+  # No container to pin: a parentless reorder has no sort field to set. With the
+  # single-root model the container is always a task, so this is defensive.
+  defp pin_container_manual(nil, _moved), do: :ok
 
   defp pin_container_manual(parent_id, _moved) when is_integer(parent_id) do
     parent = Repo.get!(Task, parent_id)
@@ -798,16 +791,10 @@ defmodule DoIt.Tasks do
   always travels with the mode that owns it, so a child cannot inherit
   the mode while overriding direction.
 
-  Accepts a `%Task{}`, a task id, `nil`, or `{:initiative, id}`.
+  Accepts a `%Task{}`, a task id, or `nil`. The walk terminates at the
+  Initiative's root task (`parent_id IS NULL`) — sort lives only on tasks.
   """
   def resolve_sort(nil), do: {"manual", false}
-
-  def resolve_sort({:initiative, initiative_id}) do
-    case Repo.get(Initiative, initiative_id) do
-      %Initiative{sort_mode: mode, sort_reverse: rev} when is_binary(mode) -> {mode, rev}
-      _ -> {"manual", false}
-    end
-  end
 
   def resolve_sort(task_id) when is_integer(task_id) do
     case Repo.get(Task, task_id) do
@@ -819,8 +806,8 @@ defmodule DoIt.Tasks do
   def resolve_sort(%Task{sort_mode: mode, sort_reverse: rev}) when is_binary(mode),
     do: {mode, rev}
 
-  def resolve_sort(%Task{parent_id: nil, initiative_id: initiative_id}),
-    do: resolve_sort({:initiative, initiative_id})
+  # The root task: nothing above it, so an unset mode falls back to manual.
+  def resolve_sort(%Task{parent_id: nil}), do: {"manual", false}
 
   def resolve_sort(%Task{parent_id: parent_id}), do: resolve_sort(parent_id)
 

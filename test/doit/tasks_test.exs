@@ -688,38 +688,14 @@ defmodule DoIt.TasksTest do
       |> Repo.update!()
     end
 
-    defp set_sort_fields(%Initiative{} = initiative, mode, reverse) do
-      initiative
-      |> Ecto.Changeset.change(sort_mode: mode, sort_reverse: reverse)
-      |> Repo.update!()
-    end
-
     test "nil returns {\"manual\", false}" do
       assert Tasks.resolve_sort(nil) == {"manual", false}
-    end
-
-    test "{:initiative, id} returns the initiative's {mode, reverse}", %{initiative: initiative} do
-      set_sort_fields(initiative, "alphabetical", true)
-      assert Tasks.resolve_sort({:initiative, initiative.id}) == {"alphabetical", true}
-    end
-
-    test "{:initiative, id} with sort_mode: nil falls back to {\"manual\", false}", %{
-      initiative: initiative
-    } do
-      assert initiative.sort_mode == nil
-      assert Tasks.resolve_sort({:initiative, initiative.id}) == {"manual", false}
-    end
-
-    test "{:initiative, id} with a nonexistent id returns {\"manual\", false}" do
-      assert Tasks.resolve_sort({:initiative, -1}) == {"manual", false}
     end
 
     test "task with explicit sort_mode returns its own pair (no walk-up)", %{
       user: user,
       initiative: initiative
     } do
-      set_sort_fields(initiative, "priority", false)
-
       {:ok, root} =
         Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
@@ -778,38 +754,10 @@ defmodule DoIt.TasksTest do
       assert Tasks.resolve_sort(child) == {"alphabetical", true}
     end
 
-    test "chain all nil walks to initiative's pair", %{user: user, initiative: initiative} do
-      set_sort_fields(initiative, "created", true)
-
-      {:ok, root} =
-        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
-
-      {:ok, mid} =
-        Tasks.create_task(user, %{
-          "initiative_id" => initiative.id,
-          "parent_id" => root.id,
-          "title" => "Mid"
-        })
-
-      {:ok, leaf} =
-        Tasks.create_task(user, %{
-          "initiative_id" => initiative.id,
-          "parent_id" => mid.id,
-          "title" => "Leaf"
-        })
-
-      assert root.sort_mode == nil
-      assert mid.sort_mode == nil
-      assert leaf.sort_mode == nil
-      assert Tasks.resolve_sort(leaf) == {"created", true}
-    end
-
-    test "chain all nil and initiative nil falls back to {\"manual\", false}", %{
+    test "chain all nil falls back to {\"manual\", false}", %{
       user: user,
       initiative: initiative
     } do
-      assert initiative.sort_mode == nil
-
       {:ok, root} =
         Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
