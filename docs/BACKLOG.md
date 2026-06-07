@@ -17,6 +17,9 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 - **Duplicate a non-owned initiative.** Copy it into a brand-new initiative you own — new tasks, fresh timestamps, _not_ a clone of the original's history. Owners can disable duplication per-initiative, but it's a soft barrier only (manual recreation is always possible; make owners aware).
 - **Trash ↔ duplicate interplay.** An owner-trashed initiative shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
 
+### User preferences
+- **Persist Initiative-list sort server-side.** The Initiatives index sort (mode + reverse + manual drag order) ships in localStorage (per-browser) in M02 Arc 3 worklist 6. When user profile/preferences gets built, move it to proper per-user server storage so it follows the user across devices. Manual order would land on `initiative_members.sort_order` (per-membership); the mode/reverse on a user-preferences record.
+
 ### Task row polish
 - **Color-coded priority pills.** Map each priority (`high` / `low` / etc.) to its own chip color instead of the current monochrome zinc, so priority reads at a glance. Default (`normal`) stays the empty dashed placeholder. One-spot change in `task_node/1`'s priority chip.
 
