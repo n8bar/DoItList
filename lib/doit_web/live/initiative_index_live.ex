@@ -56,6 +56,17 @@ defmodule DoItWeb.InitiativeIndexLive do
 
   defp role_badge_class(_), do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
 
+  # The Initiative's subtitle (root task title) for the card, or nil when blank
+  # (stored as a single space). nil hides the row via `:if`.
+  defp subtitle_text(%{subtitle: s}) when is_binary(s) do
+    case String.trim(s) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp subtitle_text(_), do: nil
+
   defp build_empty_form do
     to_form(Initiatives.change_initiative(%DoIt.Initiatives.Initiative{}))
   end
@@ -106,7 +117,7 @@ defmodule DoItWeb.InitiativeIndexLive do
           class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} class="block p-4">
-            <div class="flex items-center justify-between gap-3">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
               <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
                 <span class="text-emerald-600 dark:text-emerald-400 flex-none" aria-hidden="true">
                   <.botanical_icon kind={:grove} class="w-5 h-5" />
@@ -129,6 +140,12 @@ defmodule DoItWeb.InitiativeIndexLive do
                 </span>
               </div>
             </div>
+            <p
+              :if={subtitle_text(initiative)}
+              class="mt-1 text-sm text-zinc-600 dark:text-zinc-300 line-clamp-1"
+            >
+              {subtitle_text(initiative)}
+            </p>
             <p
               :if={initiative.description}
               class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2"

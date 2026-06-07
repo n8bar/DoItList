@@ -10,6 +10,8 @@ defmodule DoIt.Initiatives.Initiative do
     field :name, :string
     field :description, :string
     field :my_role, :string, virtual: true
+    # The root task's title, loaded for list views (the Initiative's subtitle).
+    field :subtitle, :string, virtual: true
 
     belongs_to :owner, User
     # The system-managed root task: the Initiative IS this task (its title is the
