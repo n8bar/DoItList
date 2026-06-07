@@ -91,6 +91,31 @@ defmodule DoIt.Initiatives do
   end
 
   @doc """
+  The Initiative's optional subtitle, stored in its root task's title. Blank
+  reads as `""`; the underlying column holds a single space.
+  """
+  def subtitle(%Initiative{} = initiative) do
+    case Repo.get(Task, initiative.root_task_id) do
+      %Task{title: title} -> if String.trim(title) == "", do: "", else: title
+      _ -> ""
+    end
+  end
+
+  @doc """
+  Sets the Initiative's subtitle by writing the root task's title. A blank value
+  is stored as a single space (the column is non-null and a struct-level change
+  bypasses the task-title min-1 validation). No-op write path — no activity event.
+  """
+  def update_subtitle(%Initiative{root_task_id: root_id}, subtitle) when is_binary(subtitle) do
+    title = if String.trim(subtitle) == "", do: " ", else: subtitle
+
+    case Repo.get(Task, root_id) do
+      %Task{} = root -> root |> Ecto.Changeset.change(title: title) |> Repo.update()
+      nil -> {:error, :no_root_task}
+    end
+  end
+
+  @doc """
   Deletes an initiative. Its tasks, members, and activity cascade away via the
   database FK constraints (ON DELETE CASCADE). Caller must enforce that the
   actor is the owner.

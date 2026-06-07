@@ -32,6 +32,7 @@ defmodule DoItWeb.InitiativeShowLive do
          socket
          |> assign(:page_title, initiative.name)
          |> assign(:initiative, initiative)
+         |> assign(:subtitle, Initiatives.subtitle(initiative))
          |> assign(:role, role)
          |> assign(:can_edit, Initiatives.can_edit?(role))
          |> assign(:can_admin, Initiatives.can_admin?(role))
@@ -196,15 +197,40 @@ defmodule DoItWeb.InitiativeShowLive do
     initiative = socket.assigns.initiative
     form = to_form(Initiatives.change_initiative(initiative))
 
+    # The Initiative IS its root task: select the root so the shared sort menu +
+    # computed-from-children line operate on it, while the pane wraps the
+    # Initiative-only fields (name / subtitle / description / members / delete).
+    root = Tasks.get_task_with_relations(initiative.root_task_id)
+
     {:noreply,
      socket
-     |> assign(:selected_task_id, nil)
+     |> assign(:selected_task_id, initiative.root_task_id)
+     |> assign(:selected_task, root)
      |> assign(:editing_initiative?, true)
-     |> assign(:initiative_form, form)}
+     |> assign(:initiative_form, form)
+     |> assign(:subtitle, Initiatives.subtitle(initiative))}
   end
 
   def handle_event("close_initiative", _params, socket) do
-    {:noreply, assign(socket, :editing_initiative?, false)}
+    {:noreply,
+     socket
+     |> assign(:editing_initiative?, false)
+     |> assign(:selected_task_id, nil)
+     |> assign(:selected_task, nil)}
+  end
+
+  def handle_event("update_subtitle", %{"subtitle" => subtitle}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission to edit this initiative.")}
+    else
+      case Initiatives.update_subtitle(socket.assigns.initiative, subtitle) do
+        {:ok, _root} ->
+          {:noreply, assign(socket, :subtitle, Initiatives.subtitle(socket.assigns.initiative))}
+
+        {:error, _} ->
+          {:noreply, socket}
+      end
+    end
   end
 
   def handle_event("delete_initiative", _params, socket) do
@@ -684,7 +710,7 @@ defmodule DoItWeb.InitiativeShowLive do
               :if={@can_edit}
               type="button"
               phx-click="show_add_root"
-              class="mt-1 hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              class="mt-1 ml-auto hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label="New list"
               title="New list"
             >
@@ -693,22 +719,18 @@ defmodule DoItWeb.InitiativeShowLive do
             </button>
           </div>
 
+          <p
+            :if={@subtitle != ""}
+            phx-click="edit_initiative"
+            title="Click to edit"
+            class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-200"
+          >
+            {@subtitle}
+          </p>
+
           <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
             {@initiative.description}
           </p>
-
-          <%!-- New List after the description on mobile. --%>
-          <button
-            :if={@can_edit}
-            type="button"
-            phx-click="show_add_root"
-            class="mt-3 sm:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-            aria-label="New list"
-            title="New list"
-          >
-            <.icon name="hero-plus" class="w-4 h-4" />
-            <span>New List</span>
-          </button>
 
           <div
             class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
@@ -727,6 +749,46 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
               {initiative_progress(@tree)}%
             </span>
+          </div>
+        </div>
+
+        <%!-- Mobile only (.05.04): New List + a Show/Hide Members toggle on one
+             row under the progress bar; the members section collapses inline,
+             client-side. Desktop uses the title-row New List + aside panel. --%>
+        <div class="sm:hidden mb-6">
+          <div class="flex justify-center items-center gap-2">
+            <button
+              :if={@can_edit}
+              type="button"
+              phx-click="show_add_root"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              aria-label="New list"
+              title="New list"
+            >
+              <.icon name="hero-plus" class="w-4 h-4" />
+              <span>New List</span>
+            </button>
+            <button
+              type="button"
+              phx-click={
+                Phoenix.LiveView.JS.toggle(to: "#mobile-members")
+                |> Phoenix.LiveView.JS.toggle(to: "#members-show-label")
+                |> Phoenix.LiveView.JS.toggle(to: "#members-hide-label")
+              }
+              aria-controls="mobile-members"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            >
+              <.icon name="hero-users" class="w-4 h-4" />
+              <span id="members-show-label">Show Members</span>
+              <span id="members-hide-label" class="hidden">Hide Members</span>
+            </button>
+          </div>
+          <div id="mobile-members" class="hidden mt-2">
+            <.members_panel
+              members={@members}
+              can_admin={@can_admin}
+              show_member_form={@show_member_form}
+            />
           </div>
         </div>
 
@@ -789,64 +851,14 @@ defmodule DoItWeb.InitiativeShowLive do
                 <.icon name="hero-x-mark" class="w-5 h-5" />
               </button>
             </div>
-            <div class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
-              <div class="flex items-center justify-between mb-2">
-                <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
-                <button
-                  :if={@can_admin}
-                  type="button"
-                  phx-click="show_member_form"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                >
-                  <.icon name="hero-plus" class="w-3.5 h-3.5" />
-                  <span>Add Member</span>
-                </button>
-              </div>
-
-              <div :if={@show_member_form} class="mb-3">
-                <form phx-submit="add_member" class="flex flex-col gap-2">
-                  <input
-                    type="email"
-                    name="email"
-                    placeholder="email@example.com"
-                    aria-label="Member email"
-                    required
-                    class="w-full input input-bordered input-sm"
-                  />
-                  <select
-                    name="role"
-                    aria-label="Member role"
-                    class="w-full select select-bordered select-sm"
-                  >
-                    <option value="editor">Editor</option>
-                    <option value="viewer">Viewer</option>
-                    <option value="owner">Owner</option>
-                  </select>
-                  <div class="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      phx-click="cancel_member"
-                      class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      phx-disable-with="Adding..."
-                      class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-                    >
-                      Add
-                    </button>
-                  </div>
-                </form>
-              </div>
-
-              <ul class="space-y-1 text-sm">
-                <li :for={m <- @members} class="flex items-center justify-between">
-                  <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
-                  <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
-                </li>
-              </ul>
+            <%!-- Desktop/tablet: standalone Members panel. On phone it's hidden
+                 in favor of the header's collapsible toggle (.05.04.1). --%>
+            <div class="hidden sm:block">
+              <.members_panel
+                members={@members}
+                can_admin={@can_admin}
+                show_member_form={@show_member_form}
+              />
             </div>
 
             <div
@@ -858,6 +870,8 @@ defmodule DoItWeb.InitiativeShowLive do
                 can_edit={@can_edit}
                 can_admin={@can_admin}
                 initiative={@initiative}
+                root_task={@selected_task}
+                subtitle={@subtitle}
               />
             </div>
 
@@ -1299,6 +1313,8 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :can_edit, :boolean, required: true
   attr :can_admin, :boolean, required: true
   attr :initiative, :map, required: true
+  attr :root_task, :map, required: true
+  attr :subtitle, :string, required: true
 
   def initiative_editor(assigns) do
     ~H"""
@@ -1331,6 +1347,23 @@ defmodule DoItWeb.InitiativeShowLive do
           disabled={not @can_edit}
           phx-debounce="600"
         />
+
+        <%!-- Subtitle is stored in the root task's title (.05.03), so it has its
+             own write path rather than riding the Initiative changeset. --%>
+        <div>
+          <label class="text-xs text-zinc-500 dark:text-zinc-400">Subtitle</label>
+          <input
+            type="text"
+            name="subtitle"
+            value={@subtitle}
+            placeholder="a short tagline for this initiative"
+            class="w-full input input-bordered input-sm"
+            disabled={not @can_edit}
+            phx-change="update_subtitle"
+            phx-debounce="600"
+          />
+        </div>
+
         <.input
           field={@form[:description]}
           type="textarea"
@@ -1339,6 +1372,12 @@ defmodule DoItWeb.InitiativeShowLive do
           phx-debounce="600"
         />
       </.form>
+
+      <div :if={not leaf?(@root_task)} class="text-xs text-zinc-500 dark:text-zinc-400 italic">
+        Computed from children: {@root_task.computed_progress}%
+      </div>
+
+      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
 
       <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <button
@@ -1350,6 +1389,143 @@ defmodule DoItWeb.InitiativeShowLive do
           Delete initiative
         </button>
       </div>
+    </div>
+    """
+  end
+
+  attr :members, :list, required: true
+  attr :can_admin, :boolean, required: true
+  attr :show_member_form, :boolean, required: true
+
+  @doc """
+  The Initiative's Members list + add-member form. Shared by the aside panel
+  (desktop/tablet) and the mobile header collapsible (.05.04.1).
+  """
+  def members_panel(assigns) do
+    ~H"""
+    <div class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
+        <button
+          :if={@can_admin}
+          type="button"
+          phx-click="show_member_form"
+          class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+        >
+          <.icon name="hero-plus" class="w-3.5 h-3.5" />
+          <span>Add Member</span>
+        </button>
+      </div>
+
+      <div :if={@show_member_form} class="mb-3">
+        <form phx-submit="add_member" class="flex flex-col gap-2">
+          <input
+            type="email"
+            name="email"
+            placeholder="email@example.com"
+            aria-label="Member email"
+            required
+            class="w-full input input-bordered input-sm"
+          />
+          <select name="role" aria-label="Member role" class="w-full select select-bordered select-sm">
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+            <option value="owner">Owner</option>
+          </select>
+          <div class="flex justify-end gap-2">
+            <button
+              type="button"
+              phx-click="cancel_member"
+              class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              phx-disable-with="Adding..."
+              class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+            >
+              Add
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <ul class="space-y-1 text-sm">
+        <li :for={m <- @members} class="flex items-center justify-between">
+          <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
+          <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+        </li>
+      </ul>
+    </div>
+    """
+  end
+
+  attr :task, :map, required: true
+  attr :can_edit, :boolean, required: true
+  attr :label, :string, default: "Sort children by"
+
+  @doc """
+  The "sort by" control for a branch task: criterion dropdown + Reverse +
+  "Apply to all descendants". Shared by the Task and Initiative Details panes
+  (the Initiative's is its root task, labeled "Sort lists by"). Targets the
+  selected task server-side via `set_sort` / `cascade_sort`.
+  """
+  def sort_menu(assigns) do
+    ~H"""
+    <div :if={not leaf?(@task)} class="space-y-1">
+      <label for={"sort-mode-#{@task.id}"} class="text-xs text-zinc-500 dark:text-zinc-400">
+        {@label}
+      </label>
+      <form
+        id={"sort-form-#{@task.id}"}
+        phx-hook="SortRecall"
+        data-task-id={@task.id}
+        phx-change="set_sort"
+        class="flex items-center gap-2"
+      >
+        <select
+          id={"sort-mode-#{@task.id}"}
+          name="mode"
+          class="flex-1 select select-bordered select-sm"
+          disabled={not @can_edit}
+        >
+          <option value="" selected={is_nil(@task.sort_mode)}>
+            {sort_mode_inherit_label(@task)}
+          </option>
+          <option :for={m <- sort_mode_options()} value={m} selected={@task.sort_mode == m}>
+            {sort_mode_label(m)}
+          </option>
+        </select>
+        <label
+          for={"sort-reverse-#{@task.id}"}
+          class={[
+            "flex items-center gap-1 text-xs select-none",
+            reverse_disabled?(@task) && "text-zinc-400 dark:text-zinc-500",
+            not reverse_disabled?(@task) && "text-zinc-600 dark:text-zinc-300"
+          ]}
+          title="Reverse the sort direction"
+        >
+          <input
+            id={"sort-reverse-#{@task.id}"}
+            type="checkbox"
+            name="reverse"
+            value="true"
+            checked={@task.sort_reverse}
+            disabled={not @can_edit or reverse_disabled?(@task)}
+            class="checkbox checkbox-xs"
+          /> Reverse
+        </label>
+      </form>
+      <button
+        :if={@can_edit}
+        type="button"
+        phx-click="cascade_sort"
+        class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
+        title="Apply this sort_mode and direction to every descendant branch"
+      >
+        Apply to all descendants
+      </button>
     </div>
     """
   end
@@ -1499,67 +1675,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
-      <div :if={not leaf?(@task)} class="space-y-1">
-        <label
-          for={"sort-mode-#{@task.id}"}
-          class="text-xs text-zinc-500 dark:text-zinc-400"
-        >
-          Sort children by
-        </label>
-        <form
-          id={"sort-form-#{@task.id}"}
-          phx-hook="SortRecall"
-          data-task-id={@task.id}
-          phx-change="set_sort"
-          class="flex items-center gap-2"
-        >
-          <select
-            id={"sort-mode-#{@task.id}"}
-            name="mode"
-            class="flex-1 select select-bordered select-sm"
-            disabled={not @can_edit}
-          >
-            <option value="" selected={is_nil(@task.sort_mode)}>
-              {sort_mode_inherit_label(@task)}
-            </option>
-            <option
-              :for={m <- sort_mode_options()}
-              value={m}
-              selected={@task.sort_mode == m}
-            >
-              {sort_mode_label(m)}
-            </option>
-          </select>
-          <label
-            for={"sort-reverse-#{@task.id}"}
-            class={[
-              "flex items-center gap-1 text-xs select-none",
-              reverse_disabled?(@task) && "text-zinc-400 dark:text-zinc-500",
-              not reverse_disabled?(@task) && "text-zinc-600 dark:text-zinc-300"
-            ]}
-            title="Reverse the sort direction"
-          >
-            <input
-              id={"sort-reverse-#{@task.id}"}
-              type="checkbox"
-              name="reverse"
-              value="true"
-              checked={@task.sort_reverse}
-              disabled={not @can_edit or reverse_disabled?(@task)}
-              class="checkbox checkbox-xs"
-            /> Reverse
-          </label>
-        </form>
-        <button
-          :if={@can_edit}
-          type="button"
-          phx-click="cascade_sort"
-          class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
-          title="Apply this sort_mode and direction to every descendant branch"
-        >
-          Apply to all descendants
-        </button>
-      </div>
+      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" />
 
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
