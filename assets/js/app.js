@@ -871,6 +871,60 @@ Hooks.TreeWidth = {
   },
 }
 
+// Initiatives-index sort control. The preference (mode + reverse + manual drag
+// order) lives in localStorage — per-user, per-browser, no schema (worklist 6;
+// recapture as server prefs later, see BACKLOG). On mount we seed the controls
+// from storage and push apply_sort so the server sorts + re-streams; on change
+// we persist and re-push. The drag hook writes the same key's `order`.
+const INIT_SORT_KEY = "doit:init-sort"
+function readInitSort() {
+  try {
+    return JSON.parse(localStorage.getItem(INIT_SORT_KEY)) || {}
+  } catch {
+    return {}
+  }
+}
+function writeInitSort(state) {
+  localStorage.setItem(INIT_SORT_KEY, JSON.stringify(state))
+}
+Hooks.InitiativeSort = {
+  mounted() {
+    this.sel = this.el.querySelector("select[name=mode]")
+    this.rev = this.el.querySelector("input[name=reverse]")
+    const s = readInitSort()
+    this.order = s.order || []
+    // Reverse is remembered per mode, so each sort option keeps its own
+    // direction. (Legacy single-boolean shape is discarded.)
+    this.reverseByMode = s.reverse && typeof s.reverse === "object" ? s.reverse : {}
+    this.sel.value = s.mode || ""
+    this.rev.checked = !!this.reverseByMode[this.sel.value]
+    this.push()
+
+    // Switching modes reflects that mode's remembered reverse.
+    this.sel.addEventListener("change", () => {
+      this.rev.checked = !!this.reverseByMode[this.sel.value]
+      this.persist()
+      this.push()
+    })
+    // Toggling reverse updates only the current mode's setting.
+    this.rev.addEventListener("change", () => {
+      this.reverseByMode[this.sel.value] = this.rev.checked
+      this.persist()
+      this.push()
+    })
+  },
+  persist() {
+    writeInitSort({mode: this.sel.value || null, order: this.order, reverse: this.reverseByMode})
+  },
+  push() {
+    this.pushEvent("apply_sort", {
+      mode: this.sel.value || "",
+      reverse: !!this.reverseByMode[this.sel.value],
+      order: this.order,
+    })
+  },
+}
+
 // Focuses a Details-panel field on request from the server. Tapping a task's
 // priority / weight / assignee chip selects the task and pushes "focus-field"
 // with the target id; we focus it once the editor is in the DOM. rAF lets the

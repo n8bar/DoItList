@@ -25,7 +25,7 @@ defmodule DoIt.Initiatives do
       on: m.initiative_id == i.id and m.user_id == ^user_id,
       left_join: rt in Task,
       on: rt.id == i.root_task_id,
-      select: %{i | my_role: m.role, subtitle: rt.title},
+      select: %{i | my_role: m.role, subtitle: rt.title, progress: rt.computed_progress},
       order_by: [
         asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
         desc: i.updated_at

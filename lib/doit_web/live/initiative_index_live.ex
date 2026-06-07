@@ -4,6 +4,10 @@ defmodule DoItWeb.InitiativeIndexLive do
   alias DoIt.Initiatives
 
   @impl true
+  # Sort modes the index understands. `nil` = the server's default order
+  # (owner-first, recently-updated); "manual" = the user's localStorage drag order.
+  @sort_modes ~w(name progress created updated manual)
+
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
     initiatives = Initiatives.list_visible_initiatives(user)
@@ -13,6 +17,8 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> assign(:page_title, "Initiatives")
      |> assign(:show_form, false)
      |> assign(:initiative_count, length(initiatives))
+     |> assign(:initiatives, initiatives)
+     |> assign(:sort_state, %{mode: nil, reverse: false, order: []})
      |> assign(:form, build_empty_form())
      |> stream(:initiatives, initiatives)}
   end
@@ -37,13 +43,62 @@ defmodule DoItWeb.InitiativeIndexLive do
          socket
          |> assign(:show_form, false)
          |> update(:initiative_count, &(&1 + 1))
+         |> update(:initiatives, &[initiative | &1])
          |> put_flash(:info, "Initiative created.")
-         |> stream_insert(:initiatives, initiative, at: 0)}
+         |> restream_sorted()}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
     end
   end
+
+  # Sort preference (and manual drag order) live in the browser's localStorage;
+  # a hook pushes them here on mount and on change, and we re-stream sorted.
+  # Keeps the preference per-user without a schema (see worklist 6 / BACKLOG).
+  def handle_event("apply_sort", params, socket) do
+    sort_state = %{
+      mode: normalize_mode(params["mode"]),
+      reverse: params["reverse"] in [true, "true"],
+      order: params["order"] || []
+    }
+
+    {:noreply, socket |> assign(:sort_state, sort_state) |> restream_sorted()}
+  end
+
+  defp restream_sorted(socket) do
+    sorted = sort_initiatives(socket.assigns.initiatives, socket.assigns.sort_state)
+    stream(socket, :initiatives, sorted, reset: true)
+  end
+
+  defp normalize_mode(mode) when mode in @sort_modes, do: mode
+  defp normalize_mode(_), do: nil
+
+  defp sort_initiatives(list, %{mode: nil}), do: list
+
+  defp sort_initiatives(list, %{mode: "manual", order: order, reverse: reverse}) do
+    idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
+    # Items in the saved order come first by their index; the rest keep their
+    # current (server) order after, via a stable sort on a tied key. Reverse
+    # flips the resulting manual sequence.
+    list
+    |> Enum.sort_by(fn it -> Map.get(idx, to_string(it.id), length(order)) end)
+    |> maybe_reverse(reverse)
+  end
+
+  defp sort_initiatives(list, %{mode: mode, reverse: reverse}) do
+    list |> Enum.sort_by(&sort_key(&1, mode), sorter(mode)) |> maybe_reverse(reverse)
+  end
+
+  defp sort_key(i, "name"), do: String.downcase(i.name || "")
+  defp sort_key(i, "progress"), do: i.progress || 0
+  defp sort_key(i, "created"), do: i.inserted_at
+  defp sort_key(i, "updated"), do: i.updated_at
+
+  defp sorter(mode) when mode in ~w(created updated), do: DateTime
+  defp sorter(_), do: :asc
+
+  defp maybe_reverse(list, true), do: Enum.reverse(list)
+  defp maybe_reverse(list, _), do: list
 
   defp role_badge_class("owner"),
     do: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
@@ -109,6 +164,29 @@ defmodule DoItWeb.InitiativeIndexLive do
           </.form>
         </div>
       <% end %>
+
+      <%!-- Sort control. The hook (.06.2) seeds it from localStorage, pushes
+           apply_sort, and persists changes — per-user, per-browser. --%>
+      <form
+        :if={@initiative_count > 0}
+        id="initiative-sort"
+        phx-hook="InitiativeSort"
+        phx-update="ignore"
+        class="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300"
+      >
+        <label for="initiative-sort-mode" class="text-xs">Sort</label>
+        <select id="initiative-sort-mode" name="mode" class="select select-bordered select-sm">
+          <option value="">Recent</option>
+          <option value="manual">Manual</option>
+          <option value="name">Name</option>
+          <option value="progress">Progress</option>
+          <option value="created">Created</option>
+          <option value="updated">Updated</option>
+        </select>
+        <label class="flex items-center gap-1 text-xs select-none">
+          <input type="checkbox" name="reverse" value="true" class="checkbox checkbox-xs" /> Reverse
+        </label>
+      </form>
 
       <div id="initiatives" phx-update="stream" class="space-y-2">
         <div
