@@ -518,15 +518,142 @@ Hooks.DragReorder = {
       reorder: !!plan.reorder,
     }
 
-    // Optimistic UI: leave the source where it is; LiveView will re-render
-    // the tree on :ok. On error, the flash explains why.
-    this.pushEvent("move_task", params, (reply) => {
-      if (reply && reply.ok === false) {
-        // Revert visual hint — server will also re-render unchanged tree.
-        // No-op here beyond cleanup.
+    // Temporary drop tracing, gated behind the idclip easter egg so it's silent
+    // in normal use. Prints what the drop computed vs. what we push to the server.
+    if (document.documentElement.classList.contains("debug-task-ids")) {
+      const liId = (el) => {
+        const li = el && el.closest && el.closest("li[data-task-id]")
+        return li ? li.dataset.taskId : null
       }
+      console.log("[idclip] drop", {
+        drag: taskId,
+        source_parent: liId(this.sourceLi.parentElement),
+        anchor: this.anchorLi ? this.anchorLi.dataset.taskId : null,
+        placeholder_parent: this.placeholderEl ? liId(this.placeholderEl.parentElement) : null,
+        tail_parent: this.activeTail ? liId(this.activeTail.parentElement) : null,
+        "->push parent_id": plan.parentId,
+        "->push position": plan.position,
+        "->push reorder": !!plan.reorder,
+      })
+    }
+
+    // Optimistic UI (.03.03.08): move the row to the drop indicator now and pink
+    // the affected group; the server's authoritative re-render clears the hue
+    // (the class is client-added, so morphdom strips it). Revert on a failed
+    // write — the server also re-renders the unchanged tree.
+    const origParent = this.sourceLi.parentElement
+    const origNext = this.sourceLi.nextSibling
+    const sourceParentLi = origParent && origParent.closest("li[data-task-id]")
+    const dest = this.optimisticDest(plan)
+    if (dest && dest.container) {
+      const destParentLi = dest.container.closest("li[data-task-id]")
+      dest.container.insertBefore(this.sourceLi, dest.before)
+      // Extra rows whose DB value changes. Reorder (same parent) only flips the
+      // parent's sort_mode → pink that one row. A cross-parent move recomputes
+      // progress up BOTH chains → pink both ancestor chains.
+      const extra = []
+      if (sourceParentLi === destParentLi) {
+        const r = destParentLi && destParentLi.firstElementChild
+        if (r) extra.push(r)
+      } else {
+        this.collectAncestorRows(sourceParentLi, extra)
+        this.collectAncestorRows(destParentLi, extra)
+      }
+      this.markSaving(dest.container, extra)
+    }
+
+    const fabricatedUl = this._fabricatedUl
+    this._fabricatedUl = null
+    this.pushEvent("move_task", params, (reply) => {
+      // Keep the optimistic placement only when the move actually persisted.
+      // A failed write (ok: false) or a move awaiting completion-flip
+      // confirmation (committed: false) snaps the row back to where it was —
+      // the server's authoritative re-render (or the confirm modal) takes over.
+      const committed = reply && reply.ok !== false && reply.committed !== false
+      if (!committed && origParent) {
+        origParent.insertBefore(this.sourceLi, origNext)
+        // Drop any empty child list we fabricated for an optimistic reparent.
+        if (fabricatedUl && fabricatedUl.children.length === 0) fabricatedUl.remove()
+      }
+      // Clear the hue explicitly on the server's reply — don't rely on morphdom
+      // stripping it, which is unreliable once we've moved the DOM ourselves.
+      this.clearSaving()
     })
     this.cleanup()
+  },
+
+  // Where the drop's visual indicator says the row should land — reuse the
+  // placeholder / tail / root-zone / center target rather than re-deriving it.
+  optimisticDest(plan) {
+    if (this.placeholderEl && this.placeholderEl.parentElement) {
+      return {container: this.placeholderEl.parentElement, before: this.placeholderEl}
+    }
+    if (this.activeTail && this.activeTail.parentElement) {
+      return {container: this.activeTail.parentElement, before: this.activeTail}
+    }
+    if (plan.parentId === null) {
+      const rootUl = document.getElementById("task-tree")
+      if (rootUl) {
+        const before = plan.position === 0 ? rootUl.querySelector(":scope > li[data-task-id]") : null
+        return {container: rootUl, before}
+      }
+    }
+    // Center (reparent as first child). If the anchor is a leaf with no child
+    // list yet, fabricate one with the right id so the reparent is optimistic
+    // too — morphdom reconciles it against the server's real <ul> on re-render.
+    if (this.anchorLi && !plan.reorder) {
+      let ul = this.anchorLi.querySelector(":scope > ul[id^='children-']")
+      if (!ul) {
+        ul = document.createElement("ul")
+        ul.id = "children-" + this.anchorLi.dataset.taskId
+        ul.className = "pl-1.5 sm:pl-6 space-y-1"
+        this.anchorLi.appendChild(ul)
+        // Remember it so a non-committed move can remove the empty shell.
+        this._fabricatedUl = ul
+      }
+      return {container: ul, before: ul.querySelector(":scope > li[data-task-id]")}
+    }
+    return null
+  },
+
+  // Pink the affected rows: the moved/reordered children of `container`, plus
+  // any `extraRows` (parent and/or ancestor rows whose value changes). We don't
+  // pink the container <ul> itself — its tint would bleed through the child area.
+  markSaving(container, extraRows) {
+    this.clearSaving()
+    this._saving = []
+    const add = (el) => {
+      if (el) {
+        el.classList.add("is-saving")
+        this._saving.push(el)
+      }
+    }
+    if (container) {
+      container
+        .querySelectorAll(":scope > li[data-task-id] > div:first-child")
+        .forEach(add)
+    }
+    ;(extraRows || []).forEach(add)
+    // Safety net: never let the hue linger if the reply never comes.
+    this._savingTimer = setTimeout(() => this.clearSaving(), 1500)
+  },
+  // Push the row of `li` and each of its ancestor task rows onto `acc` — the
+  // chain whose progress recomputes on a cross-parent move. Stops at the root
+  // task (top-level tasks have no rendered parent row).
+  collectAncestorRows(li, acc) {
+    let cur = li
+    while (cur && cur.matches && cur.matches("li[data-task-id]")) {
+      if (cur.firstElementChild) acc.push(cur.firstElementChild)
+      cur = cur.parentElement && cur.parentElement.closest("li[data-task-id]")
+    }
+  },
+  clearSaving() {
+    if (this._savingTimer) {
+      clearTimeout(this._savingTimer)
+      this._savingTimer = null
+    }
+    if (this._saving) this._saving.forEach((el) => el.classList.remove("is-saving"))
+    this._saving = null
   },
 
   abort() {
@@ -922,6 +1049,192 @@ Hooks.InitiativeSort = {
       reverse: !!this.reverseByMode[this.sel.value],
       order: this.order,
     })
+  },
+}
+
+// Drag-to-reorder the Initiatives index (.06.3). The grove icon is the handle;
+// dropping inserts the card before/after another (no reparent / center drop).
+// The new order is written to localStorage (mode "manual") and pushed so the
+// server re-streams it. Reuses the pointer-event pattern from DragReorder, in a
+// simpler reorder-only form.
+const INIT_DRAG_THRESHOLD_PX = 4
+const INIT_DRAG_LONG_PRESS_MS = 400
+const INIT_DRAG_TOUCH_TOLERANCE_PX = 8
+Hooks.InitiativeDrag = {
+  mounted() {
+    this.onDown = (e) => this.start(e)
+    // The handle sits inside the card's <a>; on touch, a long-press would
+    // otherwise fire the iOS link callout / context menu and cancel the drag.
+    this.onContext = (e) => e.preventDefault()
+    this.el.addEventListener("pointerdown", this.onDown)
+    this.el.addEventListener("contextmenu", this.onContext)
+  },
+  destroyed() {
+    this.cleanup()
+    if (this.onDown) this.el.removeEventListener("pointerdown", this.onDown)
+    if (this.onContext) this.el.removeEventListener("contextmenu", this.onContext)
+  },
+  start(e) {
+    if (e.button !== undefined && e.button !== 0) return
+    if (this.armed || this.dragging) return
+    e.preventDefault() // don't navigate the card link
+    e.stopPropagation()
+    this.startY = e.clientY
+    this.pointerType = e.pointerType || "mouse"
+    this.pid = e.pointerId
+    this.armed = true
+    this.dragging = false
+    this.card = this.el.closest("[data-initiative-id]")
+    this.container = this.card && this.card.parentElement
+    this.longFired = this.pointerType !== "touch"
+
+    this.onMove = (ev) => this.move(ev)
+    this.onUp = (ev) => this.up(ev)
+    this.onCancel = () => this.abort()
+    document.addEventListener("pointermove", this.onMove)
+    document.addEventListener("pointerup", this.onUp)
+    document.addEventListener("pointercancel", this.onCancel)
+
+    if (this.pointerType === "touch") {
+      this.timer = setTimeout(() => {
+        this.timer = null
+        if (this.armed && !this.dragging) {
+          this.longFired = true
+          this.begin()
+        }
+      }, INIT_DRAG_LONG_PRESS_MS)
+    }
+  },
+  begin() {
+    this.dragging = true
+    if (this.card) this.card.style.opacity = "0.5"
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "grabbing"
+  },
+  move(e) {
+    if (!this.armed) return
+    if (this.pid !== undefined && e.pointerId !== this.pid) return
+
+    if (!this.dragging) {
+      if (this.pointerType === "touch" && !this.longFired) {
+        if (Math.abs(e.clientY - this.startY) >= INIT_DRAG_TOUCH_TOLERANCE_PX) this.abort()
+        return
+      }
+      if (Math.abs(e.clientY - this.startY) < INIT_DRAG_THRESHOLD_PX) return
+      this.begin()
+    }
+
+    this.clearPlaceholder()
+    const under = document.elementFromPoint(e.clientX, e.clientY)
+    const overCard = under && under.closest("[data-initiative-id]")
+    if (!overCard || overCard === this.card || overCard.parentElement !== this.container) {
+      this.target = null
+      return
+    }
+    const rect = overCard.getBoundingClientRect()
+    this.after = e.clientY > rect.top + rect.height / 2
+    this.target = overCard
+    this.showPlaceholder(overCard, this.after)
+  },
+  showPlaceholder(card, after) {
+    if (!this.ph) {
+      this.ph = document.createElement("div")
+      this.ph.className = "init-drop-placeholder"
+      this.ph.setAttribute("aria-hidden", "true")
+    }
+    if (after) card.after(this.ph)
+    else card.before(this.ph)
+  },
+  clearPlaceholder() {
+    if (this.ph && this.ph.parentElement) this.ph.parentElement.removeChild(this.ph)
+  },
+  up(e) {
+    if (!this.armed) return
+    if (this.pid !== undefined && e.pointerId !== this.pid) return
+    if (!this.dragging) {
+      this.cleanup()
+      return
+    }
+    this.suppressClick()
+    const target = this.target
+    const after = this.after
+    this.clearPlaceholder()
+
+    if (target) {
+      const ids = [...this.container.querySelectorAll(":scope > [data-initiative-id]")].map(
+        (c) => c.dataset.initiativeId,
+      )
+      const dragged = this.card.dataset.initiativeId
+      const order = ids.filter((id) => id !== dragged)
+      const ti = order.indexOf(target.dataset.initiativeId)
+      order.splice(after ? ti + 1 : ti, 0, dragged)
+      this.persistAndPush(order)
+    }
+    this.cleanup()
+  },
+  persistAndPush(order) {
+    const s = readInitSort()
+    const reverse = s.reverse && typeof s.reverse === "object" ? s.reverse : {}
+    writeInitSort({mode: "manual", order, reverse})
+    const sel = document.querySelector("#initiative-sort select[name=mode]")
+    const rev = document.querySelector("#initiative-sort input[name=reverse]")
+    if (sel) sel.value = "manual"
+    if (rev) rev.checked = !!reverse["manual"]
+    this.pushEvent("apply_sort", {mode: "manual", reverse: !!reverse["manual"], order})
+  },
+  abort() {
+    this.cleanup()
+  },
+  suppressClick() {
+    const swallow = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      document.removeEventListener("click", swallow, true)
+      clearTimeout(t)
+    }
+    document.addEventListener("click", swallow, true)
+    const t = setTimeout(() => document.removeEventListener("click", swallow, true), 50)
+  },
+  cleanup() {
+    if (this.timer) {
+      clearTimeout(this.timer)
+      this.timer = null
+    }
+    if (this.onMove) document.removeEventListener("pointermove", this.onMove)
+    if (this.onUp) document.removeEventListener("pointerup", this.onUp)
+    if (this.onCancel) document.removeEventListener("pointercancel", this.onCancel)
+    this.onMove = this.onUp = this.onCancel = null
+    this.clearPlaceholder()
+    this.ph = null
+    if (this.card) this.card.style.opacity = ""
+    document.body.style.userSelect = ""
+    document.body.style.cursor = ""
+    this.armed = false
+    this.dragging = false
+    this.target = null
+  },
+}
+
+// The keyboard-shortcuts help overlay. Toggled by a "doit:shortcuts-toggle"
+// event (dispatched by the `?` key or the ⌨ affordance); closed by Escape, the
+// backdrop, or the X (anything with [data-close]).
+Hooks.ShortcutsOverlay = {
+  mounted() {
+    this.onToggle = () => this.el.classList.toggle("hidden")
+    this.onKey = (e) => {
+      if (e.key === "Escape" && !this.el.classList.contains("hidden")) this.el.classList.add("hidden")
+    }
+    this.onClick = (e) => {
+      if (e.target.closest("[data-close]")) this.el.classList.add("hidden")
+    }
+    this.el.addEventListener("doit:shortcuts-toggle", this.onToggle)
+    this.el.addEventListener("click", this.onClick)
+    window.addEventListener("keydown", this.onKey)
+  },
+  destroyed() {
+    this.el.removeEventListener("doit:shortcuts-toggle", this.onToggle)
+    this.el.removeEventListener("click", this.onClick)
+    window.removeEventListener("keydown", this.onKey)
   },
 }
 

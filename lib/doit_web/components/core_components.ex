@@ -485,6 +485,64 @@ defmodule DoItWeb.CoreComponents do
     """
   end
 
+  # Data-driven keyboard-shortcut list — add a key here and it shows in the help
+  # overlay automatically (m02.03 .07.2.1).
+  @shortcuts [
+    {"Enter", "Open the selected task's details — or reopen the last task; again to close"},
+    {"Space", "Expand / collapse the selected task"},
+    {"↑ ↓", "Select the previous / next task"},
+    {"← →", "Select the parent / first child"},
+    {"Alt + ↑ ↓ ← →", "Reorder, or dedent / indent, the selected task"},
+    {"N", "New subtask of the selected task"},
+    {"S", "New sibling of the selected task"},
+    {"P / W / A", "Step priority / weight / assignee (Shift to step back)"},
+    {"Alt + P / W / A", "Focus the priority / weight / assignee field"},
+    {"?", "Show this help"}
+  ]
+
+  @doc """
+  The keyboard-shortcuts help overlay: a hidden modal listing every shortcut.
+  Opened by `?` or a "⌨ shortcuts" affordance, closed by Escape / backdrop / X.
+  Toggled entirely client-side via the `ShortcutsOverlay` hook; data-driven from
+  the `@shortcuts` list above.
+  """
+  def shortcuts_overlay(assigns) do
+    assigns = assign(assigns, :shortcuts, @shortcuts)
+
+    ~H"""
+    <div
+      id="shortcuts-overlay"
+      phx-hook="ShortcutsOverlay"
+      class="hidden fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
+      <div class="absolute inset-0 bg-black/50" data-close aria-hidden="true"></div>
+      <div class="relative z-10 w-full max-w-md max-h-[80vh] overflow-y-auto rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-medium text-zinc-800 dark:text-zinc-100">Keyboard shortcuts</h2>
+          <button
+            type="button"
+            data-close
+            aria-label="Close"
+            class="inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white"
+          >
+            <.icon name="hero-x-mark" class="w-5 h-5" />
+          </button>
+        </div>
+        <dl class="space-y-2">
+          <div :for={{keys, label} <- @shortcuts} class="flex items-baseline justify-between gap-4">
+            <dt class="flex-none">
+              <kbd class="px-1.5 py-0.5 rounded border border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                {keys}
+              </kbd>
+            </dt>
+            <dd class="text-sm text-zinc-600 dark:text-zinc-300 text-right">{label}</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+    """
+  end
+
   @doc """
   A small info icon that reveals an explanatory popover on click and
   light-dismisses on click-away. Reusable for "explain a UI rule" moments —

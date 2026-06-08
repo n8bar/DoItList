@@ -370,6 +370,160 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "move_task persistence (drag parity)" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      %{conn: conn, user: user, initiative: initiative}
+    end
+
+    test "a plain cross-parent move persists to the DB", %{
+      conn: conn,
+      user: user,
+      initiative: initiative
+    } do
+      p1 = create_task(user, initiative, nil, "P1")
+      p2 = create_task(user, initiative, nil, "P2")
+      x = create_task(user, initiative, p1, "X")
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      render_hook(view, "move_task", %{
+        "task_id" => x.id,
+        "parent_id" => p2.id,
+        "position" => nil,
+        "reorder" => false
+      })
+
+      assert Tasks.get_task!(x.id).parent_id == p2.id
+    end
+
+    test "a completion-flipping move waits for confirm, then persists", %{
+      conn: conn,
+      user: user,
+      initiative: initiative
+    } do
+      p = create_task(user, initiative, nil, "P")
+      c1 = create_task(user, initiative, p, "C1")
+      c2 = create_task(user, initiative, p, "C2")
+
+      # One child done, one open → P sits at 50%/open. Moving the open child
+      # out leaves only the done child → P would cross to complete (scenario 2),
+      # which requires confirmation before it commits.
+      {:ok, _} = Tasks.toggle_complete(c1, user)
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      render_hook(view, "move_task", %{
+        "task_id" => c2.id,
+        "parent_id" => initiative.root_task_id,
+        "position" => 0,
+        "reorder" => false
+      })
+
+      # Not yet committed: still under P, confirm modal showing.
+      assert Tasks.get_task!(c2.id).parent_id == p.id
+      assert has_element?(view, "button[phx-click=confirm_pending]")
+
+      render_click(view, "confirm_pending", %{})
+
+      # Proceed actually moves it to the root task.
+      assert Tasks.get_task!(c2.id).parent_id == initiative.root_task_id
+    end
+  end
+
+  describe "keyboard attribute adjusters (P / W / A)" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      t = create_task(user, initiative, nil, "T")
+      %{conn: conn, user: user, initiative: initiative, t: t}
+    end
+
+    defp adjust(view, field, dir) do
+      render_hook(view, "kbd_adjust", %{"field" => field, "dir" => dir})
+    end
+
+    test "P steps priority up toward high and clamps", %{conn: conn, initiative: initiative, t: t} do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      select_task(view, t.id)
+
+      assert Tasks.get_task!(t.id).priority == "normal"
+      adjust(view, "priority", "up")
+      assert Tasks.get_task!(t.id).priority == "high"
+      adjust(view, "priority", "up")
+      assert Tasks.get_task!(t.id).priority == "high"
+    end
+
+    test "Shift+P steps priority down and clamps at low", %{
+      conn: conn,
+      initiative: initiative,
+      t: t
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      select_task(view, t.id)
+
+      adjust(view, "priority", "down")
+      assert Tasks.get_task!(t.id).priority == "low"
+      adjust(view, "priority", "down")
+      assert Tasks.get_task!(t.id).priority == "low"
+    end
+
+    test "W steps weight by 1 with no upper wrap; Shift+W floors at 1", %{
+      conn: conn,
+      initiative: initiative,
+      t: t
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      select_task(view, t.id)
+
+      assert Decimal.equal?(Tasks.get_task!(t.id).weight, Decimal.new(1))
+      adjust(view, "weight", "up")
+      assert Decimal.equal?(Tasks.get_task!(t.id).weight, Decimal.new(2))
+      adjust(view, "weight", "down")
+      adjust(view, "weight", "down")
+      # 2 → 1 → floored at 1
+      assert Decimal.equal?(Tasks.get_task!(t.id).weight, Decimal.new(1))
+    end
+
+    test "A cycles assignee through Unassigned and members with wrap", %{
+      conn: conn,
+      user: user,
+      initiative: initiative,
+      t: t
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      select_task(view, t.id)
+
+      assert Tasks.get_task!(t.id).assignee_id == nil
+      adjust(view, "assignee", "up")
+      assert Tasks.get_task!(t.id).assignee_id == user.id
+      # only [Unassigned, owner] → wraps back to Unassigned
+      adjust(view, "assignee", "up")
+      assert Tasks.get_task!(t.id).assignee_id == nil
+    end
+
+    test "S opens the New Sibling form for the selected task's parent", %{
+      conn: conn,
+      user: user,
+      initiative: initiative,
+      t: t
+    } do
+      child = create_task(user, initiative, t, "child")
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      select_task(view, child.id)
+      render_hook(view, "kbd_new_sibling", %{})
+
+      # The add form is now open; creating from it lands a sibling under T.
+      render_hook(view, "create_task", %{"title" => "sib"})
+
+      titles = sibling_order(initiative.id, t.id)
+      assert child.id in titles
+      assert length(titles) == 2
+    end
+  end
+
   describe "delete initiative" do
     setup %{conn: conn} do
       {conn, user} = register_and_log_in(conn)

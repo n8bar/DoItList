@@ -211,4 +211,44 @@ li.drop-tail.is-over {
   box-shadow: inset 0 0 0 2px rgba(52, 211, 153, 0.85);
 }
 
+/* The Initiatives drag handle sits inside the card's link; suppress the iOS
+   long-press callout so tap-and-hold starts a drag instead of a link preview. */
+[phx-hook="InitiativeDrag"] {
+  -webkit-touch-callout: none;
+}
+
+/* .init-drop-placeholder: the before/after insertion marker while dragging to
+   reorder the Initiatives index (.06.3). */
+div.init-drop-placeholder {
+  height: 3px;
+  margin: -1px 0;
+  border-radius: 9999px;
+  background-color: rgba(16, 185, 129, 0.85); /* emerald-500 */
+}
+[data-theme=dark] div.init-drop-placeholder {
+  background-color: rgba(52, 211, 153, 0.9); /* emerald-400 */
+}
+
+/* Optimistic "saving" hue (.03.03.08): a faint, mostly-transparent pink on the
+   rows / containers whose order is being persisted. Added client-side the moment
+   a reorder/sort happens and cleared automatically when the authoritative
+   re-render lands (the server never emits the class, so morphdom strips it). */
+.is-saving {
+  background-color: rgba(236, 72, 153, 0.05) !important; /* pink-500 @ 5% */
+  transition: background-color 200ms ease;
+}
+[data-theme=dark] .is-saving {
+  background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
+}
+
+/* Debug ID pills (idclip easter egg). Hidden until the `debug-task-ids` class
+   is toggled onto <html> by the TaskKeys hook; then each task row shows a small
+   amber `#id` pill (parent id on hover) to diagnose drag/drop placement. */
+.task-id-pill {
+  display: none;
+}
+.debug-task-ids .task-id-pill {
+  display: inline-flex;
+}
+
 /* This file is for your main application CSS */

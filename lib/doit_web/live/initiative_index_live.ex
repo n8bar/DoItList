@@ -130,7 +130,7 @@ defmodule DoItWeb.InitiativeIndexLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
-      <div class="flex items-center justify-between mb-6">
+      <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
           <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Your initiatives</h1>
           <p class="text-sm text-zinc-500 dark:text-zinc-400">
@@ -140,16 +140,23 @@ defmodule DoItWeb.InitiativeIndexLive do
         <button
           type="button"
           phx-click="show_new"
-          class="px-3 py-2 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700"
+          class="w-fit self-center inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
         >
-          New initiative
+          <.icon name="hero-plus" class="w-4 h-4" />
+          <span>New Initiative</span>
         </button>
       </div>
 
       <%= if @show_form do %>
         <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-6">
           <.form :let={f} for={@form} phx-submit="create" class="space-y-3">
-            <.input field={f[:name]} type="text" label="Name" required />
+            <.input
+              field={f[:name]}
+              type="text"
+              label="Name"
+              required
+              phx-mounted={Phoenix.LiveView.JS.focus()}
+            />
             <.input field={f[:description]} type="textarea" label="Description (optional)" />
             <div class="flex justify-end gap-2">
               <button
@@ -192,13 +199,29 @@ defmodule DoItWeb.InitiativeIndexLive do
         <div
           :for={{dom_id, initiative} <- @streams.initiatives}
           id={dom_id}
+          data-initiative-id={initiative.id}
           class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
         >
-          <.link navigate={~p"/initiatives/#{initiative.id}"} class="block p-4">
+          <.link navigate={~p"/initiatives/#{initiative.id}"} draggable="false" class="block p-4">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
               <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
-                <span class="text-emerald-600 dark:text-emerald-400 flex-none" aria-hidden="true">
+                <span
+                  id={"init-drag-#{initiative.id}"}
+                  phx-hook="InitiativeDrag"
+                  data-id={initiative.id}
+                  aria-hidden="true"
+                  title="Drag to reorder"
+                  class="flex-none inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 cursor-grab active:cursor-grabbing touch-none select-none"
+                >
+                  <.icon
+                    name="hero-ellipsis-vertical"
+                    class="w-3 h-3 text-zinc-300 dark:text-zinc-600"
+                  />
                   <.botanical_icon kind={:grove} class="w-5 h-5" />
+                  <.icon
+                    name="hero-ellipsis-vertical"
+                    class="w-3 h-3 text-zinc-300 dark:text-zinc-600"
+                  />
                 </span>
                 <span class="truncate">{initiative.name}</span>
               </span>
@@ -230,6 +253,27 @@ defmodule DoItWeb.InitiativeIndexLive do
             >
               {initiative.description}
             </p>
+
+            <%!-- Rolled-up progress (the root task's computed progress), with the
+                 percentage centered inside the bar like the Initiative page. --%>
+            <div
+              class="relative mt-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+              role="progressbar"
+              aria-valuenow={initiative.progress || 0}
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-label={"Progress: #{initiative.progress || 0}%"}
+              style={"--progress: #{initiative.progress || 0}%"}
+            >
+              <div
+                class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+                style="width: var(--progress)"
+              >
+              </div>
+              <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+                {initiative.progress || 0}%
+              </span>
+            </div>
           </.link>
         </div>
       </div>
@@ -237,6 +281,20 @@ defmodule DoItWeb.InitiativeIndexLive do
       <p :if={@initiative_count == 0 and not @show_form} class="text-zinc-500 dark:text-zinc-400 mt-4">
         No initiatives yet. Create one to get started.
       </p>
+
+      <%!-- Desktop-only entry to the keyboard-shortcuts help (.07.2.1); hidden on
+           mobile, which won't use shortcuts. --%>
+      <div class="hidden sm:flex justify-center mt-10">
+        <button
+          type="button"
+          phx-click={Phoenix.LiveView.JS.dispatch("doit:shortcuts-toggle", to: "#shortcuts-overlay")}
+          class="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+        >
+          <.icon name="hero-command-line" class="w-4 h-4" /> Keyboard shortcuts
+        </button>
+      </div>
+
+      <.shortcuts_overlay />
     </Layouts.app>
     """
   end

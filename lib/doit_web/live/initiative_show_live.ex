@@ -40,6 +40,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:show_member_form, false)
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
+         |> assign(:last_selected_task_id, nil)
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
@@ -184,12 +185,78 @@ defmodule DoItWeb.InitiativeShowLive do
               socket
               |> assign(:editing_initiative?, false)
               |> assign(:selected_task_id, id)
+              |> assign(:last_selected_task_id, id)
               |> assign(:selected_task, task)
               |> assign(:comments, Tasks.list_comments(id))
               |> assign(:activity, Tasks.list_task_activity(id))
 
             {:noreply, push_focus(socket, focus)}
         end
+    end
+  end
+
+  # Keyboard: Enter toggles selection / pane. A selection → deselect (remember
+  # it as last). No selection → reselect the last task, or the first task if
+  # there's no history. Suppression (focus in a text field) is handled client-side.
+  def handle_event("kbd_select_toggle", _params, socket) do
+    if socket.assigns.selected_task_id do
+      {:noreply,
+       socket
+       |> assign(:last_selected_task_id, socket.assigns.selected_task_id)
+       |> assign(:selected_task_id, nil)
+       |> assign(:selected_task, nil)
+       |> assign(:comments, [])
+       |> assign(:activity, [])}
+    else
+      select_task_by_id(socket, socket.assigns.last_selected_task_id || first_task_id(socket))
+    end
+  end
+
+  # Keyboard: N — open the New Subtask form under the selected task.
+  def handle_event("kbd_new_subtask", _params, socket) do
+    cond do
+      is_nil(socket.assigns.selected_task_id) -> {:noreply, socket}
+      not socket.assigns.can_edit -> {:noreply, socket}
+      true -> {:noreply, show_add_for(socket, socket.assigns.selected_task_id)}
+    end
+  end
+
+  # Keyboard: S — open the New Sibling form for the selected task (same parent).
+  def handle_event("kbd_new_sibling", _params, socket) do
+    cond do
+      is_nil(socket.assigns.selected_task_id) ->
+        {:noreply, socket}
+
+      not socket.assigns.can_edit ->
+        {:noreply, socket}
+
+      true ->
+        task = socket.assigns.selected_task
+
+        {:noreply,
+         socket
+         |> assign(:add_task_for, task.parent_id || :root)
+         |> assign(:add_task_after, task.id)
+         |> assign(:new_task_title, "")}
+    end
+  end
+
+  # Keyboard: P / W / A — step priority / weight / assignee of the selected task.
+  def handle_event("kbd_adjust", %{"field" => field, "dir" => dir}, socket)
+      when field in ~w(priority weight assignee) and dir in ~w(up down) do
+    cond do
+      is_nil(socket.assigns.selected_task_id) -> {:noreply, socket}
+      not socket.assigns.can_edit -> {:noreply, socket}
+      true -> apply_kbd_adjust(socket, field, dir)
+    end
+  end
+
+  # Keyboard: Alt+P / Alt+W / Alt+A — focus that Details field for precise editing.
+  def handle_event("kbd_focus_field", %{"field" => field}, socket) do
+    cond do
+      is_nil(socket.assigns.selected_task_id) -> {:noreply, socket}
+      not socket.assigns.can_edit -> {:noreply, socket}
+      true -> {:noreply, push_focus(socket, field)}
     end
   end
 
@@ -473,14 +540,17 @@ defmodule DoItWeb.InitiativeShowLive do
         {:ok, %{scenario: nil}} ->
           case commit_move(socket, task, attrs) do
             {:ok, socket} ->
-              {:reply, %{ok: true}, socket}
+              {:reply, %{ok: true, committed: true}, socket}
 
             {:error, reason, socket} ->
               {:reply, %{ok: false, error: format_move_error(reason)}, socket}
           end
 
         {:ok, %{scenario: scenario, titles: titles}} ->
-          {:reply, %{ok: true},
+          # A completion-flip confirmation is required: the move is NOT yet
+          # persisted, so tell the client not to keep its optimistic placement
+          # (the confirm modal drives the real move). committed: false.
+          {:reply, %{ok: true, committed: false},
            assign(socket, :pending_action, %{
              kind: :move,
              task_id: task.id,
@@ -654,26 +724,106 @@ defmodule DoItWeb.InitiativeShowLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
-      <div
-        id="initiative-show-root"
-        phx-hook=".KbdAltArrowGuard"
-        phx-window-keydown="kbd_move"
-        phx-throttle="100"
-      >
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".KbdAltArrowGuard">
+      <div id="initiative-show-root" phx-hook=".TaskKeys">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
           export default {
             mounted() {
-              this._handler = (e) => {
-                if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown" ||
-                                 e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-                  e.preventDefault();
-                }
-              };
-              window.addEventListener("keydown", this._handler);
+              this._h = (e) => this.handle(e);
+              window.addEventListener("keydown", this._h);
             },
-            destroyed() {
-              window.removeEventListener("keydown", this._handler);
-            }
+            destroyed() { window.removeEventListener("keydown", this._h); },
+            updated() {
+              // After a keyboard-driven selection change, bring the selected
+              // row (not its subtree) into view if it isn't already.
+              if (this._scrollSelected) {
+                this._scrollSelected = false;
+                const li = document.querySelector("li[data-selected]");
+                if (li) (li.firstElementChild || li).scrollIntoView({block: "nearest"});
+              }
+            },
+            inField() {
+              const a = document.activeElement;
+              return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" ||
+                              a.tagName === "SELECT" || a.isContentEditable));
+            },
+            selectedId() {
+              const el = document.querySelector("li[data-selected]");
+              return el ? el.getAttribute("data-selected") : null;
+            },
+            handle(e) {
+              // Suppression: a text-accepting element has focus — fall through.
+              if (this.inField()) return;
+              const k = e.key;
+              // Easter egg (idclip — Doom's noclip): "see through" to each row's
+              // task/parent IDs as a debug pill. Type the code outside any field.
+              if (k.length === 1 && /[a-z]/i.test(k)) {
+                this._idbuf = ((this._idbuf || "") + k.toLowerCase()).slice(-6);
+                if (this._idbuf === "idclip") {
+                  this._idbuf = "";
+                  document.documentElement.classList.toggle("debug-task-ids");
+                  return;
+                }
+              }
+              if (k === "?") {
+                e.preventDefault();
+                const o = document.getElementById("shortcuts-overlay");
+                if (o) o.dispatchEvent(new CustomEvent("doit:shortcuts-toggle"));
+                return;
+              }
+              if (k === "Enter") {
+                e.preventDefault();
+                this._scrollSelected = true;
+                this.pushEvent("kbd_select_toggle", {});
+                return;
+              }
+              const sel = this.selectedId();
+              if (!sel) return; // every other shortcut needs a selected task
+              if (k === " ") {
+                e.preventDefault();
+                const btn = document.getElementById("collapse-" + sel);
+                if (btn) btn.click();
+                return;
+              }
+              if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
+                e.preventDefault();
+                if (e.altKey) { this.pushEvent("kbd_move", {key: k, altKey: true}); return; }
+                const id = this.navTarget(sel, k);
+                if (id) { this._scrollSelected = true; this.pushEvent("select_task", {id: id}); }
+                return;
+              }
+              if (k === "n" || k === "N") { e.preventDefault(); this.pushEvent("kbd_new_subtask", {}); return; }
+              if (k === "s" || k === "S") { e.preventDefault(); this.pushEvent("kbd_new_sibling", {}); return; }
+              // P / W / A: Alt focuses the field for precise editing; plain steps
+              // the value up, Shift steps it down.
+              const field = k.length === 1 && {p: "priority", w: "weight", a: "assignee"}[k.toLowerCase()];
+              if (field) {
+                e.preventDefault();
+                if (e.altKey) { this.pushEvent("kbd_focus_field", {field: field}); return; }
+                this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up"});
+                return;
+              }
+            },
+            visibleRows() {
+              return [...document.querySelectorAll("li[data-task-id]")]
+                .filter((li) => !li.closest("ul.collapsed-peek"));
+            },
+            navTarget(sel, key) {
+              const cur = document.querySelector(`li[data-task-id="${sel}"]`);
+              if (!cur) return null;
+              if (key === "ArrowUp" || key === "ArrowDown") {
+                const rows = this.visibleRows();
+                const j = rows.indexOf(cur) + (key === "ArrowUp" ? -1 : 1);
+                return rows[j] ? rows[j].dataset.taskId : null;
+              }
+              if (key === "ArrowLeft") {
+                const p = cur.parentElement && cur.parentElement.closest("li[data-task-id]");
+                return p ? p.dataset.taskId : null;
+              }
+              const ul = cur.querySelector(":scope > ul[id^='children-']");
+              if (!ul || ul.classList.contains("collapsed-peek")) return null;
+              const first = ul.querySelector(":scope > li[data-task-id]");
+              return first ? first.dataset.taskId : null;
+            },
           }
         </script>
         <div class="relative mb-6 pb-6">
@@ -834,12 +984,16 @@ defmodule DoItWeb.InitiativeShowLive do
           >
           </div>
 
-          <aside class={[
-            "space-y-4",
-            (@selected_task_id || @editing_initiative?) &&
-              "fixed lg:static inset-y-0 right-0 z-30 w-full sm:w-96 lg:w-auto bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
-            !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
-          ]}>
+          <aside class={
+            [
+              "space-y-4",
+              # Mobile: flyout overlay. Desktop: sticky to the top of <main>, scrolls
+              # its own contents (.03.07.01) — self-start + max-h give sticky room.
+              (@selected_task_id || @editing_initiative?) &&
+                "fixed lg:sticky top-0 bottom-0 lg:bottom-auto right-0 z-30 w-full sm:w-96 lg:w-auto lg:self-start lg:max-h-[calc(100dvh-4rem)] bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
+              !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
+            ]
+          }>
             <div class="lg:hidden flex justify-end">
               <button
                 type="button"
@@ -894,8 +1048,42 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
+      <.shortcuts_overlay />
     </Layouts.app>
     """
+  end
+
+  defp select_task_by_id(socket, nil), do: {:noreply, socket}
+
+  defp select_task_by_id(socket, id) do
+    case Tasks.get_task_with_relations(id) do
+      nil ->
+        {:noreply, socket}
+
+      task ->
+        {:noreply,
+         socket
+         |> assign(:editing_initiative?, false)
+         |> assign(:selected_task_id, id)
+         |> assign(:last_selected_task_id, id)
+         |> assign(:selected_task, task)
+         |> assign(:comments, Tasks.list_comments(id))
+         |> assign(:activity, Tasks.list_task_activity(id))}
+    end
+  end
+
+  defp show_add_for(socket, parent_id) do
+    socket
+    |> assign(:add_task_for, parent_id)
+    |> assign(:add_task_after, parent_id)
+    |> assign(:new_task_title, "")
+  end
+
+  defp first_task_id(socket) do
+    case socket.assigns.tree do
+      [%{id: id} | _] -> id
+      _ -> nil
+    end
   end
 
   # Whitelist the field so a client can't push an arbitrary DOM id to focus.
@@ -904,6 +1092,56 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp push_focus(socket, _field), do: socket
+
+  # Persist a single-field keyboard step (P/W/A), then re-render the tree + pane.
+  defp apply_kbd_adjust(socket, field, dir) do
+    task = socket.assigns.selected_task
+    params = adjust_params(field, dir, task, socket.assigns.members)
+
+    case Tasks.update_task(task, socket.assigns.current_user, params) do
+      {:ok, _updated} ->
+        {:noreply, socket |> load_tree() |> refresh_selected()}
+
+      {:error, cs} ->
+        {:noreply, put_flash(socket, :error, "Couldn't update task: #{summarize_errors(cs)}.")}
+    end
+  end
+
+  defp adjust_params("priority", dir, task, _members),
+    do: %{"priority" => step_priority(task.priority, dir)}
+
+  defp adjust_params("weight", dir, task, _members),
+    do: %{"weight" => Decimal.to_string(step_weight(task.weight, dir))}
+
+  defp adjust_params("assignee", dir, task, members),
+    do: %{"assignee_id" => step_assignee(task.assignee_id, dir, members)}
+
+  # Priority order is low → normal → high; "up" moves toward high, clamped at
+  # both ends (no wrap).
+  defp step_priority(current, dir) do
+    order = DoIt.Tasks.Task.priorities()
+    i = Enum.find_index(order, &(&1 == current)) || 0
+    next = if dir == "up", do: i + 1, else: i - 1
+    Enum.at(order, max(0, min(next, length(order) - 1)))
+  end
+
+  # Weight steps by whole units; no upper wrap, floored at 1 on the way down.
+  defp step_weight(weight, "up"), do: Decimal.add(weight, 1)
+  defp step_weight(weight, "down"), do: Decimal.max(Decimal.new(1), Decimal.sub(weight, 1))
+
+  # Assignee cycles [Unassigned | members…] with wrap in both directions; an
+  # empty string is the "unassigned" param value for the changeset.
+  defp step_assignee(current, dir, members) do
+    ids = [nil | Enum.map(members, & &1.user.id)]
+    i = Enum.find_index(ids, &(&1 == current)) || 0
+    n = length(ids)
+    next = if dir == "up", do: rem(i + 1, n), else: rem(i - 1 + n, n)
+
+    case Enum.at(ids, next) do
+      nil -> ""
+      id -> to_string(id)
+    end
+  end
 
   defp pending_verb(%{kind: :create}), do: "new task"
   defp pending_verb(%{kind: :move}), do: "move"
@@ -993,6 +1231,7 @@ defmodule DoItWeb.InitiativeShowLive do
     <li
       id={"task-#{@task.id}"}
       data-task-id={@task.id}
+      data-selected={@selected_id == @task.id && @task.id}
       data-depth={@depth}
       class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500"
     >
@@ -1040,13 +1279,22 @@ defmodule DoItWeb.InitiativeShowLive do
              three live in a min-w-0 overflow-hidden group so they clip together
              (rightmost first) instead of wrapping Row 1 when depth narrows it. --%>
         <div class="flex flex-1 items-center gap-2 min-w-0 overflow-hidden">
+          <%!-- Debug-only ID pill (idclip easter egg). Hidden unless the
+               `debug-task-ids` class is toggled on; shows this task's id and,
+               on hover, its parent id — for diagnosing drag/drop placement. --%>
+          <span
+            class="task-id-pill items-center justify-center h-5 px-1.5 rounded-full text-xs flex-none font-mono bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+            title={"parent #{@task.parent_id}"}
+          >
+            {"#" <> Integer.to_string(@task.id)}
+          </span>
           <button
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
             phx-value-focus="priority"
             class={[
-              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
+              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
               if(@task.priority == "normal",
                 do: "border border-dashed border-zinc-300 dark:border-zinc-600",
                 else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
@@ -1062,7 +1310,7 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-value-id={@task.id}
             phx-value-focus="weight"
             class={[
-              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded text-xs flex-none cursor-pointer",
+              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
               if(Decimal.equal?(@task.weight, Decimal.new(1)),
                 do: "border border-dashed border-zinc-300 dark:border-zinc-600",
                 else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
@@ -1079,7 +1327,7 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-value-id={@task.id}
             phx-value-focus="assignee"
             class={[
-              "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded text-xs flex-none cursor-pointer",
+              "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded-full text-xs flex-none cursor-pointer",
               if(@task.assignee_id && @task.assignee,
                 do: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300",
                 else: "border border-dashed border-zinc-300 dark:border-zinc-600"
@@ -1111,7 +1359,10 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               <.icon name="hero-plus" class="w-4 h-4" />
               <span class="hidden sm:inline">
-                {if(@depth == 0, do: "New Task", else: "New Subtask")}
+                <span class={@selected_id == @task.id && "underline"}>N</span>{if(@depth == 0,
+                  do: "ew Task",
+                  else: "ew Subtask"
+                )}
               </span>
             </button>
             <button
@@ -1138,7 +1389,7 @@ defmodule DoItWeb.InitiativeShowLive do
               phx-value-task={@task.id}
               class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              + Add Sibling
+              + Add <span class={@selected_id == @task.id && "underline"}>S</span>ibling
             </button>
           </div>
         </div>
@@ -1287,7 +1538,7 @@ defmodule DoItWeb.InitiativeShowLive do
         type="text"
         name="title"
         required
-        autofocus
+        phx-mounted={Phoenix.LiveView.JS.focus()}
         placeholder={if(@parent_id, do: "New subtask...", else: "New list / root task...")}
         class="flex-1 input input-bordered input-sm"
       />
@@ -1425,6 +1676,7 @@ defmodule DoItWeb.InitiativeShowLive do
             placeholder="email@example.com"
             aria-label="Member email"
             required
+            phx-mounted={Phoenix.LiveView.JS.focus()}
             class="w-full input input-bordered input-sm"
           />
           <select name="role" aria-label="Member role" class="w-full select select-bordered select-sm">
@@ -1578,7 +1830,9 @@ defmodule DoItWeb.InitiativeShowLive do
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">Priority</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+              <span class={@can_edit && "underline"}>P</span>riority
+            </label>
             <select
               id="task-field-priority"
               name="task[priority]"
@@ -1595,7 +1849,9 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">Weight</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+              <span class={@can_edit && "underline"}>W</span>eight
+            </label>
             <input
               id="task-field-weight"
               type="number"
@@ -1609,7 +1865,9 @@ defmodule DoItWeb.InitiativeShowLive do
             />
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">Assignee</label>
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+              <span class={@can_edit && "underline"}>A</span>ssignee
+            </label>
             <select
               id="task-field-assignee"
               name="task[assignee_id]"
