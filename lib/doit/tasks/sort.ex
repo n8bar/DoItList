@@ -26,6 +26,12 @@ defmodule DoIt.Tasks.Sort do
 
   @sort_gap 1000
 
+  # Modes with a real comparator. Anything outside this set (e.g. a `sort_mode`
+  # left over from a renamed/removed scheme) is treated as manual rather than
+  # allowed to crash the caller's transaction — a stray value must never take
+  # down a move or resort.
+  @known_modes ~w(alphabetical completion computed_progress priority created updated)
+
   def sort_gap, do: @sort_gap
 
   @doc "Reorder `children` by `mode` (optionally reversed) and stamp new `sort_order` values."
@@ -33,13 +39,15 @@ defmodule DoIt.Tasks.Sort do
 
   def apply([], _mode, _reverse?), do: []
   def apply([_one] = list, _mode, _reverse?), do: list
-  def apply(children, "manual", _reverse?), do: children
 
-  def apply(children, mode, reverse?) when is_list(children) do
+  def apply(children, mode, reverse?) when mode in @known_modes and is_list(children) do
     children
     |> Enum.sort(&compare(&1, &2, mode, reverse?))
     |> renumber()
   end
+
+  # "manual" and any unrecognized mode: keep the existing order untouched.
+  def apply(children, _mode, _reverse?) when is_list(children), do: children
 
   defp renumber(children) do
     children

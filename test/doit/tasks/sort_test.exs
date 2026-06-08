@@ -49,6 +49,16 @@ defmodule DoIt.Tasks.SortTest do
       # reverse? has no effect on manual.
       assert Sort.apply([a, b, c], "manual", true) == [a, b, c]
     end
+
+    test "an unknown/legacy mode is treated as manual (no crash, order preserved)" do
+      a = task(1, title: "Z", sort_order: 999)
+      b = task(2, title: "A", sort_order: 1)
+
+      # A stray value (e.g. a sort_mode left over from a renamed scheme) must
+      # never crash the sort engine — it degrades to manual.
+      assert Sort.apply([a, b], "status") == [a, b]
+      assert Sort.apply([a, b], "bogus", true) == [a, b]
+    end
   end
 
   describe "apply/3 — alphabetical" do
