@@ -114,6 +114,15 @@ window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren,
 
 // Pink-on-interaction wiring for the click / change write paths.
 document.addEventListener("click", (e) => {
+  // Modal "Delete" Proceed (.03.01.11): optimistically drop the row + subtree
+  // now and pink the surviving ancestors; the form submit (confirm_pending)
+  // still fires, and a failed write re-inserts the row via morphdom. No return —
+  // the submit must proceed.
+  const del = e.target.closest("[data-optimistic-remove]")
+  if (del) {
+    const li = document.getElementById("task-" + del.dataset.optimisticRemove)
+    if (li) { markSaving(savingAncestors(li)); li.remove() }
+  }
   // Completion toggle (leaf or branch) — pink the toggled row + its subtree +
   // the ancestor chain whose progress / status recomputes.
   const toggle = e.target.closest("[data-complete-toggle]")
@@ -147,22 +156,19 @@ document.addEventListener("change", (e) => {
   }
 })
 
-// Delete the selected task with optimistic removal (.03.03.08): confirm, then
-// drop the row + its subtree from the DOM immediately and pink the surviving
-// ancestor chain while progress recomputes. A failed write leaves the server
-// tree unchanged, so the authoritative re-render re-inserts the row (morphdom
-// matches it by id). Owns its own confirm so the Del key (which clicks this
-// button) is gated too.
-Hooks.DeleteTask = {
+// Confirmation suppression (.03.01.11): read the per-class skip flags from
+// localStorage on mount and push them to the LiveView; persist a flag when the
+// server reports a "Don't show this again" box was checked on Proceed.
+const CONFIRM_CLASSES = ["completion-flip", "cascade-sort", "cascade-complete"]
+Hooks.ConfirmSkips = {
   mounted() {
-    this.el.addEventListener("click", () => {
-      if (!window.confirm("Delete this task and all its children?")) return
-      const li = this.el.dataset.taskId && document.getElementById("task-" + this.el.dataset.taskId)
-      if (li) {
-        markSaving(savingAncestors(li))
-        li.remove()
-      }
-      this.pushEvent("delete_task", {})
+    ensureStorageVersion("doit:confirm-skip", 1)
+    const skipped = CONFIRM_CLASSES.filter(
+      (c) => localStorage.getItem("doit:confirm-skip:" + c) === "1"
+    )
+    this.pushEvent("confirm_skips_loaded", {classes: skipped})
+    this.handleEvent("persist-confirm-skip", (payload) => {
+      localStorage.setItem("doit:confirm-skip:" + payload.class, "1")
     })
   },
 }

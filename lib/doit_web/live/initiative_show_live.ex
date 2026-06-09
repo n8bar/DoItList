@@ -47,6 +47,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:add_task_after, nil)
          |> assign(:new_task_title, "")
          |> assign(:pending_action, nil)
+         |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
     end
   end
@@ -79,6 +80,12 @@ defmodule DoItWeb.InitiativeShowLive do
   # --- Events ----------------------------------------------------------------
 
   @impl true
+  # Confirmation suppression (.03.01.11): the ConfirmSkips hook reads the
+  # per-class skip flags from localStorage on mount and pushes them here.
+  def handle_event("confirm_skips_loaded", %{"classes" => classes}, socket) do
+    {:noreply, assign(socket, :confirm_skips, MapSet.new(classes))}
+  end
+
   def handle_event("show_add_root", _params, socket) do
     {:noreply,
      socket
@@ -142,13 +149,17 @@ defmodule DoItWeb.InitiativeShowLive do
           {:noreply, commit_create(socket, attrs)}
 
         {:ok, %{scenario: scenario, titles: titles}} ->
-          {:noreply,
-           assign(socket, :pending_action, %{
-             kind: :create,
-             attrs: attrs,
-             scenario: scenario,
-             titles: titles
-           })}
+          if skip_confirm?(socket, "completion-flip") do
+            {:noreply, commit_create(socket, attrs)}
+          else
+            {:noreply,
+             assign(socket, :pending_action, %{
+               kind: :create,
+               attrs: attrs,
+               scenario: scenario,
+               titles: titles
+             })}
+          end
 
         {:error, cs} ->
           {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
@@ -300,16 +311,12 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("delete_initiative", _params, socket) do
+  def handle_event("request_delete_initiative", _params, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can delete this initiative.")}
     else
-      {:ok, _} = Initiatives.delete_initiative(socket.assigns.initiative)
-
       {:noreply,
-       socket
-       |> put_flash(:info, "Initiative deleted.")
-       |> push_navigate(to: ~p"/initiatives")}
+       assign(socket, :pending_action, %{kind: :delete_initiative, title: socket.assigns.initiative.name})}
     end
   end
 
@@ -377,14 +384,15 @@ defmodule DoItWeb.InitiativeShowLive do
       task = socket.assigns.selected_task
       branch_count = 1 + Tasks.count_descendant_branches(task.id)
 
-      if branch_count > 10 do
+      if branch_count > 10 and not skip_confirm?(socket, "cascade-sort") do
         {:noreply,
          assign(socket, :pending_action, %{
            kind: :cascade_sort,
            task_id: task.id,
            mode: task.sort_mode,
            reverse: task.sort_reverse,
-           branch_count: branch_count
+           branch_count: branch_count,
+           affected: Tasks.count_descendants(task.id)
          })}
       else
         {:noreply, commit_cascade_sort(socket, task, task.sort_mode, task.sort_reverse)}
@@ -451,39 +459,13 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("cascade_complete", %{"id" => id}, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
-    else
-      task = Tasks.get_task!(String.to_integer(id))
-      user = socket.assigns.current_user
+  # Branch checkbox (.03.01.11): confirm via the styled modal unless the
+  # "branch completion changes" class is suppressed, in which case cascade now.
+  def handle_event("cascade_complete", %{"id" => id}, socket),
+    do: request_cascade(socket, String.to_integer(id), :cascade_complete)
 
-      case Tasks.cascade_complete(task, user) do
-        {:ok, _} ->
-          {:noreply, socket |> load_tree() |> refresh_selected()}
-
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
-      end
-    end
-  end
-
-  def handle_event("cascade_incomplete", %{"id" => id}, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
-    else
-      task = Tasks.get_task!(String.to_integer(id))
-      user = socket.assigns.current_user
-
-      case Tasks.cascade_incomplete(task, user) do
-        {:ok, _} ->
-          {:noreply, socket |> load_tree() |> refresh_selected()}
-
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't cascade: #{summarize_errors(cs)}.")}
-      end
-    end
-  end
+  def handle_event("cascade_incomplete", %{"id" => id}, socket),
+    do: request_cascade(socket, String.to_integer(id), :cascade_incomplete)
 
   def handle_event("add_comment", %{"comment" => %{"body" => body}}, socket) do
     if not socket.assigns.can_edit do
@@ -499,24 +481,18 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("delete_task", _params, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
-    else
-      task = socket.assigns.selected_task
-      user = socket.assigns.current_user
+  # Delete (.03.01.11): always confirm via the styled modal (not suppressible).
+  def handle_event("request_delete_task", _params, socket) do
+    cond do
+      not socket.assigns.can_edit ->
+        {:noreply, put_flash(socket, :error, "You don't have permission.")}
 
-      case Tasks.delete_task(task, user) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> assign(:selected_task_id, nil)
-           |> put_flash(:info, "Task deleted.")
-           |> load_tree()}
+      is_nil(socket.assigns.selected_task_id) ->
+        {:noreply, socket}
 
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't delete task: #{summarize_errors(cs)}.")}
-      end
+      true ->
+        task = socket.assigns.selected_task
+        {:noreply, assign(socket, :pending_action, %{kind: :delete_task, task_id: task.id, title: task.title})}
     end
   end
 
@@ -547,17 +523,25 @@ defmodule DoItWeb.InitiativeShowLive do
           end
 
         {:ok, %{scenario: scenario, titles: titles}} ->
-          # A completion-flip confirmation is required: the move is NOT yet
-          # persisted, so tell the client not to keep its optimistic placement
-          # (the confirm modal drives the real move). committed: false.
-          {:reply, %{ok: true, committed: false},
-           assign(socket, :pending_action, %{
-             kind: :move,
-             task_id: task.id,
-             attrs: attrs,
-             scenario: scenario,
-             titles: titles
-           })}
+          if skip_confirm?(socket, "completion-flip") do
+            # Suppressed: commit straight through, no modal.
+            case commit_move(socket, task, attrs) do
+              {:ok, socket} -> {:reply, %{ok: true, committed: true}, socket}
+              {:error, reason, socket} -> {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+            end
+          else
+            # A completion-flip confirmation is required: the move is NOT yet
+            # persisted, so tell the client not to keep its optimistic placement
+            # (the confirm modal drives the real move). committed: false.
+            {:reply, %{ok: true, committed: false},
+             assign(socket, :pending_action, %{
+               kind: :move,
+               task_id: task.id,
+               attrs: attrs,
+               scenario: scenario,
+               titles: titles
+             })}
+          end
 
         {:error, reason} ->
           {:reply, %{ok: false, error: format_move_error(reason)},
@@ -566,26 +550,38 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("confirm_pending", _params, socket) do
-    case socket.assigns.pending_action do
-      %{kind: :move, task_id: task_id, attrs: attrs} ->
-        task = Tasks.get_task!(task_id)
+  def handle_event("confirm_pending", params, socket) do
+    pending = socket.assigns.pending_action
+    socket = maybe_suppress(socket, pending, params)
 
-        case commit_move(socket, task, attrs) do
-          {:ok, socket} -> {:noreply, socket}
-          {:error, _reason, socket} -> {:noreply, socket}
-        end
+    socket =
+      case pending do
+        %{kind: :move, task_id: task_id, attrs: attrs} ->
+          case commit_move(socket, Tasks.get_task!(task_id), attrs) do
+            {:ok, socket} -> socket
+            {:error, _reason, socket} -> socket
+          end
 
-      %{kind: :create, attrs: attrs} ->
-        {:noreply, commit_create(socket, attrs)}
+        %{kind: :create, attrs: attrs} ->
+          commit_create(socket, attrs)
 
-      %{kind: :cascade_sort, task_id: task_id, mode: mode, reverse: reverse} ->
-        task = Tasks.get_task!(task_id)
-        {:noreply, commit_cascade_sort(socket, task, mode, reverse)}
+        %{kind: :cascade_sort, task_id: task_id, mode: mode, reverse: reverse} ->
+          commit_cascade_sort(socket, Tasks.get_task!(task_id), mode, reverse)
 
-      _ ->
-        {:noreply, socket}
-    end
+        %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
+          commit_cascade(socket, id, kind)
+
+        %{kind: :delete_task, task_id: id} ->
+          commit_delete_task(socket, id)
+
+        %{kind: :delete_initiative} ->
+          commit_delete_initiative(socket)
+
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("cancel_pending", _params, socket) do
@@ -682,6 +678,81 @@ defmodule DoItWeb.InitiativeShowLive do
         socket
         |> assign(:pending_action, nil)
         |> put_flash(:error, "Couldn't apply sort to descendants.")
+    end
+  end
+
+  # Branch checkbox: open the modal unless suppressed, else cascade now.
+  defp request_cascade(socket, id, kind) do
+    cond do
+      not socket.assigns.can_edit ->
+        {:noreply, put_flash(socket, :error, "You don't have permission.")}
+
+      skip_confirm?(socket, "cascade-complete") ->
+        {:noreply, commit_cascade(socket, id, kind)}
+
+      true ->
+        task = Tasks.get_task!(id)
+        {:noreply, assign(socket, :pending_action, %{kind: kind, task_id: id, title: task.title})}
+    end
+  end
+
+  defp commit_cascade(socket, id, kind) do
+    task = Tasks.get_task!(id)
+    user = socket.assigns.current_user
+
+    result =
+      case kind do
+        :cascade_complete -> Tasks.cascade_complete(task, user)
+        :cascade_incomplete -> Tasks.cascade_incomplete(task, user)
+      end
+
+    case result do
+      {:ok, _} ->
+        socket |> assign(:pending_action, nil) |> load_tree() |> refresh_selected()
+
+      {:error, cs} ->
+        socket
+        |> assign(:pending_action, nil)
+        |> put_flash(:error, "Couldn't cascade: #{summarize_errors(cs)}.")
+    end
+  end
+
+  defp commit_delete_task(socket, id) do
+    case Tasks.delete_task(Tasks.get_task!(id), socket.assigns.current_user) do
+      {:ok, _} ->
+        socket
+        |> assign(:pending_action, nil)
+        |> assign(:selected_task_id, nil)
+        |> assign(:selected_task, nil)
+        |> put_flash(:info, "Task deleted.")
+        |> load_tree()
+
+      {:error, cs} ->
+        socket
+        |> assign(:pending_action, nil)
+        |> put_flash(:error, "Couldn't delete task: #{summarize_errors(cs)}.")
+    end
+  end
+
+  defp commit_delete_initiative(socket) do
+    {:ok, _} = Initiatives.delete_initiative(socket.assigns.initiative)
+
+    socket
+    |> put_flash(:info, "Initiative deleted.")
+    |> push_navigate(to: ~p"/initiatives")
+  end
+
+  # If "Don't show this again" was checked, remember the class server-side and
+  # tell the client to persist it to localStorage.
+  defp maybe_suppress(socket, pending, params) do
+    class = pending && confirm_class(pending)
+
+    if class && params["dont_show"] in ["true", "on"] do
+      socket
+      |> assign(:confirm_skips, MapSet.put(socket.assigns.confirm_skips, class))
+      |> push_event("persist-confirm-skip", %{class: class})
+    else
+      socket
     end
   end
 
@@ -1065,6 +1136,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
+      <div id="confirm-skips" phx-hook="ConfirmSkips" hidden></div>
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.shortcuts_overlay />
     </Layouts.app>
@@ -1165,19 +1237,49 @@ defmodule DoItWeb.InitiativeShowLive do
   defp pending_verb(%{kind: :move}), do: "move"
   defp pending_verb(_), do: "change"
 
+  # Confirmation classes (.03.01.11). A suppressible pending action maps to a
+  # class with its own localStorage skip key + checkbox label; deletes → nil
+  # (a destructive action always confirms).
+  defp confirm_class(%{kind: kind}) when kind in [:move, :create], do: "completion-flip"
+  defp confirm_class(%{kind: :cascade_sort}), do: "cascade-sort"
+
+  defp confirm_class(%{kind: kind}) when kind in [:cascade_complete, :cascade_incomplete],
+    do: "cascade-complete"
+
+  defp confirm_class(_), do: nil
+
+  defp confirm_class_label("completion-flip"), do: "completion changes"
+  defp confirm_class_label("cascade-sort"), do: "large branch reorgs"
+  defp confirm_class_label("cascade-complete"), do: "branch completion changes"
+
+  defp skip_confirm?(socket, class),
+    do: not is_nil(class) and MapSet.member?(socket.assigns.confirm_skips, class)
+
   attr :pending, :map, default: nil
   attr :verb, :string, default: "change"
 
   defp completion_confirm(assigns) do
+    pending = assigns.pending
+
+    assigns =
+      assigns
+      |> assign(:class, pending && confirm_class(pending))
+      |> assign(:destructive, pending && Map.get(pending, :kind) in [:delete_task, :delete_initiative])
+      |> assign(
+        :optimistic_remove,
+        pending && Map.get(pending, :kind) == :delete_task && Map.get(pending, :task_id)
+      )
+
     ~H"""
     <div
       :if={@pending}
       id="completion-confirm"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
     >
-      <div
-        class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900"
+      <form
+        phx-submit="confirm_pending"
         phx-click-away="cancel_pending"
+        class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900"
       >
         <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
           {confirm_title(@pending)}
@@ -1191,6 +1293,13 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <li :for={title <- @pending.titles} class="truncate">{title}</li>
         </ul>
+        <label
+          :if={@class}
+          class="mt-4 flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 select-none"
+        >
+          <input type="checkbox" name="dont_show" value="true" class="checkbox checkbox-sm" />
+          Don't show this again for {confirm_class_label(@class)}
+        </label>
         <div class="mt-5 flex justify-end gap-2">
           <button
             type="button"
@@ -1200,25 +1309,45 @@ defmodule DoItWeb.InitiativeShowLive do
             Cancel
           </button>
           <button
-            type="button"
-            phx-click="confirm_pending"
-            class="rounded bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-700"
+            type="submit"
+            data-optimistic-remove={@optimistic_remove}
+            class={[
+              "rounded px-3 py-1.5 text-sm font-medium text-white",
+              @destructive && "bg-red-600 hover:bg-red-700",
+              !@destructive && "bg-emerald-600 hover:bg-emerald-700"
+            ]}
           >
-            Proceed
+            {if @destructive, do: "Delete", else: "Proceed"}
           </button>
         </div>
-      </div>
+      </form>
     </div>
     """
   end
 
-  defp confirm_title(%{kind: :cascade_sort}), do: "Apply sort to all descendants"
+  defp confirm_title(%{kind: :cascade_sort}), do: "Large branch reorg"
+  defp confirm_title(%{kind: :cascade_complete}), do: "Complete this branch?"
+  defp confirm_title(%{kind: :cascade_incomplete}), do: "Reopen this branch?"
+  defp confirm_title(%{kind: :delete_task}), do: "Delete task"
+  defp confirm_title(%{kind: :delete_initiative}), do: "Delete initiative"
   defp confirm_title(_), do: "Confirm completion change"
 
-  defp confirm_body(%{kind: :cascade_sort, branch_count: n}, _verb) do
-    "This will overwrite the sort settings on #{n} descendant branch(es). " <>
-      "The change is only reversible via Undo (Arc 5)."
+  defp confirm_body(%{kind: :cascade_sort, affected: n}, _verb) do
+    "This is a large branch reorg affecting #{n} task(s). It overwrites the sort " <>
+      "settings on every descendant branch; reversible only via Undo (Arc 5)."
   end
+
+  defp confirm_body(%{kind: :cascade_complete, title: t}, _verb),
+    do: "Mark \"#{t}\" and all its subtasks complete?"
+
+  defp confirm_body(%{kind: :cascade_incomplete, title: t}, _verb),
+    do: "Reopen \"#{t}\" and all its subtasks?"
+
+  defp confirm_body(%{kind: :delete_task, title: t}, _verb),
+    do: "Delete \"#{t}\" and all its subtasks? This can't be undone."
+
+  defp confirm_body(%{kind: :delete_initiative, title: t}, _verb),
+    do: "Delete \"#{t}\" and everything in it? This can't be undone."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -1447,13 +1576,6 @@ defmodule DoItWeb.InitiativeShowLive do
             }
             phx-value-id={@task.id}
             data-complete-toggle
-            data-confirm={
-              cond do
-                @task.children == [] -> nil
-                @task.status == "done" -> "Uncheck this task and all its children?"
-                true -> "Mark this task and all its children completed?"
-              end
-            }
             aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
             aria-pressed={@task.status == "done"}
             class={[
@@ -1652,11 +1774,10 @@ defmodule DoItWeb.InitiativeShowLive do
       <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <button
           type="button"
-          phx-click="delete_initiative"
-          data-confirm={"Delete the initiative \"#{@initiative.name}\" and everything in it? This can't be undone."}
-          class="text-xs text-red-600 hover:underline"
+          phx-click="request_delete_initiative"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
         >
-          Delete initiative
+          <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete initiative
         </button>
       </div>
     </div>
@@ -1973,8 +2094,7 @@ defmodule DoItWeb.InitiativeShowLive do
             :if={@can_edit}
             id="delete-task-btn"
             type="button"
-            phx-hook="DeleteTask"
-            data-task-id={@task.id}
+            phx-click="request_delete_task"
             class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
           >
             <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete

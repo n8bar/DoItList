@@ -891,6 +891,11 @@ defmodule DoIt.Tasks do
     length(descendant_branches(task_id))
   end
 
+  @doc "Count all descendant tasks of `task_id` (the whole subtree below it)."
+  def count_descendants(task_id) when is_integer(task_id) do
+    length(list_descendants(task_id))
+  end
+
   # All descendants of `task_id` that are themselves parents (have children).
   # Returned as full task structs ordered by id for stable iteration.
   defp descendant_branches(task_id) do

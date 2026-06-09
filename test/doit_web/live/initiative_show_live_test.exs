@@ -423,7 +423,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       # Not yet committed: still under P, confirm modal showing.
       assert Tasks.get_task!(c2.id).parent_id == p.id
-      assert has_element?(view, "button[phx-click=confirm_pending]")
+      assert has_element?(view, "form[phx-submit=confirm_pending]")
 
       render_click(view, "confirm_pending", %{})
 
@@ -539,10 +539,13 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       {:ok, view, _html} = live(conn, open_path(initiative))
       render_click(view, "edit_initiative", %{})
 
-      assert has_element?(view, "button[phx-click=delete_initiative]")
+      # Delete now opens the styled confirm modal; Proceed redirects.
+      assert has_element?(view, "button[phx-click=request_delete_initiative]")
+      render_click(view, "request_delete_initiative", %{})
+      assert has_element?(view, "form[phx-submit=confirm_pending]")
 
       assert {:error, {:live_redirect, %{to: to}}} =
-               view |> element("button[phx-click=delete_initiative]") |> render_click()
+               render_click(view, "confirm_pending", %{})
 
       assert to == ~p"/initiatives"
       refute Initiatives.get_initiative(initiative.id)
