@@ -679,6 +679,24 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "cascade_complete reconciles ancestors upward" do
+    test "marking a branch done auto-checks its now-complete parent", %{
+      user: user,
+      initiative: initiative
+    } do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      branch = new_task(user, initiative, %{"parent_id" => parent.id, "title" => "B"})
+      new_task(user, initiative, %{"parent_id" => branch.id, "title" => "b1"})
+      new_task(user, initiative, %{"parent_id" => branch.id, "title" => "b2"})
+
+      {:ok, _} = Tasks.cascade_complete(Tasks.get_task!(branch.id), user)
+
+      parent = Tasks.get_task!(parent.id)
+      assert parent.status == "done"
+      assert parent.computed_progress == 100
+    end
+  end
+
   describe "resolve_sort/1" do
     # Persist sort fields directly via Repo.update so the helper actually
     # sees them — set_sort/4 is exercised in its own context tests.

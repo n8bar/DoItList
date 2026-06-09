@@ -763,8 +763,13 @@ defmodule DoIt.Tasks do
 
         case update_task(task, actor, %{"status" => status}) do
           {:ok, updated} ->
+            # Reconcile the ancestor chain both ways, mirroring the leaf toggle:
+            # marking a branch done may complete its now-fully-done parent;
+            # reopening it may invalidate a done ancestor.
             if status == "open" do
               uncheck_done_ancestors(updated.parent_id, actor)
+            else
+              check_completed_ancestors(updated.parent_id, actor)
             end
 
             updated
