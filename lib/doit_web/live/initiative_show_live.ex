@@ -786,7 +786,12 @@ defmodule DoItWeb.InitiativeShowLive do
               }
               if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
                 e.preventDefault();
-                if (e.altKey) { this.pushEvent("kbd_move", {key: k, altKey: true}); return; }
+                if (e.altKey) {
+                  const S = window.DoitSaving, li = S && S.selectedLi();
+                  if (li) S.markSaving([S.savingRowOf(li), ...S.savingAncestors(li)]);
+                  this.pushEvent("kbd_move", {key: k, altKey: true});
+                  return;
+                }
                 const id = this.navTarget(sel, k);
                 if (id) { this._scrollSelected = true; this.pushEvent("select_task", {id: id}); }
                 return;
@@ -806,6 +811,12 @@ defmodule DoItWeb.InitiativeShowLive do
               if (field) {
                 e.preventDefault();
                 if (e.altKey) { this.pushEvent("kbd_focus_field", {field: field}); return; }
+                const S = window.DoitSaving, li = S && S.selectedLi();
+                if (li) {
+                  S.markSaving(field === "weight"
+                    ? [S.savingRowOf(li), ...S.savingAncestors(li)]
+                    : [S.savingRowOf(li)]);
+                }
                 this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up"});
                 return;
               }
@@ -1435,6 +1446,7 @@ defmodule DoItWeb.InitiativeShowLive do
               end
             }
             phx-value-id={@task.id}
+            data-complete-toggle
             data-confirm={
               cond do
                 @task.children == [] -> nil
@@ -1740,6 +1752,7 @@ defmodule DoItWeb.InitiativeShowLive do
         id={"sort-form-#{@task.id}"}
         phx-hook="SortRecall"
         data-task-id={@task.id}
+        data-saving-children
         phx-change="set_sort"
         class="flex items-center gap-2"
       >
@@ -1780,6 +1793,7 @@ defmodule DoItWeb.InitiativeShowLive do
         :if={@can_edit}
         type="button"
         phx-click="cascade_sort"
+        data-saving-subtree
         class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
         title="Apply this sort_mode and direction to every descendant branch"
       >
@@ -1959,8 +1973,8 @@ defmodule DoItWeb.InitiativeShowLive do
             :if={@can_edit}
             id="delete-task-btn"
             type="button"
-            phx-click="delete_task"
-            data-confirm="Delete this task and all its children?"
+            phx-hook="DeleteTask"
+            data-task-id={@task.id}
             class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
           >
             <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete

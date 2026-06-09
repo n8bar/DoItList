@@ -59,6 +59,114 @@ function ensureStorageVersion(namespace, currentVersion, opts = {}) {
   localStorage.setItem(sentinel, target)
 }
 
+// Shared "saving" hue (.03.03.08): pink the rows a write touches the instant
+// the user acts; the authoritative re-render strips the client-added class
+// (morphdom reconciles it away), with a timeout as a safety net. Used by the
+// keyboard / checkbox / sort / form / delete paths. DragReorder keeps its own
+// gesture-coupled variant (it also moves the DOM and clears on the reply).
+const SAVING_ROW = "li[data-task-id]"
+const savingPending = new Set()
+let savingTimer = null
+
+const savingRowOf = (li) => li && (li.firstElementChild || li)
+
+// Ancestor task rows (the chain whose progress / status a rollup write recomputes).
+function savingAncestors(li) {
+  const acc = []
+  let cur = li && li.parentElement && li.parentElement.closest(SAVING_ROW)
+  while (cur) {
+    if (cur.firstElementChild) acc.push(cur.firstElementChild)
+    cur = cur.parentElement && cur.parentElement.closest(SAVING_ROW)
+  }
+  return acc
+}
+
+// The row + every descendant row (for completion cascade / deletion).
+const savingSubtree = (li) =>
+  li ? [savingRowOf(li), ...[...li.querySelectorAll(SAVING_ROW)].map(savingRowOf)] : []
+
+// The row + its direct child rows (for a sibling resort).
+function savingChildren(li) {
+  if (!li) return []
+  const ul = li.querySelector(":scope > ul[id^='children-']")
+  const kids = ul ? [...ul.querySelectorAll(":scope > li[data-task-id]")].map(savingRowOf) : []
+  return [savingRowOf(li), ...kids]
+}
+
+function markSaving(rows) {
+  rows.forEach((el) => {
+    if (el) { el.classList.add("is-saving"); savingPending.add(el) }
+  })
+  if (savingTimer) clearTimeout(savingTimer)
+  savingTimer = setTimeout(clearSavingHue, 1500)
+}
+
+function clearSavingHue() {
+  savingPending.forEach((el) => el.classList.remove("is-saving"))
+  savingPending.clear()
+  if (savingTimer) { clearTimeout(savingTimer); savingTimer = null }
+}
+
+const selectedLi = () => document.querySelector("li[data-selected]")
+
+// The colocated TaskKeys hook can't import, so reach it through the window.
+window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren, selectedLi, savingRowOf}
+
+// Pink-on-interaction wiring for the click / change write paths.
+document.addEventListener("click", (e) => {
+  // Completion toggle (leaf or branch) — pink the toggled row + its subtree +
+  // the ancestor chain whose progress / status recomputes.
+  const toggle = e.target.closest("[data-complete-toggle]")
+  if (toggle) {
+    const li = toggle.closest(SAVING_ROW)
+    if (li) markSaving([...savingSubtree(li), ...savingAncestors(li)])
+    return
+  }
+  // Cascade-sort to all descendants — pink the whole subtree of the selected branch.
+  if (e.target.closest("[data-saving-subtree]")) {
+    const li = selectedLi()
+    if (li) markSaving(savingSubtree(li))
+  }
+})
+
+document.addEventListener("change", (e) => {
+  // Sort menu — pink the resorted children of the selected branch.
+  if (e.target.closest("[data-saving-children]")) {
+    const li = selectedLi()
+    if (li) markSaving(savingChildren(li))
+    return
+  }
+  // Details attribute fields — pink the edited row; weight rolls up, so its
+  // ancestors pink too. Priority / assignee don't roll up. Title / description
+  // are intentionally excluded (not part of .03.03.08's attribute scope).
+  if (["task-field-priority", "task-field-weight", "task-field-assignee"].includes(e.target.id)) {
+    const li = selectedLi()
+    if (!li) return
+    const rollup = e.target.id === "task-field-weight"
+    markSaving(rollup ? [savingRowOf(li), ...savingAncestors(li)] : [savingRowOf(li)])
+  }
+})
+
+// Delete the selected task with optimistic removal (.03.03.08): confirm, then
+// drop the row + its subtree from the DOM immediately and pink the surviving
+// ancestor chain while progress recomputes. A failed write leaves the server
+// tree unchanged, so the authoritative re-render re-inserts the row (morphdom
+// matches it by id). Owns its own confirm so the Del key (which clicks this
+// button) is gated too.
+Hooks.DeleteTask = {
+  mounted() {
+    this.el.addEventListener("click", () => {
+      if (!window.confirm("Delete this task and all its children?")) return
+      const li = this.el.dataset.taskId && document.getElementById("task-" + this.el.dataset.taskId)
+      if (li) {
+        markSaving(savingAncestors(li))
+        li.remove()
+      }
+      this.pushEvent("delete_task", {})
+    })
+  },
+}
+
 // Auto-dismiss :info flash messages after 4s. :error flashes stay until the
 // user dismisses them (those usually need attention).
 Hooks.AutoDismissFlash = {
