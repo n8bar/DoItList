@@ -793,6 +793,13 @@ defmodule DoItWeb.InitiativeShowLive do
               }
               if (k === "n" || k === "N") { e.preventDefault(); this.pushEvent("kbd_new_subtask", {}); return; }
               if (k === "s" || k === "S") { e.preventDefault(); this.pushEvent("kbd_new_sibling", {}); return; }
+              // Del clicks the delete button so its confirm dialog still fires.
+              if (k === "Delete") {
+                e.preventDefault();
+                const btn = document.getElementById("delete-task-btn");
+                if (btn) btn.click();
+                return;
+              }
               // P / W / A: Alt focuses the field for precise editing; plain steps
               // the value up, Shift steps it down.
               const field = k.length === 1 && {p: "priority", w: "weight", a: "assignee"}[k.toLowerCase()];
@@ -1950,12 +1957,13 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="flex items-center gap-2">
           <button
             :if={@can_edit}
+            id="delete-task-btn"
             type="button"
             phx-click="delete_task"
             data-confirm="Delete this task and all its children?"
-            class="text-xs text-red-600 hover:underline"
+            class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
           >
-            Delete
+            <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete
           </button>
         </div>
       </div>

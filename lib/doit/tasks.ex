@@ -617,13 +617,27 @@ defmodule DoIt.Tasks do
       Repo.transaction(fn ->
         parent_id = task.parent_id
         initiative_id = task.initiative_id
+        title = task.title
 
         case Repo.delete(task) do
-          {:ok, deleted} ->
-            record_event(deleted, actor, "deleted", %{title: deleted.title})
-            if parent_id, do: recompute_ancestors(parent_id)
+          {:ok, _deleted} ->
+            # The "deleted" event lives on the PARENT's timeline — the task is
+            # gone, and an activity row FK'd to it (task_id null: false,
+            # on_delete: :delete_all) would fail to insert and roll the whole
+            # delete back. Skip the event for a parentless task.
+            if parent_id do
+              case record_event_for(parent_id, initiative_id, actor, "child_deleted", %{
+                     title: title
+                   }) do
+                {:ok, _} -> :ok
+                {:error, cs} -> Repo.rollback(cs)
+              end
+
+              recompute_ancestors(parent_id)
+            end
+
             broadcast_change(initiative_id, {:task_deleted, task.id})
-            deleted
+            task
 
           {:error, cs} ->
             Repo.rollback(cs)
@@ -1054,10 +1068,16 @@ defmodule DoIt.Tasks do
   end
 
   defp record_event(%Task{} = task, %User{} = actor, kind, data) do
+    record_event_for(task.id, task.initiative_id, actor, kind, data)
+  end
+
+  # Record against task/initiative ids directly — used when no live %Task{}
+  # struct is on hand (e.g. logging a deletion on the surviving parent).
+  defp record_event_for(task_id, initiative_id, %User{} = actor, kind, data) do
     %ActivityEvent{}
     |> ActivityEvent.changeset(%{
-      task_id: task.id,
-      initiative_id: task.initiative_id,
+      task_id: task_id,
+      initiative_id: initiative_id,
       user_id: actor.id,
       kind: kind,
       data: data

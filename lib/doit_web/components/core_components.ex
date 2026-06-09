@@ -497,6 +497,7 @@ defmodule DoItWeb.CoreComponents do
     {"S", "New sibling of the selected task"},
     {"P / W / A", "Step priority / weight / assignee (Shift to step back)"},
     {"Alt + P / W / A", "Focus the priority / weight / assignee field"},
+    {"Del", "Delete the selected task (with confirmation)"},
     {"?", "Show this help"}
   ]
 

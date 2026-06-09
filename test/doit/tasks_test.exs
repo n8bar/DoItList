@@ -679,6 +679,29 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "delete_task/2" do
+    test "deletes the task + subtree, logs on the parent, and persists", %{
+      user: user,
+      initiative: initiative
+    } do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      child = new_task(user, initiative, %{"parent_id" => parent.id, "title" => "C"})
+      grandchild = new_task(user, initiative, %{"parent_id" => child.id, "title" => "GC"})
+
+      assert {:ok, _} = Tasks.delete_task(Tasks.get_task!(child.id), user)
+
+      # The delete actually commits — the FK'd "deleted" event no longer rolls
+      # it back — and the cascade takes the whole subtree.
+      assert Tasks.get_task(child.id) == nil
+      assert Tasks.get_task(grandchild.id) == nil
+
+      # Parent survives and carries the deletion on its own timeline.
+      assert Tasks.get_task(parent.id)
+      kinds = parent.id |> Tasks.list_task_activity() |> Enum.map(& &1.kind)
+      assert "child_deleted" in kinds
+    end
+  end
+
   describe "cascade_complete reconciles ancestors upward" do
     test "marking a branch done auto-checks its now-complete parent", %{
       user: user,
