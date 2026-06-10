@@ -321,8 +321,9 @@ defmodule DoIt.Tasks do
   ancestor chain progress before and after, rolls the transaction back, and
   classifies any completion-state flips it *would* cause.
 
-  Returns `{:ok, %{scenario: 1 | 2 | 3 | nil, titles: [String.t()]}}` or
-  `{:error, reason}` where reason matches `move_task/3`.
+  Returns `{:ok, %{scenario: 1 | 2 | 3 | nil, titles: [String.t()], ids: [integer()]}}`
+  or `{:error, reason}` where reason matches `move_task/3`. `titles` and `ids`
+  describe the same flipped tasks, in the same order.
 
   Scenarios:
     1 — only previously-completed ancestors would become incomplete
@@ -424,13 +425,13 @@ defmodule DoIt.Tasks do
         after_p = Map.get(after_progress, id)
 
         cond do
-          status != "done" and before_p != 100 and after_p == 100 -> [{:complete, title}]
-          status == "done" and before_p == 100 and after_p != 100 -> [{:uncomplete, title}]
+          status != "done" and before_p != 100 and after_p == 100 -> [{:complete, title, id}]
+          status == "done" and before_p == 100 and after_p != 100 -> [{:uncomplete, title, id}]
           true -> []
         end
       end)
 
-    kinds = flips |> Enum.map(fn {kind, _} -> kind end) |> Enum.uniq()
+    kinds = flips |> Enum.map(fn {kind, _, _} -> kind end) |> Enum.uniq()
 
     scenario =
       case kinds do
@@ -440,7 +441,11 @@ defmodule DoIt.Tasks do
         _ -> 3
       end
 
-    %{scenario: scenario, titles: Enum.map(flips, fn {_, t} -> t end)}
+    %{
+      scenario: scenario,
+      titles: Enum.map(flips, fn {_, t, _} -> t end),
+      ids: Enum.map(flips, fn {_, _, id} -> id end)
+    }
   end
 
   defp validate_move(_task, nil), do: :ok
@@ -798,6 +803,19 @@ defmodule DoIt.Tasks do
   defp list_descendants(task_id) do
     immediate = Repo.all(from t in Task, where: t.parent_id == ^task_id)
     Enum.flat_map(immediate, fn t -> [t | list_descendants(t.id)] end)
+  end
+
+  @doc "IDs of `task_id` and every task in the subtree below it."
+  def subtree_ids(task_id) do
+    [task_id | task_id |> list_descendants() |> Enum.map(& &1.id)]
+  end
+
+  @doc "IDs of every ancestor of `task_id`, nearest first, root task included."
+  def ancestor_ids(task_id) do
+    case Repo.one(from t in Task, where: t.id == ^task_id, select: t.parent_id) do
+      nil -> []
+      parent_id -> [parent_id | ancestor_ids(parent_id)]
+    end
   end
 
   @doc """

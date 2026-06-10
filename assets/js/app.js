@@ -114,6 +114,10 @@ window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren,
 
 // Pink-on-interaction wiring for the click / change write paths.
 document.addEventListener("click", (e) => {
+  // Pending-confirm pinking is server-rendered (pink = "maybe write"): while a
+  // confirm modal is open the rows at stake hold the hue via the
+  // pending_saving_ids assign, so it survives re-renders; Cancel clears it and
+  // Proceed keeps it through the write. Nothing to do client-side here.
   // Modal "Delete" Proceed (.03.01.11): optimistically drop the row + subtree
   // now and pink the surviving ancestors; the form submit (confirm_pending)
   // still fires, and a failed write re-inserts the row via morphdom. No return —
@@ -662,16 +666,15 @@ Hooks.DragReorder = {
     if (dest && dest.container) {
       const destParentLi = dest.container.closest("li[data-task-id]")
       dest.container.insertBefore(this.sourceLi, dest.before)
-      // Extra rows whose DB value changes. Reorder (same parent) only flips the
-      // parent's sort_mode → pink that one row. A cross-parent move recomputes
-      // progress up BOTH chains → pink both ancestor chains.
+      // Extra rows whose DB row certainly gets written. A same-parent reorder
+      // affects the parent only when it flips its sort_mode to manual — an
+      // already-manual parent doesn't change. Ancestor progress updates are
+      // value-dependent, so we never pink ancestor chains — the re-render
+      // shows whichever actually changed.
       const extra = []
       if (sourceParentLi === destParentLi) {
         const r = destParentLi && destParentLi.firstElementChild
-        if (r) extra.push(r)
-      } else {
-        this.collectAncestorRows(sourceParentLi, extra)
-        this.collectAncestorRows(destParentLi, extra)
+        if (r && dest.container.dataset.sortMode !== "manual") extra.push(r)
       }
       this.markSaving(dest.container, extra)
     }

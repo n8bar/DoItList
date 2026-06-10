@@ -46,7 +46,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:add_task_for, nil)
          |> assign(:add_task_after, nil)
          |> assign(:new_task_title, "")
-         |> assign(:pending_action, nil)
+         |> assign_pending(nil)
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
     end
@@ -148,16 +148,17 @@ defmodule DoItWeb.InitiativeShowLive do
         {:ok, %{scenario: nil}} ->
           {:noreply, commit_create(socket, attrs)}
 
-        {:ok, %{scenario: scenario, titles: titles}} ->
+        {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
           if skip_confirm?(socket, "completion-flip") do
             {:noreply, commit_create(socket, attrs)}
           else
             {:noreply,
-             assign(socket, :pending_action, %{
+             assign_pending(socket, %{
                kind: :create,
                attrs: attrs,
                scenario: scenario,
-               titles: titles
+               titles: titles,
+               flip_ids: flip_ids
              })}
           end
 
@@ -316,7 +317,10 @@ defmodule DoItWeb.InitiativeShowLive do
       {:noreply, put_flash(socket, :error, "Only the owner can delete this initiative.")}
     else
       {:noreply,
-       assign(socket, :pending_action, %{kind: :delete_initiative, title: socket.assigns.initiative.name})}
+       assign_pending(socket, %{
+         kind: :delete_initiative,
+         title: socket.assigns.initiative.name
+       })}
     end
   end
 
@@ -386,7 +390,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       if branch_count > 10 and not skip_confirm?(socket, "cascade-sort") do
         {:noreply,
-         assign(socket, :pending_action, %{
+         assign_pending(socket, %{
            kind: :cascade_sort,
            task_id: task.id,
            mode: task.sort_mode,
@@ -492,7 +496,13 @@ defmodule DoItWeb.InitiativeShowLive do
 
       true ->
         task = socket.assigns.selected_task
-        {:noreply, assign(socket, :pending_action, %{kind: :delete_task, task_id: task.id, title: task.title})}
+
+        {:noreply,
+         assign_pending(socket, %{
+           kind: :delete_task,
+           task_id: task.id,
+           title: task.title
+         })}
     end
   end
 
@@ -522,24 +532,28 @@ defmodule DoItWeb.InitiativeShowLive do
               {:reply, %{ok: false, error: format_move_error(reason)}, socket}
           end
 
-        {:ok, %{scenario: scenario, titles: titles}} ->
+        {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
           if skip_confirm?(socket, "completion-flip") do
             # Suppressed: commit straight through, no modal.
             case commit_move(socket, task, attrs) do
-              {:ok, socket} -> {:reply, %{ok: true, committed: true}, socket}
-              {:error, reason, socket} -> {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+              {:ok, socket} ->
+                {:reply, %{ok: true, committed: true}, socket}
+
+              {:error, reason, socket} ->
+                {:reply, %{ok: false, error: format_move_error(reason)}, socket}
             end
           else
             # A completion-flip confirmation is required: the move is NOT yet
             # persisted, so tell the client not to keep its optimistic placement
             # (the confirm modal drives the real move). committed: false.
             {:reply, %{ok: true, committed: false},
-             assign(socket, :pending_action, %{
+             assign_pending(socket, %{
                kind: :move,
                task_id: task.id,
                attrs: attrs,
                scenario: scenario,
-               titles: titles
+               titles: titles,
+               flip_ids: flip_ids
              })}
           end
 
@@ -585,7 +599,7 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   def handle_event("cancel_pending", _params, socket) do
-    {:noreply, assign(socket, :pending_action, nil)}
+    {:noreply, assign_pending(socket, nil)}
   end
 
   # Keyboard alternative for task reorganization (M02 Arc 3 item 6).
@@ -652,13 +666,13 @@ defmodule DoItWeb.InitiativeShowLive do
         |> assign(:add_task_for, nil)
         |> assign(:add_task_after, nil)
         |> assign(:new_task_title, "")
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> put_flash(:info, "Task added.")
         |> load_tree()
 
       {:error, cs} ->
         socket
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> put_flash(:error, "Couldn't create task: #{summarize_errors(cs)}.")
     end
   end
@@ -669,14 +683,14 @@ defmodule DoItWeb.InitiativeShowLive do
     case Tasks.cascade_sort(task, user, mode, reverse) do
       {:ok, %{branch_count: n}} ->
         socket
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> put_flash(:info, "Sort applied to #{n} branch(es).")
         |> load_tree()
         |> refresh_selected()
 
       {:error, _reason} ->
         socket
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> put_flash(:error, "Couldn't apply sort to descendants.")
     end
   end
@@ -692,7 +706,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       true ->
         task = Tasks.get_task!(id)
-        {:noreply, assign(socket, :pending_action, %{kind: kind, task_id: id, title: task.title})}
+        {:noreply, assign_pending(socket, %{kind: kind, task_id: id, title: task.title})}
     end
   end
 
@@ -708,11 +722,11 @@ defmodule DoItWeb.InitiativeShowLive do
 
     case result do
       {:ok, _} ->
-        socket |> assign(:pending_action, nil) |> load_tree() |> refresh_selected()
+        socket |> assign_pending(nil) |> load_tree() |> refresh_selected()
 
       {:error, cs} ->
         socket
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> put_flash(:error, "Couldn't cascade: #{summarize_errors(cs)}.")
     end
   end
@@ -721,7 +735,7 @@ defmodule DoItWeb.InitiativeShowLive do
     case Tasks.delete_task(Tasks.get_task!(id), socket.assigns.current_user) do
       {:ok, _} ->
         socket
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> assign(:selected_task_id, nil)
         |> assign(:selected_task, nil)
         |> put_flash(:info, "Task deleted.")
@@ -729,7 +743,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       {:error, cs} ->
         socket
-        |> assign(:pending_action, nil)
+        |> assign_pending(nil)
         |> put_flash(:error, "Couldn't delete task: #{summarize_errors(cs)}.")
     end
   end
@@ -763,14 +777,14 @@ defmodule DoItWeb.InitiativeShowLive do
       {:ok, _moved} ->
         {:ok,
          socket
-         |> assign(:pending_action, nil)
+         |> assign_pending(nil)
          |> load_tree()
          |> refresh_selected()}
 
       {:error, reason} ->
         {:error, reason,
          socket
-         |> assign(:pending_action, nil)
+         |> assign_pending(nil)
          |> put_flash(:error, "Couldn't move task: #{format_move_error(reason)}.")}
     end
   end
@@ -858,8 +872,10 @@ defmodule DoItWeb.InitiativeShowLive do
               if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
                 e.preventDefault();
                 if (e.altKey) {
-                  const S = window.DoitSaving, li = S && S.selectedLi();
-                  if (li) S.markSaving([S.savingRowOf(li), ...S.savingAncestors(li)]);
+                  const li = document.querySelector(`li[data-task-id="${sel}"]`);
+                  if (li && this.blockedMove(li, k)) { this.bonk(); return; }
+                  const S = window.DoitSaving;
+                  if (S && li) S.markSaving(this.movePinkRows(S, li, k));
                   this.pushEvent("kbd_move", {key: k, altKey: true});
                   return;
                 }
@@ -912,6 +928,56 @@ defmodule DoItWeb.InitiativeShowLive do
               if (!ul || ul.classList.contains("collapsed-peek")) return null;
               const first = ul.querySelector(":scope > li[data-task-id]");
               return first ? first.dataset.taskId : null;
+            },
+            taskSibling(li, dir) {
+              let el = dir < 0 ? li.previousElementSibling : li.nextElementSibling;
+              while (el && !el.matches("li[data-task-id]")) {
+                el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+              }
+              return el;
+            },
+            // The four impossible reorgs (.03.07.02.12): first child up, last
+            // child down, top-level dedent, indent with no previous sibling.
+            blockedMove(li, key) {
+              if (key === "ArrowUp" || key === "ArrowRight") return !this.taskSibling(li, -1);
+              if (key === "ArrowDown") return !this.taskSibling(li, 1);
+              return !li.parentElement.closest("li[data-task-id]");
+            },
+            // Pink only rows that certainly get a DB write. Moves write the
+            // moved row (parent_id / sort_order), the swapped sibling, and the
+            // parent when the reorder flips it from auto-sort to manual.
+            // Ancestor progress updates are value-dependent — the re-render
+            // shows them; we don't guess.
+            movePinkRows(S, li, key) {
+              if (key === "ArrowLeft" || key === "ArrowRight") {
+                return [S.savingRowOf(li)];
+              }
+              const swap = this.taskSibling(li, key === "ArrowUp" ? -1 : 1);
+              const rows = [S.savingRowOf(li), S.savingRowOf(swap)];
+              const parentLi = li.parentElement.closest("li[data-task-id]");
+              if (parentLi && li.parentElement.dataset.sortMode !== "manual") {
+                rows.push(S.savingRowOf(parentLi));
+              }
+              return rows;
+            },
+            // Short descending thud for a rejected move. Audio is a nicety —
+            // never let it break the keyboard path.
+            bonk() {
+              try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                this._audio = this._audio || new Ctx();
+                const ctx = this._audio;
+                if (ctx.state === "suspended") ctx.resume();
+                const osc = ctx.createOscillator(), gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(150, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(70, ctx.currentTime + 0.15);
+                gain.gain.setValueAtTime(0.12, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.2);
+              } catch (_e) { /* no audio, no problem */ }
             },
           }
         </script>
@@ -1044,7 +1110,12 @@ defmodule DoItWeb.InitiativeShowLive do
               No lists yet. Create one to start tracking work.
             </div>
 
-            <ul id="task-tree" phx-hook="TreeWidth" class="space-y-2">
+            <ul
+              id="task-tree"
+              phx-hook="TreeWidth"
+              data-sort-mode={elem(Tasks.resolve_sort(@initiative.root_task_id), 0)}
+              class="space-y-2"
+            >
               <%= for t <- @tree do %>
                 <.task_node
                   task={t}
@@ -1054,6 +1125,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   can_edit={@can_edit}
                   selected_id={@selected_task_id}
                   initiative_id={@initiative.id}
+                  saving_ids={@pending_saving_ids}
                 />
                 <%= if @add_task_after == t.id and @add_task_for != t.id do %>
                   <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
@@ -1255,6 +1327,35 @@ defmodule DoItWeb.InitiativeShowLive do
   defp skip_confirm?(socket, class),
     do: not is_nil(class) and MapSet.member?(socket.assigns.confirm_skips, class)
 
+  # Pink = "maybe write" (.03.03.08): while a confirm modal is pending, the
+  # rows its write would touch hold the saving hue — rendered server-side so
+  # it survives re-renders and the user sees what's at stake while deciding.
+  # Cancel clears it; Proceed keeps it through the write.
+  defp assign_pending(socket, nil) do
+    socket
+    |> assign(:pending_action, nil)
+    |> assign(:pending_saving_ids, MapSet.new())
+  end
+
+  defp assign_pending(socket, pending) do
+    socket
+    |> assign(:pending_action, pending)
+    |> assign(:pending_saving_ids, pending_saving_ids(pending))
+  end
+
+  defp pending_saving_ids(%{kind: kind, task_id: id})
+       when kind in [:cascade_complete, :cascade_incomplete],
+       do: MapSet.new(Tasks.subtree_ids(id) ++ Tasks.ancestor_ids(id))
+
+  defp pending_saving_ids(%{kind: kind, task_id: id}) when kind in [:cascade_sort, :delete_task],
+    do: MapSet.new(Tasks.subtree_ids(id))
+
+  defp pending_saving_ids(%{kind: :move, task_id: id, flip_ids: flip_ids}),
+    do: MapSet.new([id | flip_ids])
+
+  defp pending_saving_ids(%{kind: :create, flip_ids: flip_ids}), do: MapSet.new(flip_ids)
+  defp pending_saving_ids(_), do: MapSet.new()
+
   attr :pending, :map, default: nil
   attr :verb, :string, default: "change"
 
@@ -1264,7 +1365,10 @@ defmodule DoItWeb.InitiativeShowLive do
     assigns =
       assigns
       |> assign(:class, pending && confirm_class(pending))
-      |> assign(:destructive, pending && Map.get(pending, :kind) in [:delete_task, :delete_initiative])
+      |> assign(
+        :destructive,
+        pending && Map.get(pending, :kind) in [:delete_task, :delete_initiative]
+      )
       |> assign(
         :optimistic_remove,
         pending && Map.get(pending, :kind) == :delete_task && Map.get(pending, :task_id)
@@ -1372,6 +1476,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :can_edit, :boolean, required: true
   attr :selected_id, :any, required: true
   attr :initiative_id, :integer, required: true
+  attr :saving_ids, :any, required: true
 
   def task_node(assigns) do
     ~H"""
@@ -1386,6 +1491,7 @@ defmodule DoItWeb.InitiativeShowLive do
         data-task-row
         class={[
           "relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
+          MapSet.member?(@saving_ids, @task.id) && "is-saving",
           if(@selected_id == @task.id,
             do: "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900",
             else: "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
@@ -1577,7 +1683,7 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-value-id={@task.id}
             data-complete-toggle
             aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
-            aria-pressed={@task.status == "done"}
+            aria-pressed={to_string(@task.status == "done")}
             class={[
               "absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
               @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
@@ -1643,6 +1749,7 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-hook="CollapseChildren"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}
+        data-sort-mode={elem(Tasks.resolve_sort(@task), 0)}
         class="pl-1.5 sm:pl-6 space-y-1"
       >
         <%= for c <- @task.children do %>
@@ -1654,6 +1761,7 @@ defmodule DoItWeb.InitiativeShowLive do
             can_edit={@can_edit}
             selected_id={@selected_id}
             initiative_id={@initiative_id}
+            saving_ids={@saving_ids}
           />
           <%= if @add_task_after == c.id and @add_task_for != c.id do %>
             <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
