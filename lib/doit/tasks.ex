@@ -800,9 +800,24 @@ defmodule DoIt.Tasks do
     end)
   end
 
+  # One recursive CTE for the whole subtree — the per-node query loop this
+  # replaces cost ~7ms per task and made big-branch operations feel sluggish.
   defp list_descendants(task_id) do
-    immediate = Repo.all(from t in Task, where: t.parent_id == ^task_id)
-    Enum.flat_map(immediate, fn t -> [t | list_descendants(t.id)] end)
+    initial = from(t in Task, where: t.parent_id == ^task_id)
+
+    recursion =
+      from(t in Task,
+        inner_join: d in "descendants",
+        on: t.parent_id == d.id
+      )
+
+    {"descendants", Task}
+    |> recursive_ctes(true)
+    |> with_cte("descendants", as: ^union_all(initial, ^recursion))
+    |> Repo.all()
+    # Loaded through the CTE, the structs' source is "descendants" — reset it
+    # so later updates of these structs target the real table.
+    |> Enum.map(&Ecto.put_meta(&1, source: Task.__schema__(:source)))
   end
 
   @doc "IDs of `task_id` and every task in the subtree below it."

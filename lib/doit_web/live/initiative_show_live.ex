@@ -55,7 +55,14 @@ defmodule DoItWeb.InitiativeShowLive do
   defp load_tree(socket) do
     initiative_id = socket.assigns.initiative.id
     tree = Tasks.initiative_task_tree(initiative_id)
-    assign(socket, :tree, tree)
+
+    # Resolved once here; task_node threads it down (child = own mode ||
+    # parent's resolved), so rendering never walks the DB per branch.
+    root_sort_mode = elem(Tasks.resolve_sort(socket.assigns.initiative.root_task_id), 0)
+
+    socket
+    |> assign(:tree, tree)
+    |> assign(:root_sort_mode, root_sort_mode)
   end
 
   defp refresh_selected(socket) do
@@ -1110,12 +1117,7 @@ defmodule DoItWeb.InitiativeShowLive do
               No lists yet. Create one to start tracking work.
             </div>
 
-            <ul
-              id="task-tree"
-              phx-hook="TreeWidth"
-              data-sort-mode={elem(Tasks.resolve_sort(@initiative.root_task_id), 0)}
-              class="space-y-2"
-            >
+            <ul id="task-tree" phx-hook="TreeWidth" data-sort-mode={@root_sort_mode} class="space-y-2">
               <%= for t <- @tree do %>
                 <.task_node
                   task={t}
@@ -1126,6 +1128,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   selected_id={@selected_task_id}
                   initiative_id={@initiative.id}
                   saving_ids={@pending_saving_ids}
+                  inherited_sort={@root_sort_mode}
                 />
                 <%= if @add_task_after == t.id and @add_task_for != t.id do %>
                   <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
@@ -1477,8 +1480,11 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :selected_id, :any, required: true
   attr :initiative_id, :integer, required: true
   attr :saving_ids, :any, required: true
+  attr :inherited_sort, :string, required: true
 
   def task_node(assigns) do
+    assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
+
     ~H"""
     <li
       id={"task-#{@task.id}"}
@@ -1749,7 +1755,7 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-hook="CollapseChildren"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}
-        data-sort-mode={elem(Tasks.resolve_sort(@task), 0)}
+        data-sort-mode={@resolved_sort}
         class="pl-1.5 sm:pl-6 space-y-1"
       >
         <%= for c <- @task.children do %>
@@ -1762,6 +1768,7 @@ defmodule DoItWeb.InitiativeShowLive do
             selected_id={@selected_id}
             initiative_id={@initiative_id}
             saving_ids={@saving_ids}
+            inherited_sort={@resolved_sort}
           />
           <%= if @add_task_after == c.id and @add_task_for != c.id do %>
             <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
