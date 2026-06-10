@@ -976,14 +976,16 @@ defmodule DoItWeb.InitiativeShowLive do
                 const ctx = this._audio;
                 if (ctx.state === "suspended") ctx.resume();
                 const osc = ctx.createOscillator(), gain = ctx.createGain();
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(150, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(70, ctx.currentTime + 0.15);
-                gain.gain.setValueAtTime(0.12, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+                // Triangle + ~220 Hz: pure sine below ~100 Hz is inaudible on
+                // laptop speakers (tab showed the speaker icon, nobody heard it).
+                osc.type = "triangle";
+                osc.frequency.setValueAtTime(220, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.2);
+                gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
                 osc.connect(gain).connect(ctx.destination);
                 osc.start();
-                osc.stop(ctx.currentTime + 0.2);
+                osc.stop(ctx.currentTime + 0.3);
               } catch (_e) { /* no audio, no problem */ }
             },
           }
@@ -1491,7 +1493,7 @@ defmodule DoItWeb.InitiativeShowLive do
       data-task-id={@task.id}
       data-selected={@selected_id == @task.id && @task.id}
       data-depth={@depth}
-      class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-400 dark:first:border-t-zinc-500"
+      class="rounded border border-zinc-400 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-500 dark:first:border-t-zinc-500"
     >
       <div
         data-task-row
@@ -1515,7 +1517,7 @@ defmodule DoItWeb.InitiativeShowLive do
           data-parent-id={@task.parent_id}
           data-depth={@depth}
           data-initiative-id={@initiative_id}
-          class="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-300 dark:text-zinc-600 hover:text-zinc-500 dark:hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none"
+          class="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none"
         >
           <.icon name="hero-ellipsis-vertical" class="w-3 h-3" />
           <span class={botanical_color(@task, @depth)}>
