@@ -5,6 +5,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
+  alias DoIt.Tasks.Tree
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -62,6 +63,42 @@ defmodule DoItWeb.InitiativeShowLive do
     socket
     |> assign(:tree, tree)
     |> assign(:root_sort_mode, root_sort_mode)
+  end
+
+  # Attribute-level changes patch the loaded tree instead of reloading the
+  # initiative (.03.04.03, ProductSpec § Collaboration Model): merge the
+  # written task + its ancestor roll-ups, re-key the parent's child order
+  # (auto-sorted parents resort on update), and refresh the pane only when it
+  # shows an affected task. Structural changes (create / move / delete / sort
+  # / cascades) still take the full load_tree.
+  defp patch_task(socket, task_id) do
+    case Tasks.lineage(task_id) do
+      [] ->
+        # The task vanished under us (e.g. deleted concurrently) — reload.
+        socket |> load_tree() |> refresh_selected()
+
+      lineage ->
+        task = Enum.find(lineage, &(&1.id == task_id))
+        socket = assign(socket, :tree, patched_tree(socket, task, lineage))
+
+        if socket.assigns.selected_task_id in Enum.map(lineage, & &1.id),
+          do: refresh_selected(socket),
+          else: socket
+    end
+  end
+
+  defp patched_tree(socket, task, lineage) do
+    tree = Tree.merge(socket.assigns.tree, lineage)
+
+    case task.parent_id do
+      # The system root has no display order of its own to re-key.
+      nil ->
+        tree
+
+      parent_id ->
+        key = if parent_id == socket.assigns.initiative.root_task_id, do: :root, else: parent_id
+        Tree.reorder_children(tree, key, Tasks.ordered_child_ids(parent_id))
+    end
   end
 
   defp refresh_selected(socket) do
@@ -346,11 +383,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       case Tasks.update_task(task, user, params) do
         {:ok, _updated} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Saved.")
-           |> load_tree()
-           |> refresh_selected()}
+          {:noreply, socket |> put_flash(:info, "Saved.") |> patch_task(task.id)}
 
         {:error, cs} ->
           {:noreply, put_flash(socket, :error, "Couldn't save task: #{summarize_errors(cs)}.")}
@@ -415,7 +448,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       case Tasks.update_task(task, user, %{"manual_progress" => value}) do
         {:ok, _} ->
-          {:noreply, socket |> load_tree() |> refresh_selected()}
+          {:noreply, patch_task(socket, task.id)}
 
         {:error, cs} ->
           {:noreply, put_flash(socket, :error, "Invalid progress: #{summarize_errors(cs)}.")}
@@ -432,7 +465,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       case Tasks.toggle_complete(task, user) do
         {:ok, _} ->
-          {:noreply, socket |> load_tree() |> refresh_selected()}
+          {:noreply, patch_task(socket, task.id)}
 
         {:error, cs} ->
           {:noreply, put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
@@ -765,8 +798,7 @@ defmodule DoItWeb.InitiativeShowLive do
   @impl true
   def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
 
-  def handle_info({:task_updated, _id}, socket),
-    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+  def handle_info({:task_updated, id}, socket), do: {:noreply, patch_task(socket, id)}
 
   def handle_info({:task_deleted, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
@@ -1234,13 +1266,13 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp push_focus(socket, _field), do: socket
 
-  # Persist a single-field keyboard step (P/W/A), then re-render the tree + pane.
+  # Persist a single-field keyboard step (P/W/A), then patch the affected rows.
   defp apply_kbd_adjust(socket, task, field, dir) do
     params = adjust_params(field, dir, task, socket.assigns.members)
 
     case Tasks.update_task(task, socket.assigns.current_user, params) do
       {:ok, _updated} ->
-        {:noreply, socket |> load_tree() |> refresh_selected()}
+        {:noreply, patch_task(socket, task.id)}
 
       {:error, cs} ->
         {:noreply, put_flash(socket, :error, "Couldn't update task: #{summarize_errors(cs)}.")}

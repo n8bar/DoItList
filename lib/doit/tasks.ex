@@ -825,12 +825,53 @@ defmodule DoIt.Tasks do
     [task_id | task_id |> list_descendants() |> Enum.map(& &1.id)]
   end
 
-  @doc "IDs of every ancestor of `task_id`, nearest first, root task included."
+  @doc """
+  The task plus its ancestors, preloaded for tree rendering — the set whose
+  stored fields can change when the task is written (roll-ups walk up).
+  One recursive query regardless of depth. Returns `[]` when the task no
+  longer exists.
+  """
+  def lineage(task_id) do
+    task_id
+    |> ancestor_chain_query()
+    |> Repo.all()
+    |> Enum.map(&Ecto.put_meta(&1, source: Task.__schema__(:source)))
+    |> Repo.preload([:assignee, :updated_by])
+  end
+
+  @doc "Child ids of `parent_id` in display order."
+  def ordered_child_ids(parent_id) do
+    Repo.all(
+      from t in Task,
+        where: t.parent_id == ^parent_id,
+        order_by: [asc: t.sort_order, asc: t.inserted_at],
+        select: t.id
+    )
+  end
+
+  @doc "IDs of every ancestor of `task_id` (unordered), root task included."
   def ancestor_ids(task_id) do
-    case Repo.one(from t in Task, where: t.id == ^task_id, select: t.parent_id) do
-      nil -> []
-      parent_id -> [parent_id | ancestor_ids(parent_id)]
-    end
+    task_id
+    |> ancestor_chain_query()
+    |> select([t], t.id)
+    |> Repo.all()
+    |> List.delete(task_id)
+  end
+
+  # The task + every ancestor as one recursive CTE (the per-level walk this
+  # replaces cost ~5ms per depth level).
+  defp ancestor_chain_query(task_id) do
+    initial = from(t in Task, where: t.id == ^task_id)
+
+    recursion =
+      from(t in Task,
+        inner_join: a in "ancestors",
+        on: t.id == a.parent_id
+      )
+
+    {"ancestors", Task}
+    |> recursive_ctes(true)
+    |> with_cte("ancestors", as: ^union_all(initial, ^recursion))
   end
 
   @doc """

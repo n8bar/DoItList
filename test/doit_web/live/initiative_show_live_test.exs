@@ -425,6 +425,67 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "incremental tree patch (.03.04.03)" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      parent = create_task(user, initiative, nil, "Patch parent")
+      leaf = create_task(user, initiative, parent, "Patch leaf")
+
+      %{conn: conn, user: user, initiative: initiative, parent: parent, leaf: leaf}
+    end
+
+    test "a collaborator's update broadcast patches the rendered tree", %{
+      conn: conn,
+      user: user,
+      initiative: initiative,
+      leaf: leaf
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      {:ok, _} = Tasks.update_task(Tasks.get_task!(leaf.id), user, %{"title" => "Renamed live"})
+
+      assert render(view) =~ "Renamed live"
+    end
+
+    test "a leaf completion patches ancestor roll-up in the rendered tree", %{
+      conn: conn,
+      initiative: initiative,
+      parent: parent,
+      leaf: leaf
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      render_click(view, "toggle_complete", %{"id" => Integer.to_string(leaf.id)})
+
+      assert Tasks.get_task!(parent.id).status == "done"
+      assert has_element?(view, "#task-#{parent.id} [data-complete-toggle][aria-pressed='true']")
+    end
+
+    test "an attribute change under an auto-sorted parent re-keys sibling order", %{
+      conn: conn,
+      user: user,
+      initiative: initiative,
+      parent: parent,
+      leaf: leaf
+    } do
+      bravo = create_task(user, initiative, parent, "bravo")
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(parent.id), user, "alphabetical", false)
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      # Rename the first leaf so it sorts after "bravo".
+      select_task(view, leaf.id)
+      render_submit(view, "update_task", %{"task" => %{"title" => "zulu"}})
+
+      html = render(view)
+      {z_pos, _} = :binary.match(html, "zulu")
+      {b_pos, _} = :binary.match(html, "bravo")
+      assert b_pos < z_pos
+      assert hd(sibling_order(initiative.id, parent.id)) == bravo.id
+    end
+  end
+
   describe "move_task persistence (drag parity)" do
     setup %{conn: conn} do
       {conn, user} = register_and_log_in(conn)
