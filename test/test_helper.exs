@@ -15,7 +15,11 @@ if ws_endpoint do
       browser_pool: false,
       # The 2s default is too tight for a first page load on a shared dev box.
       timeout: to_timeout(second: 10),
-      browser_launch_timeout: to_timeout(second: 30)
+      browser_launch_timeout: to_timeout(second: 30),
+      # Native-dialog guard (§8.18.1): nothing in the app may raise a browser
+      # dialog. Auto-accept would hide one; without it, any dialog stalls the
+      # action into a loud timeout failure.
+      accept_dialogs: false
     )
   )
 
