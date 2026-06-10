@@ -1068,6 +1068,37 @@ Hooks.CollapseChildren = {
   },
 }
 
+// The net under the hooks above: collapse state's source of truth is
+// localStorage and the server never renders collapsed-peek, but per-hook
+// updated() callbacks miss some patch paths (nodes moved optimistically by
+// DragReorder then reconciled by morphdom, replaced subtrees) — which
+// expanded collapsed branches on sort/reorder. After ANY class/childList
+// change in the document, re-apply every collapse state. classList.toggle
+// with a no-op force doesn't write the attribute, so this converges instead
+// of looping.
+function applyCollapseStates() {
+  document.querySelectorAll("ul[id^='children-']").forEach((ul) => {
+    const key = `phx:collapse:${ul.dataset.initiativeId}:${ul.dataset.taskId}`
+    const collapsed = localStorage.getItem(key) === "1"
+    ul.classList.toggle("collapsed-peek", collapsed)
+    const btn = document.getElementById(`collapse-${ul.dataset.taskId}`)
+    if (btn) btn.setAttribute("aria-expanded", String(!collapsed))
+  })
+}
+let collapseGuardRaf = null
+new MutationObserver(() => {
+  if (collapseGuardRaf) return
+  collapseGuardRaf = requestAnimationFrame(() => {
+    collapseGuardRaf = null
+    applyCollapseStates()
+  })
+}).observe(document.body, {
+  subtree: true,
+  childList: true,
+  attributes: true,
+  attributeFilter: ["class"],
+})
+
 // Sizes the whole task tree to one width so every row — roots included —
 // renders uniformly and the tree scrolls horizontally only when depth genuinely
 // needs it (ProductSpec § Task Tree Display). The width is driven by the deepest
