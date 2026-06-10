@@ -66,6 +66,26 @@ This creates a `doit_test` database alongside `doit_dev`. The pure-Elixir
 progress tests in `test/doit/tasks/progress_test.exs` do not touch the database
 at all and are the fastest signal that the roll-up math is correct.
 
+### Browser (e2e) tests
+
+Tests tagged `:e2e` (in `test/e2e/`) drive a real headless Chromium through
+[Playwright](https://playwright.dev/). The browser runs in its own compose
+service (the web image stays Alpine; tests connect to it over websocket), so
+start that once, then use the `test.e2e` alias:
+
+```bash
+docker compose --profile test up -d playwright
+
+docker compose run --rm \
+  -e MIX_ENV=test \
+  -e DB_DATABASE=doit \
+  web mix test.e2e
+```
+
+Plain `mix test` excludes the `:e2e` tag and never needs the playwright
+service. `mix test.e2e` runs the whole suite including it; append a path
+(e.g. `mix test.e2e test/e2e`) to run just the browser tests.
+
 ## Terminology
 
 Canonical definitions live in [`docs/ProductSpec.md`](docs/ProductSpec.md). Quick reference:
