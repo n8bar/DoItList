@@ -24,6 +24,7 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 ## Engineering Style
 - Boring, understandable code; small, reviewable changes.
 - Business logic in domain/service modules with tests, not views. Progress math stays in pure modules with unit tests.
+- State lives where its lifetime is: ephemeral UI state (selection, expand/collapse, focus) stays client-side; the server owns durable data. Writes get optimistic feedback (UX_GUARDRAILS §6); renders and broadcasts update incrementally — cost proportional to the change, not the tree.
 
 ## Dev Environment
 - Everything runs through Docker — `docker compose up --build`. No host installs beyond Docker + Compose.

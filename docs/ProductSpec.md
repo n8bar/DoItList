@@ -131,6 +131,6 @@ A visual placeholder appears in the destination position during drag so the user
 
 ## Collaboration Model
 - Multiple users may open the same Initiative simultaneously.
-- Changes save immediately and propagate to other active users promptly.
+- Changes save immediately and propagate to other active users promptly — and the propagation work scales with the size of the change, not the size of the tree or the team, so "near-instant" holds as both grow.
 - Last writer wins. No check-in/check-out, no file locking, no conflict resolution UI.
 - Each task records who last updated it and when, accessible in the UI.

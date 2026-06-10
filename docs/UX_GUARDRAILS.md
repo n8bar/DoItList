@@ -1,5 +1,5 @@
 # UX_GUARDRAILS
-_Last updated: 2026-06-06_
+_Last updated: 2026-06-10_
 
 Universal UX/a11y baseline. Apply on every UI change. This doc is universal principles only — project-specific standards live in [`ProductSpec.md`](ProductSpec.md).
 
@@ -34,8 +34,9 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 ### 6. Loading & action feedback
 6.1 Operations longer than ~100ms show progress immediately.
 6.2 Optimistic UI for fast operations: reflect the action instantly when likely to succeed; reconcile on error.
-6.3 Confirmations only for destructive or irreversible actions. Don't gate ordinary actions behind "are you sure?"
+6.3 Confirmations only for actions that are destructive, irreversible, or whose side effects reach beyond what the user is looking at (e.g., a move that silently flips an ancestor's completion). Never gate ordinary actions behind "are you sure?" — and surprise-scope confirmations must be suppressible.
 6.4 Prefer undo over confirm where feasible — let the user act, with a short window to reverse.
+6.5 Interactions that only change view state — selection, expand/collapse, focus — never wait on the network.
 
 ### 7. Navigation & state
 7.1 Same path = same content. Back button works as expected; refreshing a page returns the user where they were.
