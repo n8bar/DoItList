@@ -53,7 +53,14 @@ Database data lives in the named Docker volume `doit_pgdata`, so it survives
 ## Run the tests
 
 The test suite (notably the progress roll-up unit tests) runs inside the
-container too:
+container too. With the stack already up, reuse the running container — no
+spin-up cost:
+
+```bash
+docker compose exec -e MIX_ENV=test web mix test
+```
+
+Without a running stack, an ephemeral container works as before:
 
 ```bash
 docker compose run --rm \
