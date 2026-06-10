@@ -2353,7 +2353,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # --- Keyboard move helpers ------------------------------------------------
 
   # Compute and execute the right move_task call for the selected task given
-  # an Alt+Arrow key. Returns {:noreply, socket}.
+  # an Alt+Arrow key. Goes through the same preview → confirm path as a drag,
+  # so a move that would flip ancestor completion raises the styled modal
+  # (and honors the "completion changes" suppression class) instead of
+  # committing silently. Returns {:noreply, socket}.
   defp do_kbd_move(key, socket) do
     user = socket.assigns.current_user
     task = Tasks.get_task!(socket.assigns.selected_task_id)
@@ -2373,14 +2376,36 @@ defmodule DoItWeb.InitiativeShowLive do
         {:noreply, socket}
 
       attrs ->
-        case Tasks.move_task(task, user, attrs) do
-          {:ok, _moved} ->
-            {:noreply, socket}
+        case Tasks.preview_move(task, user, attrs) do
+          {:ok, %{scenario: nil}} ->
+            kbd_commit_move(socket, task, attrs)
+
+          {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
+            if skip_confirm?(socket, "completion-flip") do
+              kbd_commit_move(socket, task, attrs)
+            else
+              {:noreply,
+               assign_pending(socket, %{
+                 kind: :move,
+                 task_id: task.id,
+                 attrs: attrs,
+                 scenario: scenario,
+                 titles: titles,
+                 flip_ids: flip_ids
+               })}
+            end
 
           {:error, reason} ->
             {:noreply,
              put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
         end
+    end
+  end
+
+  defp kbd_commit_move(socket, task, attrs) do
+    case commit_move(socket, task, attrs) do
+      {:ok, socket} -> {:noreply, socket}
+      {:error, _reason, socket} -> {:noreply, socket}
     end
   end
 

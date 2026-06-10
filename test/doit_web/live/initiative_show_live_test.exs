@@ -217,6 +217,61 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "keyboard move honors the completion-flip confirm" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      # P is a done branch (its only child is done); L is an incomplete leaf
+      # right after it. Indenting L under P would uncomplete P — scenario 1.
+      p = create_task(user, initiative, nil, "P")
+      d = create_task(user, initiative, p, "D")
+      {:ok, _} = Tasks.toggle_complete(d, user)
+      l = create_task(user, initiative, nil, "L")
+
+      %{conn: conn, user: user, initiative: initiative, p: p, l: l}
+    end
+
+    test "indent into a done branch raises the modal; Proceed commits move + flip", %{
+      conn: conn,
+      initiative: initiative,
+      p: p,
+      l: l
+    } do
+      assert Tasks.get_task!(p.id).status == "done"
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      select_task(view, l.id)
+      send_kbd(view, "ArrowRight")
+
+      # Not moved yet — the styled confirm gates it, same as a drag.
+      assert has_element?(view, "form[phx-submit=confirm_pending]")
+      assert Tasks.get_task!(l.id).parent_id == initiative.root_task_id
+
+      render_click(view, "confirm_pending", %{})
+
+      assert Tasks.get_task!(l.id).parent_id == p.id
+      assert Tasks.get_task!(p.id).status == "open"
+    end
+
+    test "Cancel leaves the tree untouched", %{
+      conn: conn,
+      initiative: initiative,
+      p: p,
+      l: l
+    } do
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      select_task(view, l.id)
+      send_kbd(view, "ArrowRight")
+      render_click(view, "cancel_pending", %{})
+
+      refute has_element?(view, "form[phx-submit=confirm_pending]")
+      assert Tasks.get_task!(l.id).parent_id == initiative.root_task_id
+      assert Tasks.get_task!(p.id).status == "done"
+    end
+  end
+
   describe "Alt+ArrowLeft dedents to the grandparent" do
     setup %{conn: conn} do
       {conn, user} = register_and_log_in(conn)
