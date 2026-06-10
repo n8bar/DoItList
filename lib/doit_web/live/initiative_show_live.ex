@@ -40,7 +40,6 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:show_member_form, false)
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
-         |> assign(:last_selected_task_id, nil)
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
@@ -175,24 +174,20 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Selection is client-first (UX_GUARDRAILS 6.5): the highlight lives in the
+  # DOM, this event only loads the Details pane.
   def handle_event("select_task", %{"id" => id} = params, socket) do
     id = String.to_integer(id)
     focus = params["focus"]
 
     cond do
-      # A pill tap on the already-open task: don't toggle closed — just jump to
-      # the field it points at.
+      # A pill tap on the already-open task: just jump to the field.
       focus && socket.assigns.selected_task_id == id ->
         {:noreply, push_focus(socket, focus)}
 
-      # Plain row tap on the open task toggles it closed.
+      # Pane already shows this task — nothing to load.
       socket.assigns.selected_task_id == id ->
-        {:noreply,
-         socket
-         |> assign(:selected_task_id, nil)
-         |> assign(:selected_task, nil)
-         |> assign(:comments, [])
-         |> assign(:activity, [])}
+        {:noreply, socket}
 
       true ->
         case Tasks.get_task_with_relations(id) do
@@ -204,7 +199,6 @@ defmodule DoItWeb.InitiativeShowLive do
               socket
               |> assign(:editing_initiative?, false)
               |> assign(:selected_task_id, id)
-              |> assign(:last_selected_task_id, id)
               |> assign(:selected_task, task)
               |> assign(:comments, Tasks.list_comments(id))
               |> assign(:activity, Tasks.list_task_activity(id))
@@ -214,44 +208,21 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  # Keyboard: Enter toggles selection / pane. A selection → deselect (remember
-  # it as last). No selection → reselect the last task, or the first task if
-  # there's no history. Suppression (focus in a text field) is handled client-side.
-  def handle_event("kbd_select_toggle", _params, socket) do
-    if socket.assigns.selected_task_id do
-      {:noreply,
-       socket
-       |> assign(:last_selected_task_id, socket.assigns.selected_task_id)
-       |> assign(:selected_task_id, nil)
-       |> assign(:selected_task, nil)
-       |> assign(:comments, [])
-       |> assign(:activity, [])}
-    else
-      select_task_by_id(socket, socket.assigns.last_selected_task_id || first_task_id(socket))
-    end
-  end
-
-  # Keyboard: N — open the New Subtask form under the selected task.
-  def handle_event("kbd_new_subtask", _params, socket) do
-    cond do
-      is_nil(socket.assigns.selected_task_id) -> {:noreply, socket}
-      not socket.assigns.can_edit -> {:noreply, socket}
-      true -> {:noreply, show_add_for(socket, socket.assigns.selected_task_id)}
+  # Keyboard: N — open the New Subtask form under the client's selected task.
+  def handle_event("kbd_new_subtask", params, socket) do
+    case kbd_target(socket, params) do
+      nil -> {:noreply, socket}
+      task -> {:noreply, show_add_for(socket, task.id)}
     end
   end
 
   # Keyboard: S — open the New Sibling form for the selected task (same parent).
-  def handle_event("kbd_new_sibling", _params, socket) do
-    cond do
-      is_nil(socket.assigns.selected_task_id) ->
+  def handle_event("kbd_new_sibling", params, socket) do
+    case kbd_target(socket, params) do
+      nil ->
         {:noreply, socket}
 
-      not socket.assigns.can_edit ->
-        {:noreply, socket}
-
-      true ->
-        task = socket.assigns.selected_task
-
+      task ->
         {:noreply,
          socket
          |> assign(:add_task_for, task.parent_id || :root)
@@ -261,12 +232,11 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   # Keyboard: P / W / A — step priority / weight / assignee of the selected task.
-  def handle_event("kbd_adjust", %{"field" => field, "dir" => dir}, socket)
+  def handle_event("kbd_adjust", %{"field" => field, "dir" => dir} = params, socket)
       when field in ~w(priority weight assignee) and dir in ~w(up down) do
-    cond do
-      is_nil(socket.assigns.selected_task_id) -> {:noreply, socket}
-      not socket.assigns.can_edit -> {:noreply, socket}
-      true -> apply_kbd_adjust(socket, field, dir)
+    case kbd_target(socket, params) do
+      nil -> {:noreply, socket}
+      task -> apply_kbd_adjust(socket, task, field, dir)
     end
   end
 
@@ -612,17 +582,11 @@ defmodule DoItWeb.InitiativeShowLive do
   # Keyboard alternative for task reorganization (M02 Arc 3 item 6).
   # When a task is selected (Details panel open) and the user has edit rights,
   # Alt+↑/↓ reorder among siblings; Alt+←/→ dedent / indent.
-  def handle_event("kbd_move", %{"key" => key, "altKey" => true}, socket)
+  def handle_event("kbd_move", %{"key" => key, "altKey" => true} = params, socket)
       when key in ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"] do
-    cond do
-      is_nil(socket.assigns.selected_task_id) ->
-        {:noreply, socket}
-
-      not socket.assigns.can_edit ->
-        {:noreply, socket}
-
-      true ->
-        do_kbd_move(key, socket)
+    case kbd_target(socket, params) do
+      nil -> {:noreply, socket}
+      task -> do_kbd_move(key, task, socket)
     end
   end
 
@@ -804,7 +768,9 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_info({:task_updated, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
 
-  def handle_info({:task_deleted, _id}, socket), do: {:noreply, load_tree(socket)}
+  def handle_info({:task_deleted, _id}, socket),
+    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+
   def handle_info({:comment_added, _id}, socket), do: {:noreply, refresh_selected(socket)}
 
   def handle_info({:task_moved, _id}, socket),
@@ -822,16 +788,14 @@ defmodule DoItWeb.InitiativeShowLive do
             mounted() {
               this._h = (e) => this.handle(e);
               window.addEventListener("keydown", this._h);
+              // Row clicks are handled by a delegated listener in app.js (no
+              // hook of its own) — give it a push channel into this LiveView.
+              window.DoitPush = (ev, payload) => this.pushEvent(ev, payload);
             },
-            destroyed() { window.removeEventListener("keydown", this._h); },
-            updated() {
-              // After a keyboard-driven selection change, bring the selected
-              // row (not its subtree) into view if it isn't already.
-              if (this._scrollSelected) {
-                this._scrollSelected = false;
-                const li = document.querySelector("li[data-selected]");
-                if (li) (li.firstElementChild || li).scrollIntoView({block: "nearest"});
-              }
+            destroyed() {
+              window.removeEventListener("keydown", this._h);
+              if (window.DoitPush) delete window.DoitPush;
+              clearTimeout(this._paneT);
             },
             inField() {
               const a = document.activeElement;
@@ -839,8 +803,14 @@ defmodule DoItWeb.InitiativeShowLive do
                               a.tagName === "SELECT" || a.isContentEditable));
             },
             selectedId() {
-              const el = document.querySelector("li[data-selected]");
-              return el ? el.getAttribute("data-selected") : null;
+              const S = window.DoitSelection;
+              return S ? S.id : null;
+            },
+            // The pane load trails rapid keyboard navigation: the highlight is
+            // client-instant, the server round-trip settles after the pause.
+            schedulePaneLoad(id) {
+              clearTimeout(this._paneT);
+              this._paneT = setTimeout(() => this.pushEvent("select_task", {id: id}), 150);
             },
             handle(e) {
               // Suppression: a text-accepting element has focus — fall through.
@@ -864,8 +834,16 @@ defmodule DoItWeb.InitiativeShowLive do
               }
               if (k === "Enter") {
                 e.preventDefault();
-                this._scrollSelected = true;
-                this.pushEvent("kbd_select_toggle", {});
+                const S = window.DoitSelection;
+                if (!S) return;
+                if (S.id) {
+                  S.clear();
+                  this.pushEvent("close_task", {});
+                } else {
+                  const first = document.querySelector("li[data-task-id]");
+                  const id = S.lastId || (first && first.dataset.taskId);
+                  if (id) { S.set(id, {scroll: true}); this.pushEvent("select_task", {id: id}); }
+                }
                 return;
               }
               const sel = this.selectedId();
@@ -883,15 +861,18 @@ defmodule DoItWeb.InitiativeShowLive do
                   if (li && this.blockedMove(li, k)) { this.bonk(); return; }
                   const S = window.DoitSaving;
                   if (S && li) S.markSaving(this.movePinkRows(S, li, k));
-                  this.pushEvent("kbd_move", {key: k, altKey: true});
+                  this.pushEvent("kbd_move", {key: k, altKey: true, id: sel});
                   return;
                 }
                 const id = this.navTarget(sel, k);
-                if (id) { this._scrollSelected = true; this.pushEvent("select_task", {id: id}); }
+                if (id) {
+                  window.DoitSelection.set(id, {scroll: true});
+                  this.schedulePaneLoad(id);
+                }
                 return;
               }
-              if (k === "n" || k === "N") { e.preventDefault(); this.pushEvent("kbd_new_subtask", {}); return; }
-              if (k === "s" || k === "S") { e.preventDefault(); this.pushEvent("kbd_new_sibling", {}); return; }
+              if (k === "n" || k === "N") { e.preventDefault(); this.pushEvent("kbd_new_subtask", {id: sel}); return; }
+              if (k === "s" || k === "S") { e.preventDefault(); this.pushEvent("kbd_new_sibling", {id: sel}); return; }
               // Del clicks the delete button so its confirm dialog still fires.
               if (k === "Delete") {
                 e.preventDefault();
@@ -911,7 +892,7 @@ defmodule DoItWeb.InitiativeShowLive do
                     ? [S.savingRowOf(li), ...S.savingAncestors(li)]
                     : [S.savingRowOf(li)]);
                 }
-                this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up"});
+                this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
                 return;
               }
             },
@@ -1127,7 +1108,6 @@ defmodule DoItWeb.InitiativeShowLive do
                   add_task_for={@add_task_for}
                   add_task_after={@add_task_after}
                   can_edit={@can_edit}
-                  selected_id={@selected_task_id}
                   initiative_id={@initiative.id}
                   saving_ids={@pending_saving_ids}
                   inherited_sort={@root_sort_mode}
@@ -1220,25 +1200,6 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
-  defp select_task_by_id(socket, nil), do: {:noreply, socket}
-
-  defp select_task_by_id(socket, id) do
-    case Tasks.get_task_with_relations(id) do
-      nil ->
-        {:noreply, socket}
-
-      task ->
-        {:noreply,
-         socket
-         |> assign(:editing_initiative?, false)
-         |> assign(:selected_task_id, id)
-         |> assign(:last_selected_task_id, id)
-         |> assign(:selected_task, task)
-         |> assign(:comments, Tasks.list_comments(id))
-         |> assign(:activity, Tasks.list_task_activity(id))}
-    end
-  end
-
   defp show_add_for(socket, parent_id) do
     socket
     |> assign(:add_task_for, parent_id)
@@ -1246,9 +1207,22 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:new_task_title, "")
   end
 
-  defp first_task_id(socket) do
-    case socket.assigns.tree do
-      [%{id: id} | _] -> id
+  # Resolve a keyboard shortcut's target: the client sends its selected id
+  # (the DOM-owned selection); fall back to the server's pane task. Guarded
+  # to this initiative and to editors.
+  defp kbd_target(socket, params) do
+    id =
+      case params["id"] do
+        id when is_binary(id) -> String.to_integer(id)
+        _ -> socket.assigns.selected_task_id
+      end
+
+    with true <- socket.assigns.can_edit,
+         false <- is_nil(id),
+         %Task{} = task <- Tasks.get_task(id),
+         true <- task.initiative_id == socket.assigns.initiative.id do
+      task
+    else
       _ -> nil
     end
   end
@@ -1261,8 +1235,7 @@ defmodule DoItWeb.InitiativeShowLive do
   defp push_focus(socket, _field), do: socket
 
   # Persist a single-field keyboard step (P/W/A), then re-render the tree + pane.
-  defp apply_kbd_adjust(socket, field, dir) do
-    task = socket.assigns.selected_task
+  defp apply_kbd_adjust(socket, task, field, dir) do
     params = adjust_params(field, dir, task, socket.assigns.members)
 
     case Tasks.update_task(task, socket.assigns.current_user, params) do
@@ -1493,7 +1466,6 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :add_task_for, :any, required: true
   attr :add_task_after, :any, required: true
   attr :can_edit, :boolean, required: true
-  attr :selected_id, :any, required: true
   attr :initiative_id, :integer, required: true
   attr :saving_ids, :any, required: true
   attr :inherited_sort, :string, required: true
@@ -1502,10 +1474,13 @@ defmodule DoItWeb.InitiativeShowLive do
     assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
 
     ~H"""
+    <%!-- Selection is client-owned (UX_GUARDRAILS 6.5): the data-selected attr
+         is set by the client and the highlight comes from app.css rules under
+         li[data-selected], so selection never re-renders the tree. Row clicks
+         are handled by the delegated listener in app.js. --%>
     <li
       id={"task-#{@task.id}"}
       data-task-id={@task.id}
-      data-selected={@selected_id == @task.id && @task.id}
       data-depth={@depth}
       class="rounded border border-zinc-400 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-500 dark:first:border-t-zinc-500"
     >
@@ -1514,13 +1489,8 @@ defmodule DoItWeb.InitiativeShowLive do
         class={[
           "relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
           MapSet.member?(@saving_ids, @task.id) && "is-saving",
-          if(@selected_id == @task.id,
-            do: "bg-emerald-50 dark:bg-emerald-950 hover:bg-emerald-100 dark:hover:bg-emerald-900",
-            else: "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-          )
+          "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
         ]}
-        phx-click="select_task"
-        phx-value-id={@task.id}
       >
         <span
           :if={@can_edit}
@@ -1634,7 +1604,7 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               <.icon name="hero-plus" class="w-4 h-4" />
               <span class="hidden sm:inline">
-                <span class={@selected_id == @task.id && "underline"}>N</span>{if(@depth == 0,
+                <span class="kbd-key">N</span>{if(@depth == 0,
                   do: "ew Task",
                   else: "ew Subtask"
                 )}
@@ -1664,7 +1634,7 @@ defmodule DoItWeb.InitiativeShowLive do
               phx-value-task={@task.id}
               class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
-              + Add <span class={@selected_id == @task.id && "underline"}>S</span>ibling
+              + Add <span class="kbd-key">S</span>ibling
             </button>
           </div>
         </div>
@@ -1781,7 +1751,6 @@ defmodule DoItWeb.InitiativeShowLive do
             add_task_for={@add_task_for}
             add_task_after={@add_task_after}
             can_edit={@can_edit}
-            selected_id={@selected_id}
             initiative_id={@initiative_id}
             saving_ids={@saving_ids}
             inherited_sort={@resolved_sort}
@@ -2380,9 +2349,8 @@ defmodule DoItWeb.InitiativeShowLive do
   # so a move that would flip ancestor completion raises the styled modal
   # (and honors the "completion changes" suppression class) instead of
   # committing silently. Returns {:noreply, socket}.
-  defp do_kbd_move(key, socket) do
+  defp do_kbd_move(key, task, socket) do
     user = socket.assigns.current_user
-    task = Tasks.get_task!(socket.assigns.selected_task_id)
     siblings = sibling_ids(task)
     idx = Enum.find_index(siblings, &(&1 == task.id)) || 0
 

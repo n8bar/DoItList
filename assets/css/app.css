@@ -133,6 +133,27 @@ ul.collapsed-peek {
   margin-bottom: 0.25rem;
 }
 
+/* Client-owned selection (UX_GUARDRAILS 6.5): the highlight + shortcut-key
+   underlines key off the client-set data-selected attribute, so selecting a
+   row never re-renders the tree. Colors mirror the old server-rendered
+   emerald classes (emerald-50/100 light, emerald-950/900 dark). Scoped with
+   `>` so a selected branch doesn't tint its children's rows. */
+li[data-selected] > [data-task-row] {
+  background-color: #ecfdf5;
+}
+li[data-selected] > [data-task-row]:hover {
+  background-color: #d1fae5;
+}
+[data-theme=dark] li[data-selected] > [data-task-row] {
+  background-color: #022c22;
+}
+[data-theme=dark] li[data-selected] > [data-task-row]:hover {
+  background-color: #064e3b;
+}
+li[data-selected] > [data-task-row] .kbd-key {
+  text-decoration: underline;
+}
+
 /* Drag-reorder visuals (Hooks.DragReorder).
    - .dragging-source: dim the row being dragged so the user can see what's
      moving without losing it visually.

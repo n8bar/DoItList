@@ -112,6 +112,72 @@ const selectedLi = () => document.querySelector("li[data-selected]")
 // The colocated TaskKeys hook can't import, so reach it through the window.
 window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren, selectedLi, savingRowOf}
 
+// Client-owned selection (UX_GUARDRAILS 6.5): the highlight is a DOM attribute
+// + CSS, applied instantly and re-applied across re-renders by the guard
+// observer below — the server only ever hears about it to load the Details
+// pane. `lastId` backs the Enter toggle's "reselect what I had" behavior.
+const DoitSelection = {
+  id: null,
+  lastId: null,
+  li() { return this.id ? document.getElementById("task-" + this.id) : null },
+  set(id, opts = {}) {
+    id = String(id)
+    if (this.id && this.id !== id) this.lastId = this.id
+    this.id = id
+    this.apply()
+    if (opts.scroll) {
+      const li = this.li()
+      if (li) (li.firstElementChild || li).scrollIntoView({block: "nearest"})
+    }
+  },
+  clear() {
+    if (this.id) this.lastId = this.id
+    this.id = null
+    this.apply()
+  },
+  // Idempotent: setting an attribute to its current value doesn't mutate, so
+  // the guard observer converges instead of looping.
+  apply() {
+    document.querySelectorAll("li[data-selected]").forEach((li) => {
+      if (!this.id || li.id !== "task-" + this.id) li.removeAttribute("data-selected")
+    })
+    const li = this.li()
+    if (li && li.getAttribute("data-selected") !== this.id) {
+      li.setAttribute("data-selected", this.id)
+    }
+  },
+}
+window.DoitSelection = DoitSelection
+
+// Row clicks: selection toggles instantly client-side; the server event only
+// drives the Details pane. Pills (phx-value-focus) keep their own phx-click
+// (select + focus a field) and never toggle the selection closed.
+document.addEventListener("click", (e) => {
+  const row = e.target.closest("[data-task-row]")
+  if (!row || !window.DoitPush) return
+  // Interactive children (toggle, collapse, pills, drag handle) own their
+  // clicks; pills additionally select without toggling. The check must stay
+  // inside the row — ancestors (children <ul>s, the page root) carry hooks.
+  const interactive = e.target.closest("button, a, form, [phx-hook]")
+  if (interactive && interactive !== row && row.contains(interactive)) {
+    if (e.target.closest("[phx-value-focus]")) {
+      const li = row.closest("li[data-task-id]")
+      if (li) DoitSelection.set(li.dataset.taskId)
+    }
+    return
+  }
+  const li = row.closest("li[data-task-id]")
+  if (!li) return
+  const id = li.dataset.taskId
+  if (DoitSelection.id === id) {
+    DoitSelection.clear()
+    window.DoitPush("close_task", {})
+  } else {
+    DoitSelection.set(id)
+    window.DoitPush("select_task", {id: id})
+  }
+})
+
 // Pink-on-interaction wiring for the click / change write paths.
 document.addEventListener("click", (e) => {
   // Pending-confirm pinking is server-rendered (pink = "maybe write"): while a
@@ -1091,12 +1157,16 @@ new MutationObserver(() => {
   collapseGuardRaf = requestAnimationFrame(() => {
     collapseGuardRaf = null
     applyCollapseStates()
+    // Selection is client-owned too — re-assert it across the same patch paths.
+    window.DoitSelection.apply()
   })
 }).observe(document.body, {
   subtree: true,
   childList: true,
   attributes: true,
-  attributeFilter: ["class"],
+  // data-selected: morphdom strips the client-set attr on patch; both
+  // re-applies are idempotent (no write when correct), so no loops.
+  attributeFilter: ["class", "data-selected"],
 })
 
 // Sizes the whole task tree to one width so every row — roots included —
