@@ -245,7 +245,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       send_kbd(view, "ArrowRight")
 
       # Not moved yet — the styled confirm gates it, same as a drag.
-      assert has_element?(view, "form[phx-submit=confirm_pending]")
+      assert has_element?(view, "#confirm-form")
       assert Tasks.get_task!(l.id).parent_id == initiative.root_task_id
 
       render_click(view, "confirm_pending", %{})
@@ -266,7 +266,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       send_kbd(view, "ArrowRight")
       render_click(view, "cancel_pending", %{})
 
-      refute has_element?(view, "form[phx-submit=confirm_pending]")
+      refute has_element?(view, "#confirm-form")
       assert Tasks.get_task!(l.id).parent_id == initiative.root_task_id
       assert Tasks.get_task!(p.id).status == "done"
     end
@@ -478,7 +478,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       # Not yet committed: still under P, confirm modal showing.
       assert Tasks.get_task!(c2.id).parent_id == p.id
-      assert has_element?(view, "form[phx-submit=confirm_pending]")
+      assert has_element?(view, "#confirm-form")
 
       render_click(view, "confirm_pending", %{})
 
@@ -597,7 +597,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       # Delete now opens the styled confirm modal; Proceed redirects.
       assert has_element?(view, "button[phx-click=request_delete_initiative]")
       render_click(view, "request_delete_initiative", %{})
-      assert has_element?(view, "form[phx-submit=confirm_pending]")
+      assert has_element?(view, "#confirm-form")
 
       assert {:error, {:live_redirect, %{to: to}}} =
                render_click(view, "confirm_pending", %{})

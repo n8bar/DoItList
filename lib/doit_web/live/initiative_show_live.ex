@@ -1385,9 +1385,19 @@ defmodule DoItWeb.InitiativeShowLive do
       id="completion-confirm"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
     >
+      <%!-- The modal hides optimistically (6.1/6.2): JS.hide runs at click time,
+           the push commits; the maybe-write hue carries the in-flight signal,
+           and the server render reconciles (incl. failures, via flash). --%>
       <form
-        phx-submit="confirm_pending"
-        phx-click-away="cancel_pending"
+        id="confirm-form"
+        phx-submit={
+          Phoenix.LiveView.JS.hide(to: "#completion-confirm")
+          |> Phoenix.LiveView.JS.push("confirm_pending")
+        }
+        phx-click-away={
+          Phoenix.LiveView.JS.hide(to: "#completion-confirm")
+          |> Phoenix.LiveView.JS.push("cancel_pending")
+        }
         class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900"
       >
         <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
@@ -1412,18 +1422,22 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="mt-5 flex justify-end gap-2">
           <button
             type="button"
-            phx-click="cancel_pending"
-            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            phx-click={
+              Phoenix.LiveView.JS.hide(to: "#completion-confirm")
+              |> Phoenix.LiveView.JS.push("cancel_pending")
+            }
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
           >
             Cancel
           </button>
           <button
             type="submit"
             data-optimistic-remove={@optimistic_remove}
+            phx-disable-with={if @destructive, do: "Deleting…", else: "Working…"}
             class={[
-              "rounded px-3 py-1.5 text-sm font-medium text-white",
-              @destructive && "bg-red-600 hover:bg-red-700",
-              !@destructive && "bg-emerald-600 hover:bg-emerald-700"
+              "rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition",
+              @destructive && "bg-red-600 hover:bg-red-700 active:bg-red-800",
+              !@destructive && "bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
             ]}
           >
             {if @destructive, do: "Delete", else: "Proceed"}
