@@ -155,6 +155,9 @@ const DoitSelection = {
   // (not attributes) and skip the focused element, so the guard observer
   // converges and in-progress typing survives.
   syncPaneSkeleton() {
+    // Selecting a task always leaves the initiative editor (.03.07.08).
+    const ip = document.getElementById("initiative-editor-pane")
+    if (ip && this.id && !ip.hidden) ip.hidden = true
     const pane = document.getElementById("task-editor-pane")
     if (!pane) return
     const arrived = pane.dataset.taskId === this.id
@@ -203,12 +206,26 @@ const DoitSelection = {
 }
 window.DoitSelection = DoitSelection
 
-// Closing the pane by any server-bound control (the X, the mobile backdrop,
-// switching to the initiative editor) also clears the client selection, so
-// the highlight and skeleton can't outlive the pane.
+// Pane visibility flips client-instant (.03.07.08); the server patch
+// confirms moments later. The initiative title click swaps panes at once,
+// any close control hides both, and selecting a task hides the initiative
+// editor (see DoitSelection.apply).
 document.addEventListener("click", (e) => {
-  if (e.target.closest("[phx-click='close_task'], [phx-click='close_panel'], [phx-click='edit_initiative']")) {
+  const initiativePane = document.getElementById("initiative-editor-pane")
+  const taskPane = document.getElementById("task-editor-pane")
+  if (e.target.closest("[phx-click='edit_initiative']")) {
     DoitSelection.clear()
+    if (initiativePane) initiativePane.hidden = false
+    if (taskPane) taskPane.hidden = true
+    return
+  }
+  if (
+    e.target.closest(
+      "[phx-click='close_task'], [phx-click='close_panel'], [phx-click='close_initiative']"
+    )
+  ) {
+    DoitSelection.clear()
+    if (initiativePane) initiativePane.hidden = true
   }
 })
 

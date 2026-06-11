@@ -64,8 +64,13 @@ defmodule DoItWeb.InitiativeShowLive do
     # parent's resolved), so rendering never walks the DB per branch. The
     # header bar shows the system root's roll-up — same leaf-average math as
     # every branch (ProductSpec § Roll-up Progress).
+    # Top-level tasks ARE the root's children — attach them so leaf?(@root_task)
+    # never falls back to a per-render count query (the pane renders always now).
+    root = root && Map.put(root, :children, tree)
+
     socket
     |> assign(:tree, tree)
+    |> assign(:root_task, root)
     |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
     |> assign(:initiative_progress, (root && root.computed_progress) || 0)
   end
@@ -92,11 +97,16 @@ defmodule DoItWeb.InitiativeShowLive do
           |> maybe_refresh_root_sort(task, root_id)
 
         # Any in-tree lineage tops out at the system root — its fresh roll-up
-        # drives the header bar.
+        # drives the header bar and the initiative editor's computed line.
         socket =
           case Enum.find(lineage, &(&1.id == root_id)) do
-            nil -> socket
-            root -> assign(socket, :initiative_progress, root.computed_progress || 0)
+            nil ->
+              socket
+
+            root ->
+              socket
+              |> assign(:initiative_progress, root.computed_progress || 0)
+              |> assign(:root_task, Map.put(root, :children, socket.assigns.tree))
           end
 
         if socket.assigns.selected_task_id in Enum.map(lineage, & &1.id),
@@ -323,15 +333,12 @@ defmodule DoItWeb.InitiativeShowLive do
     initiative = socket.assigns.initiative
     form = to_form(Initiatives.change_initiative(initiative))
 
-    # The Initiative IS its root task: select the root so the shared sort menu +
-    # computed-from-children line operate on it, while the pane wraps the
-    # Initiative-only fields (name / subtitle / description / members / delete).
-    root = Tasks.get_task_with_relations(initiative.root_task_id)
-
+    # The editor reads @root_task (kept fresh by load_tree / patch_task); the
+    # sort controls carry their own task id, so the task selection is left
+    # alone — its pane just hides while the editor is open.
     {:noreply,
      socket
-     |> assign(:selected_task_id, initiative.root_task_id)
-     |> assign(:selected_task, root)
+     |> assign(:selected_task_id, nil)
      |> assign(:editing_initiative?, true)
      |> assign(:initiative_form, form)
      |> assign(:subtitle, Initiatives.subtitle(initiative))}
@@ -341,8 +348,7 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply,
      socket
      |> assign(:editing_initiative?, false)
-     |> assign(:selected_task_id, nil)
-     |> assign(:selected_task, nil)}
+     |> assign(:selected_task_id, nil)}
   end
 
   def handle_event("update_subtitle", %{"subtitle" => subtitle}, socket) do
@@ -449,11 +455,11 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("cascade_sort", _params, socket) do
+  def handle_event("cascade_sort", params, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
     else
-      task = socket.assigns.selected_task
+      task = sort_target(socket, params)
       branch_count = Tasks.count_descendant_branches(task.id)
 
       if branch_count > 10 and not skip_confirm?(socket, "cascade-sort") do
@@ -474,7 +480,7 @@ defmodule DoItWeb.InitiativeShowLive do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
     else
-      task = socket.assigns.selected_task
+      task = sort_target(socket, params)
       user = socket.assigns.current_user
 
       mode =
@@ -1257,8 +1263,12 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
+            <%!-- Persistent like the task pane (.03.07.08): always rendered,
+                 hidden toggled — the client flips it instantly on the
+                 initiative title click and the server patch confirms. --%>
             <div
-              :if={@editing_initiative?}
+              id="initiative-editor-pane"
+              hidden={not @editing_initiative?}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.initiative_editor
@@ -1266,7 +1276,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 can_edit={@can_edit}
                 can_admin={@can_admin}
                 initiative={@initiative}
-                root_task={@selected_task}
+                root_task={@root_task}
                 subtitle={@subtitle}
               />
             </div>
@@ -1281,11 +1291,11 @@ defmodule DoItWeb.InitiativeShowLive do
                  LiveView never clobbers the focused field, so in-progress
                  typing survives the patch. --%>
             <div
-              :if={@selected_task && not @editing_initiative?}
+              :if={@selected_task}
               id="task-editor-pane"
               phx-hook="FocusField"
               data-task-id={@selected_task.id}
-              hidden={is_nil(@selected_task_id)}
+              hidden={is_nil(@selected_task_id) or @editing_initiative?}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.task_editor
@@ -1312,6 +1322,15 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:add_task_for, parent_id)
     |> assign(:add_task_after, parent_id)
     |> assign(:new_task_title, "")
+  end
+
+  # The sort controls name their own target (the form's hidden task_id /
+  # the cascade button's phx-value-id); fall back to the pane task.
+  defp sort_target(socket, params) do
+    case params["task_id"] || params["id"] do
+      id when is_binary(id) -> Tasks.get_task!(String.to_integer(id))
+      _ -> socket.assigns.selected_task
+    end
   end
 
   # Resolve a keyboard shortcut's target: the client sends its selected id
@@ -1976,7 +1995,10 @@ defmodule DoItWeb.InitiativeShowLive do
         />
       </.form>
 
-      <div :if={not leaf?(@root_task)} class="text-xs text-zinc-500 dark:text-zinc-400 italic">
+      <div class={[
+        "text-xs text-zinc-500 dark:text-zinc-400 italic",
+        leaf?(@root_task) && "invisible"
+      ]}>
         Computed from children: {@root_task.computed_progress}%
       </div>
 
@@ -1995,9 +2017,18 @@ defmodule DoItWeb.InitiativeShowLive do
         </summary>
         <div class="mt-3 space-y-3">
           <div>
-            <label for="progress-calc" class="text-xs text-zinc-500 dark:text-zinc-400">
-              Progress calculation
-            </label>
+            <div class="flex items-center gap-1">
+              <label for="progress-calc" class="text-xs text-zinc-500 dark:text-zinc-400">
+                Progress calculation
+              </label>
+              <.info_hint id="calc-hint" label="How do the methods differ?">
+                Leaf average (default): every leaf counts equally, no matter how deep it
+                sits — a branch holding 40 leaves outweighs a sibling holding 1. Weights
+                multiply down the path, so weighting a branch scales its whole subtree.
+                First-generation children: each direct child counts as one unit
+                regardless of how many leaves it contains, level by level.
+              </.info_hint>
+            </div>
             <form phx-change="set_progress_calc">
               <select
                 id="progress-calc"
@@ -2114,7 +2145,9 @@ defmodule DoItWeb.InitiativeShowLive do
   """
   def sort_menu(assigns) do
     ~H"""
-    <div :if={not leaf?(@task)} class="space-y-1">
+    <%!-- invisible (not removed) on leaves so leaf↔branch selection switches
+         don't shift the layout below (UX_GUARDRAILS 1.1). --%>
+    <div class={["space-y-1", leaf?(@task) && "invisible"]}>
       <label for={"sort-mode-#{@task.id}"} class="text-xs text-zinc-500 dark:text-zinc-400">
         {@label}
       </label>
@@ -2126,6 +2159,7 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-change="set_sort"
         class="flex items-center gap-2"
       >
+        <input type="hidden" name="task_id" value={@task.id} />
         <select
           id={"sort-mode-#{@task.id}"}
           name="mode"
@@ -2163,6 +2197,7 @@ defmodule DoItWeb.InitiativeShowLive do
         :if={@can_edit}
         type="button"
         phx-click="cascade_sort"
+        phx-value-id={@task.id}
         data-saving-subtree
         class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition"
         title="Force every descendant branch to inherit this branch's sort"
@@ -2278,10 +2313,24 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
         </div>
 
-        <div :if={leaf?(@task)}>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400">
-            Manual progress: {@task.manual_progress}%
-          </label>
+        <%!-- One progress block for leaf and branch alike — the branch-only
+             copy keeps its space when invisible, so leaf↔branch selection
+             switches never shift the layout (UX_GUARDRAILS 1.1). --%>
+        <div class="space-y-1">
+          <div class="flex items-center gap-1">
+            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+              Manual progress: {@task.manual_progress}%
+            </label>
+            <.info_hint
+              :if={not leaf?(@task)}
+              id={"mp-hint-#{@task.id}"}
+              label="Why is this disabled?"
+            >
+              Progress on a task with subtasks is calculated from its subtasks instead of
+              being set manually. Your manual value is kept and will start being used again
+              if you remove all subtasks.
+            </.info_hint>
+          </div>
           <input
             type="range"
             name="task[manual_progress]"
@@ -2290,36 +2339,24 @@ defmodule DoItWeb.InitiativeShowLive do
             step="5"
             value={@task.manual_progress}
             class="w-full"
-            disabled={not @can_edit}
+            disabled={not @can_edit or not leaf?(@task)}
             phx-debounce="200"
+            aria-label={
+              if leaf?(@task),
+                do: "Manual progress",
+                else: "Manual progress (disabled — computed from subtasks)"
+            }
           />
-        </div>
-
-        <div :if={not leaf?(@task)} class="space-y-1">
-          <div class="flex items-center gap-1">
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">
-              Manual progress: {@task.manual_progress}%
-            </label>
-            <.info_hint id={"mp-hint-#{@task.id}"} label="Why is this disabled?">
-              Progress on a task with subtasks is calculated from its subtasks instead of
-              being set manually. Your manual value is kept and will start being used again
-              if you remove all subtasks.
-            </.info_hint>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="5"
-            value={@task.manual_progress}
-            class="w-full"
-            disabled
-            aria-label="Manual progress (disabled — computed from subtasks)"
-          />
-          <p class="text-xs text-zinc-400 dark:text-zinc-500 italic">
+          <p class={[
+            "text-xs text-zinc-400 dark:text-zinc-500 italic",
+            leaf?(@task) && "invisible"
+          ]}>
             Ignored — this task has subtasks.
           </p>
-          <div class="text-xs text-zinc-500 dark:text-zinc-400 italic">
+          <div class={[
+            "text-xs text-zinc-500 dark:text-zinc-400 italic",
+            leaf?(@task) && "invisible"
+          ]}>
             Computed from children: {@task.computed_progress}%
           </div>
         </div>

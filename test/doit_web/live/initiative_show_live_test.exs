@@ -411,7 +411,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert render(view) =~ "Computed from children:"
     end
 
-    test "selecting a leaf shows the editable slider, no branch hint", %{
+    test "selecting a leaf enables the slider; branch copy keeps its space, invisible", %{
       conn: conn,
       initiative: initiative,
       child: child
@@ -420,7 +420,10 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       select_task(view, child.id)
 
-      refute render(view) =~ "Ignored — this task has subtasks."
+      assert has_element?(view, "#task-editor-pane input[type=range]:not([disabled])")
+      # Reserved space (UX_GUARDRAILS 1.1): the branch-only copy stays in the
+      # DOM, invisible, so leaf↔branch switches don't shift the layout.
+      assert has_element?(view, "#task-editor-pane p.invisible")
       refute has_element?(view, "#mp-hint-#{child.id}-pop")
     end
   end
