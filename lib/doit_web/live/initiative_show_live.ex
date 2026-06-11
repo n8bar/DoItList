@@ -1975,8 +1975,11 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- Subtitle is stored in the root task's title (.05.03), so it has its
              own write path rather than riding the Initiative changeset. --%>
         <div>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400">Subtitle</label>
+          <label for="initiative-subtitle" class="text-xs text-zinc-500 dark:text-zinc-400">
+            Subtitle
+          </label>
           <input
+            id="initiative-subtitle"
             type="text"
             name="subtitle"
             value={@subtitle}
@@ -2266,7 +2269,9 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <form phx-change="update_task" phx-submit="update_task" class="space-y-3">
         <div>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400">Title</label>
+          <label for="task-field-title" class="text-xs text-zinc-500 dark:text-zinc-400">
+            Title
+          </label>
           <input
             id="task-field-title"
             type="text"
@@ -2279,8 +2284,11 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
 
         <div>
-          <label class="text-xs text-zinc-500 dark:text-zinc-400">Description</label>
+          <label for="task-field-description" class="text-xs text-zinc-500 dark:text-zinc-400">
+            Description
+          </label>
           <textarea
+            id="task-field-description"
             name="task[description]"
             class="w-full textarea textarea-bordered textarea-sm"
             rows="3"
@@ -2291,7 +2299,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+            <label for="task-field-priority" class="text-xs text-zinc-500 dark:text-zinc-400">
               <span class={@can_edit && "underline"}>P</span>riority
             </label>
             <select
@@ -2310,7 +2318,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+            <label for="task-field-weight" class="text-xs text-zinc-500 dark:text-zinc-400">
               <span class={@can_edit && "underline"}>W</span>eight
             </label>
             <input
@@ -2326,7 +2334,7 @@ defmodule DoItWeb.InitiativeShowLive do
             />
           </div>
           <div>
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+            <label for="task-field-assignee" class="text-xs text-zinc-500 dark:text-zinc-400">
               <span class={@can_edit && "underline"}>A</span>ssignee
             </label>
             <select
@@ -2352,7 +2360,7 @@ defmodule DoItWeb.InitiativeShowLive do
              switches never shift the layout (UX_GUARDRAILS 1.1). --%>
         <div class="space-y-1">
           <div class="flex items-center gap-1">
-            <label class="text-xs text-zinc-500 dark:text-zinc-400">
+            <label for="task-field-progress" class="text-xs text-zinc-500 dark:text-zinc-400">
               Manual progress: {@task.manual_progress}%
             </label>
             <.info_hint
@@ -2366,6 +2374,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </.info_hint>
           </div>
           <input
+            id="task-field-progress"
             type="range"
             name="task[manual_progress]"
             min="0"
