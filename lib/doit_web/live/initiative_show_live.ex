@@ -2373,14 +2373,13 @@ defmodule DoItWeb.InitiativeShowLive do
   # Dropdown ordering: criteria first, then Manual at the bottom. "weight"
   # is intentionally absent from the menu but still supported by the engine
   # for a possible future re-enable.
-  @sort_mode_options ~w(alphabetical completion computed_progress priority created updated manual)
+  @sort_mode_options ~w(alphabetical completion priority created updated manual)
 
   defp sort_mode_options, do: @sort_mode_options
 
   defp sort_mode_label("manual"), do: "Manual"
   defp sort_mode_label("alphabetical"), do: "Alphabetical"
-  defp sort_mode_label("completion"), do: "Completion"
-  defp sort_mode_label("computed_progress"), do: "Progress"
+  defp sort_mode_label("completion"), do: "Completion %"
   defp sort_mode_label("priority"), do: "Priority"
   defp sort_mode_label("created"), do: "First Created"
   defp sort_mode_label("updated"), do: "Last Updated"
@@ -2400,8 +2399,6 @@ defmodule DoItWeb.InitiativeShowLive do
   defp sort_direction_label("priority", true), do: "lowest priority"
   defp sort_direction_label("completion", false), do: "least complete"
   defp sort_direction_label("completion", true), do: "most complete"
-  defp sort_direction_label("computed_progress", false), do: "most progress"
-  defp sort_direction_label("computed_progress", true), do: "least progress"
   defp sort_direction_label("created", false), do: "oldest 1st"
   defp sort_direction_label("created", true), do: "newest 1st"
   defp sort_direction_label("updated", false), do: "recently updated"

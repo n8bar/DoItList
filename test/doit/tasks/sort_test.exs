@@ -86,24 +86,24 @@ defmodule DoIt.Tasks.SortTest do
     end
   end
 
-  describe "apply/3 — completion" do
-    test "orders open → in_progress → done and stamps sort_order" do
+  describe "apply/3 — completion (%)" do
+    test "orders by completion % ascending (least complete first); done sorts as 100" do
       tasks = [
-        task(1, status: "done"),
-        task(2, status: "open"),
-        task(3, status: "in_progress")
+        task(1, status: "done", computed_progress: 40),
+        task(2, status: "open", computed_progress: 0),
+        task(3, status: "open", computed_progress: 60)
       ]
 
       result = Sort.apply(tasks, "completion")
 
-      assert Enum.map(result, & &1.status) == ["open", "in_progress", "done"]
+      assert Enum.map(result, & &1.id) == [2, 3, 1]
       assert Enum.map(result, & &1.sort_order) == [@gap, 2 * @gap, 3 * @gap]
     end
 
-    test "id tiebreaker for matching status — lower id first regardless of input order" do
-      a = task(30, status: "open")
-      b = task(10, status: "open")
-      c = task(20, status: "open")
+    test "id tiebreaker for matching % — lower id first regardless of input order" do
+      a = task(30, status: "open", computed_progress: 50)
+      b = task(10, status: "open", computed_progress: 50)
+      c = task(20, status: "open", computed_progress: 50)
 
       for input <- [[a, b, c], [c, b, a], [b, a, c]] do
         assert Sort.apply(input, "completion") |> Enum.map(& &1.id) == [10, 20, 30]
@@ -111,29 +111,10 @@ defmodule DoIt.Tasks.SortTest do
     end
   end
 
-  describe "apply/3 — computed_progress" do
-    test "orders descending (most progress first) and stamps sort_order" do
-      tasks = [
-        task(1, computed_progress: 25),
-        task(2, computed_progress: 100),
-        task(3, computed_progress: 0),
-        task(4, computed_progress: 60)
-      ]
-
-      result = Sort.apply(tasks, "computed_progress")
-
-      assert Enum.map(result, & &1.computed_progress) == [100, 60, 25, 0]
-      assert Enum.map(result, & &1.sort_order) == [@gap, 2 * @gap, 3 * @gap, 4 * @gap]
-    end
-
-    test "id tiebreaker for matching progress — lower id first regardless of input order" do
-      a = task(8, computed_progress: 50)
-      b = task(2, computed_progress: 50)
-      c = task(5, computed_progress: 50)
-
-      for input <- [[a, b, c], [c, a, b], [b, c, a]] do
-        assert Sort.apply(input, "computed_progress") |> Enum.map(& &1.id) == [2, 5, 8]
-      end
+  describe "apply/3 — retired computed_progress mode" do
+    test "degrades to manual (merged into completion %); migration repoints stored values" do
+      tasks = [task(1, computed_progress: 25), task(2, computed_progress: 100)]
+      assert Sort.apply(tasks, "computed_progress") == tasks
     end
   end
 
@@ -225,21 +206,15 @@ defmodule DoIt.Tasks.SortTest do
       assert Enum.map(result, & &1.title) == ["cherry", "banana", "Apple"]
     end
 
-    test "flips completion to done → in_progress → open" do
-      tasks = [task(1, status: "open"), task(2, status: "done"), task(3, status: "in_progress")]
-      result = Sort.apply(tasks, "completion", true)
-      assert Enum.map(result, & &1.status) == ["done", "in_progress", "open"]
-    end
-
-    test "flips computed_progress to ascending (least progress first)" do
+    test "flips completion % to most complete first" do
       tasks = [
-        task(1, computed_progress: 25),
-        task(2, computed_progress: 100),
-        task(3, computed_progress: 0)
+        task(1, status: "open", computed_progress: 25),
+        task(2, status: "done", computed_progress: 100),
+        task(3, status: "open", computed_progress: 0)
       ]
 
-      result = Sort.apply(tasks, "computed_progress", true)
-      assert Enum.map(result, & &1.computed_progress) == [0, 25, 100]
+      result = Sort.apply(tasks, "completion", true)
+      assert Enum.map(result, & &1.id) == [2, 1, 3]
     end
 
     test "flips priority to low → normal → high" do

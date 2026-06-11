@@ -11,8 +11,8 @@ defmodule DoIt.Tasks.Sort do
 
   * `"manual"` — no-op; input returned unchanged regardless of `reverse?`
   * `"alphabetical"` — title ascending, case-insensitive
-  * `"completion"` — `open` → `in_progress` → `done` (incomplete first)
-  * `"computed_progress"` — descending (most progress first)
+  * `"completion"` — completion % ascending (least complete first);
+    `done` sorts as 100 by construction
   * `"priority"` — `high` → `normal` → `low`
   * `"created"` — `inserted_at` ascending (oldest first)
   * `"updated"` — `updated_at` descending (most recent first)
@@ -30,7 +30,7 @@ defmodule DoIt.Tasks.Sort do
   # left over from a renamed/removed scheme) is treated as manual rather than
   # allowed to crash the caller's transaction — a stray value must never take
   # down a move or resort.
-  @known_modes ~w(alphabetical completion computed_progress priority created updated)
+  @known_modes ~w(alphabetical completion priority created updated)
 
   def sort_gap, do: @sort_gap
 
@@ -67,10 +67,7 @@ defmodule DoIt.Tasks.Sort do
     do: cmp(downcase(a.title), downcase(b.title))
 
   defp mode_compare(%Task{} = a, %Task{} = b, "completion"),
-    do: cmp(status_rank(a.status), status_rank(b.status))
-
-  defp mode_compare(%Task{} = a, %Task{} = b, "computed_progress"),
-    do: cmp(b.computed_progress, a.computed_progress)
+    do: cmp(completion_value(a), completion_value(b))
 
   defp mode_compare(%Task{} = a, %Task{} = b, "priority"),
     do: cmp(priority_rank(a.priority), priority_rank(b.priority))
@@ -96,10 +93,11 @@ defmodule DoIt.Tasks.Sort do
   defp downcase(nil), do: ""
   defp downcase(s) when is_binary(s), do: String.downcase(s)
 
-  defp status_rank("open"), do: 0
-  defp status_rank("in_progress"), do: 1
-  defp status_rank("done"), do: 2
-  defp status_rank(_), do: 3
+  # The visible roll-up % — the same number the row's underbar shows.
+  defp completion_value(%Task{status: "done"}), do: 100
+  defp completion_value(%Task{computed_progress: cp}) when is_integer(cp), do: cp
+  defp completion_value(%Task{manual_progress: mp}) when is_integer(mp), do: mp
+  defp completion_value(_), do: 0
 
   defp priority_rank("high"), do: 0
   defp priority_rank("normal"), do: 1

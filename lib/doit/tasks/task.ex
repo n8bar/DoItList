@@ -8,7 +8,7 @@ defmodule DoIt.Tasks.Task do
 
   @statuses ~w(open in_progress done)
   @priorities ~w(low normal high)
-  @sort_modes ~w(manual alphabetical completion computed_progress priority created updated)
+  @sort_modes ~w(manual alphabetical completion priority created updated)
 
   schema "tasks" do
     field :title, :string
