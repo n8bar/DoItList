@@ -1243,10 +1243,31 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
+            <%!-- Instant pane shell (.03.07.04): shown client-side the moment a
+                 task is selected, replaced by the real pane when the server
+                 render lands. The client compares data-task-id below against
+                 its selection to know when to hide this. --%>
+            <div
+              id="pane-skeleton"
+              hidden
+              aria-hidden="true"
+              class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4 space-y-3"
+            >
+              <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Task details</h3>
+              <div data-skeleton-title class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              </div>
+              <div class="space-y-2 animate-pulse motion-reduce:animate-none">
+                <div class="h-8 rounded bg-zinc-100 dark:bg-zinc-800"></div>
+                <div class="h-8 rounded bg-zinc-100 dark:bg-zinc-800"></div>
+                <div class="h-24 rounded bg-zinc-100 dark:bg-zinc-800"></div>
+              </div>
+            </div>
+
             <div
               :if={@selected_task_id && not @editing_initiative?}
               id="task-editor-pane"
               phx-hook="FocusField"
+              data-task-id={@selected_task_id}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.task_editor
@@ -1755,12 +1776,15 @@ defmodule DoItWeb.InitiativeShowLive do
             <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
           </button>
 
-          <span class={[
-            "flex-1 min-w-0",
-            @depth == 0 && "text-xl font-bold",
-            @depth > 0 && "text-sm font-medium",
-            @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
-          ]}>
+          <span
+            data-task-title
+            class={[
+              "flex-1 min-w-0",
+              @depth == 0 && "text-xl font-bold",
+              @depth > 0 && "text-sm font-medium",
+              @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
+            ]}
+          >
             {@task.title}
           </span>
         </div>

@@ -119,11 +119,17 @@ window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren,
 const DoitSelection = {
   id: null,
   lastId: null,
+  pendingSince: 0,
   li() { return this.id ? document.getElementById("task-" + this.id) : null },
   set(id, opts = {}) {
     id = String(id)
     if (this.id && this.id !== id) this.lastId = this.id
     this.id = id
+    this.pendingSince = Date.now()
+    // The observer hides the skeleton when the pane arrives; this covers the
+    // no-mutation case so the freshness timeout actually fires.
+    clearTimeout(this._skT)
+    this._skT = setTimeout(() => this.syncPaneSkeleton(), 3100)
     this.apply()
     if (opts.scroll) {
       const li = this.li()
@@ -145,9 +151,39 @@ const DoitSelection = {
     if (li && li.getAttribute("data-selected") !== this.id) {
       li.setAttribute("data-selected", this.id)
     }
+    this.syncPaneSkeleton()
+  },
+  // Instant pane shell (.03.07.04): visible from selection until the server's
+  // pane for this task arrives. Transient — a timeout guards against a stuck
+  // skeleton on any path we didn't foresee. All writes are set-if-different
+  // so the guard observer converges.
+  syncPaneSkeleton() {
+    const sk = document.getElementById("pane-skeleton")
+    if (!sk) return
+    const pane = document.getElementById("task-editor-pane")
+    const arrived = pane && pane.dataset.taskId === this.id
+    const fresh = Date.now() - this.pendingSince < 3000
+    const show = !!(this.id && !arrived && fresh)
+    if (sk.hidden !== !show) sk.hidden = !show
+    if (show) {
+      const li = this.li()
+      const titleEl = li && li.querySelector(":scope > [data-task-row] [data-task-title]")
+      const title = titleEl ? titleEl.textContent.trim() : ""
+      const slot = sk.querySelector("[data-skeleton-title]")
+      if (slot && slot.textContent !== title) slot.textContent = title
+    }
   },
 }
 window.DoitSelection = DoitSelection
+
+// Closing the pane by any server-bound control (the X, the mobile backdrop,
+// switching to the initiative editor) also clears the client selection, so
+// the highlight and skeleton can't outlive the pane.
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[phx-click='close_task'], [phx-click='close_panel'], [phx-click='edit_initiative']")) {
+    DoitSelection.clear()
+  }
+})
 
 // Row clicks: selection toggles instantly client-side; the server event only
 // drives the Details pane. Pills (phx-value-focus) keep their own phx-click
