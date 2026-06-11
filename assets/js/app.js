@@ -598,10 +598,23 @@ document.addEventListener("keydown", (e) => {
 // failed Proceed pushes both, cancelled first, so the revert still runs.
 window.DoitPendingMove = null
 
+// While a row is held away from its server-side parent, any patch touching
+// that parent's list re-creates the row there (LiveView reconciles a list
+// against the server's expected contents — it can't know the original node
+// went elsewhere). The held original must stay the ONE instance: kill any
+// same-id clone wherever a hold is asserted or released.
+function removePendingMoveClones(li) {
+  if (!li || !li.id) return
+  document.querySelectorAll("#" + CSS.escape(li.id)).forEach((el) => {
+    if (el !== li) el.remove()
+  })
+}
+
 function revertPendingMove() {
   const p = window.DoitPendingMove
   window.DoitPendingMove = null
   if (!p || !p.parent || !p.parent.isConnected) return
+  removePendingMoveClones(p.li)
   // The original next-sibling may have been re-rendered away; fall back to
   // appending rather than throwing.
   const next = p.next && p.next.parentElement === p.parent ? p.next : null
@@ -629,6 +642,10 @@ document.addEventListener("click", (e) => {
 function applyPendingMove() {
   const p = window.DoitPendingMove
   if (!p || !p.destContainer) return
+  // A patch re-creates the row under its server-side parent as a CLONE
+  // (the original sits at the held spot) — that clone is the visible
+  // "snap-back". Remove clones every pass.
+  removePendingMoveClones(p.li)
   // A patch may have replaced the container / sibling instances — re-find
   // them by id before giving up.
   let container = p.destContainer
@@ -1179,42 +1196,36 @@ Hooks.DragReorder = {
     const fabricatedUl = this._fabricatedUl
     this._fabricatedUl = null
     const movedLi = this.sourceLi
-    const held = {}
     this.pushEvent("move_task", params, (reply) => {
       const failed = !reply || reply.ok === false
-      // A failed write snaps the row back — the server re-renders the
-      // unchanged tree.
-      if (failed && origParent) {
-        origParent.insertBefore(movedLi, origNext)
-        // Drop any empty child list we fabricated for an optimistic reparent.
-        if (fabricatedUl && fabricatedUl.children.length === 0) fabricatedUl.remove()
+      if (failed) {
+        // A failed write snaps the row back — the server re-renders the
+        // unchanged tree.
+        revertPendingMove()
+      } else if (reply.committed !== false) {
+        // Committed: the placement is truth now; release the hold.
+        window.DoitPendingMove = null
       }
-      // A move awaiting completion-flip confirmation (committed: false) HOLDS
-      // its optimistic placement while the modal decides (§8.20 — confirms
-      // must not undo optimism). Server-side the row still lives under its
-      // old parent, so any patch (the pending-hue render included) puts it
-      // back; the guard observer re-asserts the held spot until the
-      // "confirm-cancelled" / "confirm-resolved" listeners below release it.
-      if (!failed && reply.committed === false) {
-        window.DoitPendingMove = {
-          li: movedLi,
-          parent: origParent,
-          next: origNext,
-          fabricatedUl,
-          destContainer: held.container,
-          destNext: held.next,
-        }
-        applyPendingMove()
-      }
+      // committed === false: a completion-flip confirm is deciding — the hold
+      // stays (§8.20) until "confirm-cancelled" / "confirm-resolved".
       // Clear the hue explicitly on the server's reply — don't rely on morphdom
       // stripping it, which is unreliable once we've moved the DOM ourselves.
       this.clearSaving()
     })
     this.cleanup()
-    // Captured after cleanup so the drop placeholder (the pre-cleanup
-    // nextSibling) doesn't pollute the held position.
-    held.container = movedLi.parentElement
-    held.next = movedLi.nextElementSibling
+    // The hold is registered BEFORE the reply can race it: any patch landing
+    // first (the confirm's pending-hue render) re-creates the row under its
+    // server-side parent, and the guard observer needs the handle to fix that
+    // (incl. removing the re-created clone — see applyPendingMove). Captured
+    // after cleanup so the drop placeholder doesn't pollute the held position.
+    window.DoitPendingMove = {
+      li: movedLi,
+      parent: origParent,
+      next: origNext,
+      fabricatedUl,
+      destContainer: movedLi.parentElement,
+      destNext: movedLi.nextElementSibling,
+    }
   },
 
   // Where the drop's visual indicator says the row should land — reuse the
