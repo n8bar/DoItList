@@ -2043,9 +2043,15 @@ defmodule DoItWeb.InitiativeShowLive do
                       it holds.
                     </dd>
                   </div>
-                  <div class="pt-1 border-t border-zinc-100 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400">
-                    A 40-leaf branch beside one lone leaf: leaf average lets the 40
-                    dominate; first-generation splits it 50/50.
+                  <div class="pt-1 border-t border-zinc-100 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 space-y-1">
+                    <p>One finished leaf next to a branch of 40 unfinished:</p>
+                    <p>
+                      Leaf average →
+                      <span class="font-medium text-zinc-700 dark:text-zinc-200">2%</span>
+                      (1 of 41 leaves). First-generation →
+                      <span class="font-medium text-zinc-700 dark:text-zinc-200">50%</span>
+                      (1 of 2 children).
+                    </p>
                   </div>
                 </dl>
               </.info_hint>
