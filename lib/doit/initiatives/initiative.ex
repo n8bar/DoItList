@@ -31,7 +31,7 @@ defmodule DoIt.Initiatives.Initiative do
     initiative
     |> cast(attrs, [:name, :description, :progress_calc, :owner_id])
     |> validate_required([:name, :owner_id])
-    |> validate_inclusion(:progress_calc, ~w(leaf_average first_generation))
+    |> validate_inclusion(:progress_calc, ~w(leaf_average single_level))
     |> validate_length(:name, min: 1, max: 120)
     |> validate_length(:description, max: 4000)
   end

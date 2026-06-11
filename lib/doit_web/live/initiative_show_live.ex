@@ -387,7 +387,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # Initiative Settings (.03.07.07): switch the progress calc, recompute the
   # whole initiative under the new mode, and tell members to full-reload.
   def handle_event("set_progress_calc", %{"calc" => calc}, socket)
-      when calc in ~w(leaf_average first_generation) do
+      when calc in ~w(leaf_average single_level) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
     else
@@ -2036,7 +2036,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   </div>
                   <div>
                     <dt class="font-medium text-zinc-700 dark:text-zinc-200">
-                      First-generation children
+                      Single-level average
                     </dt>
                     <dd>
                       Each direct child counts as one unit, no matter how many leaves
@@ -2055,7 +2055,7 @@ defmodule DoItWeb.InitiativeShowLive do
                       (1 of 41 Tasks complete)
                     </p>
                     <p>
-                      First-generation children →
+                      Single-level average →
                       <span class="font-medium text-zinc-700 dark:text-zinc-200">50%</span>
                       (1 of the List's 2 Tasks complete)
                     </p>
@@ -2074,10 +2074,10 @@ defmodule DoItWeb.InitiativeShowLive do
                   Leaf average — every leaf counts equally
                 </option>
                 <option
-                  value="first_generation"
-                  selected={@initiative.progress_calc == "first_generation"}
+                  value="single_level"
+                  selected={@initiative.progress_calc == "single_level"}
                 >
-                  First-generation children — each child one unit
+                  Single-level average — each child one unit
                 </option>
               </select>
             </form>

@@ -516,7 +516,7 @@ defmodule DoIt.TasksTest do
   end
 
   describe "per-initiative progress calc setting" do
-    test "reconcile honors first_generation when set", %{user: user, initiative: initiative} do
+    test "reconcile honors single_level when set", %{user: user, initiative: initiative} do
       b =
         Tasks.create_task(user, %{
           "initiative_id" => initiative.id,
@@ -555,7 +555,7 @@ defmodule DoIt.TasksTest do
       {:ok, _} =
         DoIt.Initiatives.update_initiative(
           DoIt.Initiatives.get_initiative(initiative.id),
-          %{"progress_calc" => "first_generation"}
+          %{"progress_calc" => "single_level"}
         )
 
       Tasks.recompute_initiative_progress(initiative.id)

@@ -68,7 +68,7 @@ sum(leaf_progress * leaf_path_weight) / sum(leaf_path_weight)
 
 `leaf_path_weight` is the product of the weights along the path from the branch's direct child down to the leaf. With everything at the default weight this is a plain average of the leaves; weighting an intermediate branch scales its whole subtree's leaves on the way up. The Initiative header bar is the system root's roll-up — the same math end to end.
 
-The previous formula — the first-generation average, where each direct child counts as one unit regardless of how many leaves it contains — is available as a per-initiative setting (Initiative pane → Settings → Progress calculation); leaf average is the default.
+The previous formula — the single-level average, where each direct child counts as one unit regardless of how many leaves it contains — is available as a per-initiative setting (Initiative pane → Settings → Progress calculation); leaf average is the default.
 
 Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 

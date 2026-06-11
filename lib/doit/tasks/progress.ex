@@ -18,8 +18,8 @@ defmodule DoIt.Tasks.Progress do
       from the branch's direct child down to the leaf. With everything at the
       default weight this is a plain average of the leaves; weighting an
       intermediate branch scales its whole subtree's leaves on the way up.
-      (The original first-generation average — each direct child one unit —
-      is available as the `:first_generation` mode, a per-initiative setting.)
+      (The original single-level average — each direct child one unit —
+      is available as the `:single_level` mode, a per-initiative setting.)
     * Branch status does NOT snap to 100; progress is always derived from
       leaves so a `done` parent that gains an incomplete child reflects the
       truth. Status reconciliation lives in `DoIt.Tasks`.
@@ -31,10 +31,10 @@ defmodule DoIt.Tasks.Progress do
 
   alias DoIt.Tasks.Task
 
-  @spec compute(Task.t(), :leaf_average | :first_generation) :: integer()
+  @spec compute(Task.t(), :leaf_average | :single_level) :: integer()
   def compute(task, mode \\ :leaf_average)
   def compute(%Task{} = task, :leaf_average), do: task |> evaluate() |> elem(0)
-  def compute(%Task{} = task, :first_generation), do: fg_value(task)
+  def compute(%Task{} = task, :single_level), do: single_level_value(task)
 
   @doc """
   Compute every node's rolled-up value in one pass over an assembled tree
@@ -44,15 +44,15 @@ defmodule DoIt.Tasks.Progress do
   (they'd also need each child's leaf-weight mass), so roll-up always starts
   from the leaves.
   """
-  @spec compute_all([Task.t()], :leaf_average | :first_generation) :: %{integer() => integer()}
+  @spec compute_all([Task.t()], :leaf_average | :single_level) :: %{integer() => integer()}
   def compute_all(tree, mode \\ :leaf_average)
 
   def compute_all(tree, :leaf_average) when is_list(tree) do
     Enum.reduce(tree, %{}, fn node, acc -> elem(evaluate_into(node, acc), 1) end)
   end
 
-  def compute_all(tree, :first_generation) when is_list(tree) do
-    Enum.reduce(tree, %{}, fn node, acc -> elem(fg_into(node, acc), 1) end)
+  def compute_all(tree, :single_level) when is_list(tree) do
+    Enum.reduce(tree, %{}, fn node, acc -> elem(single_level_into(node, acc), 1) end)
   end
 
   # --- Evaluation -------------------------------------------------------------
@@ -124,45 +124,45 @@ defmodule DoIt.Tasks.Progress do
     end)
   end
 
-  # --- First-generation mode (per-initiative setting) -------------------------
+  # --- Single-level average mode (per-initiative setting) -------------------------
   # The original formula: a branch is the weighted average of its DIRECT
   # children's rolled-up values — each child one unit regardless of how many
   # leaves it contains.
 
-  defp fg_value(%Task{children: children} = task) when is_list(children) do
+  defp single_level_value(%Task{children: children} = task) when is_list(children) do
     case usable_children(children) do
       [] ->
         leaf_progress(task)
 
       kids ->
         kids
-        |> Enum.map(fn c -> {Decimal.new(fg_value(c)), to_decimal(c.weight)} end)
+        |> Enum.map(fn c -> {Decimal.new(single_level_value(c)), to_decimal(c.weight)} end)
         |> pairs_average()
     end
   end
 
-  defp fg_value(%Task{} = task), do: leaf_progress(task)
+  defp single_level_value(%Task{} = task), do: leaf_progress(task)
 
-  defp fg_into(%Task{children: children} = task, acc) when is_list(children) do
+  defp single_level_into(%Task{children: children} = task, acc) when is_list(children) do
     case usable_children(children) do
       [] ->
         value = leaf_progress(task)
-        {value, collect_skipped(children, Map.put(acc, task.id, value), &fg_into/2)}
+        {value, collect_skipped(children, Map.put(acc, task.id, value), &single_level_into/2)}
 
       kids ->
         {pairs, acc} =
           Enum.reduce(kids, {[], acc}, fn child, {pairs, acc} ->
-            {value, acc} = fg_into(child, acc)
+            {value, acc} = single_level_into(child, acc)
             {[{Decimal.new(value), to_decimal(child.weight)} | pairs], acc}
           end)
 
-        acc = collect_skipped(children -- kids, acc, &fg_into/2)
+        acc = collect_skipped(children -- kids, acc, &single_level_into/2)
         value = pairs_average(pairs)
         {value, Map.put(acc, task.id, value)}
     end
   end
 
-  defp fg_into(%Task{} = task, acc) do
+  defp single_level_into(%Task{} = task, acc) do
     value = leaf_progress(task)
     {value, Map.put(acc, task.id, value)}
   end

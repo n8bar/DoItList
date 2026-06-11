@@ -51,18 +51,18 @@ defmodule DoIt.Tasks.ProgressTest do
 
   describe "leaf average (design examples, .03.09.01)" do
     test "Example A: a one-leaf sibling vs a four-leaf branch" do
-      # First-generation said 50; leaf average dilutes: (100 + 0*4)/5 = 20.
+      # Single-level average said 50; leaf average dilutes: (100 + 0*4)/5 = 20.
       tree = branch([leaf(100), branch([leaf(0), leaf(0), leaf(0), leaf(0)])])
       assert Progress.compute(tree) == 20
     end
 
     test "Example B: sibling branches of different sizes" do
-      # First-generation said 50; leaf average: (100+100+0)/3 ≈ 67.
+      # Single-level average said 50; leaf average: (100+100+0)/3 ≈ 67.
       tree = branch([branch([leaf(100), leaf(100)]), branch([leaf(0)])])
       assert Progress.compute(tree) == 67
     end
 
-    test "Example C: flat branches agree with the first-generation method" do
+    test "Example C: flat branches agree with the single-level method" do
       assert Progress.compute(branch([leaf(40), leaf(80)])) == 60
     end
 
@@ -90,28 +90,28 @@ defmodule DoIt.Tasks.ProgressTest do
     end
   end
 
-  describe "first-generation mode (per-initiative setting)" do
+  describe "single-level mode (per-initiative setting)" do
     test "each direct child counts as one unit, however many leaves it holds" do
       grandchildren = branch([leaf(0), leaf(100)])
       tree = branch([grandchildren, leaf(0)])
-      assert Progress.compute(tree, :first_generation) == 25
+      assert Progress.compute(tree, :single_level) == 25
       assert Progress.compute(tree) == 33
     end
 
     test "a weighted branch counts once at its own weight" do
       left = branch([leaf(100), leaf(100)], weight: 3)
       root = branch([left, leaf(0, weight: 1)])
-      assert Progress.compute(root, :first_generation) == 75
+      assert Progress.compute(root, :single_level) == 75
       assert Progress.compute(root) == 86
     end
 
-    test "compute_all in fg mode matches compute for every node" do
+    test "compute_all in single-level mode matches compute for every node" do
       inner = branch([leaf(0), leaf(100)], id: 2)
       root = branch([inner, leaf(40, id: 3)], id: 1)
 
-      values = Progress.compute_all([root], :first_generation)
+      values = Progress.compute_all([root], :single_level)
 
-      assert values[1] == Progress.compute(root, :first_generation)
+      assert values[1] == Progress.compute(root, :single_level)
       assert values[2] == 50
       assert values[3] == 40
     end

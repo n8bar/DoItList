@@ -1279,7 +1279,7 @@ defmodule DoIt.Tasks do
           select: i.progress_calc
       )
 
-    if calc == "first_generation", do: :first_generation, else: :leaf_average
+    if calc == "single_level", do: :single_level, else: :leaf_average
   end
 
   @doc """
