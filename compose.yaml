@@ -34,18 +34,6 @@ services:
       - doit_deps:/app/deps
       - doit_node_modules:/app/assets/node_modules
 
-  # Playwright server for browser (e2e) tests — not part of the normal stack:
-  #   docker compose --profile test up -d playwright
-  # The web image stays Alpine; the browser needs glibc, so it runs here and
-  # tests connect over websocket (see test/test_helper.exs).
-  playwright:
-    image: mcr.microsoft.com/playwright:v1.58.0-noble
-    init: true
-    user: pwuser
-    working_dir: /home/pwuser
-    command: npx -y playwright@1.58.0 run-server --port 3000 --host 0.0.0.0
-    profiles: ["test"]
-
 volumes:
   doit_pgdata:
   doit_build:
