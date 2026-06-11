@@ -2024,11 +2024,30 @@ defmodule DoItWeb.InitiativeShowLive do
                 Progress calculation
               </label>
               <.info_hint id="calc-hint" label="How do the methods differ?">
-                Leaf average (default): every leaf counts equally, no matter how deep it
-                sits — a branch holding 40 leaves outweighs a sibling holding 1. Weights
-                multiply down the path, so weighting a branch scales its whole subtree.
-                First-generation children: each direct child counts as one unit
-                regardless of how many leaves it contains, level by level.
+                <dl class="space-y-2">
+                  <div>
+                    <dt class="font-medium text-zinc-700 dark:text-zinc-200">
+                      Leaf average <span class="font-normal text-zinc-400">(default)</span>
+                    </dt>
+                    <dd>
+                      Every leaf counts equally, however deep it sits. Weighting a
+                      branch scales its whole subtree.
+                    </dd>
+                  </div>
+                  <div>
+                    <dt class="font-medium text-zinc-700 dark:text-zinc-200">
+                      First-generation children
+                    </dt>
+                    <dd>
+                      Each direct child counts as one unit, no matter how many leaves
+                      it holds.
+                    </dd>
+                  </div>
+                  <div class="pt-1 border-t border-zinc-100 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400">
+                    A 40-leaf branch beside one lone leaf: leaf average lets the 40
+                    dominate; first-generation splits it 50/50.
+                  </div>
+                </dl>
               </.info_hint>
             </div>
             <form phx-change="set_progress_calc">
