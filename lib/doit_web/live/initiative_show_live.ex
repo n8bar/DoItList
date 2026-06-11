@@ -2044,13 +2044,20 @@ defmodule DoItWeb.InitiativeShowLive do
                     </dd>
                   </div>
                   <div class="pt-1 border-t border-zinc-100 dark:border-zinc-700 text-zinc-500 dark:text-zinc-400 space-y-1">
-                    <p>One finished leaf next to a branch of 40 unfinished:</p>
+                    <p>Example: a List contains</p>
+                    <ul class="list-disc pl-4 space-y-0.5">
+                      <li>✓ one completed Task</li>
+                      <li>one unfinished Task with 40 unfinished Tasks inside it</li>
+                    </ul>
                     <p>
                       Leaf average →
                       <span class="font-medium text-zinc-700 dark:text-zinc-200">2%</span>
-                      (1 of 41 leaves). First-generation →
+                      (1 of 41 Tasks complete)
+                    </p>
+                    <p>
+                      First-generation children →
                       <span class="font-medium text-zinc-700 dark:text-zinc-200">50%</span>
-                      (1 of 2 children).
+                      (1 of the List's 2 Tasks complete)
                     </p>
                   </div>
                 </dl>
