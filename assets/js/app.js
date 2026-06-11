@@ -161,22 +161,34 @@ const DoitSelection = {
     const ip = document.getElementById("initiative-editor-pane")
     if (ip && this.id && !ip.hidden) ip.hidden = true
     const pane = document.getElementById("task-editor-pane")
-    if (!pane) return
-    const arrived = pane.dataset.taskId === this.id
-    const shouldHide = !this.id
-    if (pane.hidden !== shouldHide) pane.hidden = shouldHide
-    // Server-only lists (comments, activity) swap to an explicit "Loading…"
-    // while a switch is in flight — never another task's data, dimmed or
-    // otherwise. The add-comment form stays live: select_task enters the
-    // event queue first, so an immediate comment lands on the new task.
-    const inFlight = !!this.id && !arrived
-    pane.querySelectorAll("[data-async-list]").forEach((el) => {
-      if (el.hidden !== inFlight) el.hidden = inFlight
-    })
-    pane.querySelectorAll("[data-async-loading]").forEach((el) => {
-      if (el.hidden !== !inFlight) el.hidden = !inFlight
-    })
-    if (inFlight) this.fillPaneFields(pane)
+    if (pane) {
+      const arrived = pane.dataset.taskId === this.id
+      const shouldHide = !this.id
+      if (pane.hidden !== shouldHide) pane.hidden = shouldHide
+      // Server-only lists (comments, activity) swap to an explicit "Loading…"
+      // while a switch is in flight — never another task's data, dimmed or
+      // otherwise. The add-comment form stays live: select_task enters the
+      // event queue first, so an immediate comment lands on the new task.
+      const inFlight = !!this.id && !arrived
+      pane.querySelectorAll("[data-async-list]").forEach((el) => {
+        if (el.hidden !== inFlight) el.hidden = inFlight
+      })
+      pane.querySelectorAll("[data-async-loading]").forEach((el) => {
+        if (el.hidden !== !inFlight) el.hidden = !inFlight
+      })
+      if (inFlight) this.fillPaneFields(pane)
+      // A pill tap on a first-ever selection parked its field focus until the
+      // pane existed (.03.07.17) — land it now.
+      if (arrived && window.DoitPendingFocus) {
+        const field = document.getElementById(window.DoitPendingFocus)
+        window.DoitPendingFocus = null
+        if (field && !field.disabled) {
+          field.focus()
+          field.scrollIntoView({block: "nearest"})
+        }
+      }
+    }
+    syncRail()
   },
   fillPaneFields(pane) {
     const li = this.li()
@@ -194,16 +206,16 @@ const DoitSelection = {
 
     // The priority pill shows the value when ≠ normal; the title attr always
     // carries it ("Priority: high").
-    const priEl = row.querySelector("[phx-value-focus='priority']")
+    const priEl = row.querySelector("[data-pill='priority']")
     const pri = priEl ? (priEl.getAttribute("title") || "").replace("Priority: ", "") : ""
     if (pri) set(pane.querySelector("#task-field-priority"), pri)
 
-    const wText = text("[phx-value-focus='weight']")
+    const wText = text("[data-pill='weight']")
     set(pane.querySelector("#task-field-weight"), wText.startsWith("w=") ? wText.slice(2) : "1.0")
 
     // Match the assignee option by its visible name (the pill shows "@name").
     const aSelect = pane.querySelector("#task-field-assignee")
-    const aText = text("[phx-value-focus='assignee']")
+    const aText = text("[data-pill='assignee']")
     if (aSelect && aSelect !== document.activeElement) {
       const name = aText.startsWith("@") ? aText.slice(1) : ""
       const opt = name
@@ -235,6 +247,21 @@ const DoitSelection = {
   },
 }
 window.DoitSelection = DoitSelection
+
+// The right rail's mobile flyout state is view state (.03.07.20): `data-open`
+// on #details-rail drives the overlay classes (Tailwind data-variants) and
+// #pane-backdrop's visibility. Open = a task is selected or the initiative
+// editor is showing — both client-known, so the flyout appears at the tap and
+// the server patch just confirms the same attribute.
+function syncRail() {
+  const rail = document.getElementById("details-rail")
+  if (!rail) return
+  const ip = document.getElementById("initiative-editor-pane")
+  const open = !!(DoitSelection.id || (ip && !ip.hidden))
+  if (rail.hasAttribute("data-open") !== open) rail.toggleAttribute("data-open", open)
+  const backdrop = document.getElementById("pane-backdrop")
+  if (backdrop && backdrop.hidden !== !open) backdrop.hidden = !open
+}
 
 // The one add-task form (UX_GUARDRAILS 6.5): opening, placing, and closing
 // it never touches the server. It teleports between phx-update="ignore"
@@ -325,6 +352,7 @@ document.addEventListener("click", (e) => {
     DoitSelection.clear()
     if (initiativePane) initiativePane.hidden = false
     if (taskPane) taskPane.hidden = true
+    syncRail()
     return
   }
   if (
@@ -334,12 +362,16 @@ document.addEventListener("click", (e) => {
   ) {
     DoitSelection.clear()
     if (initiativePane) initiativePane.hidden = true
+    syncRail()
   }
 })
 
 // Row clicks: selection toggles instantly client-side; the server event only
-// drives the Details pane. Pills (phx-value-focus) keep their own phx-click
-// (select + focus a field) and never toggle the selection closed.
+// drives the Details pane. Pills (data-pill) keep their own phx-click (pane
+// data load) and never toggle the selection closed; their field focus is pure
+// view state, done right here (.03.07.17) — on a first-ever selection the
+// pane isn't mounted yet, so the focus parks in DoitPendingFocus and
+// syncPaneSkeleton lands it when the pane arrives.
 document.addEventListener("click", (e) => {
   const row = e.target.closest("[data-task-row]")
   if (!row || !window.DoitPush) return
@@ -348,9 +380,17 @@ document.addEventListener("click", (e) => {
   // inside the row — ancestors (children <ul>s, the page root) carry hooks.
   const interactive = e.target.closest("button, a, form, [phx-hook]")
   if (interactive && interactive !== row && row.contains(interactive)) {
-    if (e.target.closest("[phx-value-focus]")) {
+    const pill = e.target.closest("[data-pill]")
+    if (pill) {
       const li = row.closest("li[data-task-id]")
       if (li) DoitSelection.set(li.dataset.taskId)
+      const field = document.getElementById("task-field-" + pill.dataset.pill)
+      if (field && !field.disabled) {
+        field.focus()
+        field.scrollIntoView({block: "nearest"})
+      } else if (!field) {
+        window.DoitPendingFocus = "task-field-" + pill.dataset.pill
+      }
     }
     return
   }
@@ -441,7 +481,7 @@ document.addEventListener("input", (e) => {
       return
     }
     case "task-field-priority": {
-      const pill = row.querySelector("[phx-value-focus='priority']")
+      const pill = row.querySelector("[data-pill='priority']")
       if (!pill) return
       const set = t.value !== "normal"
       pill.toggleAttribute("data-pill-set", set)
@@ -450,7 +490,7 @@ document.addEventListener("input", (e) => {
       return
     }
     case "task-field-weight": {
-      const pill = row.querySelector("[phx-value-focus='weight']")
+      const pill = row.querySelector("[data-pill='weight']")
       if (!pill) return
       const v = t.value.trim()
       const set = v !== "" && parseFloat(v) !== 1
@@ -460,7 +500,7 @@ document.addEventListener("input", (e) => {
       return
     }
     case "task-field-assignee": {
-      const pill = row.querySelector("[phx-value-focus='assignee']")
+      const pill = row.querySelector("[data-pill='assignee']")
       const span = pill && pill.querySelector("span")
       if (!span) return
       const name = t.value ? t.options[t.selectedIndex].textContent.trim() : ""
@@ -487,17 +527,22 @@ document.addEventListener("input", (e) => {
   }
 })
 
-// Client-instant delete confirm (.03.07.15, UX_GUARDRAILS 6.5): the dialog's
-// whole content is already client-known, so it opens at the click — no round
-// trip before the user can decide. The subtree holds a sticky maybe-write hue
-// while the dialog is up; Cancel clears it, Delete optimistically removes the
-// row (pinking the surviving ancestors) and pushes the actual delete.
+// Client-instant delete confirms (.03.07.15 task, .03.07.18 initiative;
+// UX_GUARDRAILS 6.5): both dialogs' content is already client-known, so they
+// open at the click — no round trip before the user can decide. The task
+// dialog holds a sticky maybe-write hue on the doomed subtree; Cancel clears
+// it, Delete optimistically removes the row (pinking the surviving ancestors)
+// and pushes the actual delete. The initiative dialog needs no fill or hue —
+// Proceed pushes delete_initiative and the server navigates away.
+const DELETE_MODAL_IDS = ["delete-confirm", "delete-initiative-confirm"]
+const openDeleteModal = () =>
+  DELETE_MODAL_IDS.map((id) => document.getElementById(id)).find((m) => m && !m.hidden)
+
 document.addEventListener("click", (e) => {
-  const modal = document.getElementById("delete-confirm")
-  if (!modal) return
   if (e.target.closest("#delete-task-btn")) {
     const li = selectedLi()
-    if (!li) return
+    const modal = document.getElementById("delete-confirm")
+    if (!li || !modal) return
     modal.dataset.taskId = li.dataset.taskId
     const title = li.querySelector(":scope > [data-task-row] [data-task-title]")
     modal.querySelector("[data-delete-title]").textContent = title ? title.textContent.trim() : ""
@@ -507,28 +552,39 @@ document.addEventListener("click", (e) => {
     if (cancel) cancel.focus()
     return
   }
-  if (modal.hidden) return
+  if (e.target.closest("#delete-initiative-btn")) {
+    const modal = document.getElementById("delete-initiative-confirm")
+    if (!modal) return
+    modal.hidden = false
+    const cancel = modal.querySelector("[data-delete-cancel]")
+    if (cancel) cancel.focus()
+    return
+  }
+  const modal = openDeleteModal()
+  if (!modal) return
   // Backdrop click or Cancel — close without consequence.
   if (e.target === modal || e.target.closest("[data-delete-cancel]")) {
     modal.hidden = true
     clearSavingHue()
-    const btn = document.getElementById("delete-task-btn")
-    if (btn) btn.focus()
     return
   }
   if (e.target.closest("[data-delete-proceed]")) {
     modal.hidden = true
     clearSavingHue()
-    const li = document.getElementById("task-" + modal.dataset.taskId)
-    if (li) { markSaving(savingAncestors(li)); li.remove() }
-    if (window.DoitPush) window.DoitPush("delete_task", {id: modal.dataset.taskId})
+    if (modal.id === "delete-confirm") {
+      const li = document.getElementById("task-" + modal.dataset.taskId)
+      if (li) { markSaving(savingAncestors(li)); li.remove() }
+      if (window.DoitPush) window.DoitPush("delete_task", {id: modal.dataset.taskId})
+    } else if (window.DoitPush) {
+      window.DoitPush("delete_initiative", {})
+    }
   }
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
-  const modal = document.getElementById("delete-confirm")
-  if (modal && !modal.hidden) {
+  const modal = openDeleteModal()
+  if (modal) {
     modal.hidden = true
     clearSavingHue()
   }
@@ -1701,13 +1757,51 @@ Hooks.InitiativeSort = {
     writeInitSort({mode: this.sel.value || null, order: this.order, reverse: this.reverseByMode})
   },
   push() {
+    // The cards carry their sort keys as data attributes, so explicit modes
+    // reorder client-side at the change (UX_GUARDRAILS 6.5); the server
+    // re-stream below confirms the same order. "Recent" (the default mode)
+    // is server-derived (owner-first, recently-updated) and stays with it.
+    this.clientSort()
     this.pushEvent("apply_sort", {
       mode: this.sel.value || "",
       reverse: !!this.reverseByMode[this.sel.value],
       order: this.order,
     })
   },
+  clientSort() {
+    const wrap = document.getElementById("initiatives")
+    const mode = this.sel.value
+    if (!wrap || !mode) return
+    const cards = [...wrap.querySelectorAll(":scope > [data-initiative-id]")]
+    let sorted
+    if (mode === "manual") {
+      const idx = new Map(this.order.map((id, i) => [String(id), i]))
+      const pos = (el) => idx.get(el.dataset.initiativeId) ?? this.order.length
+      sorted = cards.slice().sort((a, b) => pos(a) - pos(b))
+    } else {
+      const key = (el) =>
+        mode === "progress"
+          ? parseFloat(el.dataset.progress || "0")
+          : mode === "name"
+            ? (el.dataset.name || "").toLowerCase()
+            : el.dataset[mode] || ""
+      sorted = cards.slice().sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+    }
+    if (this.reverseByMode[mode]) sorted.reverse()
+    sorted.forEach((el) => wrap.appendChild(el))
+  },
 }
+
+// Server-driven close for client-toggled <details> (e.g. the index's New
+// Initiative form after a successful create). reset() restores the inputs to
+// the freshly re-rendered empty defaults.
+window.addEventListener("phx:close-details", (e) => {
+  const d = document.getElementById((e.detail && e.detail.id) || "")
+  if (!d) return
+  d.open = false
+  const form = d.querySelector("form")
+  if (form) form.reset()
+})
 
 // Drag-to-reorder the Initiatives index (.06.3). The grove icon is the handle;
 // dropping inserts the card before/after another (no reparent / center drop).
@@ -1892,25 +1986,6 @@ Hooks.ShortcutsOverlay = {
     this.el.removeEventListener("doit:shortcuts-toggle", this.onToggle)
     this.el.removeEventListener("click", this.onClick)
     window.removeEventListener("keydown", this.onKey)
-  },
-}
-
-// Focuses a Details-panel field on request from the server. Tapping a task's
-// priority / weight / assignee chip selects the task and pushes "focus-field"
-// with the target id; we focus it once the editor is in the DOM. rAF lets the
-// just-patched pane lay out first; scrollIntoView handles the mobile case where
-// the field sits below the fold.
-Hooks.FocusField = {
-  mounted() {
-    this.handleEvent("focus-field", ({ id }) => {
-      requestAnimationFrame(() => {
-        const el = document.getElementById(id)
-        if (el) {
-          el.focus()
-          el.scrollIntoView({ block: "nearest" })
-        }
-      })
-    })
   },
 }
 

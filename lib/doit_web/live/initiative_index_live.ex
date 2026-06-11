@@ -15,7 +15,6 @@ defmodule DoItWeb.InitiativeIndexLive do
     {:ok,
      socket
      |> assign(:page_title, "Initiatives")
-     |> assign(:show_form, false)
      |> assign(:initiative_count, length(initiatives))
      |> assign(:initiatives, initiatives)
      |> assign(:sort_state, %{mode: nil, reverse: false, order: []})
@@ -23,15 +22,11 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> stream(:initiatives, initiatives)}
   end
 
+  # The New Initiative form opens/closes client-side (UX_GUARDRAILS 6.5 —
+  # typing must never wait on a round trip): a <details> + KeepOpen, driven by
+  # the data-details-toggle/-close handlers in app.js. Only a successful
+  # create closes it from here.
   @impl true
-  def handle_event("show_new", _params, socket) do
-    {:noreply, assign(socket, :show_form, true) |> assign(:form, build_empty_form())}
-  end
-
-  def handle_event("cancel_new", _params, socket) do
-    {:noreply, assign(socket, :show_form, false)}
-  end
-
   def handle_event("create", %{"initiative" => params}, socket) do
     user = socket.assigns.current_user
 
@@ -41,10 +36,11 @@ defmodule DoItWeb.InitiativeIndexLive do
 
         {:noreply,
          socket
-         |> assign(:show_form, false)
+         |> assign(:form, build_empty_form())
          |> update(:initiative_count, &(&1 + 1))
          |> update(:initiatives, &[initiative | &1])
          |> put_flash(:info, "Initiative created.")
+         |> push_event("close-details", %{id: "new-initiative"})
          |> restream_sorted()}
 
       {:error, changeset} ->
@@ -139,7 +135,7 @@ defmodule DoItWeb.InitiativeIndexLive do
         </div>
         <button
           type="button"
-          phx-click="show_new"
+          data-details-toggle="new-initiative"
           class="w-fit self-center inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
         >
           <.icon name="hero-plus" class="w-4 h-4" />
@@ -147,21 +143,18 @@ defmodule DoItWeb.InitiativeIndexLive do
         </button>
       </div>
 
-      <%= if @show_form do %>
-        <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-6">
+      <%!-- Client-toggled (no round trip before typing); KeepOpen preserves
+           the open state across patches, e.g. a validation error re-render. --%>
+      <details id="new-initiative" phx-hook="KeepOpen" class="mb-6">
+        <summary class="hidden"></summary>
+        <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
           <.form :let={f} for={@form} phx-submit="create" class="space-y-3">
-            <.input
-              field={f[:name]}
-              type="text"
-              label="Name"
-              required
-              phx-mounted={Phoenix.LiveView.JS.focus()}
-            />
+            <.input field={f[:name]} type="text" label="Name" required />
             <.input field={f[:description]} type="textarea" label="Description (optional)" />
             <div class="flex justify-end gap-2">
               <button
                 type="button"
-                phx-click="cancel_new"
+                data-details-close="new-initiative"
                 class="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
               >
                 Cancel
@@ -170,7 +163,7 @@ defmodule DoItWeb.InitiativeIndexLive do
             </div>
           </.form>
         </div>
-      <% end %>
+      </details>
 
       <%!-- Sort control. The hook (.06.2) seeds it from localStorage, pushes
            apply_sort, and persists changes — per-user, per-browser. --%>
@@ -196,10 +189,17 @@ defmodule DoItWeb.InitiativeIndexLive do
       </form>
 
       <div id="initiatives" phx-update="stream" class="space-y-2">
+        <%!-- Sort keys ride the card as data attributes so the sort control
+             reorders the list client-side at the change (UX_GUARDRAILS 6.5);
+             the server re-stream confirms the same order. --%>
         <div
           :for={{dom_id, initiative} <- @streams.initiatives}
           id={dom_id}
           data-initiative-id={initiative.id}
+          data-name={initiative.name}
+          data-progress={initiative.progress || 0}
+          data-created={to_string(initiative.inserted_at)}
+          data-updated={to_string(initiative.updated_at)}
           class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} draggable="false" class="block p-4">
@@ -278,7 +278,7 @@ defmodule DoItWeb.InitiativeIndexLive do
         </div>
       </div>
 
-      <p :if={@initiative_count == 0 and not @show_form} class="text-zinc-500 dark:text-zinc-400 mt-4">
+      <p :if={@initiative_count == 0} class="text-zinc-500 dark:text-zinc-400 mt-4">
         No initiatives yet. Create one to get started.
       </p>
 

@@ -222,15 +222,12 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # Selection is client-first (UX_GUARDRAILS 6.5): the highlight lives in the
   # DOM, this event only loads the Details pane.
-  def handle_event("select_task", %{"id" => id} = params, socket) do
+  # Field focus (pill taps, Alt+P/W/A) is pure view state and happens
+  # client-side — this event only loads pane data (.03.07.17).
+  def handle_event("select_task", %{"id" => id}, socket) do
     id = String.to_integer(id)
-    focus = params["focus"]
 
     cond do
-      # A pill tap on the already-open task: just jump to the field.
-      focus && socket.assigns.selected_task_id == id ->
-        {:noreply, push_focus(socket, focus)}
-
       # Pane already shows this task — nothing to load.
       socket.assigns.selected_task_id == id ->
         {:noreply, socket}
@@ -241,15 +238,13 @@ defmodule DoItWeb.InitiativeShowLive do
             {:noreply, socket}
 
           task ->
-            socket =
-              socket
-              |> assign(:editing_initiative?, false)
-              |> assign(:selected_task_id, id)
-              |> assign(:selected_task, task)
-              |> assign(:comments, Tasks.list_comments(id))
-              |> assign(:activity, Tasks.list_task_activity(id))
-
-            {:noreply, push_focus(socket, focus)}
+            {:noreply,
+             socket
+             |> assign(:editing_initiative?, false)
+             |> assign(:selected_task_id, id)
+             |> assign(:selected_task, task)
+             |> assign(:comments, Tasks.list_comments(id))
+             |> assign(:activity, Tasks.list_task_activity(id))}
         end
     end
   end
@@ -260,15 +255,6 @@ defmodule DoItWeb.InitiativeShowLive do
     case kbd_target(socket, params) do
       nil -> {:noreply, socket}
       task -> apply_kbd_adjust(socket, task, field, dir)
-    end
-  end
-
-  # Keyboard: Alt+P / Alt+W / Alt+A — focus that Details field for precise editing.
-  def handle_event("kbd_focus_field", %{"field" => field}, socket) do
-    cond do
-      is_nil(socket.assigns.selected_task_id) -> {:noreply, socket}
-      not socket.assigns.can_edit -> {:noreply, socket}
-      true -> {:noreply, push_focus(socket, field)}
     end
   end
 
@@ -308,15 +294,14 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("request_delete_initiative", _params, socket) do
+  # Initiative delete (.03.07.18): the confirm dialog is client-rendered
+  # (content is known at render); this event arrives only after the user
+  # confirmed.
+  def handle_event("delete_initiative", _params, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can delete this initiative.")}
     else
-      {:noreply,
-       assign_pending(socket, %{
-         kind: :delete_initiative,
-         title: socket.assigns.initiative.name
-       })}
+      {:noreply, commit_delete_initiative(socket)}
     end
   end
 
@@ -593,9 +578,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           commit_cascade(socket, id, kind)
-
-        %{kind: :delete_initiative} ->
-          commit_delete_initiative(socket)
 
         _ ->
           socket
@@ -909,7 +891,14 @@ defmodule DoItWeb.InitiativeShowLive do
               const field = k.length === 1 && {p: "priority", w: "weight", a: "assignee"}[k.toLowerCase()];
               if (field) {
                 e.preventDefault();
-                if (e.altKey) { this.pushEvent("kbd_focus_field", {field: field}); return; }
+                // Alt+P/W/A: focusing a pane field is pure view state — no
+                // server (.03.07.17). The field exists whenever a task is
+                // selected (persistent pane) and is disabled for viewers.
+                if (e.altKey) {
+                  const el = document.getElementById("task-field-" + field);
+                  if (el && !el.disabled) { el.focus(); el.scrollIntoView({block: "nearest"}); }
+                  return;
+                }
                 const S = window.DoitSaving, li = S && S.selectedLi();
                 if (li) {
                   S.markSaving(field === "weight"
@@ -1144,25 +1133,35 @@ defmodule DoItWeb.InitiativeShowLive do
             </ul>
           </div>
 
-          <%!-- Backdrop on mobile when right-rail flyout is open --%>
+          <%!-- Backdrop on mobile when right-rail flyout is open. Always
+               rendered; the client flips `hidden` with the rail (.03.07.20). --%>
           <div
-            :if={@selected_task_id || @editing_initiative?}
+            id="pane-backdrop"
+            hidden={!(@selected_task_id || @editing_initiative?)}
             class="lg:hidden fixed inset-0 z-20 bg-black/50"
             phx-click="close_panel"
             aria-hidden="true"
           >
           </div>
 
-          <aside class={
-            [
+          <%!-- The open/closed state rides ONE data-open attribute (flipped
+               client-side at the tap, .03.07.20); all class differences hang
+               off it as Tailwind data-variants. Mobile open: flyout overlay.
+               Desktop open: sticky to the top of <main>, scrolls its own
+               contents (.03.07.01) — self-start + max-h give sticky room. --%>
+          <aside
+            id="details-rail"
+            data-open={(@selected_task_id || @editing_initiative?) && "true"}
+            class={[
               "space-y-4",
-              # Mobile: flyout overlay. Desktop: sticky to the top of <main>, scrolls
-              # its own contents (.03.07.01) — self-start + max-h give sticky room.
-              (@selected_task_id || @editing_initiative?) &&
-                "fixed lg:sticky top-0 bottom-0 lg:bottom-auto right-0 z-30 w-full sm:w-96 lg:w-auto lg:self-start lg:max-h-[calc(100dvh-4rem)] bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto [scrollbar-gutter:stable]",
-              !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
-            ]
-          }>
+              "not-data-open:hidden lg:not-data-open:block",
+              "data-open:block data-open:fixed lg:data-open:sticky data-open:top-0 data-open:bottom-0 lg:data-open:bottom-auto data-open:right-0 data-open:z-30",
+              "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto lg:data-open:self-start lg:data-open:max-h-[calc(100dvh-4rem)]",
+              "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
+              "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
+              "data-open:overflow-y-auto data-open:[scrollbar-gutter:stable]"
+            ]}
+          >
             <div class="lg:hidden flex justify-end">
               <button
                 type="button"
@@ -1210,7 +1209,6 @@ defmodule DoItWeb.InitiativeShowLive do
             <div
               :if={@selected_task}
               id="task-editor-pane"
-              phx-hook="FocusField"
               data-task-id={@selected_task.id}
               hidden={is_nil(@selected_task_id) or @editing_initiative?}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
@@ -1266,6 +1264,7 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.delete_task_confirm :if={@can_edit} />
+      <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <.shortcuts_overlay />
     </Layouts.app>
     """
@@ -1301,11 +1300,6 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   # Whitelist the field so a client can't push an arbitrary DOM id to focus.
-  defp push_focus(socket, field) when field in ~w(priority weight assignee) do
-    push_event(socket, "focus-field", %{id: "task-field-#{field}"})
-  end
-
-  defp push_focus(socket, _field), do: socket
 
   # Persist a single-field keyboard step (P/W/A), then patch the affected rows.
   defp apply_kbd_adjust(socket, task, field, dir) do
@@ -1447,6 +1441,47 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  # Initiative deletion's confirm is client-side like the task one
+  # (.03.07.18); the name is known at render, so not even a client fill is
+  # needed. Proceed pushes `delete_initiative`. phx-update="ignore" keeps it
+  # out of patches (a rename mid-session leaves the dialog's copy stale —
+  # display-only and rare).
+  attr :name, :string, required: true
+
+  defp delete_initiative_confirm(assigns) do
+    ~H"""
+    <div
+      id="delete-initiative-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Delete initiative</h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          Delete "{@name}" and everything in it? This can't be undone.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-delete-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-delete-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   attr :pending, :map, default: nil
   attr :verb, :string, default: "change"
 
@@ -1456,7 +1491,6 @@ defmodule DoItWeb.InitiativeShowLive do
     assigns =
       assigns
       |> assign(:class, pending && confirm_class(pending))
-      |> assign(:destructive, pending && Map.get(pending, :kind) == :delete_initiative)
 
     ~H"""
     <div
@@ -1515,14 +1549,10 @@ defmodule DoItWeb.InitiativeShowLive do
           </button>
           <button
             type="submit"
-            phx-disable-with={if @destructive, do: "Deleting…", else: "Working…"}
-            class={[
-              "rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition",
-              @destructive && "bg-red-600 hover:bg-red-700 active:bg-red-800",
-              !@destructive && "bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
-            ]}
+            phx-disable-with="Working…"
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
           >
-            {if @destructive, do: "Delete", else: "Proceed"}
+            Proceed
           </button>
         </div>
       </form>
@@ -1533,7 +1563,6 @@ defmodule DoItWeb.InitiativeShowLive do
   defp confirm_title(%{kind: :cascade_sort}), do: "Large branch reorg"
   defp confirm_title(%{kind: :cascade_complete}), do: "Complete this branch?"
   defp confirm_title(%{kind: :cascade_incomplete}), do: "Reopen this branch?"
-  defp confirm_title(%{kind: :delete_initiative}), do: "Delete initiative"
   defp confirm_title(_), do: "Confirm completion change"
 
   defp confirm_body(%{kind: :cascade_sort, affected: n}, _verb) do
@@ -1547,9 +1576,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :cascade_incomplete, title: t}, _verb),
     do: "Reopen \"#{t}\" and all its subtasks?"
-
-  defp confirm_body(%{kind: :delete_initiative, title: t}, _verb),
-    do: "Delete \"#{t}\" and everything in it? This can't be undone."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -1641,12 +1667,15 @@ defmodule DoItWeb.InitiativeShowLive do
           </span>
           <%!-- Pills carry their customized/default state as `data-pill-set`
                (styled via Tailwind data-variants), so the optimistic row echo
-               in app.js flips one attribute instead of juggling class lists. --%>
+               in app.js flips one attribute instead of juggling class lists.
+               A pill tap selects + focuses its Details field client-side
+               (data-pill names the field); the phx-click only loads pane
+               data when the task wasn't selected yet (.03.07.17). --%>
           <button
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
-            phx-value-focus="priority"
+            data-pill="priority"
             data-pill-set={@task.priority != "normal"}
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
@@ -1661,7 +1690,7 @@ defmodule DoItWeb.InitiativeShowLive do
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
-            phx-value-focus="weight"
+            data-pill="weight"
             data-pill-set={not Decimal.equal?(@task.weight, Decimal.new(1))}
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
@@ -1677,7 +1706,7 @@ defmodule DoItWeb.InitiativeShowLive do
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
-            phx-value-focus="assignee"
+            data-pill="assignee"
             data-pill-set={not is_nil(@task.assignee_id) and not is_nil(@task.assignee)}
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded-full text-xs flex-none cursor-pointer",
@@ -2026,9 +2055,10 @@ defmodule DoItWeb.InitiativeShowLive do
       </details>
 
       <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+        <%!-- No phx-click: the confirm opens client-side (.03.07.18). --%>
         <button
           type="button"
-          phx-click="request_delete_initiative"
+          id="delete-initiative-btn"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 active:scale-95 transition"
         >
           <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete initiative

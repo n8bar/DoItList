@@ -775,16 +775,15 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       conn: conn,
       initiative: initiative
     } do
-      {:ok, view, _html} = live(conn, open_path(initiative))
-      render_click(view, "edit_initiative", %{})
+      {:ok, view, html} = live(conn, open_path(initiative))
 
-      # Delete now opens the styled confirm modal; Proceed redirects.
-      assert has_element?(view, "button[phx-click=request_delete_initiative]")
-      render_click(view, "request_delete_initiative", %{})
-      assert has_element?(view, "#confirm-form")
+      # The confirm dialog is client-rendered (.03.07.18) and ships in the
+      # initial render; delete_initiative arrives only after the user confirms.
+      assert html =~ "delete-initiative-confirm"
+      assert has_element?(view, "#delete-initiative-btn")
 
       assert {:error, {:live_redirect, %{to: to}}} =
-               render_click(view, "confirm_pending", %{})
+               render_click(view, "delete_initiative", %{})
 
       assert to == ~p"/initiatives"
       refute Initiatives.get_initiative(initiative.id)
