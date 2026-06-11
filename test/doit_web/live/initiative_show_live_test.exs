@@ -593,8 +593,39 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       render_click(view, "confirm_pending", %{})
 
-      # Proceed actually moves it to the root task.
+      # Proceed actually moves it to the root task, and releases the client's
+      # held optimistic placement (§8.20 — the commit's render owns it now).
       assert Tasks.get_task!(c2.id).parent_id == initiative.root_task_id
+      assert_push_event(view, "confirm-resolved", %{})
+    end
+
+    test "cancelling a flip-confirmed move announces the revert (§8.20)", %{
+      conn: conn,
+      user: user,
+      initiative: initiative
+    } do
+      p = create_task(user, initiative, nil, "P")
+      c1 = create_task(user, initiative, p, "C1")
+      c2 = create_task(user, initiative, p, "C2")
+      {:ok, _} = Tasks.toggle_complete(c1, user)
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      render_hook(view, "move_task", %{
+        "task_id" => c2.id,
+        "parent_id" => initiative.root_task_id,
+        "position" => 0,
+        "reorder" => false
+      })
+
+      assert has_element?(view, "#confirm-form")
+      render_click(view, "cancel_pending", %{})
+
+      # The client holds the dragged row in its dropped spot while the modal
+      # decides; "confirm-cancelled" is what sends it home.
+      assert_push_event(view, "confirm-cancelled", %{})
+      refute has_element?(view, "#confirm-form")
+      assert Tasks.get_task!(c2.id).parent_id == p.id
     end
   end
 
@@ -703,6 +734,32 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       top = sibling_order(initiative.id, nil)
       assert length(top) == 2
       assert hd(top) != t.id
+    end
+  end
+
+  describe "delete task (client-confirmed, .03.07.15)" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      t = create_task(user, initiative, nil, "Doomed")
+      %{conn: conn, user: user, initiative: initiative, t: t}
+    end
+
+    test "delete_task removes the task; the confirm dialog never hits the server", %{
+      conn: conn,
+      initiative: initiative,
+      t: t
+    } do
+      {:ok, view, html} = live(conn, open_path(initiative))
+
+      # The dialog ships in the initial render (hidden, phx-update="ignore");
+      # opening it is pure client work.
+      assert html =~ "delete-confirm"
+
+      render_hook(view, "delete_task", %{"id" => Integer.to_string(t.id)})
+
+      assert Tasks.get_task(t.id) == nil
+      refute has_element?(view, "#task-#{t.id}")
     end
   end
 

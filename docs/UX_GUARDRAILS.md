@@ -36,7 +36,8 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 6.2 Optimistic UI for fast operations: reflect the action instantly when likely to succeed; reconcile on error.
 6.3 Confirmations only for actions that are destructive, irreversible, or whose side effects reach beyond what the user is looking at (e.g., a move that silently flips an ancestor's completion). Never gate ordinary actions behind "are you sure?" — and surprise-scope confirmations must be suppressible.
 6.4 Prefer undo over confirm where feasible — let the user act, with a short window to reverse.
-6.5 Interactions that only change view state — selection, expand/collapse, focus — never wait on the network.
+6.5 Interactions that only change view state — selection, expand/collapse, focus — never wait on the network. Opening a confirmation dialog counts when its content is already client-known.
+6.6 Confirmations preserve optimism. A confirm that interrupts an optimistic action must not visually undo it while the user decides — Cancel reverts it, Proceed carries it through.
 
 ### 7. Navigation & state
 7.1 Same path = same content. Back button works as expected; refreshing a page returns the user where they were.

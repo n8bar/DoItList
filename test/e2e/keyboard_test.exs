@@ -119,9 +119,11 @@ defmodule DoItWeb.E2E.KeyboardTest do
     |> log_in(user)
     |> open_initiative(initiative)
     |> select_task(a)
+    # The delete confirm is client-rendered (.03.07.15) — it opens with no
+    # round trip, prefilled with the selected task's title.
     |> press("body", "Delete")
-    |> assert_has("#completion-confirm", text: "Delete task")
-    |> click_button("#completion-confirm button[type='submit']", "Delete")
+    |> assert_has("#delete-confirm [data-delete-title]", text: "Doomed")
+    |> click_button("#delete-confirm [data-delete-proceed]", "Delete")
     |> refute_has("#task-#{a.id}")
 
     assert Tasks.get_task(a.id) == nil
@@ -134,21 +136,20 @@ defmodule DoItWeb.E2E.KeyboardTest do
   } do
     a = create_task(user, initiative, nil, "Steady")
 
-    conn =
-      conn
-      |> log_in(user)
-      |> open_initiative(initiative)
-      |> select_task(a)
-      # focus the (already focused) new-subtask input via N first
-      |> press("body", "n")
-      |> assert_has("#task-#{a.id} form input[name='title']:focus")
-      # Inside the input: Delete must NOT open the delete modal, "s" must not
-      # spawn a sibling form, arrows must not move the selection.
-      |> press("input[name='title']", "Delete")
-      |> refute_has("#completion-confirm")
-      |> press("input[name='title']", "s")
-      |> press("input[name='title']", "ArrowDown")
-      |> assert_has("li[data-selected='#{a.id}']")
+    conn
+    |> log_in(user)
+    |> open_initiative(initiative)
+    |> select_task(a)
+    # focus the (already focused) new-subtask input via N first
+    |> press("body", "n")
+    |> assert_has("#task-#{a.id} form input[name='title']:focus")
+    # Inside the input: Delete must NOT open the delete modal, "s" must not
+    # spawn a sibling form, arrows must not move the selection.
+    |> press("input[name='title']", "Delete")
+    |> refute_has("#completion-confirm")
+    |> press("input[name='title']", "s")
+    |> press("input[name='title']", "ArrowDown")
+    |> assert_has("li[data-selected='#{a.id}']")
 
     assert Tasks.get_task!(a.id).id == a.id
   end

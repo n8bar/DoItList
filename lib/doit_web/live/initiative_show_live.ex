@@ -500,24 +500,15 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  # Delete (.03.01.11): always confirm via the styled modal (not suppressible).
-  def handle_event("request_delete_task", _params, socket) do
-    cond do
-      not socket.assigns.can_edit ->
-        {:noreply, put_flash(socket, :error, "You don't have permission.")}
-
-      is_nil(socket.assigns.selected_task_id) ->
-        {:noreply, socket}
-
-      true ->
-        task = socket.assigns.selected_task
-
-        {:noreply,
-         assign_pending(socket, %{
-           kind: :delete_task,
-           task_id: task.id,
-           title: task.title
-         })}
+  # Delete (.03.01.11, .03.07.15): the styled confirm is client-rendered and
+  # client-decided — opening a dialog whose content is already in the DOM is
+  # view state (UX_GUARDRAILS 6.5). This event arrives only after the user
+  # confirmed; the row was already optimistically removed client-side.
+  def handle_event("delete_task", %{"id" => id}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      {:noreply, commit_delete_task(socket, String.to_integer(id))}
     end
   end
 
@@ -559,8 +550,11 @@ defmodule DoItWeb.InitiativeShowLive do
             end
           else
             # A completion-flip confirmation is required: the move is NOT yet
-            # persisted, so tell the client not to keep its optimistic placement
-            # (the confirm modal drives the real move). committed: false.
+            # persisted, but the client KEEPS its optimistic placement while
+            # the modal decides (§8.20 — confirmations must not undo optimism).
+            # committed: false tells it to hold a revert handle: Cancel / a
+            # failed Proceed reverts via "confirm-cancelled"; a Proceed commit
+            # re-renders the same placement.
             {:reply, %{ok: true, committed: false},
              assign_pending(socket, %{
                kind: :move,
@@ -600,9 +594,6 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           commit_cascade(socket, id, kind)
 
-        %{kind: :delete_task, task_id: id} ->
-          commit_delete_task(socket, id)
-
         %{kind: :delete_initiative} ->
           commit_delete_initiative(socket)
 
@@ -610,11 +601,16 @@ defmodule DoItWeb.InitiativeShowLive do
           socket
       end
 
-    {:noreply, socket}
+    # The modal is resolved either way; the client drops any held optimistic
+    # state (a failed move commit already pushed "confirm-cancelled" to revert
+    # it — that event lands first).
+    {:noreply, push_event(socket, "confirm-resolved", %{})}
   end
 
   def handle_event("cancel_pending", _params, socket) do
-    {:noreply, assign_pending(socket, nil)}
+    # The client may hold optimistic state for the pending op (a drag's
+    # placement, §8.20) — announce the cancellation so it reverts.
+    {:noreply, socket |> assign_pending(nil) |> push_event("confirm-cancelled", %{})}
   end
 
   # Keyboard alternative for task reorganization (M02 Arc 3 item 6).
@@ -782,6 +778,9 @@ defmodule DoItWeb.InitiativeShowLive do
         {:error, reason,
          socket
          |> assign_pending(nil)
+         # A client may be holding the optimistic placement from a confirmed
+         # drag — the move died, so revert it.
+         |> push_event("confirm-cancelled", %{})
          |> put_flash(:error, "Couldn't move task: #{format_move_error(reason)}.")}
     end
   end
@@ -1266,6 +1265,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
+      <.delete_task_confirm :if={@can_edit} />
       <.shortcuts_overlay />
     </Layouts.app>
     """
@@ -1398,7 +1398,7 @@ defmodule DoItWeb.InitiativeShowLive do
        when kind in [:cascade_complete, :cascade_incomplete],
        do: MapSet.new(Tasks.subtree_ids(id) ++ Tasks.ancestor_ids(id))
 
-  defp pending_saving_ids(%{kind: kind, task_id: id}) when kind in [:cascade_sort, :delete_task],
+  defp pending_saving_ids(%{kind: :cascade_sort, task_id: id}),
     do: MapSet.new(Tasks.subtree_ids(id))
 
   defp pending_saving_ids(%{kind: :move, task_id: id, flip_ids: flip_ids}),
@@ -1406,6 +1406,46 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp pending_saving_ids(%{kind: :create, flip_ids: flip_ids}), do: MapSet.new(flip_ids)
   defp pending_saving_ids(_), do: MapSet.new()
+
+  # Task deletion's confirm is fully client-side (.03.07.15, UX_GUARDRAILS
+  # 6.5): everything the dialog shows — the task title, the irreversibility
+  # copy — is already in the DOM, so opening it costs no round trip. app.js
+  # fills the title, holds the maybe-write hue on the subtree, and only the
+  # Delete button touches the server (the `delete_task` event, alongside the
+  # optimistic row removal). phx-update="ignore": the server never patches it.
+  defp delete_task_confirm(assigns) do
+    ~H"""
+    <div
+      id="delete-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Delete task</h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          Delete "<span data-delete-title></span>" and all its subtasks? This can't be undone.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-delete-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-delete-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
 
   attr :pending, :map, default: nil
   attr :verb, :string, default: "change"
@@ -1416,14 +1456,7 @@ defmodule DoItWeb.InitiativeShowLive do
     assigns =
       assigns
       |> assign(:class, pending && confirm_class(pending))
-      |> assign(
-        :destructive,
-        pending && Map.get(pending, :kind) in [:delete_task, :delete_initiative]
-      )
-      |> assign(
-        :optimistic_remove,
-        pending && Map.get(pending, :kind) == :delete_task && Map.get(pending, :task_id)
-      )
+      |> assign(:destructive, pending && Map.get(pending, :kind) == :delete_initiative)
 
     ~H"""
     <div
@@ -1478,7 +1511,6 @@ defmodule DoItWeb.InitiativeShowLive do
           </button>
           <button
             type="submit"
-            data-optimistic-remove={@optimistic_remove}
             phx-disable-with={if @destructive, do: "Deleting…", else: "Working…"}
             class={[
               "rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition",
@@ -1497,7 +1529,6 @@ defmodule DoItWeb.InitiativeShowLive do
   defp confirm_title(%{kind: :cascade_sort}), do: "Large branch reorg"
   defp confirm_title(%{kind: :cascade_complete}), do: "Complete this branch?"
   defp confirm_title(%{kind: :cascade_incomplete}), do: "Reopen this branch?"
-  defp confirm_title(%{kind: :delete_task}), do: "Delete task"
   defp confirm_title(%{kind: :delete_initiative}), do: "Delete initiative"
   defp confirm_title(_), do: "Confirm completion change"
 
@@ -1512,9 +1543,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :cascade_incomplete, title: t}, _verb),
     do: "Reopen \"#{t}\" and all its subtasks?"
-
-  defp confirm_body(%{kind: :delete_task, title: t}, _verb),
-    do: "Delete \"#{t}\" and all its subtasks? This can't be undone."
 
   defp confirm_body(%{kind: :delete_initiative, title: t}, _verb),
     do: "Delete \"#{t}\" and everything in it? This can't be undone."
@@ -1607,17 +1635,19 @@ defmodule DoItWeb.InitiativeShowLive do
           >
             {"#" <> Integer.to_string(@task.id)}
           </span>
+          <%!-- Pills carry their customized/default state as `data-pill-set`
+               (styled via Tailwind data-variants), so the optimistic row echo
+               in app.js flips one attribute instead of juggling class lists. --%>
           <button
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
             phx-value-focus="priority"
+            data-pill-set={@task.priority != "normal"}
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
-              if(@task.priority == "normal",
-                do: "border border-dashed border-zinc-300 dark:border-zinc-600",
-                else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-              )
+              "border border-dashed border-zinc-300 dark:border-zinc-600",
+              "data-pill-set:border-transparent data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
             ]}
             title={"Priority: #{@task.priority}"}
           >
@@ -1628,12 +1658,11 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-click="select_task"
             phx-value-id={@task.id}
             phx-value-focus="weight"
+            data-pill-set={not Decimal.equal?(@task.weight, Decimal.new(1))}
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
-              if(Decimal.equal?(@task.weight, Decimal.new(1)),
-                do: "border border-dashed border-zinc-300 dark:border-zinc-600",
-                else: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300"
-              )
+              "border border-dashed border-zinc-300 dark:border-zinc-600",
+              "data-pill-set:border-transparent data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
             ]}
             title={"Weight #{Decimal.to_string(@task.weight)}"}
           >
@@ -1645,12 +1674,11 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-click="select_task"
             phx-value-id={@task.id}
             phx-value-focus="assignee"
+            data-pill-set={not is_nil(@task.assignee_id) and not is_nil(@task.assignee)}
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded-full text-xs flex-none cursor-pointer",
-              if(@task.assignee_id && @task.assignee,
-                do: "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300",
-                else: "border border-dashed border-zinc-300 dark:border-zinc-600"
-              )
+              "border border-dashed border-zinc-300 dark:border-zinc-600",
+              "data-pill-set:border-transparent data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
             ]}
             title={
               if(@task.assignee_id && @task.assignee,
@@ -1659,8 +1687,8 @@ defmodule DoItWeb.InitiativeShowLive do
               )
             }
           >
-            <span :if={@task.assignee_id && @task.assignee} class="truncate">
-              @{@task.assignee.name}
+            <span class="truncate">
+              {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.name}"}
             </span>
           </button>
         </div>
@@ -1728,7 +1756,7 @@ defmodule DoItWeb.InitiativeShowLive do
               class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
             />
             <span class="hidden group-aria-[expanded=false]:inline text-xs tabular-nums">
-              ({length(@task.children)})
+              ({leaf_count(@task)})
             </span>
           </button>
 
@@ -1747,13 +1775,14 @@ defmodule DoItWeb.InitiativeShowLive do
             aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
             aria-pressed={to_string(@task.status == "done")}
             class={[
-              "absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
-              @task.status == "done" && "border-emerald-500 bg-emerald-500 text-white",
-              @task.status != "done" &&
-                "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 hover:border-emerald-500"
+              "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+              "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 hover:border-emerald-500",
+              "aria-pressed:border-emerald-500 aria-pressed:bg-emerald-500 aria-pressed:text-white"
             ]}
           >
-            <.icon :if={@task.status == "done"} name="hero-check" class="w-3 h-3" />
+            <%!-- Styling keys off aria-pressed (not server-conditional classes)
+                 so the optimistic leaf flip in app.js is one attribute write. --%>
+            <.icon name="hero-check" class="w-3 h-3 hidden group-aria-pressed/check:inline-block" />
           </button>
 
           <span
@@ -1769,9 +1798,11 @@ defmodule DoItWeb.InitiativeShowLive do
           </span>
         </div>
 
-        <%!-- Row 3: description, its own truncated line. --%>
+        <%!-- Row 3: description, its own truncated line. Always in the DOM
+             (hidden when empty) so the optimistic row echo can fill it. --%>
         <span
-          :if={@task.description && @task.description != ""}
+          data-task-description
+          hidden={is_nil(@task.description) or @task.description == ""}
           class="w-full min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
         >
           {@task.description}
@@ -2274,7 +2305,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="space-y-1">
           <div class="flex items-center gap-1">
             <label for="task-field-progress" class="text-xs text-zinc-500 dark:text-zinc-400">
-              Manual progress: {@task.manual_progress}%
+              Manual progress: <span data-progress-readout>{@task.manual_progress}</span>%
             </label>
             <.info_hint
               :if={not leaf?(@task)}
@@ -2333,11 +2364,12 @@ defmodule DoItWeb.InitiativeShowLive do
           <% end %>
         </div>
         <div class="flex items-center gap-2">
+          <%!-- No phx-click: the delete confirm opens client-side (.03.07.15);
+               app.js owns this button. --%>
           <button
             :if={@can_edit}
             id="delete-task-btn"
             type="button"
-            phx-click="request_delete_task"
             class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
           >
             <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete
@@ -2415,6 +2447,12 @@ defmodule DoItWeb.InitiativeShowLive do
       do: "text-amber-700 dark:text-amber-600",
       else: "text-emerald-600 dark:text-emerald-400"
   end
+
+  # Collapsed-badge count: leaf tasks in the whole subtree, not direct
+  # children — "(12)" tells you how much work is folded away, not how many
+  # immediate branches happen to wrap it.
+  defp leaf_count(%{children: []}), do: 1
+  defp leaf_count(%{children: children}), do: Enum.sum(Enum.map(children, &leaf_count/1))
 
   defp leaf?(%Task{} = task) do
     case Map.get(task, :children) do

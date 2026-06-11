@@ -90,6 +90,9 @@ defmodule DoItWeb.E2E.CompletionConfirmTest do
       |> drag("#drag-#{l.id}", to: "#task-#{p.id} > [data-task-row]")
       |> assert_has("#completion-confirm", text: "Source branch")
       |> assert_has("#completion-confirm", text: "Dest branch")
+      # §8.20 / .03.07.14: the optimistic placement HOLDS while the modal
+      # decides — the row sits under the destination, not snapped home.
+      |> assert_has("#children-#{p.id} > #task-#{l.id}")
       |> click_button("Proceed")
 
     conn
@@ -97,6 +100,31 @@ defmodule DoItWeb.E2E.CompletionConfirmTest do
     |> assert_open(p)
 
     assert Tasks.get_task!(l.id).parent_id == p.id
+  end
+
+  test "drag cancel: the held placement reverts home (.03.07.14)",
+       %{conn: conn, user: user, initiative: initiative} do
+    a = create_task(user, initiative, nil, "Source branch")
+    ad = create_task(user, initiative, a, "Source done")
+    complete!(ad, user)
+    l = create_task(user, initiative, a, "Moving leaf")
+
+    p = create_task(user, initiative, nil, "Dest branch")
+    pd = create_task(user, initiative, p, "Dest done")
+    complete!(pd, user)
+
+    conn
+    |> log_in(user)
+    |> open_initiative(initiative)
+    |> drag("#drag-#{l.id}", to: "#task-#{p.id} > [data-task-row]")
+    |> assert_has("#completion-confirm")
+    |> assert_has("#children-#{p.id} > #task-#{l.id}")
+    |> click_button("Cancel")
+    |> refute_has("#completion-confirm")
+    |> assert_has("#children-#{a.id} > #task-#{l.id}")
+
+    assert Tasks.get_task!(l.id).parent_id == a.id
+    assert Tasks.get_task!(a.id).status == "open"
   end
 
   test "cancel: tree state and activity log untouched", %{

@@ -69,13 +69,14 @@ defmodule DoItWeb.E2E.ConfirmSuppressionTest do
       |> click_button("Cancel")
       |> refute_has("#completion-confirm")
 
-    # Deletes always confirm — and never offer suppression.
+    # Deletes always confirm (client-rendered modal, .03.07.15) — and never
+    # offer suppression.
     conn
     |> select_task(b)
     |> press("body", "Delete")
-    |> assert_has("#completion-confirm", text: "Delete task")
-    |> refute_has("#completion-confirm input[name='dont_show']")
-    |> click_button("Cancel")
+    |> assert_has("#delete-confirm [data-delete-title]", text: b.title)
+    |> refute_has("#delete-confirm input[name='dont_show']")
+    |> click_button("#delete-confirm [data-delete-cancel]", "Cancel")
 
     assert Tasks.get_task!(b.id).status == "open"
   end

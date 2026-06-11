@@ -93,12 +93,14 @@ function savingChildren(li) {
   return [savingRowOf(li), ...kids]
 }
 
-function markSaving(rows) {
+function markSaving(rows, opts = {}) {
   rows.forEach((el) => {
     if (el) { el.classList.add("is-saving"); savingPending.add(el) }
   })
-  if (savingTimer) clearTimeout(savingTimer)
-  savingTimer = setTimeout(clearSavingHue, 1500)
+  if (savingTimer) { clearTimeout(savingTimer); savingTimer = null }
+  // sticky: a client-held maybe-write (the delete confirm, while open) — no
+  // safety timeout; whoever closes the dialog clears the hue explicitly.
+  if (!opts.sticky) savingTimer = setTimeout(clearSavingHue, 1500)
 }
 
 function clearSavingHue() {
@@ -370,21 +372,24 @@ document.addEventListener("click", (e) => {
   // confirm modal is open the rows at stake hold the hue via the
   // pending_saving_ids assign, so it survives re-renders; Cancel clears it and
   // Proceed keeps it through the write. Nothing to do client-side here.
-  // Modal "Delete" Proceed (.03.01.11): optimistically drop the row + subtree
-  // now and pink the surviving ancestors; the form submit (confirm_pending)
-  // still fires, and a failed write re-inserts the row via morphdom. No return —
-  // the submit must proceed.
-  const del = e.target.closest("[data-optimistic-remove]")
-  if (del) {
-    const li = document.getElementById("task-" + del.dataset.optimisticRemove)
-    if (li) { markSaving(savingAncestors(li)); li.remove() }
-  }
+  // (Task deletion's confirm is the exception — fully client-side, .03.07.15,
+  // handled by the #delete-confirm block below.)
   // Completion toggle (leaf or branch) — pink the toggled row + its subtree +
   // the ancestor chain whose progress / status recomputes.
   const toggle = e.target.closest("[data-complete-toggle]")
   if (toggle) {
     const li = toggle.closest(SAVING_ROW)
     if (li) markSaving([...savingSubtree(li), ...savingAncestors(li)])
+    // Leaf toggles flip the checkbox optimistically (§8.18.1 judgment): its
+    // styling keys off aria-pressed, so one attribute write does it. Leaf
+    // toggles commit directly — no confirm class covers them — so nothing can
+    // intercept the flip. Branch toggles (cascade_*) stay server-timed: they
+    // may open a confirm, and their flip belongs to the cascade's outcome.
+    if (toggle.getAttribute("phx-click") === "toggle_complete") {
+      const pressed = toggle.getAttribute("aria-pressed") === "true"
+      toggle.setAttribute("aria-pressed", String(!pressed))
+      toggle.setAttribute("aria-label", pressed ? "Mark task completed" : "Reopen task")
+    }
     return
   }
   // Cascade-sort to all descendants — pink the whole subtree of the selected branch.
@@ -410,6 +415,166 @@ document.addEventListener("change", (e) => {
     const rollup = e.target.id === "task-field-weight"
     markSaving(rollup ? [savingRowOf(li), ...savingAncestors(li)] : [savingRowOf(li)])
   }
+})
+
+// Optimistic row echo (UX_GUARDRAILS 6.2): a pane edit tells us exactly what
+// the selected row will show after the write, so the row updates at the
+// keystroke. The server patch re-renders the same values (no flicker) and a
+// rejected write restores the truth. Roll-up math (ancestors, branch %) is
+// never predicted — the saving hue covers that window.
+document.addEventListener("input", (e) => {
+  const li = selectedLi()
+  const row = li && li.querySelector(":scope > [data-task-row]")
+  if (!row) return
+  const t = e.target
+  switch (t.id) {
+    case "task-field-title": {
+      const el = row.querySelector("[data-task-title]")
+      if (el) el.textContent = t.value
+      return
+    }
+    case "task-field-description": {
+      const el = row.querySelector("[data-task-description]")
+      if (!el) return
+      el.textContent = t.value
+      el.hidden = t.value === ""
+      return
+    }
+    case "task-field-priority": {
+      const pill = row.querySelector("[phx-value-focus='priority']")
+      if (!pill) return
+      const set = t.value !== "normal"
+      pill.toggleAttribute("data-pill-set", set)
+      pill.textContent = set ? t.value : ""
+      pill.title = "Priority: " + t.value
+      return
+    }
+    case "task-field-weight": {
+      const pill = row.querySelector("[phx-value-focus='weight']")
+      if (!pill) return
+      const v = t.value.trim()
+      const set = v !== "" && parseFloat(v) !== 1
+      pill.toggleAttribute("data-pill-set", set)
+      pill.textContent = set ? "w=" + v : ""
+      if (v !== "") pill.title = "Weight " + v
+      return
+    }
+    case "task-field-assignee": {
+      const pill = row.querySelector("[phx-value-focus='assignee']")
+      const span = pill && pill.querySelector("span")
+      if (!span) return
+      const name = t.value ? t.options[t.selectedIndex].textContent.trim() : ""
+      pill.toggleAttribute("data-pill-set", !!name)
+      span.textContent = name ? "@" + name : ""
+      pill.title = name ? "Assignee: " + name : "Unassigned"
+      return
+    }
+    case "task-field-progress": {
+      const readout = document.querySelector("#task-editor-pane [data-progress-readout]")
+      if (readout) readout.textContent = t.value
+      // The slider only writes a leaf's bar; a done leaf displays 100
+      // regardless of the manual value, so leave it to the server.
+      const done = row.querySelector("[data-complete-toggle][aria-pressed='true']")
+      if (done) return
+      const bar = row.querySelector("[role='progressbar']")
+      if (!bar) return
+      bar.style.setProperty("--progress", t.value + "%")
+      bar.setAttribute("aria-valuenow", t.value)
+      const txt = bar.querySelector(".progress-bar-text")
+      if (txt) txt.textContent = t.value + "%"
+      return
+    }
+  }
+})
+
+// Client-instant delete confirm (.03.07.15, UX_GUARDRAILS 6.5): the dialog's
+// whole content is already client-known, so it opens at the click — no round
+// trip before the user can decide. The subtree holds a sticky maybe-write hue
+// while the dialog is up; Cancel clears it, Delete optimistically removes the
+// row (pinking the surviving ancestors) and pushes the actual delete.
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("delete-confirm")
+  if (!modal) return
+  if (e.target.closest("#delete-task-btn")) {
+    const li = selectedLi()
+    if (!li) return
+    modal.dataset.taskId = li.dataset.taskId
+    const title = li.querySelector(":scope > [data-task-row] [data-task-title]")
+    modal.querySelector("[data-delete-title]").textContent = title ? title.textContent.trim() : ""
+    markSaving(savingSubtree(li), {sticky: true})
+    modal.hidden = false
+    const cancel = modal.querySelector("[data-delete-cancel]")
+    if (cancel) cancel.focus()
+    return
+  }
+  if (modal.hidden) return
+  // Backdrop click or Cancel — close without consequence.
+  if (e.target === modal || e.target.closest("[data-delete-cancel]")) {
+    modal.hidden = true
+    clearSavingHue()
+    const btn = document.getElementById("delete-task-btn")
+    if (btn) btn.focus()
+    return
+  }
+  if (e.target.closest("[data-delete-proceed]")) {
+    modal.hidden = true
+    clearSavingHue()
+    const li = document.getElementById("task-" + modal.dataset.taskId)
+    if (li) { markSaving(savingAncestors(li)); li.remove() }
+    if (window.DoitPush) window.DoitPush("delete_task", {id: modal.dataset.taskId})
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("delete-confirm")
+  if (modal && !modal.hidden) {
+    modal.hidden = true
+    clearSavingHue()
+  }
+})
+
+// Confirm-held optimism (§8.20): while a completion-flip confirm decides a
+// drag, the optimistic placement holds. The server announces the outcome:
+// "confirm-cancelled" (Cancel, click-away, or a failed Proceed) reverts the
+// row to where it came from; "confirm-resolved" (modal closed via Proceed)
+// releases the handle — the commit's re-render owns the row from there. A
+// failed Proceed pushes both, cancelled first, so the revert still runs.
+window.DoitPendingMove = null
+
+// Re-assert the held placement: server-side the row still belongs to its old
+// parent, so every patch that touches either child list moves it back. Runs
+// from the guard observer; insert-only-when-different, so it converges.
+function applyPendingMove() {
+  const p = window.DoitPendingMove
+  if (!p || !p.destContainer) return
+  // A patch may have replaced the container / sibling instances — re-find
+  // them by id before giving up.
+  let container = p.destContainer
+  if (!container.isConnected && container.id) {
+    container = document.getElementById(container.id)
+    if (container) p.destContainer = container
+  }
+  if (!container || !container.isConnected) return
+  let next = p.destNext
+  if (next && !next.isConnected && next.id) next = document.getElementById(next.id)
+  if (next && next.parentElement !== container) next = null
+  if (p.li.parentElement !== container || p.li.nextElementSibling !== next) {
+    container.insertBefore(p.li, next)
+  }
+}
+window.addEventListener("phx:confirm-cancelled", () => {
+  const p = window.DoitPendingMove
+  window.DoitPendingMove = null
+  if (!p || !p.parent || !p.parent.isConnected) return
+  // The original next-sibling may have been re-rendered away; fall back to
+  // appending rather than throwing.
+  const next = p.next && p.next.parentElement === p.parent ? p.next : null
+  p.parent.insertBefore(p.li, next)
+  if (p.fabricatedUl && p.fabricatedUl.children.length === 0) p.fabricatedUl.remove()
+})
+window.addEventListener("phx:confirm-resolved", () => {
+  window.DoitPendingMove = null
 })
 
 // Confirmation suppression (.03.01.11): read the per-class skip flags from
@@ -938,22 +1103,43 @@ Hooks.DragReorder = {
 
     const fabricatedUl = this._fabricatedUl
     this._fabricatedUl = null
+    const movedLi = this.sourceLi
+    const held = {}
     this.pushEvent("move_task", params, (reply) => {
-      // Keep the optimistic placement only when the move actually persisted.
-      // A failed write (ok: false) or a move awaiting completion-flip
-      // confirmation (committed: false) snaps the row back to where it was —
-      // the server's authoritative re-render (or the confirm modal) takes over.
-      const committed = reply && reply.ok !== false && reply.committed !== false
-      if (!committed && origParent) {
-        origParent.insertBefore(this.sourceLi, origNext)
+      const failed = !reply || reply.ok === false
+      // A failed write snaps the row back — the server re-renders the
+      // unchanged tree.
+      if (failed && origParent) {
+        origParent.insertBefore(movedLi, origNext)
         // Drop any empty child list we fabricated for an optimistic reparent.
         if (fabricatedUl && fabricatedUl.children.length === 0) fabricatedUl.remove()
+      }
+      // A move awaiting completion-flip confirmation (committed: false) HOLDS
+      // its optimistic placement while the modal decides (§8.20 — confirms
+      // must not undo optimism). Server-side the row still lives under its
+      // old parent, so any patch (the pending-hue render included) puts it
+      // back; the guard observer re-asserts the held spot until the
+      // "confirm-cancelled" / "confirm-resolved" listeners below release it.
+      if (!failed && reply.committed === false) {
+        window.DoitPendingMove = {
+          li: movedLi,
+          parent: origParent,
+          next: origNext,
+          fabricatedUl,
+          destContainer: held.container,
+          destNext: held.next,
+        }
+        applyPendingMove()
       }
       // Clear the hue explicitly on the server's reply — don't rely on morphdom
       // stripping it, which is unreliable once we've moved the DOM ourselves.
       this.clearSaving()
     })
     this.cleanup()
+    // Captured after cleanup so the drop placeholder (the pre-cleanup
+    // nextSibling) doesn't pollute the held position.
+    held.container = movedLi.parentElement
+    held.next = movedLi.nextElementSibling
   },
 
   // Where the drop's visual indicator says the row should land — reuse the
@@ -1391,6 +1577,8 @@ new MutationObserver(() => {
     applyCollapseStates()
     // Selection is client-owned too — re-assert it across the same patch paths.
     window.DoitSelection.apply()
+    // A confirm-held drag placement (§8.20) survives the same way.
+    applyPendingMove()
   })
 }).observe(document.body, {
   subtree: true,
