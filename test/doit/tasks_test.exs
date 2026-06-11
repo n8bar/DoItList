@@ -560,7 +560,7 @@ defmodule DoIt.TasksTest do
 
       Tasks.recompute_initiative_progress(initiative.id)
 
-      # First generation: avg(lone 100, C 0) = 50.
+      # Single-level average: avg(lone 100, C 0) = 50.
       assert Tasks.get_task!(b.id).computed_progress == 50
     end
   end
