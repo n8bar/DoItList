@@ -1,12 +1,14 @@
 # Product Spec
-_Last updated: 2026-05-19_
+_Last updated: 2026-06-11_
+
+> **Draft — pending operator approval:** this revision removes Weight from the product (Core Idea, Vocabulary, Durable Principles, Roll-up Progress, Sibling sort). Implementation items live in [`milestones/m02-ux-buildout/m02.03-task-tree.md`](milestones/m02-ux-buildout/m02.03-task-tree.md) § 10.
 
 The canonical specification of Do It List — what the product is, the vocabulary used to describe it, the principles it must hold to, and the headline behaviors that define it.
 
 This is the master spec. Milestone docs and subsystem specs narrow or extend it but do not contradict it. [`PLAN.md`](PLAN.md) tracks how we get there; this doc tracks what "there" means.
 
 ## Core Idea
-**Task trees with real progress.** Break work into nested tasks; update progress on leaves; parent progress rolls up automatically. Weighting is optional but available for users who need accuracy.
+**Task trees with real progress.** Break work into nested tasks; update progress on leaves; parent progress rolls up automatically. Importance is expressed by decomposition: break the work that matters more into more detail, and it counts for more — there is no weight attribute to tune.
 
 This is not a generic todo app. Nested work is first-class.
 
@@ -21,8 +23,7 @@ Heavily inspired by AbstractSpoon's ToDo List, with three deliberate departures:
 - **Task** — any node in the tree.
 - **List** — informal name for a *root* task (a task whose `parent_id` is null). An Initiative usually has multiple Lists, each with its own tree.
 - **Progress** — a task's current completion (0–100). Manual on leaves, computed on branches.
-- **Roll-up progress** — a branch task's computed progress: the weighted average of its children's rolled-up progress.
-- **Weight** — how much a child contributes to its parent's roll-up. Default `1`.
+- **Roll-up progress** — a branch task's computed progress: the average progress of all its descendant leaves (the leaf average).
 - **Leaf task** — a task with no children. (A metaphor term serving where the plain vocabulary has no analog — see Visual Metaphor.)
 - **Initiative member** — a `(user, initiative, role)` triple. Roles: `owner`, `editor`, `viewer`.
 
@@ -54,23 +55,23 @@ The task tree stays readable at any viewport and degrades by scrolling, never by
 
 ## Durable Principles
 - **Nested work is first-class.** The tree is the point.
-- **Progress is useful by default.** A user who never touches weights still gets meaningful roll-up.
-- **Weighting is optional, never required.** Users opt in to non-equal contributions.
+- **Progress is useful by default.** Roll-up needs no configuration to be meaningful.
+- **Importance is expressed by decomposition, not configuration.** To make a branch count for more, break it into more leaves. The side effect is virtuous: the work that matters most ends up specified in the most detail. (This replaced an explicit per-task Weight on 2026-06-11 — the AbstractSpoon inspiration works the same way, and decomposition had already absorbed weight's job when leaf-average roll-up landed.)
 - **No file check-in/check-out collaboration.** Real-time, last-writer-wins by default.
 - **Grow milestone by milestone.** Resist becoming bloated PM software.
 
 ## Roll-up Progress (principle + formula)
-Leaf tasks use manual progress. Branch tasks use the **leaf average** (per the AbstractSpoon inspiration): the weighted average over **all descendant leaves** — every leaf counts, wherever it sits in the subtree:
+Leaf tasks use manual progress. Branch tasks use the **leaf average** (per the AbstractSpoon inspiration): the plain average over **all descendant leaves** — every leaf counts one unit, wherever it sits in the subtree:
 
 ```
-sum(leaf_progress * leaf_path_weight) / sum(leaf_path_weight)
+sum(leaf_progress) / leaf_count
 ```
 
-`leaf_path_weight` is the product of the weights along the path from the branch's direct child down to the leaf. With everything at the default weight this is a plain average of the leaves; weighting an intermediate branch scales its whole subtree's leaves on the way up. The Initiative header bar is the system root's roll-up — the same math end to end.
+Because every leaf counts the same, a subtree's pull on its ancestors is its leaf count — decomposing a branch further is how the user makes it matter more. The Initiative header bar is the system root's roll-up — the same math end to end.
 
 The previous formula — the single-level average, where each direct child counts as one unit regardless of how many leaves it contains — is available as a per-initiative setting (Initiative pane → Settings → Progress calculation); leaf average is the default.
 
-Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
+Edge cases (status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 
 ## Reorganization
 _Added 2026-05-19; operator-approved 2026-05-20._
@@ -101,7 +102,7 @@ Change a task's position among its current siblings without changing its parent.
 ### Sibling sort
 Apply an ordering rule to one parent's children.
 
-- Available criteria: alphabetical (by title), by status, by computed progress, by priority, by weight, by created date, by updated date.
+- Available criteria: alphabetical (by title), by status, by computed progress, by priority, by created date, by updated date.
 - The sort mode is a preference that cascades from User → Initiative → List → each parent task, with "inherit from ancestor" as the implicit default at every level. Any level may explicitly override; the closest explicit setting wins. (User-level preferences are not yet specified; when user preferences arrive, sort mode is one of them.)
 - An optional **resort all posterity** helper propagates a parent's current sort mode down its subtree. Non-mandatory; not automatic.
 
