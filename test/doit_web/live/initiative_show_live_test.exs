@@ -627,6 +627,45 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       refute has_element?(view, "#confirm-form")
       assert Tasks.get_task!(c2.id).parent_id == p.id
     end
+
+    test "the full §8.20 cycle: cancel, redo the same move, proceed", %{
+      conn: conn,
+      user: user,
+      initiative: initiative
+    } do
+      # A: every child done except one. P: fully done.
+      a = create_task(user, initiative, nil, "A")
+      ad = create_task(user, initiative, a, "A done")
+      {:ok, _} = Tasks.toggle_complete(ad, user)
+      l = create_task(user, initiative, a, "Mover")
+      p = create_task(user, initiative, nil, "P")
+      pd = create_task(user, initiative, p, "P done")
+      {:ok, _} = Tasks.toggle_complete(pd, user)
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      move = %{"task_id" => l.id, "parent_id" => p.id, "position" => 0, "reorder" => false}
+
+      # Both flips listed: A would complete, P would reopen.
+      render_hook(view, "move_task", move)
+      assert has_element?(view, "#confirm-form")
+      assert render(view) =~ "A"
+      assert render(view) =~ "P"
+
+      render_click(view, "cancel_pending", %{})
+      assert Tasks.get_task!(l.id).parent_id == a.id
+      assert Tasks.get_task!(a.id).status == "open"
+      assert Tasks.get_task!(p.id).status == "done"
+
+      # Redo the identical move; this time proceed.
+      render_hook(view, "move_task", move)
+      assert has_element?(view, "#confirm-form")
+      render_click(view, "confirm_pending", %{})
+
+      assert Tasks.get_task!(l.id).parent_id == p.id
+      assert Tasks.get_task!(a.id).status == "done"
+      assert Tasks.get_task!(p.id).status == "open"
+    end
   end
 
   describe "keyboard attribute adjusters (P / W / A)" do
