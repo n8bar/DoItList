@@ -515,6 +515,41 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "broadcast discipline (post-commit only)" do
+    # The commit-ordering itself can't be observed under the shared sandbox;
+    # these pin the queue mechanics around it: success broadcasts, previews
+    # and failures never do.
+    test "a successful mutation broadcasts; a failed one doesn't", %{
+      user: user,
+      initiative: initiative
+    } do
+      Tasks.subscribe(initiative.id)
+
+      task = new_task(user, initiative, %{"title" => "Noisy"})
+      assert_receive {:task_created, _}
+
+      {:ok, _} = Tasks.update_task(Tasks.get_task!(task.id), user, %{"title" => "Renamed"})
+      assert_receive {:task_updated, _}
+
+      {:error, _} = Tasks.update_task(Tasks.get_task!(task.id), user, %{"title" => ""})
+      refute_receive {:task_updated, _}, 50
+    end
+
+    test "previews never broadcast", %{user: user, initiative: initiative} do
+      p = new_task(user, initiative, %{"title" => "P"})
+      d = new_task(user, initiative, %{"title" => "D", "parent_id" => p.id})
+      {:ok, _} = Tasks.toggle_complete(d, user)
+      l = new_task(user, initiative, %{"title" => "L"})
+
+      Tasks.subscribe(initiative.id)
+
+      {:ok, %{scenario: 1}} =
+        Tasks.preview_move(Tasks.get_task!(l.id), user, %{"parent_id" => p.id})
+
+      refute_receive _, 50
+    end
+  end
+
   describe "per-initiative progress calc setting" do
     test "reconcile honors single_level when set", %{user: user, initiative: initiative} do
       b =

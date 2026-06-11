@@ -374,6 +374,9 @@ defmodule DoIt.Tasks do
         end
       end)
 
+    # The dry-run rolled back — drop anything it queued for broadcast.
+    discard_broadcasts(result)
+
     case result do
       {:error, {:preview, before, after_progress}} ->
         {:ok, classify_flips(before, after_progress)}
@@ -937,6 +940,7 @@ defmodule DoIt.Tasks do
           Repo.rollback(cs)
       end
     end)
+    |> flush_broadcasts()
   end
 
   @doc """
@@ -1071,17 +1075,22 @@ defmodule DoIt.Tasks do
   # API entry point so a single user action (with its cascading recompute
   # walk-up) resorts each affected parent at most once.
   defp with_resort_batching(fun) do
-    if Process.get(:resort_dedup) do
-      fun.()
-    else
-      Process.put(:resort_dedup, MapSet.new())
-
-      try do
+    result =
+      if Process.get(:resort_dedup) do
         fun.()
-      after
-        Process.delete(:resort_dedup)
+      else
+        Process.put(:resort_dedup, MapSet.new())
+
+        try do
+          fun.()
+        after
+          Process.delete(:resort_dedup)
+        end
       end
-    end
+
+    # Every batching mutator's exit doubles as the post-commit broadcast
+    # point (no-op when this was a nested call still inside a transaction).
+    flush_broadcasts(result)
   end
 
   defp mark_resorted(parent_id) do
@@ -1306,8 +1315,53 @@ defmodule DoIt.Tasks do
     Phoenix.PubSub.subscribe(DoIt.PubSub, topic(initiative_id))
   end
 
+  @pending_broadcasts :doit_pending_broadcasts
+
+  # PubSub must fire AFTER commit. A broadcast sent mid-transaction reaches
+  # subscribers while the writes are still invisible to their connections —
+  # they reload the OLD state and stay stale forever. (The test sandbox
+  # shares one connection, so tests cannot catch this; it only breaks against
+  # real Postgres.) Inside a transaction the message queues in the process
+  # dictionary; flush_broadcasts/1 sends the queue once the outermost
+  # mutator's result is known.
   defp broadcast_change(initiative_id, message) do
-    Phoenix.PubSub.broadcast(DoIt.PubSub, topic(initiative_id), message)
+    if Repo.in_transaction?() do
+      Process.put(@pending_broadcasts, [
+        {initiative_id, message} | Process.get(@pending_broadcasts, [])
+      ])
+    else
+      Phoenix.PubSub.broadcast(DoIt.PubSub, topic(initiative_id), message)
+    end
+
+    :ok
+  end
+
+  # No-op while still inside a transaction (an outer mutator will flush).
+  # Sends the queue on a successful result; drops it otherwise (rollback).
+  defp flush_broadcasts(result) do
+    cond do
+      Repo.in_transaction?() ->
+        result
+
+      match?({:ok, _}, result) ->
+        pending = Process.get(@pending_broadcasts, [])
+        Process.delete(@pending_broadcasts)
+
+        for {initiative_id, message} <- Enum.reverse(pending) do
+          Phoenix.PubSub.broadcast(DoIt.PubSub, topic(initiative_id), message)
+        end
+
+        result
+
+      true ->
+        Process.delete(@pending_broadcasts)
+        result
+    end
+  end
+
+  defp discard_broadcasts(result) do
+    Process.delete(@pending_broadcasts)
+    result
   end
 
   defp topic(initiative_id), do: "initiative:#{initiative_id}"
