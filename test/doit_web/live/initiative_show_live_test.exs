@@ -465,6 +465,34 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert has_element?(view, "#task-#{parent.id} [data-complete-toggle][aria-pressed='true']")
     end
 
+    test "a deep change re-sorting a progress-keyed ancestor level reaches the view", %{
+      conn: conn,
+      user: user,
+      initiative: initiative
+    } do
+      # G sorts its children by completion %; X (branch with one leaf) and Y
+      # (open leaf) start at 0%. Completing X's leaf raises X to 100%, which
+      # must re-sort G's level — two levels above the written task.
+      g = create_task(user, initiative, nil, "G")
+      x = create_task(user, initiative, g, "X branch")
+      deep = create_task(user, initiative, x, "deep leaf")
+      y = create_task(user, initiative, g, "Y leaf")
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(g.id), user, "completion", false)
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+      assert sibling_order(initiative.id, g.id) == [x.id, y.id]
+
+      # A collaborator (direct context call → broadcast) completes the deep leaf.
+      {:ok, _} = Tasks.toggle_complete(Tasks.get_task!(deep.id), user)
+
+      assert sibling_order(initiative.id, g.id) == [y.id, x.id]
+
+      html = render(view)
+      {y_pos, _} = :binary.match(html, "Y leaf")
+      {x_pos, _} = :binary.match(html, "X branch")
+      assert y_pos < x_pos
+    end
+
     test "a collaborator's set_sort resort reaches the rendered tree", %{
       conn: conn,
       user: user,

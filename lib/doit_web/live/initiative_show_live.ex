@@ -119,23 +119,22 @@ defmodule DoItWeb.InitiativeShowLive do
     root_id = socket.assigns.initiative.root_task_id
     tree = Tree.merge(socket.assigns.tree, lineage)
 
-    # The write may have re-keyed two display orders: the task among its
-    # siblings (auto-sorted parents resort on update), and the task's own
-    # children (a sort-mode change resorts them — §8.11 finding: collaborators
-    # never saw a resort because only the sibling level was re-keyed).
-    tree =
-      case task.parent_id do
-        # The system root has no sibling order of its own to re-key.
-        nil -> tree
-        parent_id -> reorder_level(tree, parent_id, root_id)
-      end
+    # Any lineage level may have re-sorted: auto-sorted parents resort when a
+    # child's sort key changes, and progress-keyed modes resort when a
+    # DESCENDANT's roll-up changes — so simultaneous collaborators must get
+    # every level's order, not just the written task's siblings. One query
+    # re-keys them all.
+    parent_ids =
+      [task.parent_id | Enum.map(lineage, & &1.id)]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
 
-    reorder_level(tree, task.id, root_id)
-  end
-
-  defp reorder_level(tree, parent_id, root_id) do
-    key = if parent_id == root_id, do: :root, else: parent_id
-    Tree.reorder_children(tree, key, Tasks.ordered_child_ids(parent_id))
+    parent_ids
+    |> Tasks.ordered_child_ids_by_parent()
+    |> Enum.reduce(tree, fn {parent_id, ids}, acc ->
+      key = if parent_id == root_id, do: :root, else: parent_id
+      Tree.reorder_children(acc, key, ids)
+    end)
   end
 
   # A sort change on the system root re-resolves every inheriting branch.

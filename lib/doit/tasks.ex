@@ -849,6 +849,17 @@ defmodule DoIt.Tasks do
     )
   end
 
+  @doc "Display-ordered child ids for several parents, one query: %{parent_id => [ids]}."
+  def ordered_child_ids_by_parent(parent_ids) do
+    from(t in Task,
+      where: t.parent_id in ^parent_ids,
+      order_by: [asc: t.sort_order, asc: t.inserted_at],
+      select: {t.parent_id, t.id}
+    )
+    |> Repo.all()
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+  end
+
   @doc "IDs of every ancestor of `task_id` (unordered), root task included."
   def ancestor_ids(task_id) do
     task_id
