@@ -562,22 +562,26 @@ defmodule DoItWeb.CoreComponents do
 
   def info_hint(assigns) do
     ~H"""
-    <span
-      class="relative inline-flex items-center"
-      phx-click-away={JS.hide(to: "##{@id}-pop")}
-    >
+    <span class="inline-flex items-center">
+      <%!-- Native Popover API: the panel renders in the browser's top layer,
+           escaping any overflow-y-auto ancestor (it used to get clipped and
+           force scrollbars inside the pane). Light dismiss is built in; the
+           Popover hook places it next to the trigger, clamped to the
+           viewport. --%>
       <button
         type="button"
         aria-label={@label}
+        popovertarget={"#{@id}-pop"}
         class={["text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200", @class]}
-        phx-click={JS.toggle(to: "##{@id}-pop")}
       >
         <.icon name="hero-information-circle" class="w-4 h-4" />
       </button>
       <div
         id={"#{@id}-pop"}
+        popover
+        phx-hook="Popover"
         role="tooltip"
-        class="hidden absolute left-6 top-0 z-50 w-64 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3 text-xs font-normal not-italic text-zinc-600 dark:text-zinc-300 shadow-lg"
+        class="w-64 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3 text-xs font-normal not-italic text-zinc-600 dark:text-zinc-300 shadow-lg"
       >
         {render_slot(@inner_block)}
       </div>

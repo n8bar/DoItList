@@ -163,9 +163,16 @@ const DoitSelection = {
     const arrived = pane.dataset.taskId === this.id
     const shouldHide = !this.id
     if (pane.hidden !== shouldHide) pane.hidden = shouldHide
+    // Server-only lists (comments, activity) swap to an explicit "Loading…"
+    // while a switch is in flight — never another task's data, dimmed or
+    // otherwise. The add-comment form stays live: select_task enters the
+    // event queue first, so an immediate comment lands on the new task.
     const inFlight = !!this.id && !arrived
-    pane.querySelectorAll("[data-pane-async]").forEach((el) => {
-      el.classList.toggle("opacity-50", inFlight)
+    pane.querySelectorAll("[data-async-list]").forEach((el) => {
+      if (el.hidden !== inFlight) el.hidden = inFlight
+    })
+    pane.querySelectorAll("[data-async-loading]").forEach((el) => {
+      if (el.hidden !== !inFlight) el.hidden = !inFlight
     })
     if (inFlight) this.fillPaneFields(pane)
   },
@@ -201,6 +208,27 @@ const DoitSelection = {
         ? [...aSelect.options].find((o) => o.textContent.trim() === name)
         : aSelect.options[0]
       if (opt && aSelect.value !== opt.value) aSelect.value = opt.value
+    }
+
+    // Sort block: visibility from children-presence, values from the li's
+    // own sort attrs. The Inherit option's parenthetical corrects itself on
+    // the server patch — text only, no layout shift.
+    const sortBlock = pane.querySelector("[data-sort-block]")
+    if (sortBlock) {
+      const hasKids = !!li.querySelector(":scope > ul[id^='children-']")
+      sortBlock.classList.toggle("invisible", !hasKids)
+      const mode = li.dataset.sort || ""
+      const modeSel = sortBlock.querySelector("select[name='mode']")
+      if (modeSel && modeSel !== document.activeElement && modeSel.value !== mode) {
+        modeSel.value = mode
+      }
+      const rev = sortBlock.querySelector("input[name='reverse']")
+      if (rev && rev !== document.activeElement) {
+        const want = li.dataset.sortReverse === "true"
+        if (rev.checked !== want) rev.checked = want
+        const dis = mode === "" || mode === "manual"
+        if (rev.disabled !== dis) rev.disabled = dis
+      }
     }
   },
 }
@@ -1180,6 +1208,35 @@ Hooks.DragReorder = {
 // Per-task collapse/expand toggle for the task tree on /initiatives/:id.
 // Persists state in localStorage keyed by (initiative_id, task_id).
 // Toggling never affects roll-up — it only hides the children <ul>.
+// Positions a native [popover] panel next to its popovertarget trigger,
+// clamped inside the viewport (the top layer ignores ancestor overflow, so
+// without this it would center like a dialog).
+Hooks.Popover = {
+  mounted() {
+    this._onToggle = (e) => {
+      if (e.newState !== "open") return
+      const btn = document.querySelector(`[popovertarget='${this.el.id}']`)
+      if (!btn) return
+      const r = btn.getBoundingClientRect()
+      const width = Math.min(this.el.offsetWidth || 256, window.innerWidth - 16)
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - width - 8)
+      let top = r.bottom + 6
+      const height = this.el.offsetHeight
+      if (top + height > window.innerHeight - 8) top = Math.max(8, r.top - height - 6)
+      Object.assign(this.el.style, {
+        position: "fixed",
+        left: left + "px",
+        top: top + "px",
+        margin: "0",
+      })
+    }
+    this.el.addEventListener("toggle", this._onToggle)
+  },
+  destroyed() {
+    this.el.removeEventListener("toggle", this._onToggle)
+  },
+}
+
 // Native <details> whose open state survives LiveView patches — the server
 // renders it closed, so morphdom would otherwise slam it shut on every patch.
 Hooks.KeepOpen = {

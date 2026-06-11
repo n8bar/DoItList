@@ -1238,7 +1238,7 @@ defmodule DoItWeb.InitiativeShowLive do
               # Mobile: flyout overlay. Desktop: sticky to the top of <main>, scrolls
               # its own contents (.03.07.01) — self-start + max-h give sticky room.
               (@selected_task_id || @editing_initiative?) &&
-                "fixed lg:sticky top-0 bottom-0 lg:bottom-auto right-0 z-30 w-full sm:w-96 lg:w-auto lg:self-start lg:max-h-[calc(100dvh-4rem)] bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto",
+                "fixed lg:sticky top-0 bottom-0 lg:bottom-auto right-0 z-30 w-full sm:w-96 lg:w-auto lg:self-start lg:max-h-[calc(100dvh-4rem)] bg-zinc-50 lg:bg-transparent dark:bg-zinc-950 lg:dark:bg-transparent shadow-xl lg:shadow-none p-4 lg:p-0 overflow-y-auto [scrollbar-gutter:stable]",
               !(@selected_task_id || @editing_initiative?) && "hidden lg:block"
             ]
           }>
@@ -1286,7 +1286,7 @@ defmodule DoItWeb.InitiativeShowLive do
                  (selected_task keeps the last pane data, only selected_task_id
                  nils). On a selection switch the client writes the row-known
                  values (title / priority / weight / assignee) into these real
-                 fields immediately and dims the [data-pane-async] sections;
+                 fields immediately and swaps the async lists to "Loading…";
                  the server patch then reconciles the same elements in place —
                  LiveView never clobbers the focused field, so in-progress
                  typing survives the patch. --%>
@@ -1609,6 +1609,8 @@ defmodule DoItWeb.InitiativeShowLive do
       id={"task-#{@task.id}"}
       data-task-id={@task.id}
       data-depth={@depth}
+      data-sort={@task.sort_mode || ""}
+      data-sort-reverse={to_string(@task.sort_reverse)}
       class="rounded border border-zinc-400 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-500 dark:first:border-t-zinc-500"
     >
       <div
@@ -2147,7 +2149,7 @@ defmodule DoItWeb.InitiativeShowLive do
     ~H"""
     <%!-- invisible (not removed) on leaves so leaf↔branch selection switches
          don't shift the layout below (UX_GUARDRAILS 1.1). --%>
-    <div class={["space-y-1", leaf?(@task) && "invisible"]}>
+    <div data-sort-block class={["space-y-1", leaf?(@task) && "invisible"]}>
       <label for={"sort-mode-#{@task.id}"} class="text-xs text-zinc-500 dark:text-zinc-400">
         {@label}
       </label>
@@ -2389,12 +2391,12 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
-      <div
-        data-pane-async
-        class="border-t border-zinc-100 dark:border-zinc-700 pt-3 transition-opacity"
-      >
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
-        <ul class="space-y-2 mb-2">
+        <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mb-2">
+          Loading…
+        </p>
+        <ul data-async-list class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
             <div class="text-xs text-zinc-500 dark:text-zinc-400">
               {c.user && c.user.name} · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
@@ -2420,12 +2422,12 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div
-        data-pane-async
-        class="border-t border-zinc-100 dark:border-zinc-700 pt-3 transition-opacity"
-      >
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
-        <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
+        <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic">
+          Loading…
+        </p>
+        <ul data-async-list class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity} :if={e.kind != "status_changed"}>
             <span class="text-zinc-500 dark:text-zinc-400">
               {Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}
