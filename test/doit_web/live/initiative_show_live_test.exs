@@ -669,24 +669,40 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert Tasks.get_task!(t.id).assignee_id == nil
     end
 
-    test "S opens the New Sibling form for the selected task's parent", %{
+    test "create_task places by its own params: sibling after, subtask, top-level", %{
       conn: conn,
       user: user,
       initiative: initiative,
       t: t
     } do
+      # Form opening is client-only now (UX_GUARDRAILS 6.5; e2e covers the
+      # keystrokes) — the submit carries parent_id/after_id itself.
       child = create_task(user, initiative, t, "child")
 
       {:ok, view, _html} = live(conn, open_path(initiative))
-      select_task(view, child.id)
-      render_hook(view, "kbd_new_sibling", %{})
 
-      # The add form is now open; creating from it lands a sibling under T.
-      render_hook(view, "create_task", %{"title" => "sib"})
+      render_hook(view, "create_task", %{
+        "title" => "sib",
+        "parent_id" => Integer.to_string(t.id),
+        "after_id" => Integer.to_string(child.id)
+      })
 
-      titles = sibling_order(initiative.id, t.id)
-      assert child.id in titles
-      assert length(titles) == 2
+      assert [_, _] = sibling_order(initiative.id, t.id)
+      assert hd(sibling_order(initiative.id, t.id)) == child.id
+
+      render_hook(view, "create_task", %{
+        "title" => "kid",
+        "parent_id" => Integer.to_string(child.id),
+        "after_id" => ""
+      })
+
+      assert length(sibling_order(initiative.id, child.id)) == 1
+
+      render_hook(view, "create_task", %{"title" => "top", "parent_id" => "", "after_id" => ""})
+
+      top = sibling_order(initiative.id, nil)
+      assert length(top) == 2
+      assert hd(top) != t.id
     end
   end
 

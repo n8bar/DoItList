@@ -38,17 +38,12 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:can_edit, Initiatives.can_edit?(role))
          |> assign(:can_admin, Initiatives.can_admin?(role))
          |> assign(:members, Initiatives.list_members(initiative.id))
-         |> assign(:show_member_form, false)
-         |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
          |> assign(:selected_task, nil)
          |> assign(:comments, [])
          |> assign(:activity, [])
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
-         |> assign(:add_task_for, nil)
-         |> assign(:add_task_after, nil)
-         |> assign(:new_task_title, "")
          |> assign_pending(nil)
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
@@ -171,42 +166,6 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply, assign(socket, :confirm_skips, MapSet.new(classes))}
   end
 
-  def handle_event("show_add_root", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:add_task_for, :root)
-     |> assign(:add_task_after, nil)
-     |> assign(:new_task_title, "")}
-  end
-
-  def handle_event("show_add_child", %{"parent" => parent_id}, socket) do
-    parent_id = String.to_integer(parent_id)
-
-    {:noreply,
-     socket
-     |> assign(:add_task_for, parent_id)
-     |> assign(:add_task_after, parent_id)
-     |> assign(:new_task_title, "")}
-  end
-
-  def handle_event("show_add_sibling", %{"task" => task_id}, socket) do
-    task = Tasks.get_task!(String.to_integer(task_id))
-    add_for = task.parent_id || :root
-
-    {:noreply,
-     socket
-     |> assign(:add_task_for, add_for)
-     |> assign(:add_task_after, task.id)
-     |> assign(:new_task_title, "")}
-  end
-
-  def handle_event("cancel_add", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:add_task_for, nil)
-     |> assign(:add_task_after, nil)}
-  end
-
   def handle_event("create_task", %{"title" => title} = params, socket) do
     user = socket.assigns.current_user
     initiative = socket.assigns.initiative
@@ -214,11 +173,19 @@ defmodule DoItWeb.InitiativeShowLive do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission to add tasks.")}
     else
+      # The form carries its own target (client-positioned, UX_GUARDRAILS
+      # 6.5): empty parent_id = top level (a child of the system root);
+      # after_id places the new task just after that sibling, else at top.
       parent_id =
-        case socket.assigns.add_task_for do
-          # "Root level" now means a child of the Initiative's root task.
-          :root -> initiative.root_task_id
-          id when is_integer(id) -> id
+        case params["parent_id"] do
+          id when is_binary(id) and id != "" -> String.to_integer(id)
+          _ -> initiative.root_task_id
+        end
+
+      position =
+        case params["after_id"] do
+          id when is_binary(id) and id != "" -> sibling_after_position(String.to_integer(id))
+          _ -> 0
         end
 
       attrs = %{
@@ -226,7 +193,7 @@ defmodule DoItWeb.InitiativeShowLive do
         "parent_id" => parent_id,
         "title" => title,
         "weight" => Map.get(params, "weight", "1.0"),
-        "position" => new_task_position(socket.assigns)
+        "position" => position
       }
 
       case Tasks.preview_create(user, attrs) do
@@ -284,29 +251,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
             {:noreply, push_focus(socket, focus)}
         end
-    end
-  end
-
-  # Keyboard: N — open the New Subtask form under the client's selected task.
-  def handle_event("kbd_new_subtask", params, socket) do
-    case kbd_target(socket, params) do
-      nil -> {:noreply, socket}
-      task -> {:noreply, show_add_for(socket, task.id)}
-    end
-  end
-
-  # Keyboard: S — open the New Sibling form for the selected task (same parent).
-  def handle_event("kbd_new_sibling", params, socket) do
-    case kbd_target(socket, params) do
-      nil ->
-        {:noreply, socket}
-
-      task ->
-        {:noreply,
-         socket
-         |> assign(:add_task_for, task.parent_id || :root)
-         |> assign(:add_task_after, task.id)
-         |> assign(:new_task_title, "")}
     end
   end
 
@@ -687,14 +631,6 @@ defmodule DoItWeb.InitiativeShowLive do
   # Permissive fallthrough: ignore non-arrow keys, missing modifiers, etc.
   def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
 
-  def handle_event("show_member_form", _params, socket) do
-    {:noreply, socket |> assign(:show_member_form, true) |> assign(:member_email, "")}
-  end
-
-  def handle_event("cancel_member", _params, socket) do
-    {:noreply, assign(socket, :show_member_form, false)}
-  end
-
   def handle_event("add_member", %{"email" => email, "role" => role}, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
@@ -710,7 +646,6 @@ defmodule DoItWeb.InitiativeShowLive do
             {:ok, _} ->
               {:noreply,
                socket
-               |> assign(:show_member_form, false)
                |> put_flash(:info, "Added #{user.name}.")
                |> assign(:members, Initiatives.list_members(initiative.id))}
 
@@ -728,9 +663,6 @@ defmodule DoItWeb.InitiativeShowLive do
     case Tasks.create_task(socket.assigns.current_user, attrs) do
       {:ok, _task} ->
         socket
-        |> assign(:add_task_for, nil)
-        |> assign(:add_task_after, nil)
-        |> assign(:new_task_title, "")
         |> assign_pending(nil)
         |> put_flash(:info, "Task added.")
         |> load_tree()
@@ -964,8 +896,8 @@ defmodule DoItWeb.InitiativeShowLive do
                 }
                 return;
               }
-              if (k === "n" || k === "N") { e.preventDefault(); this.pushEvent("kbd_new_subtask", {id: sel}); return; }
-              if (k === "s" || k === "S") { e.preventDefault(); this.pushEvent("kbd_new_sibling", {id: sel}); return; }
+              if (k === "n" || k === "N") { e.preventDefault(); window.DoitAddForm.openChild(sel); return; }
+              if (k === "s" || k === "S") { e.preventDefault(); window.DoitAddForm.openSibling(sel); return; }
               // Del clicks the delete button so its confirm dialog still fires.
               if (k === "Delete") {
                 e.preventDefault();
@@ -1105,7 +1037,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               :if={@can_edit}
               type="button"
-              phx-click="show_add_root"
+              data-add-root
               class="mt-1 ml-auto hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label="New list"
               title="New list"
@@ -1156,7 +1088,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               :if={@can_edit}
               type="button"
-              phx-click="show_add_root"
+              data-add-root
               class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label="New list"
               title="New list"
@@ -1180,11 +1112,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </button>
           </div>
           <div id="mobile-members" class="hidden mt-2">
-            <.members_panel
-              members={@members}
-              can_admin={@can_admin}
-              show_member_form={@show_member_form}
-            />
+            <.members_panel id="members-mobile" members={@members} can_admin={@can_admin} />
           </div>
         </div>
 
@@ -1193,9 +1121,10 @@ defmodule DoItWeb.InitiativeShowLive do
                overflow-x-auto lets the tree scroll horizontally inside it when
                indentation + the row's min width exceed the column. --%>
           <div class="min-w-0 overflow-x-auto">
-            <div :if={@add_task_for == :root} class="mb-3">
-              <.task_form parent_id={nil} />
-            </div>
+            <%!-- The one add-task form (parked in #add-task-home below) gets
+                 client-teleported into these phx-update="ignore" slots —
+                 opening a form never phones home (UX_GUARDRAILS 6.5). --%>
+            <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
 
             <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
               No lists yet. Create one to start tracking work.
@@ -1206,18 +1135,12 @@ defmodule DoItWeb.InitiativeShowLive do
                 <.task_node
                   task={t}
                   depth={0}
-                  add_task_for={@add_task_for}
-                  add_task_after={@add_task_after}
                   can_edit={@can_edit}
                   initiative_id={@initiative.id}
                   saving_ids={@pending_saving_ids}
                   inherited_sort={@root_sort_mode}
                 />
-                <%= if @add_task_after == t.id and @add_task_for != t.id do %>
-                  <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
-                    <.task_form parent_id={if(@add_task_for == :root, do: nil, else: @add_task_for)} />
-                  </li>
-                <% end %>
+                <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
               <% end %>
             </ul>
           </div>
@@ -1255,11 +1178,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <%!-- Desktop/tablet: standalone Members panel. On phone it's hidden
                  in favor of the header's collapsible toggle (.05.04.1). --%>
             <div class="hidden sm:block">
-              <.members_panel
-                members={@members}
-                can_admin={@can_admin}
-                show_member_form={@show_member_form}
-              />
+              <.members_panel id="members-desktop" members={@members} can_admin={@can_admin} />
             </div>
 
             <%!-- Persistent like the task pane (.03.07.08): always rendered,
@@ -1310,17 +1229,46 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <div id="confirm-skips" phx-hook="ConfirmSkips" hidden></div>
+
+      <%!-- The single add-task form. Lives here (hidden) until the client
+           teleports it into a slot; all containers are phx-update="ignore",
+           so no patch can disturb it mid-typing. create_task reads the two
+           hidden inputs — opening/closing never touches the server. --%>
+      <div id="add-task-home" phx-update="ignore" hidden>
+        <form
+          id="add-task-form"
+          phx-submit="create_task"
+          class="flex items-center gap-2 rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2"
+        >
+          <input type="hidden" name="parent_id" value="" />
+          <input type="hidden" name="after_id" value="" />
+          <input
+            type="text"
+            name="title"
+            required
+            placeholder="New task..."
+            class="flex-1 input input-bordered input-sm"
+          />
+          <button
+            type="submit"
+            phx-disable-with="Adding..."
+            class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition"
+          >
+            Add
+          </button>
+          <button
+            type="button"
+            data-add-cancel
+            class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
+          >
+            Cancel
+          </button>
+        </form>
+      </div>
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.shortcuts_overlay />
     </Layouts.app>
     """
-  end
-
-  defp show_add_for(socket, parent_id) do
-    socket
-    |> assign(:add_task_for, parent_id)
-    |> assign(:add_task_after, parent_id)
-    |> assign(:new_task_title, "")
   end
 
   # The sort controls name their own target (the form's hidden task_id /
@@ -1589,8 +1537,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   attr :task, :map, required: true
   attr :depth, :integer, required: true
-  attr :add_task_for, :any, required: true
-  attr :add_task_after, :any, required: true
   attr :can_edit, :boolean, required: true
   attr :initiative_id, :integer, required: true
   attr :saving_ids, :any, required: true
@@ -1724,8 +1670,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
             <button
               type="button"
-              phx-click="show_add_child"
-              phx-value-parent={@task.id}
+              data-add-child={@task.id}
               class="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label={if(@depth == 0, do: "New task", else: "New subtask")}
               title={if(@depth == 0, do: "New task", else: "New subtask")}
@@ -1755,11 +1700,8 @@ defmodule DoItWeb.InitiativeShowLive do
           >
             <button
               type="button"
-              phx-click={
-                Phoenix.LiveView.JS.push("show_add_sibling")
-                |> Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")
-              }
-              phx-value-task={@task.id}
+              data-add-sibling={@task.id}
+              phx-click={Phoenix.LiveView.JS.hide(to: "#add-menu-panel-#{@task.id}")}
               class="block w-full text-left whitespace-nowrap px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               + Add <span class="kbd-key">S</span>ibling
@@ -1862,9 +1804,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
-      <div :if={@add_task_for == @task.id and @add_task_after == @task.id} class="px-3 pb-3">
-        <.task_form parent_id={@task.id} />
-      </div>
+      <div id={"add-slot-#{@task.id}"} phx-update="ignore" class="px-3 pb-3 empty:hidden"></div>
 
       <ul
         :if={@task.children != []}
@@ -1879,18 +1819,12 @@ defmodule DoItWeb.InitiativeShowLive do
           <.task_node
             task={c}
             depth={@depth + 1}
-            add_task_for={@add_task_for}
-            add_task_after={@add_task_after}
             can_edit={@can_edit}
             initiative_id={@initiative_id}
             saving_ids={@saving_ids}
             inherited_sort={@resolved_sort}
           />
-          <%= if @add_task_after == c.id and @add_task_for != c.id do %>
-            <li class="rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2">
-              <.task_form parent_id={@add_task_for} />
-            </li>
-          <% end %>
+          <li id={"add-after-#{c.id}"} phx-update="ignore" class="empty:hidden"></li>
         <% end %>
         <%!-- Item 21: tail drop-zone — "last child of this branch." Sits at the
              child indent (inside this <ul>), so nested tails stack into a
@@ -1898,37 +1832,6 @@ defmodule DoItWeb.InitiativeShowLive do
         <li :if={@can_edit} class="drop-tail" data-tail-for={@task.id} aria-hidden="true"></li>
       </ul>
     </li>
-    """
-  end
-
-  attr :parent_id, :any, required: true
-
-  def task_form(assigns) do
-    ~H"""
-    <form phx-submit="create_task" class="flex items-center gap-2">
-      <input
-        type="text"
-        name="title"
-        required
-        phx-mounted={Phoenix.LiveView.JS.focus()}
-        placeholder={if(@parent_id, do: "New subtask...", else: "New list / root task...")}
-        class="flex-1 input input-bordered input-sm"
-      />
-      <button
-        type="submit"
-        phx-disable-with="Adding..."
-        class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-      >
-        Add
-      </button>
-      <button
-        type="button"
-        phx-click="cancel_add"
-        class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
-      >
-        Cancel
-      </button>
-    </form>
     """
   end
 
@@ -2100,13 +2003,15 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  attr :id, :string, required: true
   attr :members, :list, required: true
   attr :can_admin, :boolean, required: true
-  attr :show_member_form, :boolean, required: true
 
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
-  (desktop/tablet) and the mobile header collapsible (.05.04.1).
+  (desktop/tablet) and the mobile header collapsible (.05.04.1). The form
+  opens client-side (native <details>, UX_GUARDRAILS 6.5); KeepOpen carries
+  its state across patches.
   """
   def members_panel(assigns) do
     ~H"""
@@ -2116,7 +2021,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <button
           :if={@can_admin}
           type="button"
-          phx-click="show_member_form"
+          data-details-toggle={"#{@id}-form"}
           class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
         >
           <.icon name="hero-plus" class="w-3.5 h-3.5" />
@@ -2124,40 +2029,49 @@ defmodule DoItWeb.InitiativeShowLive do
         </button>
       </div>
 
-      <div :if={@show_member_form} class="mb-3">
-        <form phx-submit="add_member" class="flex flex-col gap-2">
-          <input
-            type="email"
-            name="email"
-            placeholder="email@example.com"
-            aria-label="Member email"
-            required
-            phx-mounted={Phoenix.LiveView.JS.focus()}
-            class="w-full input input-bordered input-sm"
-          />
-          <select name="role" aria-label="Member role" class="w-full select select-bordered select-sm">
-            <option value="editor">Editor</option>
-            <option value="viewer">Viewer</option>
-            <option value="owner">Owner</option>
-          </select>
-          <div class="flex justify-end gap-2">
-            <button
-              type="button"
-              phx-click="cancel_member"
-              class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
+      <%!-- Client-opened (UX_GUARDRAILS 6.5): the button flips this <details>
+           and KeepOpen carries the state across patches. --%>
+      <details :if={@can_admin} id={"#{@id}-form"} phx-hook="KeepOpen" class="mb-3">
+        <summary class="hidden"></summary>
+        <div>
+          <form phx-submit="add_member" class="flex flex-col gap-2">
+            <input
+              type="email"
+              name="email"
+              placeholder="email@example.com"
+              aria-label="Member email"
+              required
+              phx-mounted={Phoenix.LiveView.JS.focus()}
+              class="w-full input input-bordered input-sm"
+            />
+            <select
+              name="role"
+              aria-label="Member role"
+              class="w-full select select-bordered select-sm"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              phx-disable-with="Adding..."
-              class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
-            >
-              Add
-            </button>
-          </div>
-        </form>
-      </div>
+              <option value="editor">Editor</option>
+              <option value="viewer">Viewer</option>
+              <option value="owner">Owner</option>
+            </select>
+            <div class="flex justify-end gap-2">
+              <button
+                type="button"
+                data-details-close={"#{@id}-form"}
+                class="text-xs text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                phx-disable-with="Adding..."
+                class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
+              >
+                Add
+              </button>
+            </div>
+          </form>
+        </div>
+      </details>
 
       <ul class="space-y-1 text-sm">
         <li :for={m <- @members} class="flex items-center justify-between">
@@ -2559,15 +2473,6 @@ defmodule DoItWeb.InitiativeShowLive do
   # New-task placement (item 18): the inline form sits in a slot, so the
   # created task lands there. Root/child "add" forms render at the top of
   # their list → index 0; an "add sibling after X" form → just after X. For an
-  # auto-sorted parent the backend re-sorts afterward, overriding this.
-  defp new_task_position(%{add_task_for: add_for, add_task_after: after_id}) do
-    cond do
-      is_nil(after_id) -> 0
-      after_id == add_for -> 0
-      true -> sibling_after_position(after_id)
-    end
-  end
-
   defp sibling_after_position(after_id) do
     anchor = Tasks.get_task!(after_id)
     sibs = sibling_ids(anchor)

@@ -77,7 +77,10 @@ defmodule DoItWeb.E2EHelpers do
       task.title,
       exact: true
     )
+    # The highlight is client-instant; the pane arrives with the server patch.
+    # Wait for both so follow-up actions can rely on pane controls existing.
     |> assert_has("li[data-selected='#{task.id}']")
+    |> assert_has("#task-editor-pane[data-task-id='#{task.id}']")
   end
 
   # Scoped to the task's own row — a bare descendant selector would also

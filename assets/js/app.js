@@ -234,6 +234,84 @@ const DoitSelection = {
 }
 window.DoitSelection = DoitSelection
 
+// The one add-task form (UX_GUARDRAILS 6.5): opening, placing, and closing
+// it never touches the server. It teleports between phx-update="ignore"
+// slots, so no patch can disturb it mid-typing; create_task reads the two
+// hidden inputs the client sets here.
+const DoitAddForm = {
+  form() { return document.getElementById("add-task-form") },
+  open(slot, parentId, afterId, placeholder) {
+    const form = this.form()
+    if (!form || !slot) return
+    slot.appendChild(form)
+    form.querySelector("[name='parent_id']").value = parentId || ""
+    form.querySelector("[name='after_id']").value = afterId || ""
+    const input = form.querySelector("[name='title']")
+    input.placeholder = placeholder
+    input.value = ""
+    input.focus()
+  },
+  openRoot() {
+    this.open(document.getElementById("add-slot-root"), "", "", "New list / root task...")
+  },
+  openChild(taskId) {
+    this.open(document.getElementById("add-slot-" + taskId), taskId, "", "New subtask...")
+  },
+  openSibling(taskId) {
+    const li = document.getElementById("task-" + taskId)
+    const parentLi = li && li.parentElement.closest("li[data-task-id]")
+    this.open(
+      document.getElementById("add-after-" + taskId),
+      parentLi ? parentLi.dataset.taskId : "",
+      taskId,
+      "New task..."
+    )
+  },
+  close() {
+    const form = this.form()
+    const home = document.getElementById("add-task-home")
+    if (form && home) home.appendChild(form)
+  },
+}
+window.DoitAddForm = DoitAddForm
+
+document.addEventListener("click", (e) => {
+  if (e.target.closest("[data-add-root]")) return DoitAddForm.openRoot()
+  const child = e.target.closest("[data-add-child]")
+  if (child) return DoitAddForm.openChild(child.dataset.addChild)
+  const sibling = e.target.closest("[data-add-sibling]")
+  if (sibling) return DoitAddForm.openSibling(sibling.dataset.addSibling)
+  if (e.target.closest("[data-add-cancel]")) DoitAddForm.close()
+
+  // Generic client-side <details> drivers (KeepOpen records the state).
+  const toggle = e.target.closest("[data-details-toggle]")
+  if (toggle) {
+    const d = document.getElementById(toggle.dataset.detailsToggle)
+    if (d) d.open = !d.open
+    if (d && d.open) {
+      const focusable = d.querySelector("input, select, textarea")
+      if (focusable) focusable.focus()
+    }
+    return
+  }
+  const closer = e.target.closest("[data-details-close]")
+  if (closer) {
+    const d = document.getElementById(closer.dataset.detailsClose)
+    if (d) d.open = false
+  }
+})
+
+// Rapid entry: clear the title after LiveView serializes the submit and stay
+// focused, so consecutive adds need no clicks at all.
+document.addEventListener("submit", (e) => {
+  if (e.target.id !== "add-task-form") return
+  const input = e.target.querySelector("[name='title']")
+  setTimeout(() => {
+    input.value = ""
+    input.focus()
+  }, 0)
+})
+
 // Pane visibility flips client-instant (.03.07.08); the server patch
 // confirms moments later. The initiative title click swaps panes at once,
 // any close control hides both, and selecting a task hides the initiative
