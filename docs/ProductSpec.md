@@ -23,10 +23,11 @@ Heavily inspired by AbstractSpoon's ToDo List, with three deliberate departures:
 - **Progress** — a task's current completion (0–100). Manual on leaves, computed on branches.
 - **Roll-up progress** — a branch task's computed progress: the weighted average of its children's rolled-up progress.
 - **Weight** — how much a child contributes to its parent's roll-up. Default `1`.
+- **Leaf task** — a task with no children. (A metaphor term serving where the plain vocabulary has no analog — see Visual Metaphor.)
 - **Initiative member** — a `(user, initiative, role)` triple. Roles: `owner`, `editor`, `viewer`.
 
 ## Visual Metaphor
-The product borrows a botanical metaphor at the icon layer only — the formal vocabulary above stays plain:
+The product borrows a botanical metaphor at the icon layer — formal names stay plain (a List is never called a "Tree" in UI copy). Two exceptions: examples may speak the metaphor freely, and a metaphor term may serve where the plain vocabulary has no analog (e.g. **leaf task**).
 
 - **Initiative** — represented by a 🌲🌳 small-grove icon (Lucide `trees`); it holds multiple Lists.
 - **List** — represented by a 🌳 tree icon (Lucide `tree-deciduous` / `tree-pine`); each List is one tree of nested tasks within an Initiative.
