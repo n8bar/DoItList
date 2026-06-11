@@ -2344,14 +2344,13 @@ defmodule DoItWeb.InitiativeShowLive do
   defp sort_mode_label("created"), do: "First Created"
   defp sort_mode_label("updated"), do: "Last Updated"
 
-  defp sort_mode_inherit_label(%Task{sort_mode: nil} = task) do
-    case Tasks.resolve_sort(task) do
-      {"manual", _} -> "Inherit"
-      {mode, _} -> "Inherit (#{sort_mode_label(mode)})"
-    end
+  # Always name what Inherit currently means — resolved from the parent
+  # chain, ignoring the task's own explicit mode ("Inherit (Manual)" when
+  # nothing above sets one).
+  defp sort_mode_inherit_label(%Task{} = task) do
+    {mode, _} = Tasks.resolve_sort(task.parent_id)
+    "Inherit (#{sort_mode_label(mode)})"
   end
-
-  defp sort_mode_inherit_label(_), do: "Inherit"
 
   defp reverse_disabled?(%Task{sort_mode: mode}), do: mode in [nil, "manual"]
 

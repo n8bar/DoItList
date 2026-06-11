@@ -497,6 +497,58 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "set_sort resorts by the resolved mode" do
+    test "picking Inherit under an alphabetical ancestor re-orders immediately", %{
+      user: user,
+      initiative: initiative
+    } do
+      # Under the system root, so Inherit has an ancestor to resolve to.
+      {:ok, parent} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "P"
+        })
+
+      {:ok, charlie} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "charlie"
+        })
+
+      {:ok, alpha} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => parent.id,
+          "title" => "alpha"
+        })
+
+      # Ancestor (the system root) sorts alphabetically; the parent is
+      # explicitly manual, so its children stay in creation order.
+      root = Tasks.get_task!(initiative.root_task_id)
+      {:ok, _} = Tasks.set_sort(root, user, "alphabetical", false)
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(parent.id), user, "manual", false)
+      assert ordered_titles(parent.id) == ["charlie", "alpha"]
+
+      # Inherit resolves to the root's alphabetical → children resort now.
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(parent.id), user, nil, false)
+      assert ordered_titles(parent.id) == ["alpha", "charlie"]
+
+      assert Tasks.get_task!(charlie.id).id == charlie.id
+      assert Tasks.get_task!(alpha.id).id == alpha.id
+    end
+  end
+
+  defp ordered_titles(parent_id) do
+    from(t in Task,
+      where: t.parent_id == ^parent_id,
+      order_by: [asc: t.sort_order, asc: t.inserted_at],
+      select: t.title
+    )
+    |> DoIt.Repo.all()
+  end
+
   describe "auto-resort on child mutation" do
     test "branch sorted by completion re-sorts when a child's status changes", %{
       user: user,

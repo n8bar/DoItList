@@ -1497,6 +1497,9 @@ Hooks.SortRecall = {
       if (e.target === select) {
         const m = select.value
         checkbox.checked = this.isInheritOrManual(m) ? false : this.recall(m)
+        // LiveView never patches the focused element — blur so the re-render
+        // (inherit label, selected option) can actually land.
+        select.blur()
       } else if (e.target === checkbox) {
         this.save(select.value, checkbox.checked)
       }

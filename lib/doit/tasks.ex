@@ -1000,8 +1000,13 @@ defmodule DoIt.Tasks do
         })
       end
 
-      if is_binary(updated.sort_mode) and updated.sort_mode != "manual" do
-        resort_children(updated.id, updated.sort_mode, updated.sort_reverse)
+      # Resort by the RESOLVED mode, so picking Inherit under e.g. an
+      # Alphabetical ancestor re-orders the children immediately instead of
+      # asserting an order the screen doesn't show (§8.11 finding). Explicit
+      # modes resolve to themselves; manual (explicit or resolved) is a no-op.
+      case resolve_sort(updated) do
+        {"manual", _} -> :ok
+        {mode, reverse} -> resort_children(updated.id, mode, reverse)
       end
 
       {:ok, updated}
