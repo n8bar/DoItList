@@ -153,10 +153,12 @@ const DoitSelection = {
     }
     this.syncPaneSkeleton()
   },
-  // Instant pane shell (.03.07.04): visible from selection until the server's
-  // pane for this task arrives. Transient — a timeout guards against a stuck
-  // skeleton on any path we didn't foresee. All writes are set-if-different
-  // so the guard observer converges.
+  // Instant pane shell (.03.07.04): the real pane UI, visible from selection
+  // until the server's pane for this task arrives. Row-known values (title,
+  // priority, weight, assignee — the pills) prefill live; unknown sections
+  // are disabled "Loading…". Transient — a timeout guards against a stuck
+  // shell on any path we didn't foresee. Value writes are properties (not
+  // attributes), so the guard observer converges.
   syncPaneSkeleton() {
     const sk = document.getElementById("pane-skeleton")
     if (!sk) return
@@ -165,13 +167,36 @@ const DoitSelection = {
     const fresh = Date.now() - this.pendingSince < 3000
     const show = !!(this.id && !arrived && fresh)
     if (sk.hidden !== !show) sk.hidden = !show
-    if (show) {
-      const li = this.li()
-      const titleEl = li && li.querySelector(":scope > [data-task-row] [data-task-title]")
-      const title = titleEl ? titleEl.textContent.trim() : ""
-      const slot = sk.querySelector("[data-skeleton-title]")
-      if (slot && slot.textContent !== title) slot.textContent = title
+    if (show) this.fillShellFields(sk)
+  },
+  fillShellFields(sk) {
+    const li = this.li()
+    const row = li && li.querySelector(":scope > [data-task-row]")
+    if (!row) return
+    const text = (sel) => {
+      const el = row.querySelector(sel)
+      return el ? el.textContent.trim() : ""
     }
+    const set = (sel, value) => {
+      const el = sk.querySelector(sel)
+      if (el && el.value !== value) el.value = value
+    }
+
+    set("[data-shell-field='title']", text("[data-task-title]"))
+
+    // The priority pill shows the value when ≠ normal; the title attr always
+    // carries it ("Priority: high").
+    const priEl = row.querySelector("[phx-value-focus='priority']")
+    const pri = priEl ? (priEl.getAttribute("title") || "").replace("Priority: ", "") : ""
+    if (pri) set("[data-shell-field='priority']", pri)
+
+    const wText = text("[phx-value-focus='weight']")
+    set("[data-shell-field='weight']", wText.startsWith("w=") ? wText.slice(2) : "1.0")
+
+    const aText = text("[phx-value-focus='assignee']")
+    const aOption = sk.querySelector("[data-shell-assignee-option]")
+    const aLabel = aText || "Unassigned"
+    if (aOption && aOption.textContent !== aLabel) aOption.textContent = aLabel
   },
 }
 window.DoitSelection = DoitSelection

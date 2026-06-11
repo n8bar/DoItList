@@ -1243,23 +1243,73 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
-            <%!-- Instant pane shell (.03.07.04): shown client-side the moment a
-                 task is selected, replaced by the real pane when the server
-                 render lands. The client compares data-task-id below against
-                 its selection to know when to hide this. --%>
+            <%!-- Instant pane shell (.03.07.04): the REAL pane UI, shown
+                 client-side the moment a task is selected and replaced by the
+                 server render when it lands. Fields whose values already live
+                 in the row (title, priority, weight, assignee — the pills)
+                 are prefilled by the client and look normal; only the
+                 genuinely-unknown ones are disabled with "Loading…". The
+                 client compares the real pane's data-task-id against its
+                 selection to know when to hide this. --%>
             <div
               id="pane-skeleton"
               hidden
-              aria-hidden="true"
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4 space-y-3"
             >
               <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Task details</h3>
-              <div data-skeleton-title class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+
+              <div>
+                <label class="text-xs text-zinc-500 dark:text-zinc-400">Title</label>
+                <input
+                  type="text"
+                  data-shell-field="title"
+                  class="w-full input input-bordered input-sm"
+                />
               </div>
-              <div class="space-y-2 animate-pulse motion-reduce:animate-none">
-                <div class="h-8 rounded bg-zinc-100 dark:bg-zinc-800"></div>
-                <div class="h-8 rounded bg-zinc-100 dark:bg-zinc-800"></div>
-                <div class="h-24 rounded bg-zinc-100 dark:bg-zinc-800"></div>
+
+              <div>
+                <label class="text-xs text-zinc-500 dark:text-zinc-400">Description</label>
+                <textarea
+                  disabled
+                  class="w-full textarea textarea-bordered textarea-sm"
+                  placeholder="Loading…"
+                ></textarea>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="text-xs text-zinc-500 dark:text-zinc-400">Priority</label>
+                  <select data-shell-field="priority" class="w-full select select-bordered select-sm">
+                    <option :for={p <- DoIt.Tasks.Task.priorities()} value={p}>{p}</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="text-xs text-zinc-500 dark:text-zinc-400">Weight</label>
+                  <input
+                    type="number"
+                    data-shell-field="weight"
+                    min="0.01"
+                    step="0.01"
+                    class="w-full input input-bordered input-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="text-xs text-zinc-500 dark:text-zinc-400">Assignee</label>
+                <select data-shell-field="assignee" class="w-full select select-bordered select-sm">
+                  <option data-shell-assignee-option>Unassigned</option>
+                </select>
+              </div>
+
+              <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3 space-y-1">
+                <h4 class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Comments</h4>
+                <p class="text-xs text-zinc-400 dark:text-zinc-500 italic">Loading…</p>
+              </div>
+
+              <div class="space-y-1">
+                <h4 class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Activity</h4>
+                <p class="text-xs text-zinc-400 dark:text-zinc-500 italic">Loading…</p>
               </div>
             </div>
 
