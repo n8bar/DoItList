@@ -1237,6 +1237,7 @@ defmodule DoIt.Tasks do
   defp reconcile_progress(initiative_id) do
     tasks = list_initiative_tasks(initiative_id)
     by_parent = Enum.group_by(tasks, & &1.parent_id)
+    mode = progress_calc_mode(initiative_id)
 
     # Unlike assemble_tree/1, keep the system root as a node — the Initiative
     # header shows its roll-up.
@@ -1249,7 +1250,7 @@ defmodule DoIt.Tasks do
           build_subtree(roots, by_parent)
       end
 
-    values = Progress.compute_all(tree)
+    values = Progress.compute_all(tree, mode)
 
     changed_parents =
       Enum.reduce(tasks, MapSet.new(), fn task, acc ->
@@ -1267,6 +1268,26 @@ defmodule DoIt.Tasks do
     Enum.each(changed_parents, &maybe_resort_children/1)
     :ok
   end
+
+  # The per-initiative calc setting (Initiative pane → Settings). Schemaless
+  # read keeps Tasks from depending on the Initiatives schema.
+  defp progress_calc_mode(initiative_id) do
+    calc =
+      Repo.one(
+        from i in "initiatives",
+          where: i.id == type(^initiative_id, :integer),
+          select: i.progress_calc
+      )
+
+    if calc == "first_generation", do: :first_generation, else: :leaf_average
+  end
+
+  @doc """
+  Broadcast a whole-tree change (multi-level reorder / recompute) so members
+  full-reload rather than incrementally patch.
+  """
+  def notify_tree_changed(initiative_id, task_id),
+    do: broadcast_change(initiative_id, {:task_moved, task_id})
 
   # --- PubSub ----------------------------------------------------------------
 

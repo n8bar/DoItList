@@ -9,6 +9,7 @@ defmodule DoIt.Initiatives.Initiative do
   schema "initiatives" do
     field :name, :string
     field :description, :string
+    field :progress_calc, :string, default: "leaf_average"
     field :my_role, :string, virtual: true
     # Loaded from the root task for list views: subtitle (its title) and the
     # rolled-up progress (its computed_progress).
@@ -28,8 +29,9 @@ defmodule DoIt.Initiatives.Initiative do
 
   def changeset(initiative, attrs) do
     initiative
-    |> cast(attrs, [:name, :description, :owner_id])
+    |> cast(attrs, [:name, :description, :progress_calc, :owner_id])
     |> validate_required([:name, :owner_id])
+    |> validate_inclusion(:progress_calc, ~w(leaf_average first_generation))
     |> validate_length(:name, min: 1, max: 120)
     |> validate_length(:description, max: 4000)
   end

@@ -119,17 +119,11 @@ window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren,
 const DoitSelection = {
   id: null,
   lastId: null,
-  pendingSince: 0,
   li() { return this.id ? document.getElementById("task-" + this.id) : null },
   set(id, opts = {}) {
     id = String(id)
     if (this.id && this.id !== id) this.lastId = this.id
     this.id = id
-    this.pendingSince = Date.now()
-    // The observer hides the skeleton when the pane arrives; this covers the
-    // no-mutation case so the freshness timeout actually fires.
-    clearTimeout(this._skT)
-    this._skT = setTimeout(() => this.syncPaneSkeleton(), 3100)
     this.apply()
     if (opts.scroll) {
       const li = this.li()
@@ -153,23 +147,26 @@ const DoitSelection = {
     }
     this.syncPaneSkeleton()
   },
-  // Instant pane shell (.03.07.04): the real pane UI, visible from selection
-  // until the server's pane for this task arrives. Row-known values (title,
-  // priority, weight, assignee — the pills) prefill live; unknown sections
-  // are disabled "Loading…". Transient — a timeout guards against a stuck
-  // shell on any path we didn't foresee. Value writes are properties (not
-  // attributes), so the guard observer converges.
+  // ONE pane, never swapped (.03.07.06): the pane stays mounted once created.
+  // While a selection switch is in flight (the pane's data-task-id doesn't
+  // match the client selection yet), the row-known values are written into
+  // the REAL fields immediately and the server-only sections dim; the server
+  // patch reconciles the same elements in place. Value writes are properties
+  // (not attributes) and skip the focused element, so the guard observer
+  // converges and in-progress typing survives.
   syncPaneSkeleton() {
-    const sk = document.getElementById("pane-skeleton")
-    if (!sk) return
     const pane = document.getElementById("task-editor-pane")
-    const arrived = pane && pane.dataset.taskId === this.id
-    const fresh = Date.now() - this.pendingSince < 3000
-    const show = !!(this.id && !arrived && fresh)
-    if (sk.hidden !== !show) sk.hidden = !show
-    if (show) this.fillShellFields(sk)
+    if (!pane) return
+    const arrived = pane.dataset.taskId === this.id
+    const shouldHide = !this.id
+    if (pane.hidden !== shouldHide) pane.hidden = shouldHide
+    const inFlight = !!this.id && !arrived
+    pane.querySelectorAll("[data-pane-async]").forEach((el) => {
+      el.classList.toggle("opacity-50", inFlight)
+    })
+    if (inFlight) this.fillPaneFields(pane)
   },
-  fillShellFields(sk) {
+  fillPaneFields(pane) {
     const li = this.li()
     const row = li && li.querySelector(":scope > [data-task-row]")
     if (!row) return
@@ -177,26 +174,31 @@ const DoitSelection = {
       const el = row.querySelector(sel)
       return el ? el.textContent.trim() : ""
     }
-    const set = (sel, value) => {
-      const el = sk.querySelector(sel)
-      if (el && el.value !== value) el.value = value
+    const set = (el, value) => {
+      if (el && el !== document.activeElement && el.value !== value) el.value = value
     }
 
-    set("[data-shell-field='title']", text("[data-task-title]"))
+    set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
 
     // The priority pill shows the value when ≠ normal; the title attr always
     // carries it ("Priority: high").
     const priEl = row.querySelector("[phx-value-focus='priority']")
     const pri = priEl ? (priEl.getAttribute("title") || "").replace("Priority: ", "") : ""
-    if (pri) set("[data-shell-field='priority']", pri)
+    if (pri) set(pane.querySelector("#task-field-priority"), pri)
 
     const wText = text("[phx-value-focus='weight']")
-    set("[data-shell-field='weight']", wText.startsWith("w=") ? wText.slice(2) : "1.0")
+    set(pane.querySelector("#task-field-weight"), wText.startsWith("w=") ? wText.slice(2) : "1.0")
 
+    // Match the assignee option by its visible name (the pill shows "@name").
+    const aSelect = pane.querySelector("#task-field-assignee")
     const aText = text("[phx-value-focus='assignee']")
-    const aOption = sk.querySelector("[data-shell-assignee-option]")
-    const aLabel = aText || "Unassigned"
-    if (aOption && aOption.textContent !== aLabel) aOption.textContent = aLabel
+    if (aSelect && aSelect !== document.activeElement) {
+      const name = aText.startsWith("@") ? aText.slice(1) : ""
+      const opt = name
+        ? [...aSelect.options].find((o) => o.textContent.trim() === name)
+        : aSelect.options[0]
+      if (opt && aSelect.value !== opt.value) aSelect.value = opt.value
+    }
   },
 }
 window.DoitSelection = DoitSelection
@@ -1161,6 +1163,18 @@ Hooks.DragReorder = {
 // Per-task collapse/expand toggle for the task tree on /initiatives/:id.
 // Persists state in localStorage keyed by (initiative_id, task_id).
 // Toggling never affects roll-up — it only hides the children <ul>.
+// Native <details> whose open state survives LiveView patches — the server
+// renders it closed, so morphdom would otherwise slam it shut on every patch.
+Hooks.KeepOpen = {
+  mounted() {
+    this._open = this.el.open
+    this.el.addEventListener("toggle", () => { this._open = this.el.open })
+  },
+  updated() {
+    if (this.el.open !== this._open) this.el.open = this._open
+  },
+}
+
 Hooks.CollapseToggle = {
   mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.bind(); this.apply() },
   updated() { this.apply() },

@@ -90,6 +90,33 @@ defmodule DoIt.Tasks.ProgressTest do
     end
   end
 
+  describe "first-generation mode (per-initiative setting)" do
+    test "each direct child counts as one unit, however many leaves it holds" do
+      grandchildren = branch([leaf(0), leaf(100)])
+      tree = branch([grandchildren, leaf(0)])
+      assert Progress.compute(tree, :first_generation) == 25
+      assert Progress.compute(tree) == 33
+    end
+
+    test "a weighted branch counts once at its own weight" do
+      left = branch([leaf(100), leaf(100)], weight: 3)
+      root = branch([left, leaf(0, weight: 1)])
+      assert Progress.compute(root, :first_generation) == 75
+      assert Progress.compute(root) == 86
+    end
+
+    test "compute_all in fg mode matches compute for every node" do
+      inner = branch([leaf(0), leaf(100)], id: 2)
+      root = branch([inner, leaf(40, id: 3)], id: 1)
+
+      values = Progress.compute_all([root], :first_generation)
+
+      assert values[1] == Progress.compute(root, :first_generation)
+      assert values[2] == 50
+      assert values[3] == 40
+    end
+  end
+
   describe "branch tasks (default equal weight)" do
     test "averages two leaves" do
       tree = branch([leaf(0), leaf(100)])

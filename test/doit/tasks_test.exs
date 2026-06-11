@@ -515,6 +515,56 @@ defmodule DoIt.TasksTest do
     end
   end
 
+  describe "per-initiative progress calc setting" do
+    test "reconcile honors first_generation when set", %{user: user, initiative: initiative} do
+      b =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "B"
+        })
+        |> elem(1)
+
+      {:ok, _} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => b.id,
+          "title" => "lone",
+          "manual_progress" => 100
+        })
+
+      {:ok, c} =
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => b.id,
+          "title" => "C"
+        })
+
+      for n <- 1..4 do
+        {:ok, _} =
+          Tasks.create_task(user, %{
+            "initiative_id" => initiative.id,
+            "parent_id" => c.id,
+            "title" => "c#{n}"
+          })
+      end
+
+      # Default leaf average: (100 + 0*4) / 5 = 20.
+      assert Tasks.get_task!(b.id).computed_progress == 20
+
+      {:ok, _} =
+        DoIt.Initiatives.update_initiative(
+          DoIt.Initiatives.get_initiative(initiative.id),
+          %{"progress_calc" => "first_generation"}
+        )
+
+      Tasks.recompute_initiative_progress(initiative.id)
+
+      # First generation: avg(lone 100, C 0) = 50.
+      assert Tasks.get_task!(b.id).computed_progress == 50
+    end
+  end
+
   describe "set_sort resorts by the resolved mode" do
     test "picking Inherit under an alphabetical ancestor re-orders immediately", %{
       user: user,

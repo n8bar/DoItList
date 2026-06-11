@@ -41,6 +41,9 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:show_member_form, false)
          |> assign(:member_email, "")
          |> assign(:selected_task_id, nil)
+         |> assign(:selected_task, nil)
+         |> assign(:comments, [])
+         |> assign(:activity, [])
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign(:add_task_for, nil)
@@ -373,6 +376,31 @@ defmodule DoItWeb.InitiativeShowLive do
      socket
      |> assign(:editing_initiative?, false)
      |> assign(:selected_task_id, nil)}
+  end
+
+  # Initiative Settings (.03.07.07): switch the progress calc, recompute the
+  # whole initiative under the new mode, and tell members to full-reload.
+  def handle_event("set_progress_calc", %{"calc" => calc}, socket)
+      when calc in ~w(leaf_average first_generation) do
+    if not socket.assigns.can_edit do
+      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+    else
+      case Initiatives.update_initiative(socket.assigns.initiative, %{"progress_calc" => calc}) do
+        {:ok, updated} ->
+          Tasks.recompute_initiative_progress(updated.id)
+          Tasks.notify_tree_changed(updated.id, updated.root_task_id)
+
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> load_tree()
+           |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply,
+           put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+      end
+    end
   end
 
   def handle_event("update_initiative", %{"initiative" => params}, socket) do
@@ -1243,81 +1271,21 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
-            <%!-- Instant pane shell (.03.07.04): the REAL pane UI, shown
-                 client-side the moment a task is selected and replaced by the
-                 server render when it lands. Fields whose values already live
-                 in the row (title, priority, weight, assignee — the pills)
-                 are prefilled by the client and look normal; only the
-                 genuinely-unknown ones are disabled with "Loading…". The
-                 client compares the real pane's data-task-id against its
-                 selection to know when to hide this. --%>
+            <%!-- ONE pane, never swapped (.03.07.06): once a task has been
+                 selected the pane stays mounted; deselecting hides it
+                 (selected_task keeps the last pane data, only selected_task_id
+                 nils). On a selection switch the client writes the row-known
+                 values (title / priority / weight / assignee) into these real
+                 fields immediately and dims the [data-pane-async] sections;
+                 the server patch then reconciles the same elements in place —
+                 LiveView never clobbers the focused field, so in-progress
+                 typing survives the patch. --%>
             <div
-              id="pane-skeleton"
-              hidden
-              class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4 space-y-3"
-            >
-              <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Task details</h3>
-
-              <div>
-                <label class="text-xs text-zinc-500 dark:text-zinc-400">Title</label>
-                <input
-                  type="text"
-                  data-shell-field="title"
-                  class="w-full input input-bordered input-sm"
-                />
-              </div>
-
-              <div>
-                <label class="text-xs text-zinc-500 dark:text-zinc-400">Description</label>
-                <textarea
-                  disabled
-                  class="w-full textarea textarea-bordered textarea-sm"
-                  placeholder="Loading…"
-                ></textarea>
-              </div>
-
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="text-xs text-zinc-500 dark:text-zinc-400">Priority</label>
-                  <select data-shell-field="priority" class="w-full select select-bordered select-sm">
-                    <option :for={p <- DoIt.Tasks.Task.priorities()} value={p}>{p}</option>
-                  </select>
-                </div>
-                <div>
-                  <label class="text-xs text-zinc-500 dark:text-zinc-400">Weight</label>
-                  <input
-                    type="number"
-                    data-shell-field="weight"
-                    min="0.01"
-                    step="0.01"
-                    class="w-full input input-bordered input-sm"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label class="text-xs text-zinc-500 dark:text-zinc-400">Assignee</label>
-                <select data-shell-field="assignee" class="w-full select select-bordered select-sm">
-                  <option data-shell-assignee-option>Unassigned</option>
-                </select>
-              </div>
-
-              <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3 space-y-1">
-                <h4 class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Comments</h4>
-                <p class="text-xs text-zinc-400 dark:text-zinc-500 italic">Loading…</p>
-              </div>
-
-              <div class="space-y-1">
-                <h4 class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Activity</h4>
-                <p class="text-xs text-zinc-400 dark:text-zinc-500 italic">Loading…</p>
-              </div>
-            </div>
-
-            <div
-              :if={@selected_task_id && not @editing_initiative?}
+              :if={@selected_task && not @editing_initiative?}
               id="task-editor-pane"
               phx-hook="FocusField"
-              data-task-id={@selected_task_id}
+              data-task-id={@selected_task.id}
+              hidden={is_nil(@selected_task_id)}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.task_editor
@@ -2012,23 +1980,54 @@ defmodule DoItWeb.InitiativeShowLive do
         Computed from children: {@root_task.computed_progress}%
       </div>
 
-      <%!-- Settings: initiative-wide behavior (.03.07.05). Future per-initiative
-           settings (e.g. the progress calc mode, BACKLOG → Initiative settings)
-           land in this section. Delete stays last as the danger tail. --%>
-      <div class="border-t border-zinc-200 dark:border-zinc-700 pt-3 space-y-3">
-        <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Settings</h3>
+      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
 
-        <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
-
-        <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
-          <button
-            type="button"
-            phx-click="request_delete_initiative"
-            class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 active:scale-95 transition"
-          >
-            <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete initiative
-          </button>
+      <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
+           behavior that isn't day-to-day editing. KeepOpen preserves the
+           open/closed state across LiveView patches. --%>
+      <details
+        id="initiative-settings"
+        phx-hook="KeepOpen"
+        class="border-t border-zinc-200 dark:border-zinc-700 pt-3"
+      >
+        <summary class="cursor-pointer select-none font-medium text-zinc-800 dark:text-zinc-100">
+          Settings
+        </summary>
+        <div class="mt-3 space-y-3">
+          <div>
+            <label for="progress-calc" class="text-xs text-zinc-500 dark:text-zinc-400">
+              Progress calculation
+            </label>
+            <form phx-change="set_progress_calc">
+              <select
+                id="progress-calc"
+                name="calc"
+                class="w-full select select-bordered select-sm"
+                disabled={not @can_edit}
+              >
+                <option value="leaf_average" selected={@initiative.progress_calc == "leaf_average"}>
+                  Leaf average — every leaf counts equally
+                </option>
+                <option
+                  value="first_generation"
+                  selected={@initiative.progress_calc == "first_generation"}
+                >
+                  First-generation children — each child one unit
+                </option>
+              </select>
+            </form>
+          </div>
         </div>
+      </details>
+
+      <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+        <button
+          type="button"
+          phx-click="request_delete_initiative"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 active:scale-95 transition"
+        >
+          <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete initiative
+        </button>
       </div>
     </div>
     """
@@ -2200,6 +2199,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <div>
           <label class="text-xs text-zinc-500 dark:text-zinc-400">Title</label>
           <input
+            id="task-field-title"
             type="text"
             name="task[title]"
             value={@task.title}
@@ -2352,7 +2352,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </div>
 
-      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <div
+        data-pane-async
+        class="border-t border-zinc-100 dark:border-zinc-700 pt-3 transition-opacity"
+      >
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
         <ul class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
@@ -2380,7 +2383,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <div
+        data-pane-async
+        class="border-t border-zinc-100 dark:border-zinc-700 pt-3 transition-opacity"
+      >
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <ul class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity} :if={e.kind != "status_changed"}>
