@@ -929,32 +929,34 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Set the same sort mode + direction on `root` and every branch
-  descendant in a single transaction. Used by item 14's "Apply to all
-  descendants" menu action. Records ONE `sort_cascaded` activity event
-  on the root (not per-descendant) and broadcasts once.
+  Force every descendant branch of `root` to inherit (sort_mode `nil`), so
+  the whole subtree follows `root`'s own setting from then on — a live link,
+  not a stamped copy. Each descendant resorts by its resolved mode in the
+  same transaction. Records ONE `sort_cascaded` activity event on the root
+  (not per-descendant) and broadcasts once.
 
   Returns `{:ok, %{root_id: id, branch_count: n}}` or `{:error, ...}`.
   """
-  def cascade_sort(%Task{} = root, %User{} = actor, mode, reverse) do
+  def cascade_sort(%Task{} = root, %User{} = actor) do
     with_resort_batching(fn ->
       Repo.transaction(fn ->
-        branches = [root | descendant_branches(root.id)]
+        branches = descendant_branches(root.id)
 
         Enum.each(branches, fn t ->
-          case set_sort_body(t, actor, mode, reverse) do
+          case set_sort_body(t, actor, nil, false) do
             {:ok, _} -> :ok
             {:error, reason} -> Repo.rollback(reason)
           end
         end)
 
         record_event(root, actor, "sort_cascaded", %{
-          mode: mode,
-          reverse: !!reverse,
+          mode: "inherit",
           branch_count: length(branches)
         })
 
-        broadcast_change(root.initiative_id, {:task_updated, root.id})
+        # Multi-level reorder: the incremental patch re-keys one level only,
+        # so collaborators need the structural (full reload) message.
+        broadcast_change(root.initiative_id, {:task_moved, root.id})
         %{root_id: root.id, branch_count: length(branches)}
       end)
     end)

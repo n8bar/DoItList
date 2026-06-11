@@ -437,8 +437,8 @@ defmodule DoIt.TasksTest do
     end
   end
 
-  describe "cascade_sort/4" do
-    test "sets sort_mode + sort_reverse on root and every branch descendant", %{
+  describe "cascade_sort/2" do
+    test "forces every descendant branch to inherit; the root keeps its setting", %{
       user: user,
       initiative: initiative
     } do
@@ -482,18 +482,28 @@ defmodule DoIt.TasksTest do
           "title" => "Leaf3"
         })
 
-      # Branches under root: mid, mid2 (root itself counts too, so 3 total).
+      # The root's own setting + explicit modes on descendants to overwrite.
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(root.id), user, "alphabetical", true)
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(mid.id), user, "priority", false)
+
+      # Branches under root: mid, mid2 (the root itself is not counted).
       assert Tasks.count_descendant_branches(root.id) == 2
 
-      assert {:ok, %{branch_count: 3}} =
-               Tasks.cascade_sort(root, user, "alphabetical", true)
+      assert {:ok, %{branch_count: 2}} = Tasks.cascade_sort(Tasks.get_task!(root.id), user)
 
-      # Root + both mid-level branches got the pair set.
-      for id <- [root.id, mid.id, mid2.id] do
+      # Root keeps its explicit setting; descendants now inherit it live.
+      assert Tasks.get_task!(root.id).sort_mode == "alphabetical"
+      assert Tasks.get_task!(root.id).sort_reverse == true
+
+      for id <- [mid.id, mid2.id] do
         t = Tasks.get_task!(id)
-        assert t.sort_mode == "alphabetical"
-        assert t.sort_reverse == true
+        assert t.sort_mode == nil
+        assert t.sort_reverse == false
+        assert Tasks.resolve_sort(t) == {"alphabetical", true}
       end
+
+      # And the inherited resort applied: mid's leaves are Z→A.
+      assert ordered_titles(mid.id) == ["Leaf2", "Leaf1"]
     end
   end
 

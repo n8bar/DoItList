@@ -416,20 +416,18 @@ defmodule DoItWeb.InitiativeShowLive do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
     else
       task = socket.assigns.selected_task
-      branch_count = 1 + Tasks.count_descendant_branches(task.id)
+      branch_count = Tasks.count_descendant_branches(task.id)
 
       if branch_count > 10 and not skip_confirm?(socket, "cascade-sort") do
         {:noreply,
          assign_pending(socket, %{
            kind: :cascade_sort,
            task_id: task.id,
-           mode: task.sort_mode,
-           reverse: task.sort_reverse,
            branch_count: branch_count,
            affected: Tasks.count_descendants(task.id)
          })}
       else
-        {:noreply, commit_cascade_sort(socket, task, task.sort_mode, task.sort_reverse)}
+        {:noreply, commit_cascade_sort(socket, task)}
       end
     end
   end
@@ -609,8 +607,8 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :create, attrs: attrs} ->
           commit_create(socket, attrs)
 
-        %{kind: :cascade_sort, task_id: task_id, mode: mode, reverse: reverse} ->
-          commit_cascade_sort(socket, Tasks.get_task!(task_id), mode, reverse)
+        %{kind: :cascade_sort, task_id: task_id} ->
+          commit_cascade_sort(socket, Tasks.get_task!(task_id))
 
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           commit_cascade(socket, id, kind)
@@ -701,21 +699,21 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  defp commit_cascade_sort(socket, task, mode, reverse) do
+  defp commit_cascade_sort(socket, task) do
     user = socket.assigns.current_user
 
-    case Tasks.cascade_sort(task, user, mode, reverse) do
+    case Tasks.cascade_sort(task, user) do
       {:ok, %{branch_count: n}} ->
         socket
         |> assign_pending(nil)
-        |> put_flash(:info, "Sort applied to #{n} branch(es).")
+        |> put_flash(:info, "#{n} descendant branch(es) now inherit this sort.")
         |> load_tree()
         |> refresh_selected()
 
       {:error, _reason} ->
         socket
         |> assign_pending(nil)
-        |> put_flash(:error, "Couldn't apply sort to descendants.")
+        |> put_flash(:error, "Couldn't update descendants.")
     end
   end
 
@@ -986,11 +984,19 @@ defmodule DoItWeb.InitiativeShowLive do
             // Pink only rows that certainly get a DB write. Moves write the
             // moved row (parent_id / sort_order), the swapped sibling, and the
             // parent when the reorder flips it from auto-sort to manual.
-            // Ancestor progress updates are value-dependent — the re-render
-            // shows them; we don't guess.
+            // Reparents (dedent / indent) also pink BOTH immediate parents —
+            // their % moves in almost every case. Chains above stay quiet:
+            // value-dependent.
             movePinkRows(S, li, key) {
               if (key === "ArrowLeft" || key === "ArrowRight") {
-                return [S.savingRowOf(li)];
+                const rows = [S.savingRowOf(li)];
+                const parentLi = li.parentElement.closest("li[data-task-id]");
+                if (parentLi) rows.push(S.savingRowOf(parentLi));
+                const dest = key === "ArrowRight"
+                  ? this.taskSibling(li, -1)
+                  : parentLi && parentLi.parentElement.closest("li[data-task-id]");
+                if (dest) rows.push(S.savingRowOf(dest));
+                return rows;
               }
               const swap = this.taskSibling(li, key === "ArrowUp" ? -1 : 1);
               const rows = [S.savingRowOf(li), S.savingRowOf(swap)];
@@ -1481,8 +1487,9 @@ defmodule DoItWeb.InitiativeShowLive do
   defp confirm_title(_), do: "Confirm completion change"
 
   defp confirm_body(%{kind: :cascade_sort, affected: n}, _verb) do
-    "This is a large branch reorg affecting #{n} task(s). It overwrites the sort " <>
-      "settings on every descendant branch; reversible only via Undo (Arc 5)."
+    "This is a large branch reorg affecting #{n} task(s). Every descendant branch " <>
+      "switches to Inherit — their own sort settings are overwritten and they follow " <>
+      "this branch from now on; reversible only via Undo (Arc 5)."
   end
 
   defp confirm_body(%{kind: :cascade_complete, title: t}, _verb),
@@ -2011,7 +2018,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   @doc """
   The "sort by" control for a branch task: criterion dropdown + Reverse +
-  "Apply to all descendants". Shared by the Task and Initiative Details panes
+  "Make descendants inherit". Shared by the Task and Initiative Details panes
   (the Initiative's is its root task, labeled "Sort lists by"). Targets the
   selected task server-side via `set_sort` / `cascade_sort`.
   """
@@ -2067,10 +2074,10 @@ defmodule DoItWeb.InitiativeShowLive do
         type="button"
         phx-click="cascade_sort"
         data-saving-subtree
-        class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
-        title="Apply this sort_mode and direction to every descendant branch"
+        class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition"
+        title="Force every descendant branch to inherit this branch's sort"
       >
-        Apply to all descendants
+        Make descendants inherit
       </button>
     </div>
     """
@@ -2346,11 +2353,26 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # Always name what Inherit currently means — resolved from the parent
   # chain, ignoring the task's own explicit mode ("Inherit (Manual)" when
-  # nothing above sets one).
+  # nothing above sets one). Direction is folded into the wording since the
+  # Reverse checkbox is disabled on Inherit.
   defp sort_mode_inherit_label(%Task{} = task) do
-    {mode, _} = Tasks.resolve_sort(task.parent_id)
-    "Inherit (#{sort_mode_label(mode)})"
+    {mode, reverse} = Tasks.resolve_sort(task.parent_id)
+    "Inherit (#{sort_direction_label(mode, reverse)})"
   end
+
+  defp sort_direction_label("alphabetical", false), do: "Alphabetical A–Z"
+  defp sort_direction_label("alphabetical", true), do: "Alphabetical Z–A"
+  defp sort_direction_label("priority", false), do: "highest priority"
+  defp sort_direction_label("priority", true), do: "lowest priority"
+  defp sort_direction_label("completion", false), do: "least complete"
+  defp sort_direction_label("completion", true), do: "most complete"
+  defp sort_direction_label("computed_progress", false), do: "most progress"
+  defp sort_direction_label("computed_progress", true), do: "least progress"
+  defp sort_direction_label("created", false), do: "oldest 1st"
+  defp sort_direction_label("created", true), do: "newest 1st"
+  defp sort_direction_label("updated", false), do: "recently updated"
+  defp sort_direction_label("updated", true), do: "stalest"
+  defp sort_direction_label(mode, _reverse), do: sort_mode_label(mode)
 
   defp reverse_disabled?(%Task{sort_mode: mode}), do: mode in [nil, "manual"]
 

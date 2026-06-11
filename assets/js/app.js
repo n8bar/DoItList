@@ -734,13 +734,18 @@ Hooks.DragReorder = {
       dest.container.insertBefore(this.sourceLi, dest.before)
       // Extra rows whose DB row certainly gets written. A same-parent reorder
       // affects the parent only when it flips its sort_mode to manual — an
-      // already-manual parent doesn't change. Ancestor progress updates are
-      // value-dependent, so we never pink ancestor chains — the re-render
-      // shows whichever actually changed.
+      // already-manual parent doesn't change. A cross-parent move pinks BOTH
+      // immediate parents (one loses a child, one gains — their % moves in
+      // almost every case, and the parent rows stay visible even when a
+      // branch's children are collapsed). Ancestor chains above stay quiet:
+      // those updates are value-dependent.
       const extra = []
       if (sourceParentLi === destParentLi) {
         const r = destParentLi && destParentLi.firstElementChild
         if (r && dest.container.dataset.sortMode !== "manual") extra.push(r)
+      } else {
+        if (sourceParentLi) extra.push(sourceParentLi.firstElementChild)
+        if (destParentLi) extra.push(destParentLi.firstElementChild)
       }
       this.markSaving(dest.container, extra)
     }
