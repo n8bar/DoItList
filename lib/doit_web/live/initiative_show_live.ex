@@ -1499,8 +1499,12 @@ defmodule DoItWeb.InitiativeShowLive do
           Don't show this again for {confirm_class_label(@class)}
         </label>
         <div class="mt-5 flex justify-end gap-2">
+          <%!-- data-confirm-cancel: app.js reverts held optimism + strips the
+               maybe-write hue at the click (.03.07.16) — the cancel_pending
+               round trip reconciles the same state behind it. --%>
           <button
             type="button"
+            data-confirm-cancel
             phx-click={
               Phoenix.LiveView.JS.hide(to: "#completion-confirm")
               |> Phoenix.LiveView.JS.push("cancel_pending")

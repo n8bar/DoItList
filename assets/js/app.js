@@ -542,6 +542,31 @@ document.addEventListener("keydown", (e) => {
 // failed Proceed pushes both, cancelled first, so the revert still runs.
 window.DoitPendingMove = null
 
+function revertPendingMove() {
+  const p = window.DoitPendingMove
+  window.DoitPendingMove = null
+  if (!p || !p.parent || !p.parent.isConnected) return
+  // The original next-sibling may have been re-rendered away; fall back to
+  // appending rather than throwing.
+  const next = p.next && p.next.parentElement === p.parent ? p.next : null
+  p.parent.insertBefore(p.li, next)
+  if (p.fabricatedUl && p.fabricatedUl.children.length === 0) p.fabricatedUl.remove()
+}
+
+// Cancel on a server confirm is client-instant (.03.07.16): the user must be
+// able to hop to their next action without waiting on the round trip. Revert
+// the held drag and strip the maybe-write hue at the click; cancel_pending
+// reconciles the same state behind it. (A backdrop click is the overlay
+// itself — the form's phx-click-away fires the same server event.)
+document.addEventListener("click", (e) => {
+  const overlay = document.getElementById("completion-confirm")
+  if (!overlay) return
+  if (e.target === overlay || e.target.closest("[data-confirm-cancel]")) {
+    revertPendingMove()
+    document.querySelectorAll(".is-saving").forEach((el) => el.classList.remove("is-saving"))
+  }
+})
+
 // Re-assert the held placement: server-side the row still belongs to its old
 // parent, so every patch that touches either child list moves it back. Runs
 // from the guard observer; insert-only-when-different, so it converges.
@@ -563,16 +588,10 @@ function applyPendingMove() {
     container.insertBefore(p.li, next)
   }
 }
-window.addEventListener("phx:confirm-cancelled", () => {
-  const p = window.DoitPendingMove
-  window.DoitPendingMove = null
-  if (!p || !p.parent || !p.parent.isConnected) return
-  // The original next-sibling may have been re-rendered away; fall back to
-  // appending rather than throwing.
-  const next = p.next && p.next.parentElement === p.parent ? p.next : null
-  p.parent.insertBefore(p.li, next)
-  if (p.fabricatedUl && p.fabricatedUl.children.length === 0) p.fabricatedUl.remove()
-})
+// Backstop for the cancel paths the click listener can't see — chiefly a
+// failed Proceed commit. Idempotent: the instant-cancel path already nulled
+// the handle.
+window.addEventListener("phx:confirm-cancelled", revertPendingMove)
 window.addEventListener("phx:confirm-resolved", () => {
   window.DoitPendingMove = null
 })
