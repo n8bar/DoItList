@@ -79,7 +79,12 @@ defmodule DoItWeb.InitiativeShowLive do
 
       lineage ->
         task = Enum.find(lineage, &(&1.id == task_id))
-        socket = assign(socket, :tree, patched_tree(socket, task, lineage))
+        root_id = socket.assigns.initiative.root_task_id
+
+        socket =
+          socket
+          |> assign(:tree, patched_tree(socket, task, lineage))
+          |> maybe_refresh_root_sort(task, root_id)
 
         if socket.assigns.selected_task_id in Enum.map(lineage, & &1.id),
           do: refresh_selected(socket),
@@ -88,18 +93,33 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp patched_tree(socket, task, lineage) do
+    root_id = socket.assigns.initiative.root_task_id
     tree = Tree.merge(socket.assigns.tree, lineage)
 
-    case task.parent_id do
-      # The system root has no display order of its own to re-key.
-      nil ->
-        tree
+    # The write may have re-keyed two display orders: the task among its
+    # siblings (auto-sorted parents resort on update), and the task's own
+    # children (a sort-mode change resorts them — §8.11 finding: collaborators
+    # never saw a resort because only the sibling level was re-keyed).
+    tree =
+      case task.parent_id do
+        # The system root has no sibling order of its own to re-key.
+        nil -> tree
+        parent_id -> reorder_level(tree, parent_id, root_id)
+      end
 
-      parent_id ->
-        key = if parent_id == socket.assigns.initiative.root_task_id, do: :root, else: parent_id
-        Tree.reorder_children(tree, key, Tasks.ordered_child_ids(parent_id))
-    end
+    reorder_level(tree, task.id, root_id)
   end
+
+  defp reorder_level(tree, parent_id, root_id) do
+    key = if parent_id == root_id, do: :root, else: parent_id
+    Tree.reorder_children(tree, key, Tasks.ordered_child_ids(parent_id))
+  end
+
+  # A sort change on the system root re-resolves every inheriting branch.
+  defp maybe_refresh_root_sort(socket, %{id: root_id}, root_id),
+    do: assign(socket, :root_sort_mode, elem(Tasks.resolve_sort(root_id), 0))
+
+  defp maybe_refresh_root_sort(socket, _task, _root_id), do: socket
 
   defp refresh_selected(socket) do
     case socket.assigns.selected_task_id do

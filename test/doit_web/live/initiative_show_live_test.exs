@@ -462,6 +462,25 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert has_element?(view, "#task-#{parent.id} [data-complete-toggle][aria-pressed='true']")
     end
 
+    test "a collaborator's set_sort resort reaches the rendered tree", %{
+      conn: conn,
+      user: user,
+      initiative: initiative,
+      parent: parent
+    } do
+      create_task(user, initiative, parent, "alpha")
+      # setup's "Patch leaf" sorts after "alpha" alphabetically.
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      {:ok, _} = Tasks.set_sort(Tasks.get_task!(parent.id), user, "alphabetical", false)
+
+      html = render(view)
+      {a_pos, _} = :binary.match(html, "alpha")
+      {p_pos, _} = :binary.match(html, "Patch leaf")
+      assert a_pos < p_pos
+    end
+
     test "an attribute change under an auto-sorted parent re-keys sibling order", %{
       conn: conn,
       user: user,
