@@ -20,6 +20,9 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 ### User preferences
 - **Persist Initiative-list sort server-side.** The Initiatives index sort (mode + reverse + manual drag order) ships in localStorage (per-browser) in M02 Arc 3 worklist 6. When user profile/preferences gets built, move it to proper per-user server storage so it follows the user across devices. Manual order would land on `initiative_members.sort_order` (per-membership); the mode/reverse on a user-preferences record.
 
+### Initiative settings
+- **Progress calc mode.** The first-generation average (each direct child counts as one unit — the original M01 formula) returns as a per-initiative setting; the M02 leaf-average default stays the default. Lives wherever initiative-level settings land (initiative details pane).
+
 ### Task row polish
 - **Color-coded priority pills.** Map each priority (`high` / `low` / etc.) to its own chip color instead of the current monochrome zinc, so priority reads at a glance. Default (`normal`) stays the empty dashed placeholder. One-spot change in `task_node/1`'s priority chip.
 

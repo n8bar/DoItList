@@ -59,13 +59,17 @@ The task tree stays readable at any viewport and degrades by scrolling, never by
 - **Grow milestone by milestone.** Resist becoming bloated PM software.
 
 ## Roll-up Progress (principle + formula)
-Leaf tasks use manual progress. Branch tasks use computed progress:
+Leaf tasks use manual progress. Branch tasks use the **leaf average** (per the AbstractSpoon inspiration): the weighted average over **all descendant leaves** — every leaf counts, wherever it sits in the subtree:
 
 ```
-sum(child_progress * child_weight) / sum(child_weight)
+sum(leaf_progress * leaf_path_weight) / sum(leaf_path_weight)
 ```
 
-Roll-up is recursive through ancestors. Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
+`leaf_path_weight` is the product of the weights along the path from the branch's direct child down to the leaf. With everything at the default weight this is a plain average of the leaves; weighting an intermediate branch scales its whole subtree's leaves on the way up. The Initiative header bar is the system root's roll-up — the same math end to end.
+
+The previous formula — the first-generation average, where each direct child counts as one unit regardless of how many leaves it contains — is planned to return as a per-initiative setting (see BACKLOG → Initiative settings).
+
+Edge cases (non-positive weights, status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 
 ## Reorganization
 _Added 2026-05-19; operator-approved 2026-05-20._

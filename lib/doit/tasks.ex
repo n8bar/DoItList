@@ -1203,24 +1203,8 @@ defmodule DoIt.Tasks do
   updated tree.
   """
   def recompute_initiative_progress(initiative_id) do
-    list_initiative_tasks(initiative_id)
-    |> assemble_tree()
-    |> Enum.each(&recompute_subtree/1)
-
+    reconcile_progress(initiative_id)
     initiative_task_tree(initiative_id)
-  end
-
-  defp recompute_subtree(%Task{children: children} = task) when is_list(children) do
-    Enum.each(children, &recompute_subtree/1)
-    progress = Progress.compute_for_branch(Repo.preload(task, :children, force: true))
-    if progress != task.computed_progress, do: persist_progress(task, progress)
-    progress
-  end
-
-  defp recompute_subtree(%Task{} = task) do
-    progress = Progress.compute(task)
-    if progress != task.computed_progress, do: persist_progress(task, progress)
-    progress
   end
 
   defp persist_progress(%Task{} = task, value) do
@@ -1230,46 +1214,58 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Walk up from the given task, recomputing computed_progress for each
-  ancestor. Stops at the root.
+  Reconcile computed_progress after a change at or under `task_id`'s parent.
+  Leaf-average roll-up (ProductSpec § Roll-up Progress) can't be derived
+  level-by-level from children's persisted percentages — it needs leaf
+  masses too — so this recomputes the whole initiative's values from one
+  query and writes only the diffs. Self-healing by construction.
   """
   def recompute_ancestors(nil), do: :ok
 
   def recompute_ancestors(task_id) when is_integer(task_id) do
     case Repo.get(Task, task_id) do
-      nil ->
-        :ok
-
-      task ->
-        task = preload_subtree(task)
-        progress = Progress.compute_for_branch(task)
-
-        if progress != task.computed_progress do
-          persist_progress(task, progress)
-          # task's progress changed; if task.parent has an auto-sort mode
-          # keyed on computed_progress, the siblings need to resort.
-          maybe_resort_children(task.parent_id)
-        end
-
-        recompute_ancestors(task.parent_id)
+      nil -> :ok
+      task -> reconcile_progress(task.initiative_id)
     end
   end
 
   defp recompute_self_and_ancestors(%Task{id: id} = task) do
-    task = preload_subtree(task)
-    progress = Progress.compute_for_branch(task)
-
-    if progress != task.computed_progress do
-      persist_progress(task, progress)
-      maybe_resort_children(task.parent_id)
-    end
-
-    recompute_ancestors(task.parent_id)
+    reconcile_progress(task.initiative_id)
     Repo.get!(Task, id)
   end
 
-  defp preload_subtree(%Task{} = task) do
-    Repo.preload(task, [:children])
+  defp reconcile_progress(initiative_id) do
+    tasks = list_initiative_tasks(initiative_id)
+    by_parent = Enum.group_by(tasks, & &1.parent_id)
+
+    # Unlike assemble_tree/1, keep the system root as a node — the Initiative
+    # header shows its roll-up.
+    tree =
+      case Map.get(by_parent, nil, []) do
+        [root] ->
+          [Map.put(root, :children, build_subtree(Map.get(by_parent, root.id, []), by_parent))]
+
+        roots ->
+          build_subtree(roots, by_parent)
+      end
+
+    values = Progress.compute_all(tree)
+
+    changed_parents =
+      Enum.reduce(tasks, MapSet.new(), fn task, acc ->
+        value = Map.get(values, task.id, task.computed_progress)
+
+        if value != task.computed_progress do
+          persist_progress(task, value)
+          # A changed value re-sorts siblings under progress-keyed sort modes.
+          if task.parent_id, do: MapSet.put(acc, task.parent_id), else: acc
+        else
+          acc
+        end
+      end)
+
+    Enum.each(changed_parents, &maybe_resort_children/1)
+    :ok
   end
 
   # --- PubSub ----------------------------------------------------------------

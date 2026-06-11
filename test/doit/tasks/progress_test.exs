@@ -49,6 +49,47 @@ defmodule DoIt.Tasks.ProgressTest do
     end
   end
 
+  describe "leaf average (design examples, .03.09.01)" do
+    test "Example A: a one-leaf sibling vs a four-leaf branch" do
+      # First-generation said 50; leaf average dilutes: (100 + 0*4)/5 = 20.
+      tree = branch([leaf(100), branch([leaf(0), leaf(0), leaf(0), leaf(0)])])
+      assert Progress.compute(tree) == 20
+    end
+
+    test "Example B: sibling branches of different sizes" do
+      # First-generation said 50; leaf average: (100+100+0)/3 ≈ 67.
+      tree = branch([branch([leaf(100), leaf(100)]), branch([leaf(0)])])
+      assert Progress.compute(tree) == 67
+    end
+
+    test "Example C: flat branches agree with the first-generation method" do
+      assert Progress.compute(branch([leaf(40), leaf(80)])) == 60
+    end
+
+    test "an intermediate branch's weight scales its whole subtree" do
+      # The weighted branch's leaves each carry mass 2 on the way up:
+      # (100*1 + 0*2*4) / (1 + 8) ≈ 11.
+      tree = branch([leaf(100), branch([leaf(0), leaf(0), leaf(0), leaf(0)], weight: 2)])
+      assert Progress.compute(tree) == 11
+    end
+
+    test "compute_all matches compute for every node, including zero-weight subtrees" do
+      inner = branch([leaf(0), leaf(100)], id: 2)
+      skipped = branch([leaf(70)], id: 4, weight: 0)
+      root = branch([inner, leaf(40, id: 3), skipped], id: 1)
+
+      values = Progress.compute_all([root])
+
+      assert values[1] == Progress.compute(root)
+      assert values[2] == Progress.compute(inner)
+      assert values[3] == 40
+      # Zero-weight subtree is excluded from the parent's average but its own
+      # value still reconciles.
+      assert values[4] == 70
+      assert values[1] == 47
+    end
+  end
+
   describe "branch tasks (default equal weight)" do
     test "averages two leaves" do
       tree = branch([leaf(0), leaf(100)])
@@ -98,24 +139,24 @@ defmodule DoIt.Tasks.ProgressTest do
     end
   end
 
-  describe "recursive roll-up" do
+  describe "recursive roll-up (leaf average)" do
     test "grandchildren propagate up two levels" do
-      # group1: leaf 0 + leaf 100 (avg 50)
-      # group2: leaf 100        (50)→ wait
-      # root: avg(group1, leaf(0)) = avg(50, 0) = 25
+      # Leaves: 0, 100 (inside the sub-branch) and 0 — every leaf counts
+      # equally wherever it sits → 100/3 = 33.
       grandchildren = branch([leaf(0), leaf(100)])
       tree = branch([grandchildren, leaf(0)])
-      assert Progress.compute(tree) == 25
+      assert Progress.compute(tree) == 33
     end
 
     test "weighted recursive roll-up" do
-      # left subtree: leaves 100,100 (rolled up = 100), weight 3
+      # left subtree: leaves 100,100 — each passes through the branch's
+      # weight 3 on the way up (path product) → mass 3 apiece
       # right leaf: 0, weight 1
-      # root: (100*3 + 0*1) / 4 = 75
+      # root: (100*3 + 100*3 + 0*1) / 7 ≈ 86
       left = branch([leaf(100), leaf(100)], weight: 3)
       right = leaf(0, weight: 1)
       root = branch([left, right])
-      assert Progress.compute(root) == 75
+      assert Progress.compute(root) == 86
     end
 
     test "marking a deep child done forces it to 100, propagating upward" do

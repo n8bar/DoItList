@@ -55,14 +55,16 @@ defmodule DoItWeb.InitiativeShowLive do
   defp load_tree(socket) do
     initiative_id = socket.assigns.initiative.id
     tree = Tasks.initiative_task_tree(initiative_id)
+    root = Tasks.get_task(socket.assigns.initiative.root_task_id)
 
     # Resolved once here; task_node threads it down (child = own mode ||
-    # parent's resolved), so rendering never walks the DB per branch.
-    root_sort_mode = elem(Tasks.resolve_sort(socket.assigns.initiative.root_task_id), 0)
-
+    # parent's resolved), so rendering never walks the DB per branch. The
+    # header bar shows the system root's roll-up — same leaf-average math as
+    # every branch (ProductSpec § Roll-up Progress).
     socket
     |> assign(:tree, tree)
-    |> assign(:root_sort_mode, root_sort_mode)
+    |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
+    |> assign(:initiative_progress, (root && root.computed_progress) || 0)
   end
 
   # Attribute-level changes patch the loaded tree instead of reloading the
@@ -85,6 +87,14 @@ defmodule DoItWeb.InitiativeShowLive do
           socket
           |> assign(:tree, patched_tree(socket, task, lineage))
           |> maybe_refresh_root_sort(task, root_id)
+
+        # Any in-tree lineage tops out at the system root — its fresh roll-up
+        # drives the header bar.
+        socket =
+          case Enum.find(lineage, &(&1.id == root_id)) do
+            nil -> socket
+            root -> assign(socket, :initiative_progress, root.computed_progress || 0)
+          end
 
         if socket.assigns.selected_task_id in Enum.map(lineage, & &1.id),
           do: refresh_selected(socket),
@@ -1088,11 +1098,11 @@ defmodule DoItWeb.InitiativeShowLive do
           <div
             class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
             role="progressbar"
-            aria-valuenow={initiative_progress(@tree)}
+            aria-valuenow={@initiative_progress}
             aria-valuemin="0"
             aria-valuemax="100"
-            aria-label={"Initiative progress: #{initiative_progress(@tree)}%"}
-            style={"--progress: #{initiative_progress(@tree)}%"}
+            aria-label={"Initiative progress: #{@initiative_progress}%"}
+            style={"--progress: #{@initiative_progress}%"}
           >
             <div
               class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
@@ -1100,7 +1110,7 @@ defmodule DoItWeb.InitiativeShowLive do
             >
             </div>
             <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
-              {initiative_progress(@tree)}%
+              {@initiative_progress}%
             </span>
           </div>
         </div>
@@ -2382,16 +2392,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp progress_value(%{status: "done"}), do: 100
   defp progress_value(%{manual_progress: mp}), do: mp || 0
-
-  # Equal-weighted average of root-task progress (custom root weights are
-  # ignored at the Initiative level — the Initiative header is informational,
-  # not itself a task).
-  defp initiative_progress([]), do: 0
-
-  defp initiative_progress(roots) do
-    total = Enum.reduce(roots, 0, fn t, acc -> acc + progress_value(t) end)
-    div(total, length(roots))
-  end
 
   # New-task placement (item 18): the inline form sits in a slot, so the
   # created task lands there. Root/child "add" forms render at the top of

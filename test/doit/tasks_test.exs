@@ -326,12 +326,20 @@ defmodule DoIt.TasksTest do
 
     test "cross-list move: task changes its root List, both sides recompute, Initiative aggregate reflects it",
          %{user: user, initiative: initiative} do
-      # Two Lists (root tasks), each with a non-trivial subtree.
+      # Two Lists (top-level tasks under the system root), each with a subtree.
       {:ok, list_a} =
-        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "List A"})
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "List A"
+        })
 
       {:ok, list_b} =
-        Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "List B"})
+        Tasks.create_task(user, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "List B"
+        })
 
       {:ok, mid_a} =
         Tasks.create_task(user, %{
@@ -380,12 +388,12 @@ defmodule DoIt.TasksTest do
 
       # Source List A is now empty → 0.
       assert Tasks.get_task!(list_a.id).computed_progress == 0
-      # Destination List B now has leaf-b1 (20) + mid-a (still 90) → mean = 55.
-      assert Tasks.get_task!(list_b.id).computed_progress == 55
+      # Destination List B's leaves are now 20, 100, 80 → 200/3 ≈ 67.
+      assert Tasks.get_task!(list_b.id).computed_progress == 67
 
-      # Initiative-level aggregate (mean of root progresses) — what the LV underbar shows —
-      # is now (0 + 55) / 2 = 27 (integer div, matching `initiative_progress/1` in the LV).
-      assert div(0 + 55, 2) == 27
+      # Initiative header = the system root's roll-up. List A is a leaf again
+      # (no children, manual 0) alongside B's three leaves → 200/4 = 50.
+      assert Tasks.get_task!(initiative.root_task_id).computed_progress == 50
     end
 
     test "rejects a cycle and persists nothing", %{user: user, initiative: initiative} do
