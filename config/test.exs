@@ -22,6 +22,10 @@ config :doit, DoItWeb.Endpoint,
   secret_key_base: "aVBF9NZ50c4znU3AQ+5KCsqvxVG8aYHOI3a1U+9RRQMxb3fzaZ8BKXBESr8kVWN9",
   server: false
 
+# Full-cost password hashing is pure waste in tests — nearly every LiveView
+# test registers + logs in a user, paying ~hundreds of ms of bcrypt each.
+config :bcrypt_elixir, :log_rounds, 1
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

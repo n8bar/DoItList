@@ -109,6 +109,16 @@ function clearSavingHue() {
   if (savingTimer) { clearTimeout(savingTimer); savingTimer = null }
 }
 
+// Hand the hue to the server: once a confirm modal is up, the same rows hold
+// the SERVER-rendered maybe-write pink (pending_saving_ids) — the client
+// stops tracking WITHOUT stripping classes, so the 1.5s safety timer can't
+// unpink a still-deciding modal (§-finding: Proceed looked like it unpinked;
+// the timer had already eaten the hue).
+function releaseSavingHue() {
+  savingPending.clear()
+  if (savingTimer) { clearTimeout(savingTimer); savingTimer = null }
+}
+
 const selectedLi = () => document.querySelector("li[data-selected]")
 
 // The colocated TaskKeys hook can't import, so reach it through the window.
@@ -1285,15 +1295,20 @@ Hooks.DragReorder = {
         // A failed write snaps the row back — the server re-renders the
         // unchanged tree.
         revertPendingMove()
+        this.clearSaving()
       } else if (reply.committed !== false) {
-        // Committed: the placement is truth now; release the hold.
+        // Committed: the placement is truth now; release the hold. Clear the
+        // hue explicitly — don't rely on morphdom stripping it, which is
+        // unreliable once we've moved the DOM ourselves.
         window.DoitPendingMove = null
+        this.clearSaving()
+      } else {
+        // A completion-flip confirm is deciding — the hold stays (§8.20)
+        // until "confirm-cancelled" / "confirm-resolved", and the rows now
+        // carry the SERVER's maybe-write hue: stop tracking without
+        // stripping, or the gesture timer unpinks the open modal.
+        this.releaseSaving()
       }
-      // committed === false: a completion-flip confirm is deciding — the hold
-      // stays (§8.20) until "confirm-cancelled" / "confirm-resolved".
-      // Clear the hue explicitly on the server's reply — don't rely on morphdom
-      // stripping it, which is unreliable once we've moved the DOM ourselves.
-      this.clearSaving()
     })
     this.cleanup()
     // The hold is registered BEFORE the reply can race it: any patch landing
@@ -1382,6 +1397,15 @@ Hooks.DragReorder = {
       this._savingTimer = null
     }
     if (this._saving) this._saving.forEach((el) => el.classList.remove("is-saving"))
+    this._saving = null
+  },
+  // Stop tracking without stripping classes — the server's pending hue owns
+  // the rows once a confirm modal is up.
+  releaseSaving() {
+    if (this._savingTimer) {
+      clearTimeout(this._savingTimer)
+      this._savingTimer = null
+    }
     this._saving = null
   },
 
@@ -1749,6 +1773,9 @@ new MutationObserver(() => {
     // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
     applyPendingMove()
     applyPendingToggle()
+    // While a confirm modal is up, its maybe-write hue is server-held —
+    // disarm the client's safety timer so it can't strip it mid-decision.
+    if (document.getElementById("completion-confirm")) releaseSavingHue()
   })
 }).observe(document.body, {
   subtree: true,
