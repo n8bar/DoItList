@@ -1962,16 +1962,23 @@ defmodule DoItWeb.InitiativeShowLive do
         Computed from children: {@root_task.computed_progress}%
       </div>
 
-      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
+      <%!-- Settings: initiative-wide behavior (.03.07.05). Future per-initiative
+           settings (e.g. the progress calc mode, BACKLOG → Initiative settings)
+           land in this section. Delete stays last as the danger tail. --%>
+      <div class="border-t border-zinc-200 dark:border-zinc-700 pt-3 space-y-3">
+        <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Settings</h3>
 
-      <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
-        <button
-          type="button"
-          phx-click="request_delete_initiative"
-          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600"
-        >
-          <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete initiative
-        </button>
+        <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
+
+        <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+          <button
+            type="button"
+            phx-click="request_delete_initiative"
+            class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 active:scale-95 transition"
+          >
+            <.icon name="hero-trash" class="w-3.5 h-3.5" /> Delete initiative
+          </button>
+        </div>
       </div>
     </div>
     """
