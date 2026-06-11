@@ -652,6 +652,12 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert render(view) =~ "A"
       assert render(view) =~ "P"
 
+      # While the modal decides, the flip rows hold the maybe-write hue AND
+      # the indeterminate bar (.03.07.23) — but never the moved row itself.
+      assert has_element?(view, "#task-#{a.id} > [data-task-row].is-recomputing")
+      assert has_element?(view, "#task-#{p.id} > [data-task-row].is-recomputing")
+      refute has_element?(view, "#task-#{l.id} > [data-task-row].is-recomputing")
+
       render_click(view, "cancel_pending", %{})
       assert Tasks.get_task!(l.id).parent_id == a.id
       assert Tasks.get_task!(a.id).status == "open"

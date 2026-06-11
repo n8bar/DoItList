@@ -885,7 +885,13 @@ defmodule DoItWeb.InitiativeShowLive do
                   const li = document.querySelector(`li[data-task-id="${sel}"]`);
                   if (li && this.blockedMove(li, k)) { this.bonk(); return; }
                   const S = window.DoitSaving;
-                  if (S && li) S.markSaving(this.movePinkRows(S, li, k));
+                  if (S && li) {
+                    const rows = this.movePinkRows(S, li, k);
+                    S.markSaving(rows);
+                    // Reparents move the row between parents — both parents'
+                    // % is in flight (.03.07.23): indeterminate bars.
+                    if (k === "ArrowLeft" || k === "ArrowRight") S.markRecomputing(rows.slice(1));
+                  }
                   this.pushEvent("kbd_move", {key: k, altKey: true, id: sel});
                   return;
                 }
@@ -920,9 +926,14 @@ defmodule DoItWeb.InitiativeShowLive do
                 }
                 const S = window.DoitSaving, li = S && S.selectedLi();
                 if (li) {
-                  S.markSaving(field === "weight"
-                    ? [S.savingRowOf(li), ...S.savingAncestors(li)]
-                    : [S.savingRowOf(li)]);
+                  if (field === "weight") {
+                    const ancestors = S.savingAncestors(li);
+                    S.markSaving([S.savingRowOf(li), ...ancestors]);
+                    // Weight rolls up — ancestor %s go indeterminate.
+                    S.markRecomputing(ancestors);
+                  } else {
+                    S.markSaving([S.savingRowOf(li)]);
+                  }
                 }
                 this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
                 return;
@@ -1145,6 +1156,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   can_edit={@can_edit}
                   initiative_id={@initiative.id}
                   saving_ids={@pending_saving_ids}
+                  recompute_ids={@pending_recompute_ids}
                   inherited_sort={@root_sort_mode}
                 />
                 <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
@@ -1399,12 +1411,16 @@ defmodule DoItWeb.InitiativeShowLive do
     socket
     |> assign(:pending_action, nil)
     |> assign(:pending_saving_ids, MapSet.new())
+    |> assign(:pending_recompute_ids, MapSet.new())
   end
 
   defp assign_pending(socket, pending) do
+    saving = pending_saving_ids(pending)
+
     socket
     |> assign(:pending_action, pending)
-    |> assign(:pending_saving_ids, pending_saving_ids(pending))
+    |> assign(:pending_saving_ids, saving)
+    |> assign(:pending_recompute_ids, pending_recompute_ids(pending, saving))
   end
 
   defp pending_saving_ids(%{kind: kind, task_id: id})
@@ -1419,6 +1435,14 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp pending_saving_ids(%{kind: :create, flip_ids: flip_ids}), do: MapSet.new(flip_ids)
   defp pending_saving_ids(_), do: MapSet.new()
+
+  # The held-modal era's indeterminate bars (.03.07.23): every maybe-write row
+  # whose % is genuinely unknown — i.e. all of them EXCEPT the operated row
+  # (its values are client-held optimistically). Sort-only confirms move no %.
+  defp pending_recompute_ids(%{kind: :cascade_sort}, _saving), do: MapSet.new()
+
+  defp pending_recompute_ids(%{task_id: id}, saving), do: MapSet.delete(saving, id)
+  defp pending_recompute_ids(_, saving), do: saving
 
   # Task deletion's confirm is fully client-side (.03.07.15, UX_GUARDRAILS
   # 6.5): everything the dialog shows — the task title, the irreversibility
@@ -1617,6 +1641,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :can_edit, :boolean, required: true
   attr :initiative_id, :integer, required: true
   attr :saving_ids, :any, required: true
+  attr :recompute_ids, :any, required: true
   attr :inherited_sort, :string, required: true
 
   def task_node(assigns) do
@@ -1644,6 +1669,7 @@ defmodule DoItWeb.InitiativeShowLive do
         class={[
           "group/row relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
           MapSet.member?(@saving_ids, @task.id) && "is-saving",
+          MapSet.member?(@recompute_ids, @task.id) && "is-recomputing",
           "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
         ]}
       >
@@ -1873,7 +1899,6 @@ defmodule DoItWeb.InitiativeShowLive do
             if(@can_edit, do: "left-9", else: "left-2")
           ]}
           role="progressbar"
-          data-manual-progress={@task.manual_progress}
           aria-valuenow={progress_value(@task)}
           aria-valuemin="0"
           aria-valuemax="100"
@@ -1909,6 +1934,7 @@ defmodule DoItWeb.InitiativeShowLive do
             can_edit={@can_edit}
             initiative_id={@initiative_id}
             saving_ids={@saving_ids}
+            recompute_ids={@recompute_ids}
             inherited_sort={@resolved_sort}
           />
           <li id={"add-after-#{c.id}"} phx-update="ignore" class="empty:hidden"></li>

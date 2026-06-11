@@ -262,6 +262,31 @@ div.init-drop-placeholder {
   background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
 }
 
+/* Indeterminate progress (.03.07.23): rows whose % is genuinely in flight
+   (progress-pinked, but not the operated row) stop claiming a number — the
+   fill becomes a full-width left-to-right fade from the progress color into
+   the track (no fill-edge to misread), pulsing slowly, and the % text turns
+   into an ellipsis. Width's inline var needs the !important. Fading to
+   transparent shows the track color, so dark mode comes free. */
+.is-recomputing [role="progressbar"] > div:first-child {
+  width: 100% !important;
+  background: linear-gradient(to right, rgba(52, 211, 153, 0.9), transparent);
+  animation: doit-recompute-pulse 2s ease-in-out infinite;
+}
+.is-recomputing [role="progressbar"] .progress-bar-text {
+  font-size: 0;
+}
+.is-recomputing [role="progressbar"] .progress-bar-text::after {
+  content: "…";
+  font-size: 0.75rem; /* text-xs */
+  line-height: 1;
+}
+@keyframes doit-recompute-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
 /* Debug ID pills (idclip easter egg). Hidden until the `debug-task-ids` class
    is toggled onto <html> by the TaskKeys hook; then each task row shows a small
    amber `#id` pill (parent id on hover) to diagnose drag/drop placement. */

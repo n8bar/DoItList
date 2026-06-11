@@ -104,9 +104,20 @@ function markSaving(rows, opts = {}) {
 }
 
 function clearSavingHue() {
-  savingPending.forEach((el) => el.classList.remove("is-saving"))
+  savingPending.forEach((el) => el.classList.remove("is-saving", "is-recomputing"))
   savingPending.clear()
   if (savingTimer) { clearTimeout(savingTimer); savingTimer = null }
+}
+
+// Rows whose % is genuinely in flight — pinked by a progress-affecting write
+// but NOT the operated row (its values are set optimistically) — also show
+// the indeterminate gradient (.03.07.23): the bar can't claim a number it
+// doesn't know. Same lifecycle as the pink (cleared together, stripped by
+// the patch).
+function markRecomputing(rows) {
+  rows.forEach((el) => {
+    if (el) { el.classList.add("is-recomputing"); savingPending.add(el) }
+  })
 }
 
 // Hand the hue to the server: once a confirm modal is up, the same rows hold
@@ -122,7 +133,15 @@ function releaseSavingHue() {
 const selectedLi = () => document.querySelector("li[data-selected]")
 
 // The colocated TaskKeys hook can't import, so reach it through the window.
-window.DoitSaving = {markSaving, savingAncestors, savingSubtree, savingChildren, selectedLi, savingRowOf}
+window.DoitSaving = {
+  markSaving,
+  markRecomputing,
+  savingAncestors,
+  savingSubtree,
+  savingChildren,
+  selectedLi,
+  savingRowOf,
+}
 
 // Client-owned selection (UX_GUARDRAILS 6.5): the highlight is a DOM attribute
 // + CSS, applied instantly and re-applied across re-renders by the guard
@@ -434,10 +453,15 @@ document.addEventListener("click", (e) => {
   if (toggle) {
     const li = toggle.closest(SAVING_ROW)
     if (!li) return
-    markSaving([...savingSubtree(li), ...savingAncestors(li)])
+    const subtree = savingSubtree(li)
+    const ancestors = savingAncestors(li)
+    markSaving([...subtree, ...ancestors])
+    // Everyone EXCEPT the operated row recomputes — their bars go
+    // indeterminate; the operated row's bar is set optimistically below.
+    markRecomputing([...subtree.slice(1), ...ancestors])
     const ev = toggle.dataset.toggleEvent
     if (!ev || !window.DoitPush) return
-    applyToggleOptimism(li, toggle, ev)
+    applyToggleOptimism(li, toggle)
     window.DoitPush(ev, {id: li.dataset.taskId}, (reply) => {
       const failed = !reply || reply.ok === false
       if (failed) revertPendingToggle()
@@ -473,7 +497,14 @@ document.addEventListener("change", (e) => {
     const li = selectedLi()
     if (!li) return
     const rollup = ["task-field-weight", "task-field-progress"].includes(e.target.id)
-    markSaving(rollup ? [savingRowOf(li), ...savingAncestors(li)] : [savingRowOf(li)])
+    if (rollup) {
+      const ancestors = savingAncestors(li)
+      markSaving([savingRowOf(li), ...ancestors])
+      // Ancestor %s are in flight — indeterminate bars (.03.07.23).
+      markRecomputing(ancestors)
+    } else {
+      markSaving([savingRowOf(li)])
+    }
   }
 })
 
@@ -532,10 +563,6 @@ document.addEventListener("input", (e) => {
     case "task-field-progress": {
       const readout = document.querySelector("#task-editor-pane [data-progress-readout]")
       if (readout) readout.textContent = t.value
-      // Keep the dormant-manual data attr fresh — the optimistic uncheck
-      // (.03.07.22) restores the bar from it.
-      const bar = row.querySelector("[role='progressbar']")
-      if (bar) bar.dataset.manualProgress = t.value
       // The slider only writes a leaf's bar; a done leaf displays 100
       // regardless of the manual value, so leave it to the server.
       const done = row.querySelector("[data-complete-toggle][aria-pressed='true']")
@@ -627,17 +654,17 @@ function setRowBar(row, value) {
   if (txt) txt.textContent = v + "%"
 }
 
-function applyToggleOptimism(li, toggle, ev) {
+function applyToggleOptimism(li, toggle) {
   const row = li.querySelector(":scope > [data-task-row]")
   const bar = row && row.querySelector("[role='progressbar']")
   const done = !(toggle.getAttribute("aria-pressed") === "true")
   window.DoitPendingToggle = {
     liId: li.id,
     value: done,
-    // The bar's would-be value: done → 100; a reopened leaf → its dormant
-    // manual value (carried on the bar as a data attribute); a reopened
-    // branch recomputes from children — not predicted, the patch brings it.
-    barValue: done ? "100" : ev === "toggle_complete" ? (bar && bar.dataset.manualProgress) || "0" : null,
+    // Always knowable (.03.07.23): completing → 100, reopening → 0 — the
+    // server zeroes manual_progress on every done→open transition (leaf,
+    // branch, and cascade alike; see maybe_set_done_progress).
+    barValue: done ? "100" : "0",
     prevBarValue: bar && bar.getAttribute("aria-valuenow"),
   }
   applyPendingToggle()
@@ -721,7 +748,9 @@ document.addEventListener("click", (e) => {
   if (e.target === overlay || e.target.closest("[data-confirm-cancel]")) {
     revertPendingMove()
     revertPendingToggle()
-    document.querySelectorAll(".is-saving").forEach((el) => el.classList.remove("is-saving"))
+    document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
+      el.classList.remove("is-saving", "is-recomputing")
+    })
   }
 })
 
@@ -1280,8 +1309,11 @@ Hooks.DragReorder = {
         const r = destParentLi && destParentLi.firstElementChild
         if (r && dest.container.dataset.sortMode !== "manual") extra.push(r)
       } else {
+        // Both parents' % is in flight on a cross-parent move — pink them
+        // AND go indeterminate (.03.07.23).
         if (sourceParentLi) extra.push(sourceParentLi.firstElementChild)
         if (destParentLi) extra.push(destParentLi.firstElementChild)
+        extra.forEach((r) => r && r.classList.add("is-recomputing"))
       }
       this.markSaving(dest.container, extra)
     }
@@ -1396,7 +1428,9 @@ Hooks.DragReorder = {
       clearTimeout(this._savingTimer)
       this._savingTimer = null
     }
-    if (this._saving) this._saving.forEach((el) => el.classList.remove("is-saving"))
+    if (this._saving) {
+      this._saving.forEach((el) => el.classList.remove("is-saving", "is-recomputing"))
+    }
     this._saving = null
   },
   // Stop tracking without stripping classes — the server's pending hue owns
