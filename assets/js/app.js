@@ -446,13 +446,20 @@ document.addEventListener("change", (e) => {
     if (li) markSaving(savingChildren(li))
     return
   }
-  // Details attribute fields — pink the edited row; weight rolls up, so its
-  // ancestors pink too. Priority / assignee don't roll up. Title / description
-  // are intentionally excluded (not part of .03.03.08's attribute scope).
-  if (["task-field-priority", "task-field-weight", "task-field-assignee"].includes(e.target.id)) {
+  // Details attribute fields — pink the edited row; weight and manual
+  // progress roll up, so their ancestors pink too (§8.18.3 finding: progress
+  // writes were missing from this scope entirely). Priority / assignee don't
+  // roll up. Title / description stay excluded (no roll-up, instant echo).
+  const pinkFields = [
+    "task-field-priority",
+    "task-field-weight",
+    "task-field-assignee",
+    "task-field-progress",
+  ]
+  if (pinkFields.includes(e.target.id)) {
     const li = selectedLi()
     if (!li) return
-    const rollup = e.target.id === "task-field-weight"
+    const rollup = ["task-field-weight", "task-field-progress"].includes(e.target.id)
     markSaving(rollup ? [savingRowOf(li), ...savingAncestors(li)] : [savingRowOf(li)])
   }
 })
