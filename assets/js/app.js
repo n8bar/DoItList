@@ -415,21 +415,24 @@ document.addEventListener("click", (e) => {
   // (Task deletion's confirm is the exception — fully client-side, .03.07.15,
   // handled by the #delete-confirm block below.)
   // Completion toggle (leaf or branch) — pink the toggled row + its subtree +
-  // the ancestor chain whose progress / status recomputes.
+  // the ancestor chain whose progress / status recomputes; the operated row
+  // itself flips FULLY optimistically (.03.07.22): checkbox, done styling,
+  // and its bar, at the click. The push replies like move_task: ok: false
+  // reverts, committed: true releases, committed: false (a confirm modal is
+  // deciding) HOLDS the flip via the guard net until cancelled/resolved (6.6).
   const toggle = e.target.closest("[data-complete-toggle]")
   if (toggle) {
     const li = toggle.closest(SAVING_ROW)
-    if (li) markSaving([...savingSubtree(li), ...savingAncestors(li)])
-    // Leaf toggles flip the checkbox optimistically (§8.18.1 judgment): its
-    // styling keys off aria-pressed, so one attribute write does it. Leaf
-    // toggles commit directly — no confirm class covers them — so nothing can
-    // intercept the flip. Branch toggles (cascade_*) stay server-timed: they
-    // may open a confirm, and their flip belongs to the cascade's outcome.
-    if (toggle.getAttribute("phx-click") === "toggle_complete") {
-      const pressed = toggle.getAttribute("aria-pressed") === "true"
-      toggle.setAttribute("aria-pressed", String(!pressed))
-      toggle.setAttribute("aria-label", pressed ? "Mark task completed" : "Reopen task")
-    }
+    if (!li) return
+    markSaving([...savingSubtree(li), ...savingAncestors(li)])
+    const ev = toggle.dataset.toggleEvent
+    if (!ev || !window.DoitPush) return
+    applyToggleOptimism(li, toggle, ev)
+    window.DoitPush(ev, {id: li.dataset.taskId}, (reply) => {
+      const failed = !reply || reply.ok === false
+      if (failed) revertPendingToggle()
+      else if (reply.committed !== false) window.DoitPendingToggle = null
+    })
     return
   }
   // Cascade-sort to all descendants — pink the whole subtree of the selected branch.
@@ -519,16 +522,14 @@ document.addEventListener("input", (e) => {
     case "task-field-progress": {
       const readout = document.querySelector("#task-editor-pane [data-progress-readout]")
       if (readout) readout.textContent = t.value
+      // Keep the dormant-manual data attr fresh — the optimistic uncheck
+      // (.03.07.22) restores the bar from it.
+      const bar = row.querySelector("[role='progressbar']")
+      if (bar) bar.dataset.manualProgress = t.value
       // The slider only writes a leaf's bar; a done leaf displays 100
       // regardless of the manual value, so leave it to the server.
       const done = row.querySelector("[data-complete-toggle][aria-pressed='true']")
-      if (done) return
-      const bar = row.querySelector("[role='progressbar']")
-      if (!bar) return
-      bar.style.setProperty("--progress", t.value + "%")
-      bar.setAttribute("aria-valuenow", t.value)
-      const txt = bar.querySelector(".progress-bar-text")
-      if (txt) txt.textContent = t.value + "%"
+      if (!done) setRowBar(row, t.value)
       return
     }
   }
@@ -597,6 +598,76 @@ document.addEventListener("keydown", (e) => {
   }
 })
 
+// Fully-optimistic operated row (.03.07.22): a completion toggle flips the
+// row's checkbox (aria-pressed), done styling (data-done), and progress bar
+// at the click. The hold handle survives patches via the guard observer (the
+// confirm's pending-hue render resets the attributes to server truth) and
+// settles exactly like a held drag: revert on cancel/failure, release on
+// commit/resolve.
+window.DoitPendingToggle = null
+
+function setRowBar(row, value) {
+  const bar = row && row.querySelector("[role='progressbar']")
+  if (!bar) return
+  const v = String(value)
+  if (bar.getAttribute("aria-valuenow") === v) return
+  bar.style.setProperty("--progress", v + "%")
+  bar.setAttribute("aria-valuenow", v)
+  const txt = bar.querySelector(".progress-bar-text")
+  if (txt) txt.textContent = v + "%"
+}
+
+function applyToggleOptimism(li, toggle, ev) {
+  const row = li.querySelector(":scope > [data-task-row]")
+  const bar = row && row.querySelector("[role='progressbar']")
+  const done = !(toggle.getAttribute("aria-pressed") === "true")
+  window.DoitPendingToggle = {
+    liId: li.id,
+    value: done,
+    // The bar's would-be value: done → 100; a reopened leaf → its dormant
+    // manual value (carried on the bar as a data attribute); a reopened
+    // branch recomputes from children — not predicted, the patch brings it.
+    barValue: done ? "100" : ev === "toggle_complete" ? (bar && bar.dataset.manualProgress) || "0" : null,
+    prevBarValue: bar && bar.getAttribute("aria-valuenow"),
+  }
+  applyPendingToggle()
+}
+
+function pendingToggleParts(p) {
+  const li = document.getElementById(p.liId)
+  const row = li && li.querySelector(":scope > [data-task-row]")
+  const toggle = row && row.querySelector("[data-complete-toggle]")
+  return toggle ? {row, toggle} : null
+}
+
+function applyPendingToggle() {
+  const p = window.DoitPendingToggle
+  if (!p) return
+  const parts = pendingToggleParts(p)
+  if (!parts) return
+  const want = String(p.value)
+  if (parts.toggle.getAttribute("aria-pressed") !== want) {
+    parts.toggle.setAttribute("aria-pressed", want)
+    parts.toggle.setAttribute("aria-label", p.value ? "Reopen task" : "Mark task completed")
+  }
+  if (parts.row.hasAttribute("data-done") !== p.value) {
+    parts.row.toggleAttribute("data-done", p.value)
+  }
+  if (p.barValue != null) setRowBar(parts.row, p.barValue)
+}
+
+function revertPendingToggle() {
+  const p = window.DoitPendingToggle
+  window.DoitPendingToggle = null
+  if (!p) return
+  const parts = pendingToggleParts(p)
+  if (!parts) return
+  parts.toggle.setAttribute("aria-pressed", String(!p.value))
+  parts.toggle.setAttribute("aria-label", !p.value ? "Reopen task" : "Mark task completed")
+  parts.row.toggleAttribute("data-done", !p.value)
+  if (p.prevBarValue != null) setRowBar(parts.row, p.prevBarValue)
+}
+
 // Confirm-held optimism (§8.20): while a completion-flip confirm decides a
 // drag, the optimistic placement holds. The server announces the outcome:
 // "confirm-cancelled" (Cancel, click-away, or a failed Proceed) reverts the
@@ -639,6 +710,7 @@ document.addEventListener("click", (e) => {
   if (!overlay) return
   if (e.target === overlay || e.target.closest("[data-confirm-cancel]")) {
     revertPendingMove()
+    revertPendingToggle()
     document.querySelectorAll(".is-saving").forEach((el) => el.classList.remove("is-saving"))
   }
 })
@@ -670,10 +742,14 @@ function applyPendingMove() {
 }
 // Backstop for the cancel paths the click listener can't see — chiefly a
 // failed Proceed commit. Idempotent: the instant-cancel path already nulled
-// the handle.
-window.addEventListener("phx:confirm-cancelled", revertPendingMove)
+// the handles.
+window.addEventListener("phx:confirm-cancelled", () => {
+  revertPendingMove()
+  revertPendingToggle()
+})
 window.addEventListener("phx:confirm-resolved", () => {
   window.DoitPendingMove = null
+  window.DoitPendingToggle = null
 })
 
 // Confirmation suppression (.03.01.11): read the per-class skip flags from
@@ -1670,8 +1746,9 @@ new MutationObserver(() => {
     applyCollapseStates()
     // Selection is client-owned too — re-assert it across the same patch paths.
     window.DoitSelection.apply()
-    // A confirm-held drag placement (§8.20) survives the same way.
+    // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
     applyPendingMove()
+    applyPendingToggle()
   })
 }).observe(document.body, {
   subtree: true,

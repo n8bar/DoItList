@@ -446,19 +446,22 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Replies so the client's optimistic flip (.03.07.22) can settle: ok: false
+  # reverts it, committed: true releases it to the patch.
   def handle_event("toggle_complete", %{"id" => id}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+      {:reply, %{ok: false}, put_flash(socket, :error, "You don't have permission.")}
     else
       task = Tasks.get_task!(String.to_integer(id))
       user = socket.assigns.current_user
 
       case Tasks.toggle_complete(task, user) do
         {:ok, _} ->
-          {:noreply, patch_task(socket, task.id)}
+          {:reply, %{ok: true, committed: true}, patch_task(socket, task.id)}
 
         {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
+          {:reply, %{ok: false},
+           put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
       end
     end
   end
@@ -577,7 +580,11 @@ defmodule DoItWeb.InitiativeShowLive do
           commit_cascade_sort(socket, Tasks.get_task!(task_id))
 
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
-          commit_cascade(socket, id, kind)
+          # Failure pushed "confirm-cancelled" inside — the held flip reverts.
+          case commit_cascade(socket, id, kind) do
+            {:ok, socket} -> socket
+            {:error, socket} -> socket
+          end
 
         _ ->
           socket
@@ -671,17 +678,25 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   # Branch checkbox: open the modal unless suppressed, else cascade now.
+  # Replies mirror move_task's contract — the client flipped the branch's own
+  # checkbox optimistically (.03.07.22): committed: false holds the flip while
+  # the modal decides (6.6); committed: true releases it; ok: false reverts.
   defp request_cascade(socket, id, kind) do
     cond do
       not socket.assigns.can_edit ->
-        {:noreply, put_flash(socket, :error, "You don't have permission.")}
+        {:reply, %{ok: false}, put_flash(socket, :error, "You don't have permission.")}
 
       skip_confirm?(socket, "cascade-complete") ->
-        {:noreply, commit_cascade(socket, id, kind)}
+        case commit_cascade(socket, id, kind) do
+          {:ok, socket} -> {:reply, %{ok: true, committed: true}, socket}
+          {:error, socket} -> {:reply, %{ok: false}, socket}
+        end
 
       true ->
         task = Tasks.get_task!(id)
-        {:noreply, assign_pending(socket, %{kind: kind, task_id: id, title: task.title})}
+
+        {:reply, %{ok: true, committed: false},
+         assign_pending(socket, %{kind: kind, task_id: id, title: task.title})}
     end
   end
 
@@ -697,12 +712,16 @@ defmodule DoItWeb.InitiativeShowLive do
 
     case result do
       {:ok, _} ->
-        socket |> assign_pending(nil) |> load_tree() |> refresh_selected()
+        {:ok, socket |> assign_pending(nil) |> load_tree() |> refresh_selected()}
 
       {:error, cs} ->
-        socket
-        |> assign_pending(nil)
-        |> put_flash(:error, "Couldn't cascade: #{summarize_errors(cs)}.")
+        {:error,
+         socket
+         |> assign_pending(nil)
+         # A client may hold the optimistic flip from a confirmed cascade —
+         # the write died, so revert it.
+         |> push_event("confirm-cancelled", %{})
+         |> put_flash(:error, "Couldn't cascade: #{summarize_errors(cs)}.")}
     end
   end
 
@@ -796,7 +815,7 @@ defmodule DoItWeb.InitiativeShowLive do
               window.addEventListener("keydown", this._h);
               // Row clicks are handled by a delegated listener in app.js (no
               // hook of its own) — give it a push channel into this LiveView.
-              window.DoitPush = (ev, payload) => this.pushEvent(ev, payload);
+              window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
             },
             destroyed() {
               window.removeEventListener("keydown", this._h);
@@ -1616,10 +1635,14 @@ defmodule DoItWeb.InitiativeShowLive do
       data-sort-reverse={to_string(@task.sort_reverse)}
       class="rounded border border-zinc-400 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-500 dark:first:border-t-zinc-500"
     >
+      <%!-- data-done drives the done styling (title strikethrough via
+           group-data-done variants) so the optimistic toggle (.03.07.22)
+           flips one attribute; group/row scopes it. --%>
       <div
         data-task-row
+        data-done={@task.status == "done"}
         class={[
-          "relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
+          "group/row relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
           MapSet.member?(@saving_ids, @task.id) && "is-saving",
           "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
         ]}
@@ -1793,17 +1816,20 @@ defmodule DoItWeb.InitiativeShowLive do
             </span>
           </button>
 
+          <%!-- No phx-click: app.js owns the click (.03.07.22) — it flips the
+               operated row optimistically (aria-pressed, data-done, bar) and
+               pushes data-toggle-event with a reply, so a confirm-gated
+               cascade can HOLD the flip while the modal decides (6.6). --%>
           <button
             :if={@can_edit}
             type="button"
-            phx-click={
+            data-toggle-event={
               cond do
                 @task.children == [] -> "toggle_complete"
                 @task.status == "done" -> "cascade_incomplete"
                 true -> "cascade_complete"
               end
             }
-            phx-value-id={@task.id}
             data-complete-toggle
             aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
             aria-pressed={to_string(@task.status == "done")}
@@ -1824,7 +1850,7 @@ defmodule DoItWeb.InitiativeShowLive do
               "flex-1 min-w-0",
               @depth == 0 && "text-xl font-bold",
               @depth > 0 && "text-sm font-medium",
-              @task.status == "done" && "line-through text-zinc-400 dark:text-zinc-500"
+              "group-data-done/row:line-through group-data-done/row:text-zinc-400 dark:group-data-done/row:text-zinc-500"
             ]}
           >
             {@task.title}
@@ -1847,6 +1873,7 @@ defmodule DoItWeb.InitiativeShowLive do
             if(@can_edit, do: "left-9", else: "left-2")
           ]}
           role="progressbar"
+          data-manual-progress={@task.manual_progress}
           aria-valuenow={progress_value(@task)}
           aria-valuemin="0"
           aria-valuemax="100"
@@ -1854,11 +1881,7 @@ defmodule DoItWeb.InitiativeShowLive do
           style={"--progress: #{progress_value(@task)}%"}
         >
           <div
-            class={[
-              "absolute inset-y-0 left-0 rounded-full",
-              @task.status == "done" && "bg-emerald-500",
-              @task.status != "done" && "bg-emerald-400"
-            ]}
+            class="absolute inset-y-0 left-0 rounded-full bg-emerald-400 group-data-done/row:bg-emerald-500"
             style="width: var(--progress)"
           >
           </div>
