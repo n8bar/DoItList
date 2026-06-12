@@ -40,8 +40,9 @@ defmodule DoIt.Accounts.User do
 
   def registration_changeset(user, attrs) do
     user
-    |> cast(attrs, [:email, :name, :password])
-    |> validate_required([:email, :name, :password])
+    |> cast(attrs, [:email, :username, :name, :password])
+    |> validate_required([:email, :username, :name, :password])
+    |> validate_username()
     |> validate_length(:name, min: 1, max: 80)
     |> validate_format(:email, ~r/^[^@\s]+@[^@\s]+\.[^@\s]+$/, message: "must be a valid email")
     |> update_change(:email, &String.downcase(&1))

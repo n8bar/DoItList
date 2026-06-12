@@ -13,6 +13,7 @@ defmodule DoIt.TasksTest do
     {:ok, user} =
       Accounts.register_user(%{
         "email" => "owner-#{System.unique_integer([:positive])}@example.com",
+        "username" => "owner-#{System.unique_integer([:positive])}",
         "name" => "Owner",
         "password" => "password123"
       })

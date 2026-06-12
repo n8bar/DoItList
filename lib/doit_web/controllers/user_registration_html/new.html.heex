@@ -4,6 +4,13 @@
 
     <.form :let={f} for={@form} action={~p"/users/register"} class="space-y-4">
       <.input field={f[:name]} type="text" label="Name" required />
+      <.input
+        field={f[:username]}
+        type="text"
+        label="Username (3–30 chars: letters, numbers, _ and -)"
+        autocomplete="username"
+        required
+      />
       <.input field={f[:email]} type="email" label="Email" required />
       <.input field={f[:password]} type="password" label="Password (min 8 chars)" required />
 

@@ -18,6 +18,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     {:ok, user} =
       Accounts.register_user(%{
         "email" => "kbd-#{System.unique_integer([:positive])}@example.com",
+        "username" => "kbd-#{System.unique_integer([:positive])}",
         "name" => "Kbd User",
         "password" => "password123"
       })

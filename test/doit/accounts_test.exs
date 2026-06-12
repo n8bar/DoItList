@@ -7,12 +7,31 @@ defmodule DoIt.AccountsTest do
   defp register!(attrs \\ %{}) do
     defaults = %{
       "email" => "user-#{System.unique_integer([:positive])}@example.com",
+      "username" => "user-#{System.unique_integer([:positive])}",
       "name" => "Some User",
       "password" => "password123"
     }
 
     {:ok, user} = Accounts.register_user(Map.merge(defaults, attrs))
     user
+  end
+
+  describe "registration (§1.4)" do
+    test "requires a username" do
+      {:error, changeset} =
+        Accounts.register_user(%{
+          "email" => "nouser@example.com",
+          "name" => "No User",
+          "password" => "password123"
+        })
+
+      assert "can't be blank" in errors_on(changeset).username
+    end
+
+    test "normalizes the username on the way in" do
+      user = register!(%{"username" => "MiXeD_Case"})
+      assert user.username == "mixed_case"
+    end
   end
 
   describe "username rules (m02.04 §1.2)" do

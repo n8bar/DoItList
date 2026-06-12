@@ -12,6 +12,7 @@ defmodule DoItWeb.AccountLiveTest do
     {:ok, user} =
       Accounts.register_user(%{
         "email" => "account-#{System.unique_integer([:positive])}@example.com",
+        "username" => "account-#{System.unique_integer([:positive])}",
         "name" => "Account User",
         "password" => "password123"
       })
