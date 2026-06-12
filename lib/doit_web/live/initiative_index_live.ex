@@ -128,7 +128,7 @@ defmodule DoItWeb.InitiativeIndexLive do
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
-          <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Your initiatives</h1>
+          <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">My Initiatives</h1>
           <p class="text-sm text-zinc-500 dark:text-zinc-400">
             An Initiative holds multiple Lists. Each List is a tree of nested tasks.
           </p>
