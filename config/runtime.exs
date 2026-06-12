@@ -20,7 +20,12 @@ if System.get_env("PHX_SERVER") do
   config :doit, DoItWeb.Endpoint, server: true
 end
 
-config :doit, DoItWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+# Not in test: the test endpoint keeps its own port (4002, see config/test.exs)
+# so the suite can run via `docker compose exec` inside the dev container
+# without colliding with the dev server on PORT.
+if config_env() != :test do
+  config :doit, DoItWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
+end
 
 if config_env() == :prod do
   database_url =

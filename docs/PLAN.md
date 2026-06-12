@@ -1,5 +1,5 @@
 # PLAN
-_Last updated: 2026-05-06_
+_Last updated: 2026-06-09_
 
 Human-facing execution dashboard for Do It List. Open this doc first when resuming work.
 
@@ -14,21 +14,16 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 |---|---|---|
 | Branch protection on `main` (require PR, status checks, etc.) | A second contributor joins the repo | Solo dev — protection is friction with no review benefit. |
 | GitHub Actions CI (`mix test`, build, etc.) | A second contributor joins the repo | Tests run locally in the dev container; remote CI is overhead until shared review matters. |
-
-## Current
-- Active milestone: **M02-UX-Overhaul** — scoped 2026-05-06; target 2026-05-15.
-- Status: `scoped, not yet started`
-- Next action: Land m02.02.01 (theme toggle) so the audit in m02.01.01 can cover both light and dark modes.
-- Primary next doc: [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md).
-- Branch: `M02-ux-overhaul`.
+| Data-layer optimization beyond hot-path fixes (index strategy, `load_tree` scaling, pagination / bulk reads) | M03 (API) scoping — real client load patterns exist | Hot N+1s fixed in M02 Arc 3; the rest has no trigger at current single-user scale, and an API is what will create one. |
 
 ## Release Target
-No public release yet. Owner will not release until at least M02 (UX Overhaul) lands and the app feels presentable.
+No public release yet. Operator will not release until at least M02 (UX Buildout) lands and the app feels presentable.
 
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Overhaul | Bring M01 to UX_GUARDRAILS + ten design refinements (theme toggle, Initiative rename UI, progress underbar, completion checkbox, collapsible children, inline description, Initiative header bar, signifier rework, drop status from UI, botanical icons). | 2026-05-15 | [`milestones/m02-ux-overhaul/m02-ux-overhaul.md`](milestones/m02-ux-overhaul/m02-ux-overhaul.md) |
+| [ ] | M02 | UX Buildout | Bring M01 to UX_GUARDRAILS + targeted design refinements so the app feels presentable. Arc scope and status live in the linked milestone doc's Arcs table. | 2026-05-29 | [`milestones/m02-ux-buildout/m02-ux-buildout.md`](milestones/m02-ux-buildout/m02-ux-buildout.md) |
+| [ ] | M03 | API | Programmatic API for Initiatives / Tasks / membership so external clients can integrate. Stub only — transport, auth, versioning, push-API surface all TBD. | TBD | [`milestones/m03-api/m03-api.md`](milestones/m03-api/m03-api.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |

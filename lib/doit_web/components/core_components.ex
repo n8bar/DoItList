@@ -54,6 +54,8 @@ defmodule DoItWeb.CoreComponents do
     <div
       :if={msg = render_slot(@inner_block) || Phoenix.Flash.get(@flash, @kind)}
       id={@id}
+      phx-hook="AutoDismissFlash"
+      data-kind={@kind}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
       class="toast toast-top toast-end z-50"
@@ -272,7 +274,45 @@ defmodule DoItWeb.CoreComponents do
     """
   end
 
-  # All other inputs text, datetime-local, url, password, etc. are handled here...
+  def input(%{type: "password"} = assigns) do
+    assigns = assign_new(assigns, :id, fn -> nil end)
+
+    ~H"""
+    <div class="fieldset mb-2">
+      <label for={@id}>
+        <span :if={@label} class="label mb-1">{@label}</span>
+        <div class="relative">
+          <input
+            type="password"
+            name={@name}
+            id={@id}
+            value={Phoenix.HTML.Form.normalize_value("password", @value)}
+            class={[
+              @class || "w-full input pr-10",
+              @errors != [] && (@error_class || "input-error")
+            ]}
+            {@rest}
+          />
+          <button
+            type="button"
+            id={"#{@id}-toggle"}
+            phx-hook="PasswordToggle"
+            data-input-id={@id}
+            aria-label="Show password"
+            tabindex="-1"
+            class="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+          >
+            <.icon name="hero-eye" class="w-5 h-5 password-eye" />
+            <.icon name="hero-eye-slash" class="w-5 h-5 password-eye-slash hidden" />
+          </button>
+        </div>
+      </label>
+      <.error :for={msg <- @errors}>{msg}</.error>
+    </div>
+    """
+  end
+
+  # All other inputs text, datetime-local, url, etc. are handled here...
   def input(assigns) do
     ~H"""
     <div class="fieldset mb-2">
@@ -442,6 +482,208 @@ defmodule DoItWeb.CoreComponents do
   def icon(%{name: "hero-" <> _} = assigns) do
     ~H"""
     <span class={[@name, @class]} />
+    """
+  end
+
+  # Data-driven keyboard-shortcut list — add a key here and it shows in the help
+  # overlay automatically (m02.03 .07.2.1).
+  @shortcuts [
+    {"Enter", "Open the selected task's details — or reopen the last task; again to close"},
+    {"Space", "Expand / collapse the selected task"},
+    {"↑ ↓", "Select the previous / next task"},
+    {"← →", "Select the parent / first child"},
+    {"Alt + ↑ ↓ ← →", "Reorder, or dedent / indent, the selected task"},
+    {"N", "New subtask of the selected task"},
+    {"S", "New sibling of the selected task"},
+    {"P / A", "Step priority / assignee (Shift to step back)"},
+    {"Alt + P / A", "Focus the priority / assignee field"},
+    {"Del", "Delete the selected task (with confirmation)"},
+    {"?", "Show this help"}
+  ]
+
+  @doc """
+  The keyboard-shortcuts help overlay: a hidden modal listing every shortcut.
+  Opened by `?` or a "⌨ shortcuts" affordance, closed by Escape / backdrop / X.
+  Toggled entirely client-side via the `ShortcutsOverlay` hook; data-driven from
+  the `@shortcuts` list above.
+  """
+  def shortcuts_overlay(assigns) do
+    assigns = assign(assigns, :shortcuts, @shortcuts)
+
+    ~H"""
+    <div
+      id="shortcuts-overlay"
+      phx-hook="ShortcutsOverlay"
+      class="hidden fixed inset-0 z-50 flex items-center justify-center p-4"
+    >
+      <div class="absolute inset-0 bg-black/50" data-close aria-hidden="true"></div>
+      <div class="relative z-10 w-full max-w-md max-h-[80vh] overflow-y-auto rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-5 shadow-xl">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-medium text-zinc-800 dark:text-zinc-100">Keyboard shortcuts</h2>
+          <button
+            type="button"
+            data-close
+            aria-label="Close"
+            class="inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white"
+          >
+            <.icon name="hero-x-mark" class="w-5 h-5" />
+          </button>
+        </div>
+        <dl class="space-y-2">
+          <div :for={{keys, label} <- @shortcuts} class="flex items-baseline justify-between gap-4">
+            <dt class="flex-none">
+              <kbd class="px-1.5 py-0.5 rounded border border-zinc-300 dark:border-zinc-600 bg-zinc-50 dark:bg-zinc-800 text-xs font-medium text-zinc-700 dark:text-zinc-200">
+                {keys}
+              </kbd>
+            </dt>
+            <dd class="text-sm text-zinc-600 dark:text-zinc-300 text-right">{label}</dd>
+          </div>
+        </dl>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  A small info icon that reveals an explanatory popover on click and
+  light-dismisses on click-away. Reusable for "explain a UI rule" moments —
+  why a control is disabled, how a value is derived.
+
+  ## Examples
+
+      <.info_hint id="calc-hint" label="How do the methods differ?">
+        Leaf average: every leaf counts equally, however deep it sits.
+      </.info_hint>
+  """
+  attr :id, :string, required: true
+  attr :label, :string, default: "More information"
+  attr :class, :any, default: nil
+  slot :inner_block, required: true
+
+  def info_hint(assigns) do
+    ~H"""
+    <span class="inline-flex items-center">
+      <%!-- Native Popover API: the panel renders in the browser's top layer,
+           escaping any overflow-y-auto ancestor (it used to get clipped and
+           force scrollbars inside the pane). Light dismiss is built in; the
+           Popover hook places it next to the trigger, clamped to the
+           viewport. --%>
+      <button
+        type="button"
+        aria-label={@label}
+        popovertarget={"#{@id}-pop"}
+        class={["text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200", @class]}
+      >
+        <.icon name="hero-information-circle" class="w-4 h-4" />
+      </button>
+      <div
+        id={"#{@id}-pop"}
+        popover
+        phx-hook="Popover"
+        role="tooltip"
+        class="w-64 rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-3 text-xs font-normal not-italic text-zinc-600 dark:text-zinc-300 shadow-lg"
+      >
+        {render_slot(@inner_block)}
+      </div>
+    </span>
+    """
+  end
+
+  @doc """
+  Botanical icon set (Lucide source). Tree on Lists, branch on parent tasks,
+  leaf on leaf tasks, grove on Initiatives. Used by M02's row layout to
+  carry the visual metaphor reserved in `docs/ProductSpec.md` § Visual
+  Metaphor.
+
+      <.botanical_icon kind={:grove} class="w-5 h-5" />
+      <.botanical_icon kind={:tree} />
+      <.botanical_icon kind={:branch} />
+      <.botanical_icon kind={:leaf} />
+  """
+  attr :kind, :atom, values: [:grove, :tree, :branch, :leaf], required: true
+  attr :class, :string, default: "w-4 h-4"
+
+  def botanical_icon(%{kind: :grove} = assigns) do
+    ~H"""
+    <svg
+      class={@class}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 10v.2A3 3 0 0 1 8.9 16H5a3 3 0 0 1-1-5.8V10a3 3 0 0 1 6 0Z" />
+      <path d="M7 16v6" />
+      <path d="M13 19v3" />
+      <path d="M12 19h8.3a1 1 0 0 0 .7-1.7L18 14h.3a1 1 0 0 0 .7-1.7L16 9h.2a1 1 0 0 0 .8-1.7L13 3l-1.4 1.5" />
+    </svg>
+    """
+  end
+
+  def botanical_icon(%{kind: :tree} = assigns) do
+    ~H"""
+    <svg
+      class={@class}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19Z" />
+      <path d="M12 19v3" />
+    </svg>
+    """
+  end
+
+  def botanical_icon(%{kind: :branch} = assigns) do
+    ~H"""
+    <svg
+      class={@class}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M3 21 C 8 17, 13 12, 21 4" />
+      <path d="M9 14 L 6 10.5" />
+      <path d="M15 8 L 12 4.5" />
+      <g class="text-emerald-600 dark:text-emerald-400" fill="currentColor" stroke="none">
+        <ellipse cx="5.4" cy="10" rx="1.4" ry="2.4" transform="rotate(-35 5.4 10)" />
+        <ellipse cx="11.4" cy="4" rx="1.4" ry="2.4" transform="rotate(-35 11.4 4)" />
+        <ellipse cx="20.6" cy="3.4" rx="1.4" ry="2.4" transform="rotate(-35 20.6 3.4)" />
+      </g>
+    </svg>
+    """
+  end
+
+  def botanical_icon(%{kind: :leaf} = assigns) do
+    ~H"""
+    <svg
+      class={@class}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z" />
+      <path d="M2 21c0-3 1.85-5.36 5.08-6C9.5 14.52 12 13 13 12" />
+    </svg>
     """
   end
 

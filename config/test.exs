@@ -9,16 +9,22 @@ config :doit, DoIt.Repo,
   username: System.get_env("DB_USERNAME", "postgres"),
   password: System.get_env("DB_PASSWORD", "postgres"),
   hostname: System.get_env("DB_HOSTNAME", "localhost"),
-  database: "#{System.get_env("DB_DATABASE", "doit")}_test#{System.get_env("MIX_TEST_PARTITION")}",
+  database:
+    "#{System.get_env("DB_DATABASE", "doit")}_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
 # We don't run a server during test. If one is required,
-# you can enable the server option below.
+# you can enable the server option below. Port 4002 keeps the test env clear
+# of the dev server's PORT (see config/runtime.exs).
 config :doit, DoItWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],
   secret_key_base: "aVBF9NZ50c4znU3AQ+5KCsqvxVG8aYHOI3a1U+9RRQMxb3fzaZ8BKXBESr8kVWN9",
   server: false
+
+# Full-cost password hashing is pure waste in tests — nearly every LiveView
+# test registers + logs in a user, paying ~hundreds of ms of bcrypt each.
+config :bcrypt_elixir, :log_rounds, 1
 
 # Print only warnings and errors during test
 config :logger, level: :warning

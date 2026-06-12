@@ -1,99 +1,127 @@
 defmodule DoIt.Tasks.Progress do
   @moduledoc """
-  Pure progress roll-up rules.
+  Pure progress roll-up rules (ProductSpec § Roll-up Progress).
 
   Operates on `%DoIt.Tasks.Task{}` structs whose `:children` association is
-  preloaded (or set to `[]` for leaves). No Repo access — easy to test with
-  hand-built structs.
+  preloaded recursively (or set to `[]` for leaves). No Repo access — easy to
+  test with hand-built structs.
 
-  Rules:
-    * Leaf  → `manual_progress` (clamped to 0..100).
-    * Branch → weighted average of child rolled-up progress:
-          sum(child_progress * child_weight) / sum(child_weight)
-    * Status `done` snaps the result to 100, regardless of children.
-    * Children with non-positive weight are ignored.
-    * If no usable children exist, falls back to `manual_progress`.
+  Rules — **leaf average** (AbstractSpoon-style default):
+    * Leaf  → `manual_progress` (clamped to 0..100). Leaf `status: "done"`
+      snaps to 100.
+    * Branch → plain average over **all descendant leaves** — every leaf
+      counts one unit, wherever it sits in the subtree:
+
+          sum(leaf_progress) / leaf_count
+
+      A subtree's pull on its ancestors is its leaf count; decomposing a
+      branch further is how it comes to matter more (ProductSpec § Durable
+      Principles). (The original single-level average — each direct child
+      one unit — is available as the `:single_level` mode, a per-initiative
+      setting.)
+    * Branch status does NOT snap to 100; progress is always derived from
+      leaves so a `done` parent that gains an incomplete child reflects the
+      truth. Status reconciliation lives in `DoIt.Tasks`.
+    * A branch with no children is treated as a leaf.
 
   Result is always an integer in 0..100.
   """
 
   alias DoIt.Tasks.Task
 
-  @spec compute(Task.t()) :: integer()
-  def compute(%Task{status: "done"}), do: 100
-
-  def compute(%Task{children: children} = task) when is_list(children) do
-    case usable_children(children) do
-      [] ->
-        clamp(task.manual_progress)
-
-      kids ->
-        weighted_average(kids, &compute/1)
-    end
-  end
-
-  # When :children is not preloaded, treat as leaf.
-  def compute(%Task{} = task), do: clamp(task.manual_progress)
+  @spec compute(Task.t(), :leaf_average | :single_level) :: integer()
+  def compute(task, mode \\ :leaf_average)
+  def compute(%Task{} = task, :leaf_average), do: task |> leaf_values() |> average()
+  def compute(%Task{} = task, :single_level), do: single_level_value(task)
 
   @doc """
-  Compute progress for a task whose direct `:children` are loaded but whose
-  *grandchildren* are not. Each child's already-persisted `computed_progress`
-  is trusted as the rolled-up value for its subtree — so this function is the
-  one to use when walking up an ancestor chain bottom-up, after each child has
-  already had its progress refreshed.
+  Compute every node's rolled-up value in one pass over an assembled tree
+  (a list of root nodes). Returns `%{task_id => value}` — the whole-initiative
+  reconcile diffs persisted values against this map. One traversal: leaf
+  averages aren't derivable per-level from children's persisted percentages
+  (they'd also need each child's leaf count), so roll-up always starts
+  from the leaves.
   """
-  @spec compute_for_branch(Task.t()) :: integer()
-  def compute_for_branch(%Task{status: "done"}), do: 100
+  @spec compute_all([Task.t()], :leaf_average | :single_level) :: %{integer() => integer()}
+  def compute_all(tree, mode \\ :leaf_average)
 
-  def compute_for_branch(%Task{children: children} = task) when is_list(children) do
-    case usable_children(children) do
-      [] ->
-        clamp(task.manual_progress)
-
-      kids ->
-        weighted_average(kids, &child_persisted_progress/1)
-    end
+  def compute_all(tree, :leaf_average) when is_list(tree) do
+    Enum.reduce(tree, %{}, fn node, acc -> elem(evaluate_into(node, acc), 1) end)
   end
 
-  def compute_for_branch(%Task{} = task), do: clamp(task.manual_progress)
-
-  defp child_persisted_progress(%Task{status: "done"}), do: 100
-  defp child_persisted_progress(%Task{computed_progress: cp}) when is_integer(cp), do: clamp(cp)
-  defp child_persisted_progress(%Task{manual_progress: mp}), do: clamp(mp)
-
-  defp usable_children(children) do
-    Enum.filter(children, fn child ->
-      w = to_decimal(child.weight)
-      Decimal.compare(w, Decimal.new(0)) == :gt
-    end)
+  def compute_all(tree, :single_level) when is_list(tree) do
+    Enum.reduce(tree, %{}, fn node, acc -> elem(single_level_into(node, acc), 1) end)
   end
 
-  defp weighted_average(children, progress_fun) do
-    {weighted_sum, weight_sum} =
-      Enum.reduce(children, {Decimal.new(0), Decimal.new(0)}, fn child, {ws, w_total} ->
-        progress = child |> progress_fun.() |> Decimal.new()
-        weight = to_decimal(child.weight)
+  # --- Leaf average -----------------------------------------------------------
 
-        {Decimal.add(ws, Decimal.mult(progress, weight)), Decimal.add(w_total, weight)}
+  # All descendant leaf values under a node (the node's own value if it's a leaf).
+  defp leaf_values(%Task{children: kids}) when is_list(kids) and kids != [] do
+    Enum.flat_map(kids, &leaf_values/1)
+  end
+
+  defp leaf_values(%Task{} = task), do: [leaf_progress(task)]
+
+  # Same traversal, accumulating every node's value into a map.
+  # Returns {leaf_values, acc}.
+  defp evaluate_into(%Task{children: kids} = task, acc) when is_list(kids) and kids != [] do
+    {values, acc} =
+      Enum.reduce(kids, {[], acc}, fn child, {values, acc} ->
+        {child_values, acc} = evaluate_into(child, acc)
+        {values ++ child_values, acc}
       end)
 
-    case Decimal.compare(weight_sum, Decimal.new(0)) do
-      :gt ->
-        weighted_sum
-        |> Decimal.div(weight_sum)
-        |> Decimal.round(0, :half_up)
-        |> Decimal.to_integer()
-        |> clamp()
-
-      _ ->
-        0
-    end
+    {values, Map.put(acc, task.id, average(values))}
   end
 
-  defp to_decimal(%Decimal{} = d), do: d
-  defp to_decimal(n) when is_integer(n), do: Decimal.new(n)
-  defp to_decimal(n) when is_float(n), do: Decimal.from_float(n)
-  defp to_decimal(s) when is_binary(s), do: Decimal.new(s)
+  defp evaluate_into(%Task{} = task, acc) do
+    value = leaf_progress(task)
+    {[value], Map.put(acc, task.id, value)}
+  end
+
+  # --- Single-level average mode (per-initiative setting) ---------------------
+  # The original formula: a branch is the plain average of its DIRECT
+  # children's rolled-up values — each child one unit regardless of how many
+  # leaves it contains.
+
+  defp single_level_value(%Task{children: kids}) when is_list(kids) and kids != [] do
+    kids |> Enum.map(&single_level_value/1) |> average()
+  end
+
+  defp single_level_value(%Task{} = task), do: leaf_progress(task)
+
+  defp single_level_into(%Task{children: kids} = task, acc) when is_list(kids) and kids != [] do
+    {values, acc} =
+      Enum.reduce(kids, {[], acc}, fn child, {values, acc} ->
+        {value, acc} = single_level_into(child, acc)
+        {[value | values], acc}
+      end)
+
+    value = average(values)
+    {value, Map.put(acc, task.id, value)}
+  end
+
+  defp single_level_into(%Task{} = task, acc) do
+    value = leaf_progress(task)
+    {value, Map.put(acc, task.id, value)}
+  end
+
+  # --- Shared -----------------------------------------------------------------
+
+  defp leaf_progress(%Task{status: "done"}), do: 100
+  defp leaf_progress(%Task{manual_progress: mp}), do: clamp(mp)
+
+  defp average([]), do: 0
+
+  defp average(values) do
+    values
+    |> Enum.sum()
+    |> Decimal.new()
+    |> Decimal.div(Decimal.new(length(values)))
+    |> Decimal.round(0, :half_up)
+    |> Decimal.to_integer()
+    |> clamp()
+  end
 
   defp clamp(nil), do: 0
   defp clamp(n) when n < 0, do: 0

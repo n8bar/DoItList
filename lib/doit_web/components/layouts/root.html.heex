@@ -1,9 +1,10 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="bg-white dark:bg-zinc-950" data-theme={theme_attr(assigns)}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
+    <link rel="icon" type="image/svg+xml" href={~p"/images/favicon.svg"} />
     <.live_title default="Do It List" suffix=" · Do It List">
       {assigns[:page_title]}
     </.live_title>
@@ -26,11 +27,25 @@
         }
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
         
-        window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
+        window.addEventListener("phx:set-theme", (e) => {
+          // Click via JS.dispatch puts the value on the button's data attribute;
+          // server-side push_event puts it in e.detail. Handle both.
+          const theme = (e.detail && e.detail.theme) || (e.target && e.target.dataset && e.target.dataset.phxTheme);
+          if (theme) setTheme(theme);
+        });
+
+        // Light-dismiss for <details data-menu> (e.g. the mobile hamburger):
+        // close on an outside click or Escape. Global so it survives LiveView
+        // navigation and also works on non-LiveView (dead-view) pages.
+        const closeMenus = (pred) => document
+          .querySelectorAll("details[data-menu][open]")
+          .forEach((d) => { if (pred(d)) d.removeAttribute("open"); });
+        document.addEventListener("click", (e) => closeMenus((d) => !d.contains(e.target)));
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenus(() => true); });
       })();
     </script>
   </head>
-  <body>
+  <body class="h-dvh flex flex-col bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
     {@inner_content}
   </body>
 </html>

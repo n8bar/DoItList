@@ -102,4 +102,199 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Progress underbar text — high-contrast outline so the percentage stays
+   readable regardless of the fill color behind it. Light-mode text is dark
+   with a white outline; dark-mode flips both. */
+.progress-bar-text {
+  text-shadow:
+    1px 1px 0 rgba(255, 255, 255, 0.95),
+    -1px 1px 0 rgba(255, 255, 255, 0.95),
+    1px -1px 0 rgba(255, 255, 255, 0.95),
+    -1px -1px 0 rgba(255, 255, 255, 0.95);
+}
+[data-theme=dark] .progress-bar-text {
+  text-shadow:
+    2px 2px 0 rgba(0, 0, 0, 0.9),
+    -2px 2px 0 rgba(0, 0, 0, 0.9),
+    2px -2px 0 rgba(0, 0, 0, 0.9),
+    -2px -2px 0 rgba(0, 0, 0, 0.9),
+    0 2px 0 rgba(0, 0, 0, 0.9),
+    0 -2px 0 rgba(0, 0, 0, 0.9),
+    2px 0 0 rgba(0, 0, 0, 0.9),
+    -2px 0 0 rgba(0, 0, 0, 0.9);
+}
+
+/* Collapsed parent task: clip the children list to a 6px sliver so the top
+   edge of the first child peeks out. Communicates "stuff is hidden under
+   me" in a way a static border can't. */
+ul.collapsed-peek {
+  max-height: 6px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+
+/* Client-owned selection (UX_GUARDRAILS 6.5): the highlight + shortcut-key
+   underlines key off the client-set data-selected attribute, so selecting a
+   row never re-renders the tree. Colors mirror the old server-rendered
+   emerald classes (emerald-50/100 light, emerald-950/900 dark). Scoped with
+   `>` so a selected branch doesn't tint its children's rows. */
+li[data-selected] > [data-task-row] {
+  background-color: #ecfdf5;
+}
+li[data-selected] > [data-task-row]:hover {
+  background-color: #d1fae5;
+}
+[data-theme=dark] li[data-selected] > [data-task-row] {
+  background-color: #022c22;
+}
+[data-theme=dark] li[data-selected] > [data-task-row]:hover {
+  background-color: #064e3b;
+}
+li[data-selected] > [data-task-row] .kbd-key {
+  text-decoration: underline;
+}
+
+/* Drag-reorder visuals (Hooks.DragReorder).
+   - .dragging-source: dim the row being dragged so the user can see what's
+     moving without losing it visually.
+   - .drop-target: ring around the row currently under the cursor. */
+li.dragging-source > div:first-child {
+  opacity: 0.55;
+  outline: 2px dashed rgba(16, 185, 129, 0.6); /* emerald-500 @ 60% */
+  outline-offset: -2px;
+}
+li.drop-target > div:first-child {
+  background-color: rgba(16, 185, 129, 0.08);
+  box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.7);
+}
+[data-theme=dark] li.drop-target > div:first-child {
+  background-color: rgba(16, 185, 129, 0.18);
+  box-shadow: inset 0 0 0 2px rgba(52, 211, 153, 0.85); /* emerald-400 */
+}
+li.drop-forbidden > div:first-child {
+  background-color: rgba(239, 68, 68, 0.08); /* red-500 @ 8% */
+  box-shadow: inset 0 0 0 2px rgba(239, 68, 68, 0.7);
+}
+[data-theme=dark] li.drop-forbidden > div:first-child {
+  background-color: rgba(239, 68, 68, 0.18);
+  box-shadow: inset 0 0 0 2px rgba(248, 113, 113, 0.85); /* red-400 */
+}
+/* .drop-placeholder: an inserted sliver marking the destination slot for an
+   edge-band sibling reorder (item 15). Lives in the tree's <ul> between rows
+   only during a drag. */
+li.drop-placeholder {
+  height: 3px;
+  margin: -1px 0;
+  border-radius: 9999px;
+  background-color: rgba(16, 185, 129, 0.85); /* emerald-500 */
+  list-style: none;
+}
+[data-theme=dark] li.drop-placeholder {
+  background-color: rgba(52, 211, 153, 0.9); /* emerald-400 */
+}
+/* .drop-root-zone: slim drop targets bracketing the root list during a drag
+   (item 17). Promote a non-root source or reorder a root to the list's
+   top/bottom. .is-over while the cursor is inside the zone. */
+li.drop-root-zone {
+  height: 0.875rem;
+  margin: 0.125rem 0;
+  border: 2px dashed rgba(16, 185, 129, 0.45); /* emerald-500 */
+  border-radius: 9999px;
+  list-style: none;
+}
+li.drop-root-zone.is-over {
+  border-style: solid;
+  border-color: rgba(16, 185, 129, 0.85);
+  background-color: rgba(16, 185, 129, 0.14);
+}
+[data-theme=dark] li.drop-root-zone {
+  border-color: rgba(52, 211, 153, 0.5); /* emerald-400 */
+}
+[data-theme=dark] li.drop-root-zone.is-over {
+  border-color: rgba(52, 211, 153, 0.9);
+  background-color: rgba(52, 211, 153, 0.22);
+}
+/* .drop-tail: always-present "last child of this branch" drop zone at the end
+   of each expanded branch's child list (item 21). Subtle when idle (just a
+   little breathing room); lights up while a drag hovers it. Clipped to nothing
+   when the parent branch is collapsed (lives inside the collapsed <ul>). */
+li.drop-tail {
+  height: 1rem;
+  border-radius: 9999px;
+  list-style: none;
+}
+li.drop-tail.is-over {
+  background-color: rgba(16, 185, 129, 0.16);
+  box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.7);
+}
+[data-theme=dark] li.drop-tail.is-over {
+  background-color: rgba(52, 211, 153, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(52, 211, 153, 0.85);
+}
+
+/* The Initiatives drag handle sits inside the card's link; suppress the iOS
+   long-press callout so tap-and-hold starts a drag instead of a link preview. */
+[phx-hook="InitiativeDrag"] {
+  -webkit-touch-callout: none;
+}
+
+/* .init-drop-placeholder: the before/after insertion marker while dragging to
+   reorder the Initiatives index (.06.3). */
+div.init-drop-placeholder {
+  height: 3px;
+  margin: -1px 0;
+  border-radius: 9999px;
+  background-color: rgba(16, 185, 129, 0.85); /* emerald-500 */
+}
+[data-theme=dark] div.init-drop-placeholder {
+  background-color: rgba(52, 211, 153, 0.9); /* emerald-400 */
+}
+
+/* Optimistic "saving" hue (.03.03.08): a faint, mostly-transparent pink on the
+   rows / containers whose order is being persisted. Added client-side the moment
+   a reorder/sort happens and cleared automatically when the authoritative
+   re-render lands (the server never emits the class, so morphdom strips it). */
+.is-saving {
+  background-color: rgba(236, 72, 153, 0.05) !important; /* pink-500 @ 5% */
+  transition: background-color 200ms ease;
+}
+[data-theme=dark] .is-saving {
+  background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
+}
+
+/* Indeterminate progress (.03.07.23): rows whose % is genuinely in flight
+   (progress-pinked, but not the operated row) stop claiming a number — the
+   fill becomes a full-width left-to-right fade from the progress color into
+   the track (no fill-edge to misread), pulsing slowly, and the % text turns
+   into an ellipsis. Width's inline var needs the !important. Fading to
+   transparent shows the track color, so dark mode comes free. */
+.is-recomputing [role="progressbar"] > div:first-child {
+  width: 100% !important;
+  background: linear-gradient(to right, rgba(52, 211, 153, 0.9), transparent);
+  animation: doit-recompute-pulse 2s ease-in-out infinite;
+}
+.is-recomputing [role="progressbar"] .progress-bar-text {
+  font-size: 0;
+}
+.is-recomputing [role="progressbar"] .progress-bar-text::after {
+  content: "…";
+  font-size: 0.75rem; /* text-xs */
+  line-height: 1;
+}
+@keyframes doit-recompute-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* Debug ID pills (idclip easter egg). Hidden until the `debug-task-ids` class
+   is toggled onto <html> by the TaskKeys hook; then each task row shows a small
+   amber `#id` pill (parent id on hover) to diagnose drag/drop placement. */
+.task-id-pill {
+  display: none;
+}
+.debug-task-ids .task-id-pill {
+  display: inline-flex;
+}
+
 /* This file is for your main application CSS */

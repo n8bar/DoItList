@@ -12,13 +12,24 @@ defmodule DoIt.Initiatives do
   alias DoIt.Repo
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.{Initiative, InitiativeMember}
+  alias DoIt.Tasks.Task
 
-  @doc "List initiatives the given user can see (any role)."
+  @doc """
+  List initiatives the given user can see, with their role on each loaded
+  into the virtual `:my_role` field. Owner-held initiatives sort first; ties
+  break by `updated_at` descending.
+  """
   def list_visible_initiatives(%User{id: user_id}) do
     from(i in Initiative,
       join: m in InitiativeMember,
       on: m.initiative_id == i.id and m.user_id == ^user_id,
-      order_by: [desc: i.updated_at]
+      left_join: rt in Task,
+      on: rt.id == i.root_task_id,
+      select: %{i | my_role: m.role, subtitle: rt.title, progress: rt.computed_progress},
+      order_by: [
+        asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
+        desc: i.updated_at
+      ]
     )
     |> Repo.all()
   end
@@ -39,7 +50,10 @@ defmodule DoIt.Initiatives do
                user_id: owner.id,
                role: "owner"
              })
-             |> Repo.insert() do
+             |> Repo.insert(),
+           {:ok, root} <- insert_root_task(initiative, owner),
+           {:ok, initiative} <-
+             initiative |> Ecto.Changeset.change(root_task_id: root.id) |> Repo.update() do
         initiative
       else
         {:error, reason} -> Repo.rollback(reason)
@@ -47,8 +61,68 @@ defmodule DoIt.Initiatives do
     end)
   end
 
+  # The Initiative's system-managed root task: parent_id nil, title a single
+  # space. Inserted as a struct (not a changeset) on purpose — Ecto's cast trims
+  # whitespace-only strings to empty and validate_required would reject " ", but
+  # the root title doubles as the (initially empty) subtitle and the column is
+  # min-1. No activity event or broadcast for a system row.
+  defp insert_root_task(%Initiative{} = initiative, %User{} = owner) do
+    Repo.insert(%Task{
+      initiative_id: initiative.id,
+      created_by_id: owner.id,
+      title: " ",
+      status: "open",
+      priority: "normal",
+      manual_progress: 0,
+      computed_progress: 0,
+      sort_order: 0,
+      sort_reverse: false
+    })
+  end
+
   def change_initiative(%Initiative{} = initiative, attrs \\ %{}) do
     Initiative.changeset(initiative, attrs)
+  end
+
+  @doc "Update an Initiative's editable fields (name, description). Owner stays as-is."
+  def update_initiative(%Initiative{} = initiative, attrs) do
+    initiative
+    |> Initiative.changeset(stringify_keys(attrs))
+    |> Repo.update()
+  end
+
+  @doc """
+  The Initiative's optional subtitle, stored in its root task's title. Blank
+  reads as `""`; the underlying column holds a single space.
+  """
+  def subtitle(%Initiative{} = initiative) do
+    case Repo.get(Task, initiative.root_task_id) do
+      %Task{title: title} -> if String.trim(title) == "", do: "", else: title
+      _ -> ""
+    end
+  end
+
+  @doc """
+  Sets the Initiative's subtitle by writing the root task's title. A blank value
+  is stored as a single space (the column is non-null and a struct-level change
+  bypasses the task-title min-1 validation). No-op write path — no activity event.
+  """
+  def update_subtitle(%Initiative{root_task_id: root_id}, subtitle) when is_binary(subtitle) do
+    title = if String.trim(subtitle) == "", do: " ", else: subtitle
+
+    case Repo.get(Task, root_id) do
+      %Task{} = root -> root |> Ecto.Changeset.change(title: title) |> Repo.update()
+      nil -> {:error, :no_root_task}
+    end
+  end
+
+  @doc """
+  Deletes an initiative. Its tasks, members, and activity cascade away via the
+  database FK constraints (ON DELETE CASCADE). Caller must enforce that the
+  actor is the owner.
+  """
+  def delete_initiative(%Initiative{} = initiative) do
+    Repo.delete(initiative)
   end
 
   def list_members(initiative_id) do

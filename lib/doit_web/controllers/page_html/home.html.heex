@@ -1,8 +1,8 @@
 <Layouts.app flash={@flash} current_user={@current_user}>
   <div class="text-center py-16">
-    <h1 class="text-4xl font-semibold text-zinc-900">Do It List</h1>
-    <p class="mt-3 text-lg text-zinc-600">Task trees with real progress.</p>
-    <p class="mt-2 text-sm text-zinc-500 max-w-xl mx-auto">
+    <h1 class="text-4xl font-semibold text-zinc-900 dark:text-zinc-50">Do It List</h1>
+    <p class="mt-3 text-lg text-zinc-600 dark:text-zinc-300">Task trees with real progress.</p>
+    <p class="mt-2 text-sm text-zinc-500 dark:text-zinc-400 max-w-xl mx-auto">
       Break work into nested tasks. Update progress on the leaves. Watch parent
       and root progress roll up automatically. Optional weighting when you need it.
     </p>
@@ -24,7 +24,7 @@
         </.link>
         <.link
           navigate={~p"/users/log_in"}
-          class="px-4 py-2 rounded border border-zinc-300 text-zinc-700 hover:bg-zinc-50"
+          class="px-4 py-2 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
         >
           Log in
         </.link>
