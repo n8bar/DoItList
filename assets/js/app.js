@@ -543,7 +543,7 @@ document.addEventListener("input", (e) => {
       const name = t.value ? t.options[t.selectedIndex].textContent.trim() : ""
       pill.toggleAttribute("data-pill-set", !!name)
       span.textContent = name ? "@" + name : ""
-      pill.title = name ? "Assignee: " + name : "Unassigned"
+      pill.title = name ? "Assignee: @" + name : "Unassigned"
       return
     }
     case "task-field-progress": {

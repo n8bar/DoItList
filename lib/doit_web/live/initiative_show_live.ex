@@ -1731,13 +1731,13 @@ defmodule DoItWeb.InitiativeShowLive do
             ]}
             title={
               if(@task.assignee_id && @task.assignee,
-                do: "Assignee: #{@task.assignee.name}",
+                do: "Assignee: @#{@task.assignee.username}",
                 else: "Unassigned"
               )
             }
           >
             <span class="truncate">
-              {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.name}"}
+              {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.username}"}
             </span>
           </button>
         </div>
@@ -2328,13 +2328,18 @@ defmodule DoItWeb.InitiativeShowLive do
               class="w-full select select-bordered select-sm"
               disabled={not @can_edit}
             >
+              <%!-- Option text is the bare username: the optimistic echo in
+                   app.js builds the chip's "@username" from it, and the
+                   pane-skeleton sync matches it back. Display name rides
+                   the option title. --%>
               <option value="">Unassigned</option>
               <option
                 :for={m <- @members}
                 value={m.user.id}
+                title={m.user.name}
                 selected={@task.assignee_id == m.user.id}
               >
-                {m.user.name}
+                {m.user.username}
               </option>
             </select>
           </div>
