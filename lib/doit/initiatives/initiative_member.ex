@@ -9,6 +9,9 @@ defmodule DoIt.Initiatives.InitiativeMember do
 
   schema "initiative_members" do
     field :role, :string
+    # The member's manual drag order on the Initiatives index (m02.04 §2.6).
+    # Set programmatically (Initiatives.set_index_order/2), never cast.
+    field :sort_order, :integer
 
     belongs_to :initiative, Initiative
     belongs_to :user, User

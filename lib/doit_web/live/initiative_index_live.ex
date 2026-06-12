@@ -1,25 +1,49 @@
 defmodule DoItWeb.InitiativeIndexLive do
   use DoItWeb, :live_view
 
+  alias DoIt.Accounts
   alias DoIt.Initiatives
 
   @impl true
   # Sort modes the index understands. `nil` = the server's default order
-  # (owner-first, recently-updated); "manual" = the user's localStorage drag order.
+  # (owner-first, recently-updated); "manual" = the user's drag order, stored
+  # on their membership rows (m02.04 §2.6).
   @sort_modes ~w(name progress created updated manual)
 
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
     initiatives = Initiatives.list_visible_initiatives(user)
 
+    # Sort preference follows the account (m02.04 §2.6): mode + per-mode
+    # reverse on the prefs record, manual order on the membership rows.
+    prefs = Accounts.get_preferences(user)
+    mode = normalize_mode(prefs.index_sort_mode)
+    reverse_by_mode = prefs.index_sort_reverse_by_mode || %{}
+
+    sort_state = %{
+      mode: mode,
+      reverse: !!Map.get(reverse_by_mode, mode || ""),
+      order: stored_order(initiatives)
+    }
+
     {:ok,
      socket
      |> assign(:page_title, "Initiatives")
      |> assign(:initiative_count, length(initiatives))
      |> assign(:initiatives, initiatives)
-     |> assign(:sort_state, %{mode: nil, reverse: false, order: []})
+     |> assign(:sort_state, sort_state)
+     |> assign(:reverse_by_mode, reverse_by_mode)
      |> assign(:form, build_empty_form())
-     |> stream(:initiatives, initiatives)}
+     |> stream(:initiatives, sort_initiatives(initiatives, sort_state))}
+  end
+
+  # The saved manual order as an id list, derived from the membership rows'
+  # sort_order — feeds the same order-list sorting the drag push uses.
+  defp stored_order(initiatives) do
+    initiatives
+    |> Enum.filter(& &1.my_sort_order)
+    |> Enum.sort_by(& &1.my_sort_order)
+    |> Enum.map(&to_string(&1.id))
   end
 
   # The New Initiative form opens/closes client-side (UX_GUARDRAILS 6.5 —
@@ -48,17 +72,50 @@ defmodule DoItWeb.InitiativeIndexLive do
     end
   end
 
-  # Sort preference (and manual drag order) live in the browser's localStorage;
-  # a hook pushes them here on mount and on change, and we re-stream sorted.
-  # Keeps the preference per-user without a schema (see worklist 6 / BACKLOG).
+  # Sort changes persist server-side (m02.04 §2.6): mode + per-mode reverse
+  # onto the prefs record, a pushed manual order onto the membership rows.
+  # The control pushes no order; only a drag does — absent, the session's
+  # existing order stands.
   def handle_event("apply_sort", params, socket) do
+    user = socket.assigns.current_user
+    mode = normalize_mode(params["mode"])
+    reverse = params["reverse"] in [true, "true"]
+    pushed_order = params["order"] || []
+
+    reverse_by_mode = Map.put(socket.assigns.reverse_by_mode, mode || "", reverse)
+
+    {:ok, _} =
+      Accounts.update_preferences(user, %{
+        "index_sort_mode" => mode,
+        "index_sort_reverse_by_mode" => reverse_by_mode
+      })
+
+    if pushed_order != [], do: Initiatives.set_index_order(user, pushed_order)
+
     sort_state = %{
-      mode: normalize_mode(params["mode"]),
-      reverse: params["reverse"] in [true, "true"],
-      order: params["order"] || []
+      mode: mode,
+      reverse: reverse,
+      order: if(pushed_order == [], do: socket.assigns.sort_state.order, else: pushed_order)
     }
 
-    {:noreply, socket |> assign(:sort_state, sort_state) |> restream_sorted()}
+    {:noreply,
+     socket
+     |> assign(:initiatives, reindex_order(socket.assigns.initiatives, pushed_order))
+     |> assign(:sort_state, sort_state)
+     |> assign(:reverse_by_mode, reverse_by_mode)
+     |> restream_sorted()}
+  end
+
+  # Keep the in-memory my_sort_order in step with a freshly pushed order, so
+  # re-renders (and the cards' data-my-order) reflect what was just saved.
+  defp reindex_order(initiatives, []), do: initiatives
+
+  defp reindex_order(initiatives, order) do
+    idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
+
+    Enum.map(initiatives, fn it ->
+      %{it | my_sort_order: Map.get(idx, to_string(it.id), it.my_sort_order)}
+    end)
   end
 
   defp restream_sorted(socket) do
@@ -69,7 +126,7 @@ defmodule DoItWeb.InitiativeIndexLive do
   defp normalize_mode(mode) when mode in @sort_modes, do: mode
   defp normalize_mode(_), do: nil
 
-  defp sort_initiatives(list, %{mode: nil}), do: list
+  defp sort_initiatives(list, %{mode: nil, reverse: reverse}), do: maybe_reverse(list, reverse)
 
   defp sort_initiatives(list, %{mode: "manual", order: order, reverse: reverse}) do
     idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
@@ -165,26 +222,35 @@ defmodule DoItWeb.InitiativeIndexLive do
         </div>
       </details>
 
-      <%!-- Sort control. The hook (.06.2) seeds it from localStorage, pushes
-           apply_sort, and persists changes — per-user, per-browser. --%>
+      <%!-- Sort control (.06.2, server-persisted by m02.04 §2.6). The server
+           renders the saved state (initial values survive phx-update="ignore");
+           the hook owns it from there and pushes apply_sort on change. The
+           per-mode reverse memory rides the data attribute. --%>
       <form
         :if={@initiative_count > 0}
         id="initiative-sort"
         phx-hook="InitiativeSort"
         phx-update="ignore"
+        data-reverse-by-mode={Jason.encode!(@reverse_by_mode)}
         class="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300"
       >
         <label for="initiative-sort-mode" class="text-xs">Sort</label>
         <select id="initiative-sort-mode" name="mode" class="select select-bordered select-sm">
-          <option value="">Recent</option>
-          <option value="manual">Manual</option>
-          <option value="name">Name</option>
-          <option value="progress">Progress</option>
-          <option value="created">Created</option>
-          <option value="updated">Updated</option>
+          <option value="" selected={is_nil(@sort_state.mode)}>Recent</option>
+          <option value="manual" selected={@sort_state.mode == "manual"}>Manual</option>
+          <option value="name" selected={@sort_state.mode == "name"}>Name</option>
+          <option value="progress" selected={@sort_state.mode == "progress"}>Progress</option>
+          <option value="created" selected={@sort_state.mode == "created"}>Created</option>
+          <option value="updated" selected={@sort_state.mode == "updated"}>Updated</option>
         </select>
         <label class="flex items-center gap-1 text-xs select-none">
-          <input type="checkbox" name="reverse" value="true" class="checkbox checkbox-xs" /> Reverse
+          <input
+            type="checkbox"
+            name="reverse"
+            value="true"
+            checked={@sort_state.reverse}
+            class="checkbox checkbox-xs"
+          /> Reverse
         </label>
       </form>
 
@@ -200,6 +266,7 @@ defmodule DoItWeb.InitiativeIndexLive do
           data-progress={initiative.progress || 0}
           data-created={to_string(initiative.inserted_at)}
           data-updated={to_string(initiative.updated_at)}
+          data-my-order={initiative.my_sort_order}
           class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
         >
           <.link navigate={~p"/initiatives/#{initiative.id}"} draggable="false" class="block p-4">

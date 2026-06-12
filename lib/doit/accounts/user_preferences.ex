@@ -17,7 +17,9 @@ defmodule DoIt.Accounts.UserPreferences do
     belongs_to :user, DoIt.Accounts.User
 
     field :index_sort_mode, :string
-    field :index_sort_reverse, :boolean, default: false
+    # Reverse is remembered per mode (key = mode, "" for the default
+    # "Recent"), matching the index control's shipped behavior.
+    field :index_sort_reverse_by_mode, :map, default: %{}
 
     field :initiative_sort_mode, :string
     field :initiative_sort_reverse, :boolean, default: false
@@ -40,7 +42,7 @@ defmodule DoIt.Accounts.UserPreferences do
     prefs
     |> cast(attrs, [
       :index_sort_mode,
-      :index_sort_reverse,
+      :index_sort_reverse_by_mode,
       :initiative_sort_mode,
       :initiative_sort_reverse,
       :initiative_progress_calc,
@@ -50,6 +52,11 @@ defmodule DoIt.Accounts.UserPreferences do
       :show_task_activity
     ])
     |> validate_inclusion(:index_sort_mode, [nil | @index_sort_modes])
+    |> validate_change(:index_sort_reverse_by_mode, fn _, map ->
+      if is_map(map) and Enum.all?(map, fn {k, v} -> is_binary(k) and is_boolean(v) end),
+        do: [],
+        else: [index_sort_reverse_by_mode: "is invalid"]
+    end)
     |> validate_inclusion(:initiative_sort_mode, [nil | Task.sort_modes()])
     |> validate_inclusion(:initiative_progress_calc, [nil | @progress_calcs])
     |> validate_inclusion(:task_sort_mode, ["match_parent" | Task.sort_modes()])

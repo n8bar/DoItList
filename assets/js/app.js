@@ -1915,39 +1915,29 @@ Hooks.TreeWidth = {
   },
 }
 
-// Initiatives-index sort control. The preference (mode + reverse + manual drag
-// order) lives in localStorage — per-user, per-browser, no schema (worklist 6;
-// recapture as server prefs later, see BACKLOG). On mount we seed the controls
-// from storage and push apply_sort so the server sorts + re-streams; on change
-// we persist and re-push. The drag hook writes the same key's `order`.
-const INIT_SORT_KEY = "doit:init-sort"
-function readInitSort() {
+// Initiatives-index sort control. The preference is server-persisted (m02.04
+// §2.6): mode + per-mode reverse on the user's prefs record, manual drag
+// order on their membership rows. The server renders the saved state into
+// the (phx-update="ignore") controls and the per-mode reverse memory into
+// data-reverse-by-mode; this hook owns the controls from there and pushes
+// apply_sort on change — no localStorage, the preference follows the account.
+function readReverseByMode() {
+  const form = document.getElementById("initiative-sort")
   try {
-    return JSON.parse(localStorage.getItem(INIT_SORT_KEY)) || {}
+    return JSON.parse((form && form.dataset.reverseByMode) || "{}") || {}
   } catch {
     return {}
   }
-}
-function writeInitSort(state) {
-  localStorage.setItem(INIT_SORT_KEY, JSON.stringify(state))
 }
 Hooks.InitiativeSort = {
   mounted() {
     this.sel = this.el.querySelector("select[name=mode]")
     this.rev = this.el.querySelector("input[name=reverse]")
-    const s = readInitSort()
-    this.order = s.order || []
-    // Reverse is remembered per mode, so each sort option keeps its own
-    // direction. (Legacy single-boolean shape is discarded.)
-    this.reverseByMode = s.reverse && typeof s.reverse === "object" ? s.reverse : {}
-    this.sel.value = s.mode || ""
-    this.rev.checked = !!this.reverseByMode[this.sel.value]
-    this.push()
+    this.reverseByMode = readReverseByMode()
 
     // Switching modes reflects that mode's remembered reverse.
     this.sel.addEventListener("change", () => {
       this.rev.checked = !!this.reverseByMode[this.sel.value]
-      this.persist()
       this.push()
     })
     // Toggling reverse updates only the current mode's setting.
@@ -1957,19 +1947,21 @@ Hooks.InitiativeSort = {
       this.push()
     })
   },
+  // Keep the form's data attribute in step so the drag hook (a separate
+  // instance) reads fresh per-mode reverse state.
   persist() {
-    writeInitSort({mode: this.sel.value || null, order: this.order, reverse: this.reverseByMode})
+    this.el.dataset.reverseByMode = JSON.stringify(this.reverseByMode)
   },
   push() {
     // The cards carry their sort keys as data attributes, so explicit modes
     // reorder client-side at the change (UX_GUARDRAILS 6.5); the server
     // re-stream below confirms the same order. "Recent" (the default mode)
     // is server-derived (owner-first, recently-updated) and stays with it.
+    // No order in the payload — only a drag pushes one.
     this.clientSort()
     this.pushEvent("apply_sort", {
       mode: this.sel.value || "",
       reverse: !!this.reverseByMode[this.sel.value],
-      order: this.order,
     })
   },
   clientSort() {
@@ -1979,8 +1971,9 @@ Hooks.InitiativeSort = {
     const cards = [...wrap.querySelectorAll(":scope > [data-initiative-id]")]
     let sorted
     if (mode === "manual") {
-      const idx = new Map(this.order.map((id, i) => [String(id), i]))
-      const pos = (el) => idx.get(el.dataset.initiativeId) ?? this.order.length
+      // Saved order rides the cards as data-my-order (kept fresh by the
+      // server after every drag persist).
+      const pos = (el) => (el.dataset.myOrder === undefined ? Infinity : parseInt(el.dataset.myOrder, 10))
       sorted = cards.slice().sort((a, b) => pos(a) - pos(b))
     } else {
       const key = (el) =>
@@ -2009,9 +2002,9 @@ window.addEventListener("phx:close-details", (e) => {
 
 // Drag-to-reorder the Initiatives index (.06.3). The grove icon is the handle;
 // dropping inserts the card before/after another (no reparent / center drop).
-// The new order is written to localStorage (mode "manual") and pushed so the
-// server re-streams it. Reuses the pointer-event pattern from DragReorder, in a
-// simpler reorder-only form.
+// The new order is pushed as apply_sort (mode "manual") and the server
+// persists it onto the membership rows (m02.04 §2.6). Reuses the
+// pointer-event pattern from DragReorder, in a simpler reorder-only form.
 const INIT_DRAG_THRESHOLD_PX = 4
 const INIT_DRAG_LONG_PRESS_MS = 400
 const INIT_DRAG_TOUCH_TOLERANCE_PX = 8
@@ -2128,14 +2121,15 @@ Hooks.InitiativeDrag = {
     this.cleanup()
   },
   persistAndPush(order) {
-    const s = readInitSort()
-    const reverse = s.reverse && typeof s.reverse === "object" ? s.reverse : {}
-    writeInitSort({mode: "manual", order, reverse})
+    // A drop lands you in manual mode; the server persists the order onto
+    // the membership rows (m02.04 §2.6). Per-mode reverse memory comes from
+    // the sort form's data attribute (kept fresh by InitiativeSort).
+    const reverse = !!readReverseByMode()["manual"]
     const sel = document.querySelector("#initiative-sort select[name=mode]")
     const rev = document.querySelector("#initiative-sort input[name=reverse]")
     if (sel) sel.value = "manual"
-    if (rev) rev.checked = !!reverse["manual"]
-    this.pushEvent("apply_sort", {mode: "manual", reverse: !!reverse["manual"], order})
+    if (rev) rev.checked = reverse
+    this.pushEvent("apply_sort", {mode: "manual", reverse, order})
   },
   abort() {
     this.cleanup()

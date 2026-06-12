@@ -25,7 +25,13 @@ defmodule DoIt.Initiatives do
       on: m.initiative_id == i.id and m.user_id == ^user_id,
       left_join: rt in Task,
       on: rt.id == i.root_task_id,
-      select: %{i | my_role: m.role, subtitle: rt.title, progress: rt.computed_progress},
+      select: %{
+        i
+        | my_role: m.role,
+          my_sort_order: m.sort_order,
+          subtitle: rt.title,
+          progress: rt.computed_progress
+      },
       order_by: [
         asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
         desc: i.updated_at
@@ -139,6 +145,36 @@ defmodule DoIt.Initiatives do
   def delete_initiative(%Initiative{} = initiative) do
     Repo.delete(initiative)
   end
+
+  @doc """
+  Persist the user's manual Initiatives-index order (m02.04 §2.6) onto their
+  membership rows. Position in the list becomes `sort_order`.
+  """
+  def set_index_order(%User{id: user_id}, ordered_ids) when is_list(ordered_ids) do
+    ordered_ids
+    |> Enum.map(&parse_id/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.with_index()
+    |> Enum.each(fn {initiative_id, idx} ->
+      from(m in InitiativeMember,
+        where: m.user_id == ^user_id and m.initiative_id == ^initiative_id
+      )
+      |> Repo.update_all(set: [sort_order: idx])
+    end)
+
+    :ok
+  end
+
+  defp parse_id(id) when is_integer(id), do: id
+
+  defp parse_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_id(_), do: nil
 
   @doc """
   Initiatives this user owns (by `owner_id`) that other members belong to.

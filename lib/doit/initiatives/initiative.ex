@@ -11,6 +11,8 @@ defmodule DoIt.Initiatives.Initiative do
     field :description, :string
     field :progress_calc, :string, default: "leaf_average"
     field :my_role, :string, virtual: true
+    # The viewing member's manual index order (initiative_members.sort_order).
+    field :my_sort_order, :integer, virtual: true
     # Loaded from the root task for list views: subtitle (its title) and the
     # rolled-up progress (its computed_progress).
     field :subtitle, :string, virtual: true
