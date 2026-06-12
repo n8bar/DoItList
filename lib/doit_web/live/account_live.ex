@@ -62,6 +62,25 @@ defmodule DoItWeb.AccountLive do
     end
   end
 
+  def handle_event("delete_account", _params, socket) do
+    case Accounts.delete_account(socket.assigns.current_user) do
+      :ok ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Account deleted.")
+         |> redirect(to: ~p"/")}
+
+      {:error, {:shared_initiatives, names}} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "You own Initiatives that other members belong to: #{Enum.join(names, ", ")}. " <>
+             "Transfer or delete those first."
+         )}
+    end
+  end
+
   def handle_event("validate_username", %{"user" => params}, socket) do
     changeset =
       socket.assigns.current_user
@@ -204,6 +223,41 @@ defmodule DoItWeb.AccountLive do
               <.button type="submit" phx-disable-with="Saving...">Change password</.button>
             </div>
           </.form>
+        </section>
+
+        <section
+          id="account-danger"
+          class="rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 p-4"
+        >
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400 mb-3">
+            Danger zone
+          </h2>
+          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-3">
+            Deleting your account also deletes Initiatives only you belong to. While you own
+            Initiatives with other members, deletion is blocked — transfer or delete those first.
+          </p>
+
+          <%!-- Two-step confirm, client-side (no round trip to open); KeepOpen
+               holds it open across patches, e.g. the blocked-deletion flash. --%>
+          <details id="delete-account-confirm" phx-hook="KeepOpen">
+            <summary class="w-fit cursor-pointer list-none [&::-webkit-details-marker]:hidden px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
+              Delete account…
+            </summary>
+            <div class="mt-3 flex flex-wrap items-center gap-3 rounded border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 p-3">
+              <span class="text-sm text-red-800 dark:text-red-300">
+                This can't be undone. Delete your account?
+              </span>
+              <button
+                type="button"
+                id="delete-account-button"
+                phx-click="delete_account"
+                phx-disable-with="Deleting..."
+                class="px-3 py-1.5 rounded bg-red-600 text-sm font-medium text-white hover:bg-red-700"
+              >
+                Yes, delete my account
+              </button>
+            </div>
+          </details>
         </section>
       </div>
     </Layouts.app>

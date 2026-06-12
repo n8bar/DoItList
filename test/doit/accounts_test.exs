@@ -97,6 +97,41 @@ defmodule DoIt.AccountsTest do
     end
   end
 
+  describe "delete account (§1.10)" do
+    alias DoIt.Initiatives
+
+    test "deletes the account along with sole-member owned initiatives" do
+      user = register!()
+      {:ok, initiative} = Initiatives.create_initiative(user, %{"name" => "Mine alone"})
+
+      assert :ok = Accounts.delete_account(user)
+      assert Accounts.get_user(user.id) == nil
+      assert Initiatives.get_initiative(initiative.id) == nil
+    end
+
+    test "is blocked while the user owns initiatives with other members" do
+      owner = register!()
+      member = register!()
+      {:ok, initiative} = Initiatives.create_initiative(owner, %{"name" => "Shared work"})
+      {:ok, _} = Initiatives.add_member(initiative.id, member.id, "editor")
+
+      assert {:error, {:shared_initiatives, ["Shared work"]}} = Accounts.delete_account(owner)
+      assert Accounts.get_user(owner.id)
+      assert Initiatives.get_initiative(initiative.id)
+    end
+
+    test "membership in someone else's initiative doesn't block deletion" do
+      owner = register!()
+      member = register!()
+      {:ok, initiative} = Initiatives.create_initiative(owner, %{"name" => "Not yours"})
+      {:ok, _} = Initiatives.add_member(initiative.id, member.id, "editor")
+
+      assert :ok = Accounts.delete_account(member)
+      assert Initiatives.get_initiative(initiative.id)
+      refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == member.id))
+    end
+  end
+
   describe "username rules (m02.04 §1.2)" do
     test "accepts the allowed charset, trims and downcases" do
       user = register!()

@@ -125,6 +125,40 @@ defmodule DoIt.Initiatives do
     Repo.delete(initiative)
   end
 
+  @doc """
+  Initiatives this user owns (by `owner_id`) that other members belong to.
+  Account deletion (m02.04 §1.10) is blocked while any exist — they need a
+  transfer or delete first. m02.06's Trash flow supersedes the block.
+  """
+  def owned_shared_initiatives(%User{id: user_id}) do
+    from(i in Initiative,
+      where: i.owner_id == ^user_id,
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id != ^user_id,
+      distinct: true,
+      order_by: i.name
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Delete every initiative the user owns that has no other members. Tasks,
+  memberships, and activity cascade away via the FK constraints.
+  """
+  def delete_sole_owned_initiatives(%User{id: user_id}) do
+    sole_ids =
+      from(i in Initiative,
+        where: i.owner_id == ^user_id,
+        left_join: m in InitiativeMember,
+        on: m.initiative_id == i.id and m.user_id != ^user_id,
+        where: is_nil(m.id),
+        select: i.id
+      )
+      |> Repo.all()
+
+    Repo.delete_all(from(i in Initiative, where: i.id in ^sole_ids))
+  end
+
   def list_members(initiative_id) do
     from(m in InitiativeMember,
       where: m.initiative_id == ^initiative_id,
