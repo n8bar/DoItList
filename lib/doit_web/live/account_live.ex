@@ -340,6 +340,42 @@ defmodule DoItWeb.AccountLive do
               />
             </fieldset>
           </.form>
+
+          <%!-- §2.5 — the "until a profile/settings page" home that .03.01.11
+               promised the confirm-skip flags. Flags are client-local
+               (localStorage), so the reset is too: no round trip. --%>
+          <div class="mt-6 pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-2">
+            <h3 class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+              Confirmation prompts
+            </h3>
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+              Confirmations you've checked "don't ask me again" on stay suppressed in this browser.
+            </p>
+            <button
+              type="button"
+              id="reset-confirm-prompts"
+              phx-hook=".ConfirmReset"
+              class="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            >
+              Reset confirmation prompts
+            </button>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".ConfirmReset">
+              export default {
+                mounted() {
+                  this.el.addEventListener("click", () => {
+                    Object.keys(localStorage)
+                      .filter((k) => k.startsWith("doit:confirm-skip:"))
+                      .forEach((k) => localStorage.removeItem(k))
+                    const note = document.getElementById("reset-confirm-note")
+                    if (note) note.hidden = false
+                  })
+                }
+              }
+            </script>
+            <p id="reset-confirm-note" hidden class="text-xs text-emerald-700 dark:text-emerald-400">
+              Done — every confirmation asks again. Initiative pages already open need a reload to notice.
+            </p>
+          </div>
         </section>
 
         <section
