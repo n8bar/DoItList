@@ -48,8 +48,9 @@ defmodule DoItWeb.Layouts do
               <.link
                 navigate={~p"/account"}
                 title="Account details"
-                class="text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
+                class="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
               >
+                <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
                 {@current_user.name}
               </.link>
               <.link
@@ -73,8 +74,9 @@ defmodule DoItWeb.Layouts do
                 <li>
                   <.link
                     navigate={~p"/account"}
-                    class="block rounded px-2 py-1 font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    class="flex items-center gap-1.5 rounded px-2 py-1 font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
+                    <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
                     {@current_user.name}
                   </.link>
                 </li>

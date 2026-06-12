@@ -1736,7 +1736,18 @@ defmodule DoItWeb.InitiativeShowLive do
               )
             }
           >
-            <span class="truncate">
+            <%!-- Avatar is always in the DOM (hidden when unassigned) so the
+                 optimistic echo can fill it from the pane select's data attrs. --%>
+            <span
+              data-pill-avatar
+              hidden={!(@task.assignee_id && @task.assignee)}
+              class="inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold text-white select-none"
+              style={@task.assignee && "background-color: #{avatar_bg(@task.assignee)}"}
+              aria-hidden="true"
+            >
+              {@task.assignee && initials(@task.assignee)}
+            </span>
+            <span class="truncate" data-pill-text>
               {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.username}"}
             </span>
           </button>
@@ -2163,8 +2174,12 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <ul class="space-y-1 text-sm">
         <li :for={m <- @members} class="flex items-center justify-between">
-          <span class="text-zinc-700 dark:text-zinc-200">{m.user.name}</span>
-          <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+          <span class="flex items-center gap-2 min-w-0 text-zinc-700 dark:text-zinc-200">
+            <.avatar user={m.user} class="w-6 h-6 text-xs" />
+            <span class="truncate">{m.user.name}</span>
+            <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate">@{m.user.username}</span>
+          </span>
+          <span class="text-xs text-zinc-500 dark:text-zinc-400 flex-none">{m.role}</span>
         </li>
       </ul>
     </div>
@@ -2337,6 +2352,8 @@ defmodule DoItWeb.InitiativeShowLive do
                 :for={m <- @members}
                 value={m.user.id}
                 title={m.user.name}
+                data-initials={initials(m.user)}
+                data-avatar-bg={avatar_bg(m.user)}
                 selected={@task.assignee_id == m.user.id}
               >
                 {m.user.username}
@@ -2401,7 +2418,10 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
             Last updated by
-            <span class="font-medium text-zinc-700 dark:text-zinc-200">{@task.updated_by.name}</span>
+            <span class="font-medium text-zinc-700 dark:text-zinc-200 inline-flex items-center gap-1 align-bottom"><.avatar
+                user={@task.updated_by}
+                class="w-4 h-4 text-[8px]"
+              />{@task.updated_by.name}</span>
             <span title={@task.updated_at}>
               ({Calendar.strftime(@task.updated_at, "%b %-d %H:%M")})
             </span>
@@ -2430,7 +2450,8 @@ defmodule DoItWeb.InitiativeShowLive do
         </p>
         <ul data-async-list class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
-            <div class="text-xs text-zinc-500 dark:text-zinc-400">
+            <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
+              <.avatar :if={c.user} user={c.user} class="w-4 h-4 text-[8px]" />
               {c.user && c.user.name} · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
             <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
@@ -2464,7 +2485,11 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="text-zinc-500 dark:text-zinc-400">
               {Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}
             </span>
-            · <span class="font-medium">{(e.user && e.user.name) || "system"}</span>
+            · <span class="font-medium inline-flex items-center gap-1 align-bottom"><.avatar
+                :if={e.user}
+                user={e.user}
+                class="w-4 h-4 text-[8px]"
+              />{(e.user && e.user.name) || "system"}</span>
             · {e.kind}
             <span
               :if={Map.get(e.data, "from") || Map.get(e.data, "to")}

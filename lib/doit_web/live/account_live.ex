@@ -109,11 +109,14 @@ defmodule DoItWeb.AccountLive do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
       <div class="mx-auto max-w-2xl">
-        <div class="mb-6">
-          <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Account</h1>
-          <p class="text-sm text-zinc-500 dark:text-zinc-400">
-            Your identity across Do It List.
-          </p>
+        <div class="mb-6 flex items-center gap-3">
+          <.avatar user={@current_user} class="w-12 h-12 text-lg" />
+          <div>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Account</h1>
+            <p class="text-sm text-zinc-500 dark:text-zinc-400">
+              Your identity across Do It List.
+            </p>
+          </div>
         </div>
 
         <section

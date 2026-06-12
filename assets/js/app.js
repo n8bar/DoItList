@@ -241,7 +241,7 @@ const DoitSelection = {
 
     // Match the assignee option by its visible name (the pill shows "@name").
     const aSelect = pane.querySelector("#task-field-assignee")
-    const aText = text("[data-pill='assignee']")
+    const aText = text("[data-pill='assignee'] [data-pill-text]")
     if (aSelect && aSelect !== document.activeElement) {
       const name = aText.startsWith("@") ? aText.slice(1) : ""
       const opt = name
@@ -538,12 +538,23 @@ document.addEventListener("input", (e) => {
     }
     case "task-field-assignee": {
       const pill = row.querySelector("[data-pill='assignee']")
-      const span = pill && pill.querySelector("span")
+      const span = pill && pill.querySelector("[data-pill-text]")
       if (!span) return
-      const name = t.value ? t.options[t.selectedIndex].textContent.trim() : ""
+      const opt = t.value ? t.options[t.selectedIndex] : null
+      const name = opt ? opt.textContent.trim() : ""
       pill.toggleAttribute("data-pill-set", !!name)
       span.textContent = name ? "@" + name : ""
       pill.title = name ? "Assignee: @" + name : "Unassigned"
+      // Mirror the avatar from the option's data attrs (same derivation as
+      // the server's avatar component).
+      const avatar = pill.querySelector("[data-pill-avatar]")
+      if (avatar) {
+        avatar.hidden = !opt
+        if (opt) {
+          avatar.textContent = opt.dataset.initials || ""
+          avatar.style.backgroundColor = opt.dataset.avatarBg || ""
+        }
+      }
       return
     }
     case "task-field-progress": {

@@ -687,6 +687,57 @@ defmodule DoItWeb.CoreComponents do
     """
   end
 
+  @doc """
+  Generated initials avatar (m02.04 §1.11) — a colored disc with the user's
+  initials. No uploads in M02: the color is derived deterministically from
+  the user id, so a user looks the same everywhere they appear (member list,
+  assignee chip, activity log, presence).
+
+  Size via `class` (the default suits inline text rows). `avatar_bg/1` and
+  `initials/1` are public so optimistic-echo call sites can mirror the same
+  derivation into data attributes.
+  """
+  attr :user, :map, required: true
+  attr :class, :string, default: "w-5 h-5 text-[10px]"
+  attr :rest, :global
+
+  def avatar(assigns) do
+    ~H"""
+    <span
+      class={[
+        "inline-flex flex-none items-center justify-center rounded-full font-semibold text-white select-none",
+        @class
+      ]}
+      style={"background-color: #{avatar_bg(@user)}"}
+      title={@user.name}
+      {@rest}
+    >
+      {initials(@user)}
+    </span>
+    """
+  end
+
+  # Hex palette (not Tailwind classes) so client-side echoes can copy the
+  # color straight into an inline style. All ~600-weight for white text.
+  @avatar_palette ~w(#059669 #0284c7 #7c3aed #e11d48 #d97706 #4f46e5 #0d9488 #c026d3 #ea580c #65a30d)
+
+  def avatar_bg(%{id: id}), do: Enum.at(@avatar_palette, :erlang.phash2(id, length(@avatar_palette)))
+
+  def initials(%{name: name} = user) when is_binary(name) do
+    case name |> String.split() |> Enum.map(&String.first/1) do
+      [] -> initials_from_username(user)
+      [first] -> String.upcase(first)
+      [first | rest] -> String.upcase(first <> List.last(rest))
+    end
+  end
+
+  def initials(user), do: initials_from_username(user)
+
+  defp initials_from_username(%{username: username}) when is_binary(username),
+    do: username |> String.slice(0, 2) |> String.upcase()
+
+  defp initials_from_username(_), do: "?"
+
   ## JS Commands
 
   def show(js \\ %JS{}, selector) do
