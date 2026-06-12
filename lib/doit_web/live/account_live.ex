@@ -289,6 +289,45 @@ defmodule DoItWeb.AccountLive do
                 ]}
               />
             </fieldset>
+
+            <fieldset class="space-y-2">
+              <legend class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                My Task Defaults
+              </legend>
+              <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                Applied to new tasks in Initiatives you own — whoever adds them.
+              </p>
+              <.input
+                type="select"
+                field={@prefs_form[:task_sort_mode]}
+                label="Sort children by"
+                options={[
+                  {"Match parent (default)", "match_parent"},
+                  {"Manual", "manual"},
+                  {"Alphabetical", "alphabetical"},
+                  {"Completion %", "completion"},
+                  {"Priority", "priority"},
+                  {"First Created", "created"},
+                  {"Last Updated", "updated"}
+                ]}
+              />
+              <.input
+                type="select"
+                field={@prefs_form[:task_priority]}
+                label="Priority"
+                options={[
+                  {"Normal (default)", "normal"},
+                  {"Match parent", "match_parent"},
+                  {"Low", "low"},
+                  {"High", "high"}
+                ]}
+              />
+              <.input
+                type="checkbox"
+                field={@prefs_form[:task_assign_owner]}
+                label="Assign to owner"
+              />
+            </fieldset>
           </.form>
         </section>
 

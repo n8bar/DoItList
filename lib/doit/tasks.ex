@@ -115,6 +115,7 @@ defmodule DoIt.Tasks do
       |> Map.put("created_by_id", actor.id)
       |> Map.put("updated_by_id", actor.id)
       |> Map.put_new("sort_order", sort_order)
+      |> apply_task_defaults(initiative_id, parent_id)
 
     with {:ok, task} <- %Task{} |> Task.create_changeset(attrs) |> Repo.insert(),
          task <- maybe_set_done_progress(task) do
@@ -129,6 +130,47 @@ defmodule DoIt.Tasks do
       {:ok, task}
     end
   end
+
+  # "My Task Defaults" (m02.04 §2.3) — always the *initiative owner's*
+  # preferences, whoever creates the task, so an initiative behaves one way.
+  # `put_new` throughout: explicit attrs from the caller win.
+  defp apply_task_defaults(attrs, initiative_id, parent_id) do
+    case Repo.get(DoIt.Initiatives.Initiative, initiative_id) do
+      nil ->
+        attrs
+
+      initiative ->
+        prefs = DoIt.Accounts.get_preferences_by_user_id(initiative.owner_id)
+
+        attrs
+        |> apply_default_sort(prefs)
+        |> apply_default_priority(prefs, parent_id)
+        |> apply_default_assignee(prefs, initiative)
+    end
+  end
+
+  defp apply_default_sort(attrs, %{task_sort_mode: "match_parent"}), do: attrs
+  defp apply_default_sort(attrs, %{task_sort_mode: mode}), do: Map.put_new(attrs, "sort_mode", mode)
+
+  # "Match parent" copies the parent's priority; under the system root that's
+  # "normal" by construction, which is the documented root-level fallback.
+  defp apply_default_priority(attrs, %{task_priority: "match_parent"}, parent_id) do
+    parent_priority =
+      case parent_id && Repo.get(Task, parent_id) do
+        %Task{priority: priority} -> priority
+        _ -> "normal"
+      end
+
+    Map.put_new(attrs, "priority", parent_priority)
+  end
+
+  defp apply_default_priority(attrs, %{task_priority: priority}, _parent_id),
+    do: Map.put_new(attrs, "priority", priority)
+
+  defp apply_default_assignee(attrs, %{task_assign_owner: true}, initiative),
+    do: Map.put_new(attrs, "assignee_id", initiative.owner_id)
+
+  defp apply_default_assignee(attrs, _prefs, _initiative), do: attrs
 
   defp reconcile_after_create(%Task{parent_id: nil}, _actor), do: :ok
 

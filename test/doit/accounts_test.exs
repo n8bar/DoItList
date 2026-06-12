@@ -177,6 +177,61 @@ defmodule DoIt.AccountsTest do
       assert root.sort_mode == nil
       assert root.sort_reverse == false
     end
+
+    test "My Task Defaults apply by initiative owner, with match-parent priority (§2.3)" do
+      alias DoIt.Tasks
+
+      owner = register!()
+      member = register!()
+
+      {:ok, _} =
+        Accounts.update_preferences(owner, %{
+          "task_sort_mode" => "alphabetical",
+          "task_priority" => "match_parent",
+          "task_assign_owner" => "true"
+        })
+
+      {:ok, initiative} = Inits.create_initiative(owner, %{"name" => "Owned"})
+      {:ok, _} = Inits.add_member(initiative.id, member.id, "editor")
+
+      # Root-level task (parent = system root): match-parent priority falls
+      # back to normal; owner defaults apply even though the member creates it.
+      {:ok, top} =
+        Tasks.create_task(member, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "Top"
+        })
+
+      assert top.sort_mode == "alphabetical"
+      assert top.priority == "normal"
+      assert top.assignee_id == owner.id
+
+      # Under a high-priority parent, match-parent copies "high".
+      {:ok, _} = Tasks.update_task(top, owner, %{"priority" => "high"})
+
+      {:ok, child} =
+        Tasks.create_task(owner, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => top.id,
+          "title" => "Child"
+        })
+
+      assert child.priority == "high"
+
+      # Explicit attrs still win over the defaults.
+      {:ok, explicit} =
+        Tasks.create_task(owner, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "Explicit",
+          "priority" => "low",
+          "assignee_id" => member.id
+        })
+
+      assert explicit.priority == "low"
+      assert explicit.assignee_id == member.id
+    end
   end
 
   describe "username rules (m02.04 §1.2)" do
