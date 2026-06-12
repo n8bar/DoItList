@@ -58,6 +58,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:selected_task, nil)
          |> assign(:comments, [])
          |> assign(:activity, [])
+         |> assign(:show_task_activity, Accounts.get_preferences(user).show_task_activity)
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
@@ -1297,6 +1298,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 activity={@activity}
                 members={@members}
                 can_edit={@can_edit}
+                show_activity={@show_task_activity}
               />
             </div>
           </aside>
@@ -2334,6 +2336,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :task, :map, required: true
   attr :comments, :list, required: true
   attr :activity, :list, required: true
+  attr :show_activity, :boolean, default: true
   attr :members, :list, required: true
   attr :can_edit, :boolean, required: true
 
@@ -2545,7 +2548,8 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <%!-- Hideable per user preference (m02.04 §2.4). --%>
+      <div :if={@show_activity} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic">
           Loading…

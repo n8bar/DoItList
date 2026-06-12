@@ -328,6 +328,17 @@ defmodule DoItWeb.AccountLive do
                 label="Assign to owner"
               />
             </fieldset>
+
+            <fieldset class="space-y-2">
+              <legend class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                Display elements
+              </legend>
+              <.input
+                type="checkbox"
+                field={@prefs_form[:show_task_activity]}
+                label="Show Task Activity log"
+              />
+            </fieldset>
           </.form>
         </section>
 

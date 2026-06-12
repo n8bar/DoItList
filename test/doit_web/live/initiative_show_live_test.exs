@@ -819,6 +819,24 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "show-task-activity preference (m02.04 §2.4)" do
+    test "pane hides the Activity section when the pref is off", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      task = create_task(user, initiative, nil, "Watched")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      render_click(view, "select_task", %{"id" => to_string(task.id)})
+      assert render(view) =~ ">Activity<"
+
+      {:ok, _} = Accounts.update_preferences(user, %{"show_task_activity" => "false"})
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      render_click(view, "select_task", %{"id" => to_string(task.id)})
+      refute render(view) =~ ">Activity<"
+    end
+  end
+
   describe "selection presence (m02.04 §1.12)" do
     setup %{conn: conn} do
       {conn_a, user_a} = register_and_log_in(conn)
