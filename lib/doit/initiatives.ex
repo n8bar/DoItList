@@ -75,7 +75,6 @@ defmodule DoIt.Initiatives do
       priority: "normal",
       manual_progress: 0,
       computed_progress: 0,
-      weight: Decimal.new("1.0"),
       sort_order: 0,
       sort_reverse: false
     })

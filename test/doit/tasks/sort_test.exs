@@ -16,7 +16,6 @@ defmodule DoIt.Tasks.SortTest do
       status: Keyword.get(opts, :status, "open"),
       priority: Keyword.get(opts, :priority, "normal"),
       computed_progress: Keyword.get(opts, :computed_progress, 0),
-      weight: Keyword.get(opts, :weight, Decimal.new("1.0")),
       sort_order: Keyword.get(opts, :sort_order, 0),
       inserted_at: Keyword.get(opts, :inserted_at, DateTime.utc_now()),
       updated_at: Keyword.get(opts, :updated_at, DateTime.utc_now())

@@ -1,8 +1,6 @@
 # Product Spec
 _Last updated: 2026-06-11_
 
-> **Draft — pending operator approval:** this revision removes Weight from the product (Core Idea, Vocabulary, Durable Principles, Roll-up Progress, Sibling sort). Implementation items live in [`milestones/m02-ux-buildout/m02.03-task-tree.md`](milestones/m02-ux-buildout/m02.03-task-tree.md) § 10.
-
 The canonical specification of Do It List — what the product is, the vocabulary used to describe it, the principles it must hold to, and the headline behaviors that define it.
 
 This is the master spec. Milestone docs and subsystem specs narrow or extend it but do not contradict it. [`PLAN.md`](PLAN.md) tracks how we get there; this doc tracks what "there" means.
@@ -56,7 +54,7 @@ The task tree stays readable at any viewport and degrades by scrolling, never by
 ## Durable Principles
 - **Nested work is first-class.** The tree is the point.
 - **Progress is useful by default.** Roll-up needs no configuration to be meaningful.
-- **Importance is expressed by decomposition, not configuration.** To make a branch count for more, break it into more leaves. The side effect is virtuous: the work that matters most ends up specified in the most detail. (This replaced an explicit per-task Weight on 2026-06-11 — the AbstractSpoon inspiration works the same way, and decomposition had already absorbed weight's job when leaf-average roll-up landed.)
+- **Importance is expressed by decomposition, not configuration.** To make a branch count for more, break it into more leaves — there is no weight attribute. The side effect is virtuous: the work that matters most ends up specified in the most detail.
 - **No file check-in/check-out collaboration.** Real-time, last-writer-wins by default.
 - **Grow milestone by milestone.** Resist becoming bloated PM software.
 

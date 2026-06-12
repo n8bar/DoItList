@@ -711,23 +711,6 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert Tasks.get_task!(t.id).priority == "low"
     end
 
-    test "W steps weight by 1 with no upper wrap; Shift+W floors at 1", %{
-      conn: conn,
-      initiative: initiative,
-      t: t
-    } do
-      {:ok, view, _html} = live(conn, open_path(initiative))
-      select_task(view, t.id)
-
-      assert Decimal.equal?(Tasks.get_task!(t.id).weight, Decimal.new(1))
-      adjust(view, "weight", "up")
-      assert Decimal.equal?(Tasks.get_task!(t.id).weight, Decimal.new(2))
-      adjust(view, "weight", "down")
-      adjust(view, "weight", "down")
-      # 2 → 1 → floored at 1
-      assert Decimal.equal?(Tasks.get_task!(t.id).weight, Decimal.new(1))
-    end
-
     test "A cycles assignee through Unassigned and members with wrap", %{
       conn: conn,
       user: user,

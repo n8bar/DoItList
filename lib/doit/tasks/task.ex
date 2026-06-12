@@ -17,7 +17,6 @@ defmodule DoIt.Tasks.Task do
     field :priority, :string, default: "normal"
     field :manual_progress, :integer, default: 0
     field :computed_progress, :integer, default: 0
-    field :weight, :decimal, default: Decimal.new("1.0")
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
@@ -46,7 +45,6 @@ defmodule DoIt.Tasks.Task do
       :status,
       :priority,
       :manual_progress,
-      :weight,
       :sort_order,
       :sort_mode,
       :sort_reverse,
@@ -63,7 +61,6 @@ defmodule DoIt.Tasks.Task do
     |> validate_inclusion(:priority, @priorities)
     |> validate_inclusion(:sort_mode, [nil | @sort_modes])
     |> validate_number(:manual_progress, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
-    |> validate_weight()
   end
 
   def update_changeset(task, attrs) do
@@ -74,7 +71,6 @@ defmodule DoIt.Tasks.Task do
       :status,
       :priority,
       :manual_progress,
-      :weight,
       :sort_order,
       :sort_mode,
       :sort_reverse,
@@ -89,30 +85,9 @@ defmodule DoIt.Tasks.Task do
     |> validate_inclusion(:priority, @priorities)
     |> validate_inclusion(:sort_mode, [nil | @sort_modes])
     |> validate_number(:manual_progress, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
-    |> validate_weight()
   end
 
   def computed_progress_changeset(task, computed_progress) do
     change(task, computed_progress: computed_progress)
-  end
-
-  defp validate_weight(changeset) do
-    case get_field(changeset, :weight) do
-      nil ->
-        changeset
-
-      %Decimal{} = w ->
-        if Decimal.compare(w, Decimal.new(0)) == :gt do
-          changeset
-        else
-          add_error(changeset, :weight, "must be greater than 0")
-        end
-
-      n when is_number(n) and n > 0 ->
-        changeset
-
-      _ ->
-        add_error(changeset, :weight, "must be greater than 0")
-    end
   end
 end

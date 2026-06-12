@@ -239,9 +239,6 @@ const DoitSelection = {
     const pri = priEl ? (priEl.getAttribute("title") || "").replace("Priority: ", "") : ""
     if (pri) set(pane.querySelector("#task-field-priority"), pri)
 
-    const wText = text("[data-pill='weight']")
-    set(pane.querySelector("#task-field-weight"), wText.startsWith("w=") ? wText.slice(2) : "1.0")
-
     // Match the assignee option by its visible name (the pill shows "@name").
     const aSelect = pane.querySelector("#task-field-assignee")
     const aText = text("[data-pill='assignee']")
@@ -483,20 +480,19 @@ document.addEventListener("change", (e) => {
     if (li) markSaving(savingChildren(li))
     return
   }
-  // Details attribute fields — pink the edited row; weight and manual
-  // progress roll up, so their ancestors pink too (§8.18.3 finding: progress
-  // writes were missing from this scope entirely). Priority / assignee don't
-  // roll up. Title / description stay excluded (no roll-up, instant echo).
+  // Details attribute fields — pink the edited row; manual progress rolls
+  // up, so its ancestors pink too (§8.18.3 finding: progress writes were
+  // missing from this scope entirely). Priority / assignee don't roll up.
+  // Title / description stay excluded (no roll-up, instant echo).
   const pinkFields = [
     "task-field-priority",
-    "task-field-weight",
     "task-field-assignee",
     "task-field-progress",
   ]
   if (pinkFields.includes(e.target.id)) {
     const li = selectedLi()
     if (!li) return
-    const rollup = ["task-field-weight", "task-field-progress"].includes(e.target.id)
+    const rollup = e.target.id === "task-field-progress"
     if (rollup) {
       const ancestors = savingAncestors(li)
       markSaving([savingRowOf(li), ...ancestors])
@@ -538,16 +534,6 @@ document.addEventListener("input", (e) => {
       pill.toggleAttribute("data-pill-set", set)
       pill.textContent = set ? t.value : ""
       pill.title = "Priority: " + t.value
-      return
-    }
-    case "task-field-weight": {
-      const pill = row.querySelector("[data-pill='weight']")
-      if (!pill) return
-      const v = t.value.trim()
-      const set = v !== "" && parseFloat(v) !== 1
-      pill.toggleAttribute("data-pill-set", set)
-      pill.textContent = set ? "w=" + v : ""
-      if (v !== "") pill.title = "Weight " + v
       return
     }
     case "task-field-assignee": {

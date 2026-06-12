@@ -495,8 +495,8 @@ defmodule DoItWeb.CoreComponents do
     {"Alt + ↑ ↓ ← →", "Reorder, or dedent / indent, the selected task"},
     {"N", "New subtask of the selected task"},
     {"S", "New sibling of the selected task"},
-    {"P / W / A", "Step priority / weight / assignee (Shift to step back)"},
-    {"Alt + P / W / A", "Focus the priority / weight / assignee field"},
+    {"P / A", "Step priority / assignee (Shift to step back)"},
+    {"Alt + P / A", "Focus the priority / assignee field"},
     {"Del", "Delete the selected task (with confirmation)"},
     {"?", "Show this help"}
   ]
@@ -547,12 +547,12 @@ defmodule DoItWeb.CoreComponents do
   @doc """
   A small info icon that reveals an explanatory popover on click and
   light-dismisses on click-away. Reusable for "explain a UI rule" moments —
-  why a control is disabled, how a value is derived, what weight means.
+  why a control is disabled, how a value is derived.
 
   ## Examples
 
-      <.info_hint id="weight-hint" label="What is weight?">
-        Weight scales how much a subtask contributes to its parent's progress.
+      <.info_hint id="calc-hint" label="How do the methods differ?">
+        Leaf average: every leaf counts equally, however deep it sits.
       </.info_hint>
   """
   attr :id, :string, required: true

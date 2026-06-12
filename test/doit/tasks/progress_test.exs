@@ -13,7 +13,6 @@ defmodule DoIt.Tasks.ProgressTest do
       id: opts[:id] || :erlang.unique_integer([:positive]),
       manual_progress: progress,
       status: opts[:status] || "open",
-      weight: Decimal.new(to_string(opts[:weight] || "1.0")),
       children: []
     }
   end
@@ -23,7 +22,6 @@ defmodule DoIt.Tasks.ProgressTest do
       id: opts[:id] || :erlang.unique_integer([:positive]),
       manual_progress: opts[:manual_progress] || 0,
       status: opts[:status] || "open",
-      weight: Decimal.new(to_string(opts[:weight] || "1.0")),
       children: children
     }
   end
@@ -66,26 +64,25 @@ defmodule DoIt.Tasks.ProgressTest do
       assert Progress.compute(branch([leaf(40), leaf(80)])) == 60
     end
 
-    test "an intermediate branch's weight scales its whole subtree" do
-      # The weighted branch's leaves each carry mass 2 on the way up:
-      # (100*1 + 0*2*4) / (1 + 8) ≈ 11.
-      tree = branch([leaf(100), branch([leaf(0), leaf(0), leaf(0), leaf(0)], weight: 2)])
-      assert Progress.compute(tree) == 11
+    test "decomposition is the weighting: a bigger subtree pulls harder" do
+      # The four-leaf branch carries four units against the lone leaf's one
+      # (ProductSpec § Durable Principles — no weight attribute).
+      tree = branch([leaf(100), branch([leaf(0), leaf(0), leaf(0), leaf(0)])])
+      assert Progress.compute(tree) == 20
+
+      bigger = branch([leaf(100), branch(List.duplicate(leaf(0), 9))])
+      assert Progress.compute(bigger) == 10
     end
 
-    test "compute_all matches compute for every node, including zero-weight subtrees" do
+    test "compute_all matches compute for every node" do
       inner = branch([leaf(0), leaf(100)], id: 2)
-      skipped = branch([leaf(70)], id: 4, weight: 0)
-      root = branch([inner, leaf(40, id: 3), skipped], id: 1)
+      root = branch([inner, leaf(40, id: 3)], id: 1)
 
       values = Progress.compute_all([root])
 
       assert values[1] == Progress.compute(root)
       assert values[2] == Progress.compute(inner)
       assert values[3] == 40
-      # Zero-weight subtree is excluded from the parent's average but its own
-      # value still reconciles.
-      assert values[4] == 70
       assert values[1] == 47
     end
   end
@@ -96,13 +93,6 @@ defmodule DoIt.Tasks.ProgressTest do
       tree = branch([grandchildren, leaf(0)])
       assert Progress.compute(tree, :single_level) == 25
       assert Progress.compute(tree) == 33
-    end
-
-    test "a weighted branch counts once at its own weight" do
-      left = branch([leaf(100), leaf(100)], weight: 3)
-      root = branch([left, leaf(0, weight: 1)])
-      assert Progress.compute(root, :single_level) == 75
-      assert Progress.compute(root) == 86
     end
 
     test "compute_all in single-level mode matches compute for every node" do
@@ -117,7 +107,7 @@ defmodule DoIt.Tasks.ProgressTest do
     end
   end
 
-  describe "branch tasks (default equal weight)" do
+  describe "branch tasks" do
     test "averages two leaves" do
       tree = branch([leaf(0), leaf(100)])
       assert Progress.compute(tree) == 50
@@ -136,32 +126,8 @@ defmodule DoIt.Tasks.ProgressTest do
 
     test "ignores manual_progress on a branch" do
       # branch's own manual_progress is 99, but since it has children, we use
-      # the weighted average (here: 0).
+      # the leaf average (here: 0).
       tree = branch([leaf(0), leaf(0)], manual_progress: 99)
-      assert Progress.compute(tree) == 0
-    end
-  end
-
-  describe "branch tasks (weighted)" do
-    test "weighted average with integer weights" do
-      # 25*1 + 75*3 = 25 + 225 = 250 ; total weight = 4 ; result = 62.5 → 63
-      tree = branch([leaf(25, weight: 1), leaf(75, weight: 3)])
-      assert Progress.compute(tree) == 63
-    end
-
-    test "weighted average with decimal weights" do
-      tree = branch([leaf(40, weight: "0.5"), leaf(80, weight: "1.5")])
-      # (40*0.5 + 80*1.5) / 2.0 = (20 + 120) / 2 = 70
-      assert Progress.compute(tree) == 70
-    end
-
-    test "weight of 0 means the child is ignored" do
-      tree = branch([leaf(0, weight: 0), leaf(100, weight: 1)])
-      assert Progress.compute(tree) == 100
-    end
-
-    test "if every child has weight 0, falls back to 0" do
-      tree = branch([leaf(50, weight: 0), leaf(80, weight: 0)])
       assert Progress.compute(tree) == 0
     end
   end
@@ -175,19 +141,8 @@ defmodule DoIt.Tasks.ProgressTest do
       assert Progress.compute(tree) == 33
     end
 
-    test "weighted recursive roll-up" do
-      # left subtree: leaves 100,100 — each passes through the branch's
-      # weight 3 on the way up (path product) → mass 3 apiece
-      # right leaf: 0, weight 1
-      # root: (100*3 + 100*3 + 0*1) / 7 ≈ 86
-      left = branch([leaf(100), leaf(100)], weight: 3)
-      right = leaf(0, weight: 1)
-      root = branch([left, right])
-      assert Progress.compute(root) == 86
-    end
-
     test "marking a deep child done forces it to 100, propagating upward" do
-      # The marked-done leaf is 100 by status, others are 0. Equal weights → 33.
+      # The marked-done leaf is 100 by status, others are 0 → 33.
       child_done = leaf(0, status: "done")
       tree = branch([leaf(0), leaf(0), child_done])
       assert Progress.compute(tree) == 33
@@ -215,7 +170,6 @@ defmodule DoIt.Tasks.ProgressTest do
       child = %Task{
         manual_progress: 60,
         status: "open",
-        weight: Decimal.new("1.0"),
         children: %Ecto.Association.NotLoaded{}
       }
 

@@ -192,7 +192,6 @@ defmodule DoItWeb.InitiativeShowLive do
         "initiative_id" => initiative.id,
         "parent_id" => parent_id,
         "title" => title,
-        "weight" => Map.get(params, "weight", "1.0"),
         "position" => position
       }
 
@@ -249,9 +248,9 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  # Keyboard: P / W / A — step priority / weight / assignee of the selected task.
+  # Keyboard: P / A — step priority / assignee of the selected task.
   def handle_event("kbd_adjust", %{"field" => field, "dir" => dir} = params, socket)
-      when field in ~w(priority weight assignee) and dir in ~w(up down) do
+      when field in ~w(priority assignee) and dir in ~w(up down) do
     case kbd_target(socket, params) do
       nil -> {:noreply, socket}
       task -> apply_kbd_adjust(socket, task, field, dir)
@@ -911,12 +910,12 @@ defmodule DoItWeb.InitiativeShowLive do
                 if (btn) btn.click();
                 return;
               }
-              // P / W / A: Alt focuses the field for precise editing; plain steps
+              // P / A: Alt focuses the field for precise editing; plain steps
               // the value up, Shift steps it down.
-              const field = k.length === 1 && {p: "priority", w: "weight", a: "assignee"}[k.toLowerCase()];
+              const field = k.length === 1 && {p: "priority", a: "assignee"}[k.toLowerCase()];
               if (field) {
                 e.preventDefault();
-                // Alt+P/W/A: focusing a pane field is pure view state — no
+                // Alt+P/A: focusing a pane field is pure view state — no
                 // server (.03.07.17). The field exists whenever a task is
                 // selected (persistent pane) and is disabled for viewers.
                 if (e.altKey) {
@@ -925,16 +924,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   return;
                 }
                 const S = window.DoitSaving, li = S && S.selectedLi();
-                if (li) {
-                  if (field === "weight") {
-                    const ancestors = S.savingAncestors(li);
-                    S.markSaving([S.savingRowOf(li), ...ancestors]);
-                    // Weight rolls up — ancestor %s go indeterminate.
-                    S.markRecomputing(ancestors);
-                  } else {
-                    S.markSaving([S.savingRowOf(li)]);
-                  }
-                }
+                if (li) S.markSaving([S.savingRowOf(li)]);
                 this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
                 return;
               }
@@ -1232,7 +1222,7 @@ defmodule DoItWeb.InitiativeShowLive do
                  selected the pane stays mounted; deselecting hides it
                  (selected_task keeps the last pane data, only selected_task_id
                  nils). On a selection switch the client writes the row-known
-                 values (title / priority / weight / assignee) into these real
+                 values (title / priority / assignee) into these real
                  fields immediately and swaps the async lists to "Loading…";
                  the server patch then reconciles the same elements in place —
                  LiveView never clobbers the focused field, so in-progress
@@ -1332,7 +1322,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # Whitelist the field so a client can't push an arbitrary DOM id to focus.
 
-  # Persist a single-field keyboard step (P/W/A), then patch the affected rows.
+  # Persist a single-field keyboard step (P/A), then patch the affected rows.
   defp apply_kbd_adjust(socket, task, field, dir) do
     params = adjust_params(field, dir, task, socket.assigns.members)
 
@@ -1348,9 +1338,6 @@ defmodule DoItWeb.InitiativeShowLive do
   defp adjust_params("priority", dir, task, _members),
     do: %{"priority" => step_priority(task.priority, dir)}
 
-  defp adjust_params("weight", dir, task, _members),
-    do: %{"weight" => Decimal.to_string(step_weight(task.weight, dir))}
-
   defp adjust_params("assignee", dir, task, members),
     do: %{"assignee_id" => step_assignee(task.assignee_id, dir, members)}
 
@@ -1362,10 +1349,6 @@ defmodule DoItWeb.InitiativeShowLive do
     next = if dir == "up", do: i + 1, else: i - 1
     Enum.at(order, max(0, min(next, length(order) - 1)))
   end
-
-  # Weight steps by whole units; no upper wrap, floored at 1 on the way down.
-  defp step_weight(weight, "up"), do: Decimal.add(weight, 1)
-  defp step_weight(weight, "down"), do: Decimal.max(Decimal.new(1), Decimal.sub(weight, 1))
 
   # Assignee cycles [Unassigned | members…] with wrap in both directions; an
   # empty string is the "unassigned" param value for the changeset.
@@ -1698,11 +1681,11 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <.botanical_icon kind={botanical_kind(@task, @depth)} />
         </span>
-        <%!-- Row 1: attribute chips. Priority + weight + assignee always occupy
+        <%!-- Row 1: attribute chips. Priority + assignee always occupy
              a slot; defaults render as an empty dashed placeholder of the same
              size so customized values stand out and stay column-aligned. Each
-             chip taps through to its Details field (item: select + focus). The
-             three live in a min-w-0 overflow-hidden group so they clip together
+             chip taps through to its Details field (item: select + focus). They
+             live in a min-w-0 overflow-hidden group so they clip together
              (rightmost first) instead of wrapping Row 1 when depth narrows it. --%>
         <div class="flex flex-1 items-center gap-2 min-w-0 overflow-hidden">
           <%!-- Debug-only ID pill (idclip easter egg). Hidden unless the
@@ -1734,22 +1717,6 @@ defmodule DoItWeb.InitiativeShowLive do
             title={"Priority: #{@task.priority}"}
           >
             {if @task.priority != "normal", do: @task.priority}
-          </button>
-          <button
-            type="button"
-            phx-click="select_task"
-            phx-value-id={@task.id}
-            data-pill="weight"
-            data-pill-set={not Decimal.equal?(@task.weight, Decimal.new(1))}
-            class={[
-              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
-              "border border-dashed border-zinc-300 dark:border-zinc-600",
-              "data-pill-set:border-transparent data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
-            ]}
-            title={"Weight #{Decimal.to_string(@task.weight)}"}
-          >
-            {if not Decimal.equal?(@task.weight, Decimal.new(1)),
-              do: "w=" <> Decimal.to_string(@task.weight)}
           </button>
           <button
             type="button"
@@ -2048,8 +2015,8 @@ defmodule DoItWeb.InitiativeShowLive do
                       Leaf average <span class="font-normal text-zinc-400">(default)</span>
                     </dt>
                     <dd>
-                      Every leaf counts equally, however deep it sits. Weighting a
-                      branch scales its whole subtree.
+                      Every leaf counts equally, however deep it sits. Breaking a
+                      branch into more leaves makes it count for more.
                     </dd>
                   </div>
                   <div>
@@ -2345,22 +2312,6 @@ defmodule DoItWeb.InitiativeShowLive do
             </select>
           </div>
           <div>
-            <label for="task-field-weight" class="text-xs text-zinc-500 dark:text-zinc-400">
-              <span class={@can_edit && "underline"}>W</span>eight
-            </label>
-            <input
-              id="task-field-weight"
-              type="number"
-              name="task[weight]"
-              value={Decimal.to_string(@task.weight)}
-              min="0.01"
-              step="0.01"
-              class="w-full input input-bordered input-sm"
-              disabled={not @can_edit}
-              phx-debounce="500"
-            />
-          </div>
-          <div>
             <label for="task-field-assignee" class="text-xs text-zinc-500 dark:text-zinc-400">
               <span class={@can_edit && "underline"}>A</span>ssignee
             </label>
@@ -2547,9 +2498,7 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  # Dropdown ordering: criteria first, then Manual at the bottom. "weight"
-  # is intentionally absent from the menu but still supported by the engine
-  # for a possible future re-enable.
+  # Dropdown ordering: criteria first, then Manual at the bottom.
   @sort_mode_options ~w(alphabetical completion priority created updated manual)
 
   defp sort_mode_options, do: @sort_mode_options

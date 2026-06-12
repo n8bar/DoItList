@@ -5,15 +5,13 @@ defmodule DoIt.Tasks do
   ## Progress rules
 
   * A task with no children uses its `manual_progress` (0..100).
-  * A task with children uses computed progress:
-
-        sum(child_progress * child_weight) / sum(child_weight)
-
-    where `child_progress` is itself the rolled-up value (recursive).
+  * A task with children uses computed progress — the plain average over all
+    descendant leaves (`DoIt.Tasks.Progress`; single-level average available
+    as a per-initiative setting).
   * Marking a task `done` snaps progress to 100. Reopening (back to `open`
     or `in_progress`) lets manual progress drop below 100 again.
-  * Changing a child's progress, weight, status, or parent triggers a
-    recursive recalculation up the ancestor chain.
+  * Changing a child's progress, status, or parent triggers a recursive
+    recalculation up the ancestor chain.
   """
 
   import Ecto.Query, warn: false
@@ -142,7 +140,7 @@ defmodule DoIt.Tasks do
 
   @doc """
   Updates a task's editable fields. Records granular activity events for any
-  meaningful field changes (title, status, progress, weight, assignee, parent).
+  meaningful field changes (title, status, progress, assignee, parent).
   Triggers ancestor progress recalculation when needed.
   """
   def update_task(%Task{} = task, %User{} = actor, attrs) do
@@ -1195,7 +1193,6 @@ defmodule DoIt.Tasks do
     [
       {:title, "title_changed"},
       {:manual_progress, "progress_changed"},
-      {:weight, "weight_changed"},
       {:assignee_id, "assignee_changed"},
       {:parent_id, "parent_changed"},
       {:priority, "priority_changed"}

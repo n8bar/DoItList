@@ -89,7 +89,7 @@ defmodule DoIt.TasksTest do
     assert refreshed_root.computed_progress == 50
   end
 
-  test "weighted children roll up correctly to grandparent", %{user: user, initiative: initiative} do
+  test "grandchildren roll up correctly to grandparent", %{user: user, initiative: initiative} do
     {:ok, root} = Tasks.create_task(user, %{"initiative_id" => initiative.id, "title" => "Root"})
 
     {:ok, mid} =
@@ -103,26 +103,24 @@ defmodule DoIt.TasksTest do
       Tasks.create_task(user, %{
         "initiative_id" => initiative.id,
         "parent_id" => mid.id,
-        "title" => "L1",
-        "weight" => "3"
+        "title" => "L1"
       })
 
     {:ok, leaf2} =
       Tasks.create_task(user, %{
         "initiative_id" => initiative.id,
         "parent_id" => mid.id,
-        "title" => "L2",
-        "weight" => "1"
+        "title" => "L2"
       })
 
     {:ok, _} = Tasks.update_task(leaf1, user, %{"manual_progress" => 100})
-    {:ok, _} = Tasks.update_task(leaf2, user, %{"manual_progress" => 0})
+    {:ok, _} = Tasks.update_task(leaf2, user, %{"manual_progress" => 50})
 
-    # mid: (100*3 + 0*1)/4 = 75
+    # mid: (100 + 50)/2 = 75
     refreshed_mid = Tasks.get_task!(mid.id)
     assert refreshed_mid.computed_progress == 75
 
-    # root: just one child (mid) so it equals mid.
+    # root: mid's leaves are its leaves, so it equals mid.
     refreshed_root = Tasks.get_task!(root.id)
     assert refreshed_root.computed_progress == 75
   end

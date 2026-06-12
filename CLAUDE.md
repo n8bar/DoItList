@@ -11,13 +11,13 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 @.agents/phoenix.md
 
 ## Product (primer — see [`docs/ProductSpec.md`](docs/ProductSpec.md) for canonical detail)
-- **Core idea:** Task trees with real progress. Nest tasks, update leaves, parents roll up automatically. Weighting is optional.
-- **Vocabulary** (use consistently): Initiative, Task, Progress, Weight, Roll-up progress, Initiative member. Not a generic todo app.
+- **Core idea:** Task trees with real progress. Nest tasks, update leaves, parents roll up automatically. Importance is expressed by decomposition — no weight attribute.
+- **Vocabulary** (use consistently): Initiative, Task, Progress, Roll-up progress, Initiative member. Not a generic todo app.
 - **Inspiration:** AbstractSpoon's ToDo List, with three deliberate departures — web-based, real-time collaborative, deliberately simpler.
 
 ## Durable Principles
 - Nested work is first-class.
-- Progress is useful by default; weighting is optional.
+- Progress is useful by default; importance is expressed by decomposition, not configuration.
 - No file check-in/check-out collaboration.
 - Grow milestone by milestone — resist becoming bloated PM software.
 

@@ -3,9 +3,9 @@
 Task trees with real progress.
 
 Do It List is a small web app for breaking work into nested tasks and watching
-parent and root progress roll up automatically from the leaves. Optional
-weighting lets you say "this subtask is worth 30% of its parent" without forcing
-the user to set weights for everything.
+parent and root progress roll up automatically from the leaves. Importance is
+expressed by decomposition: break the work that matters more into more detail,
+and it counts for more — there are no weights to configure.
 
 Do It List grows milestone by milestone. The execution dashboard lives in
 [`docs/PLAN.md`](docs/PLAN.md); the canonical product spec lives in
@@ -85,10 +85,8 @@ Canonical definitions live in [`docs/ProductSpec.md`](docs/ProductSpec.md). Quic
 - **Task** — any node in the tree.
 - **List** — informal name for a *root* task (a task whose `parent_id` is
   `null`). An Initiative usually has multiple Lists, each with its own tree.
-- **Roll-up progress** — `computed_progress` on a task: the weighted average of
-  its children's rolled-up progress.
-- **Weight** — how much a child contributes to its parent's roll-up. Default
-  is `1`; users only have to touch it when they want non-equal contributions.
+- **Roll-up progress** — `computed_progress` on a task: the average progress of
+  all its descendant leaves (the leaf average).
 - **Initiative member** — a `(user, initiative, role)` triple. Roles are `owner`,
   `editor`, `viewer`.
 
@@ -102,12 +100,14 @@ Pure implementation lives in `DoIt.Tasks.Progress` and is exercised by
 ```
 leaf task                    → manual_progress (clamped 0..100)
 status == "done"             → 100
-branch task                  → sum(child_progress * child_weight) / sum(child_weight)
+branch task                  → sum(leaf_progress) / leaf_count   (all descendant leaves)
 ```
 
-Children with non-positive weight are ignored. Marking a task `done` snaps its
-progress to 100; reopening lets the user move it back down. Whenever a task
-changes, `DoIt.Tasks` recomputes its ancestors recursively.
+Every leaf counts one unit wherever it sits, so a subtree's pull on its
+ancestors is its leaf count — decomposing a branch further is how it comes to
+matter more. Marking a task `done` snaps its progress to 100; reopening lets
+the user move it back down. Whenever a task changes, `DoIt.Tasks` recomputes
+its ancestors recursively.
 
 ## Architecture, briefly
 
@@ -121,7 +121,7 @@ changes, `DoIt.Tasks` recomputes its ancestors recursively.
 - `lib/doit_web/user_auth.ex` — session-based auth plug + LiveView mount hooks.
 
 Activity events are recorded on task creation, deletion, comment, and field
-changes (title, status, progress, weight, assignee, parent, priority) and are
+changes (title, status, progress, assignee, parent, priority) and are
 shown in the task editor sidebar.
 
 ## Known limitations (intentional, see Non-Goals in the milestone)
