@@ -10,6 +10,15 @@ defmodule DoItWeb.CoreComponentsTest do
       assert CoreComponents.initials(%{name: "Ana de la Cruz", username: "ana"}) == "AC"
     end
 
+    test "generational suffixes don't steal the surname initial" do
+      assert CoreComponents.initials(%{name: "Alvin Bartholomew Cubbins III", username: "al"}) == "AC"
+      assert CoreComponents.initials(%{name: "Doris Elenor Fitzgerald Jr.", username: "dor"}) == "DF"
+      assert CoreComponents.initials(%{name: "Sam Smith Sr", username: "sam"}) == "SS"
+      assert CoreComponents.initials(%{name: "Bo Vance, Jr. III", username: "bo"}) == "BV"
+      # A suffix-only "name" still yields something rather than vanishing.
+      assert CoreComponents.initials(%{name: "Jr", username: "jay"}) == "J"
+    end
+
     test "falls back to the username when the name is blank" do
       assert CoreComponents.initials(%{name: "", username: "zed99"}) == "ZE"
       assert CoreComponents.initials(%{name: nil, username: "zed99"}) == "ZE"

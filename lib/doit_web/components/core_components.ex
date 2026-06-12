@@ -723,8 +723,15 @@ defmodule DoItWeb.CoreComponents do
 
   def avatar_bg(%{id: id}), do: Enum.at(@avatar_palette, :erlang.phash2(id, length(@avatar_palette)))
 
+  # Generational/honorific suffixes ignored when picking the surname initial
+  # ("Alvin Cubbins III" → AC, "Doris Fitzgerald Jr." → DF). Bare "i" stays
+  # off the list — too likely to be a real trailing initial.
+  @name_suffixes ~w(jr jnr sr snr esq ii iii iv v vi vii viii ix x)
+
   def initials(%{name: name} = user) when is_binary(name) do
-    case name |> String.split() |> Enum.map(&String.first/1) do
+    words = name |> String.split() |> drop_trailing_suffixes()
+
+    case Enum.map(words, &String.first/1) do
       [] -> initials_from_username(user)
       [first] -> String.upcase(first)
       [first | rest] -> String.upcase(first <> List.last(rest))
@@ -732,6 +739,18 @@ defmodule DoItWeb.CoreComponents do
   end
 
   def initials(user), do: initials_from_username(user)
+
+  defp drop_trailing_suffixes([_ | _] = words) do
+    normalized = words |> List.last() |> String.trim_trailing(".") |> String.downcase()
+
+    if normalized in @name_suffixes and length(words) > 1 do
+      words |> List.delete_at(-1) |> drop_trailing_suffixes()
+    else
+      words
+    end
+  end
+
+  defp drop_trailing_suffixes(words), do: words
 
   defp initials_from_username(%{username: username}) when is_binary(username),
     do: username |> String.slice(0, 2) |> String.upcase()
