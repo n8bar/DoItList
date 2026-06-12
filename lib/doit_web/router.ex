@@ -38,6 +38,7 @@ defmodule DoItWeb.Router do
     delete "/users/log_out", UserSessionController, :delete
 
     live_session :authenticated, on_mount: [{DoItWeb.UserAuth, :require_authenticated}] do
+      live "/account", AccountLive, :show
       live "/initiatives", InitiativeIndexLive, :index
       live "/initiatives/:id", InitiativeShowLive, :show
     end

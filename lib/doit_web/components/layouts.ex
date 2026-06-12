@@ -45,7 +45,13 @@ defmodule DoItWeb.Layouts do
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
               <.theme_toggle variant={:group} current_user={@current_user} />
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-              <span class="text-zinc-600 dark:text-zinc-300">{@current_user.name}</span>
+              <.link
+                navigate={~p"/account"}
+                title="Account details"
+                class="text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
+              >
+                {@current_user.name}
+              </.link>
               <.link
                 href={~p"/users/log_out"}
                 method="delete"
@@ -64,8 +70,13 @@ defmodule DoItWeb.Layouts do
                 <.icon name="hero-bars-3" class="w-6 h-6" />
               </summary>
               <ul class="absolute right-0 mt-2 w-56 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
-                <li class="px-2 py-1 font-medium text-zinc-600 dark:text-zinc-300">
-                  {@current_user.name}
+                <li>
+                  <.link
+                    navigate={~p"/account"}
+                    class="block rounded px-2 py-1 font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    {@current_user.name}
+                  </.link>
                 </li>
                 <li>
                   <.link
