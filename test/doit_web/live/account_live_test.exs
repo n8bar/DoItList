@@ -141,6 +141,32 @@ defmodule DoItWeb.AccountLiveTest do
     end
   end
 
+  describe "preferences form (§2)" do
+    test "buffers changes until submit, then saves with the page's flash idiom", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      {:ok, view, _} = live(conn, ~p"/account")
+
+      view
+      |> form("#preferences-form",
+        user_preferences: %{task_priority: "high", task_assign_owner: "true"}
+      )
+      |> render_change()
+
+      assert Accounts.get_preferences(user).task_priority == "normal"
+
+      view
+      |> form("#preferences-form",
+        user_preferences: %{task_priority: "high", task_assign_owner: "true"}
+      )
+      |> render_submit()
+
+      assert render(view) =~ "Preferences saved."
+      prefs = Accounts.get_preferences(user)
+      assert prefs.task_priority == "high"
+      assert prefs.task_assign_owner
+    end
+  end
+
   describe "username editing (§1.3)" do
     test "live-validates format and uniqueness as you type", %{conn: conn} do
       {other_conn, _other} = register_and_log_in(conn)

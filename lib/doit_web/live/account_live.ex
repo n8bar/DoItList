@@ -16,13 +16,24 @@ defmodule DoItWeb.AccountLive do
      |> assign(:prefs_form, to_form(Accounts.change_preferences(Accounts.get_preferences(user))))}
   end
 
-  # Preferences save on every change — a select/checkbox flip is its own
-  # confirmation; only failures get a flash.
   @impl true
+  def handle_event("validate_preferences", %{"user_preferences" => params}, socket) do
+    changeset =
+      socket.assigns.current_user
+      |> Accounts.get_preferences()
+      |> Accounts.change_preferences(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :prefs_form, to_form(changeset))}
+  end
+
   def handle_event("save_preferences", %{"user_preferences" => params}, socket) do
     case Accounts.update_preferences(socket.assigns.current_user, params) do
       {:ok, prefs} ->
-        {:noreply, assign(socket, :prefs_form, to_form(Accounts.change_preferences(prefs)))}
+        {:noreply,
+         socket
+         |> assign(:prefs_form, to_form(Accounts.change_preferences(prefs)))
+         |> put_flash(:info, "Preferences saved.")}
 
       {:error, changeset} ->
         {:noreply,
@@ -257,13 +268,19 @@ defmodule DoItWeb.AccountLive do
             Preferences
           </h2>
 
-          <.form for={@prefs_form} id="preferences-form" phx-change="save_preferences" class="space-y-6">
+          <.form
+            for={@prefs_form}
+            id="preferences-form"
+            phx-change="validate_preferences"
+            phx-submit="save_preferences"
+            class="space-y-6"
+          >
             <fieldset class="space-y-2">
               <legend class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
                 My Initiative Defaults
               </legend>
               <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                Applied to Initiatives you create. Changes save immediately.
+                Applied to Initiatives you create.
               </p>
               <.input
                 type="select"
@@ -343,6 +360,10 @@ defmodule DoItWeb.AccountLive do
                 label="Show Task Activity log"
               />
             </fieldset>
+
+            <div class="flex justify-end">
+              <.button type="submit" phx-disable-with="Saving...">Save preferences</.button>
+            </div>
           </.form>
 
           <%!-- §2.5 — the "until a profile/settings page" home that .03.01.11
