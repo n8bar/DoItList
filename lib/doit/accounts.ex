@@ -34,6 +34,16 @@ defmodule DoIt.Accounts do
     User.registration_changeset(user, attrs)
   end
 
+  def change_profile(%User{} = user, attrs \\ %{}) do
+    User.profile_changeset(user, attrs)
+  end
+
+  def update_profile(%User{} = user, attrs) do
+    user
+    |> User.profile_changeset(attrs)
+    |> Repo.update()
+  end
+
   def change_username(%User{} = user, attrs \\ %{}) do
     User.username_changeset(user, attrs)
   end

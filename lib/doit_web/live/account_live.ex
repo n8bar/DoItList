@@ -10,10 +10,34 @@ defmodule DoItWeb.AccountLive do
     {:ok,
      socket
      |> assign(:page_title, "Account")
+     |> assign(:profile_form, to_form(Accounts.change_profile(user)))
      |> assign(:username_form, to_form(Accounts.change_username(user)))}
   end
 
   @impl true
+  def handle_event("validate_profile", %{"user" => params}, socket) do
+    changeset =
+      socket.assigns.current_user
+      |> Accounts.change_profile(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :profile_form, to_form(changeset))}
+  end
+
+  def handle_event("save_profile", %{"user" => params}, socket) do
+    case Accounts.update_profile(socket.assigns.current_user, params) do
+      {:ok, user} ->
+        {:noreply,
+         socket
+         |> assign(:current_user, user)
+         |> assign(:profile_form, to_form(Accounts.change_profile(user)))
+         |> put_flash(:info, "Profile updated.")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :profile_form, to_form(Map.put(changeset, :action, :validate)))}
+    end
+  end
+
   def handle_event("validate_username", %{"user" => params}, socket) do
     changeset =
       socket.assigns.current_user
@@ -58,10 +82,6 @@ defmodule DoItWeb.AccountLive do
           </h2>
           <dl class="space-y-3 text-sm">
             <div class="flex items-baseline justify-between gap-4">
-              <dt class="text-zinc-500 dark:text-zinc-400">Name</dt>
-              <dd class="text-zinc-800 dark:text-zinc-100 font-medium">{@current_user.name}</dd>
-            </div>
-            <div class="flex items-baseline justify-between gap-4">
               <dt class="text-zinc-500 dark:text-zinc-400">Email</dt>
               <dd class="text-zinc-800 dark:text-zinc-100 font-medium">{@current_user.email}</dd>
             </div>
@@ -72,6 +92,28 @@ defmodule DoItWeb.AccountLive do
               </dd>
             </div>
           </dl>
+
+          <.form
+            for={@profile_form}
+            id="profile-form"
+            phx-change="validate_profile"
+            phx-submit="save_profile"
+            class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-2"
+          >
+            <.input
+              field={@profile_form[:name]}
+              type="text"
+              label="Display name"
+              phx-debounce="300"
+              autocomplete="name"
+            />
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+              Free-form — how your name reads to other members.
+            </p>
+            <div class="flex justify-end">
+              <.button type="submit" phx-disable-with="Saving...">Save name</.button>
+            </div>
+          </.form>
 
           <.form
             for={@username_form}

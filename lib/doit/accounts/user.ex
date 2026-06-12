@@ -14,6 +14,17 @@ defmodule DoIt.Accounts.User do
   end
 
   @doc """
+  Changeset for account-page profile edits. `name` stays the free-form
+  display label, distinct from the username.
+  """
+  def profile_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:name])
+    |> validate_required([:name])
+    |> validate_length(:name, min: 1, max: 80)
+  end
+
+  @doc """
   Changeset for setting or changing the username.
 
   Rules: 3–30 chars of `a-z 0-9 _ -`, starting with a letter or digit.
