@@ -165,6 +165,10 @@ defmodule DoItWeb.AccountLive do
               label="Display name"
               phx-debounce="300"
               autocomplete="name"
+              data-protonpass-ignore="true"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
             />
             <p class="text-xs text-zinc-500 dark:text-zinc-400">
               Free-form — how your name reads to other members.

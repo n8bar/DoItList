@@ -5,8 +5,20 @@
     <.form :let={f} for={@form} action={~p"/users/register"} class="space-y-4">
       <%!-- Every field carries an explicit autocomplete: the DOM name
            user[name] normalizes to "username" in password-manager
-           heuristics, so unannotated fields get misgrabbed. --%>
-      <.input field={f[:name]} type="text" label="Name" autocomplete="name" required />
+           heuristics, so unannotated fields get misgrabbed. Proton Pass
+           ignores autocomplete for identification entirely, so the Name
+           field also carries the managers' own opt-out attributes. --%>
+      <.input
+        field={f[:name]}
+        type="text"
+        label="Name"
+        autocomplete="name"
+        data-protonpass-ignore="true"
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-bwignore="true"
+        required
+      />
       <.input
         field={f[:username]}
         type="text"
