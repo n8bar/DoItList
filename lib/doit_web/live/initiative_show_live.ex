@@ -27,7 +27,23 @@ defmodule DoItWeb.InitiativeShowLive do
          |> push_navigate(to: ~p"/initiatives")}
 
       true ->
-        if connected?(socket), do: Tasks.subscribe(initiative.id)
+        if connected?(socket) do
+          Tasks.subscribe(initiative.id)
+
+          # Selection presence (.04.01.12): subscribe first, then track — our
+          # own join diff arrives as the initial push to this client, and it
+          # already includes everyone who was here before us.
+          Phoenix.PubSub.subscribe(DoIt.PubSub, presence_topic(initiative.id))
+
+          {:ok, _} =
+            DoItWeb.Presence.track(self(), presence_topic(initiative.id), to_string(user.id), %{
+              user_id: user.id,
+              task_id: nil,
+              name: user.name,
+              initials: initials(user),
+              bg: avatar_bg(user)
+            })
+        end
 
         {:ok,
          socket
@@ -48,6 +64,40 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
     end
+  end
+
+  # --- Selection presence (.04.01.12) --------------------------------------
+
+  defp presence_topic(initiative_id), do: "initiative_presence:#{initiative_id}"
+
+  defp update_presence(socket, task_id) do
+    if connected?(socket) do
+      user = socket.assigns.current_user
+      topic = presence_topic(socket.assigns.initiative.id)
+
+      {:ok, _} =
+        DoItWeb.Presence.update(self(), topic, to_string(user.id), &Map.put(&1, :task_id, task_id))
+    end
+
+    socket
+  end
+
+  # Everyone else's current selections, shipped to the client hook. Several
+  # windows of the same user collapse to unique (user, task) pairs; my own
+  # selections are skipped — presence marks *other* members' rows.
+  defp push_presence(socket) do
+    me = socket.assigns.current_user.id
+
+    selections =
+      socket.assigns.initiative.id
+      |> presence_topic()
+      |> DoItWeb.Presence.list()
+      |> Enum.flat_map(fn {_key, %{metas: metas}} -> metas end)
+      |> Enum.filter(&(&1.user_id != me and &1.task_id))
+      |> Enum.uniq_by(&{&1.user_id, &1.task_id})
+      |> Enum.map(&Map.take(&1, [:user_id, :task_id, :name, :initials, :bg]))
+
+    push_event(socket, "presence-selections", %{selections: selections})
   end
 
   defp load_tree(socket) do
@@ -243,7 +293,8 @@ defmodule DoItWeb.InitiativeShowLive do
              |> assign(:selected_task_id, id)
              |> assign(:selected_task, task)
              |> assign(:comments, Tasks.list_comments(id))
-             |> assign(:activity, Tasks.list_task_activity(id))}
+             |> assign(:activity, Tasks.list_task_activity(id))
+             |> update_presence(id)}
         end
     end
   end
@@ -362,7 +413,7 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   def handle_event("close_task", _params, socket) do
-    {:noreply, assign(socket, :selected_task_id, nil)}
+    {:noreply, socket |> assign(:selected_task_id, nil) |> update_presence(nil)}
   end
 
   def handle_event("update_task", %{"task" => params}, socket) do
@@ -788,6 +839,12 @@ defmodule DoItWeb.InitiativeShowLive do
   # --- PubSub ---------------------------------------------------------------
 
   @impl true
+  # A presence join/leave/move anywhere in the initiative: push the full
+  # selection list to this client; the PresenceBadges hook redraws rows.
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
+    {:noreply, push_presence(socket)}
+  end
+
   def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
 
   def handle_info({:task_updated, id}, socket), do: {:noreply, patch_task(socket, id)}
@@ -1287,6 +1344,9 @@ defmodule DoItWeb.InitiativeShowLive do
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <.shortcuts_overlay />
+      <%!-- Anchor for the selection-presence channel (.04.01.12): receives
+           presence-selections pushes and paints row badges client-side. --%>
+      <div id="presence-badges" phx-hook="PresenceBadges" phx-update="ignore" hidden></div>
     </Layouts.app>
     """
   end
@@ -1751,6 +1811,16 @@ defmodule DoItWeb.InitiativeShowLive do
               {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.username}"}
             </span>
           </button>
+
+          <%!-- Other members' selection-presence avatars (.04.01.12). The
+               server renders the slot empty; the PresenceBadges hook fills
+               it and the patch-guard re-applies after morphdom passes. --%>
+          <span
+            data-presence-slot={@task.id}
+            class="inline-flex items-center gap-0.5 flex-none"
+            aria-hidden="true"
+          >
+          </span>
         </div>
 
         <%!-- Row 1, pinned right: the new-task button. --%>

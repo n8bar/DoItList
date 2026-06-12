@@ -12,6 +12,7 @@ defmodule DoIt.Application do
       DoIt.Repo,
       {DNSCluster, query: Application.get_env(:doit, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: DoIt.PubSub},
+      DoItWeb.Presence,
       # Start a worker by calling: DoIt.Worker.start_link(arg)
       # {DoIt.Worker, arg},
       # Start to serve requests, typically the last entry

@@ -818,4 +818,53 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       refute Initiatives.get_initiative(initiative.id)
     end
   end
+
+  describe "selection presence (m02.04 §1.12)" do
+    setup %{conn: conn} do
+      {conn_a, user_a} = register_and_log_in(conn)
+      {conn_b, user_b} = register_and_log_in(conn)
+      initiative = create_initiative(user_a)
+      {:ok, _} = Initiatives.add_member(initiative.id, user_b.id, "editor")
+      task = create_task(user_a, initiative, nil, "Watched task")
+
+      %{conn_a: conn_a, conn_b: conn_b, user_b: user_b, initiative: initiative, task: task}
+    end
+
+    # A presence diff can arrive in several pushes (joins first, then the
+    # selection); walk them until one carries what we're waiting for.
+    defp await_selection_push(view, fun, attempts \\ 10)
+    defp await_selection_push(_view, _fun, 0), do: flunk("no presence push matched")
+
+    defp await_selection_push(view, fun, attempts) do
+      assert_push_event(view, "presence-selections", %{selections: selections}, 1000)
+      if fun.(selections), do: selections, else: await_selection_push(view, fun, attempts - 1)
+    end
+
+    test "another member's select/deselect reaches this client; own selection is excluded",
+         %{conn_a: conn_a, conn_b: conn_b, user_b: user_b, initiative: initiative, task: task} do
+      {:ok, view_a, _} = live(conn_a, ~p"/initiatives/#{initiative.id}")
+      {:ok, view_b, _} = live(conn_b, ~p"/initiatives/#{initiative.id}")
+
+      render_click(view_b, "select_task", %{"id" => to_string(task.id)})
+
+      selections =
+        await_selection_push(view_a, fn sels ->
+          Enum.any?(sels, &(&1.user_id == user_b.id and &1.task_id == task.id))
+        end)
+
+      badge = Enum.find(selections, &(&1.user_id == user_b.id))
+      assert badge.initials != ""
+      assert String.starts_with?(badge.bg, "#")
+
+      # B's own client never gets B's selection back.
+      assert_push_event(view_b, "presence-selections", %{selections: own})
+      refute Enum.any?(own, &(&1.user_id == user_b.id))
+
+      render_click(view_b, "close_task", %{})
+
+      await_selection_push(view_a, fn sels ->
+        not Enum.any?(sels, &(&1.user_id == user_b.id))
+      end)
+    end
+  end
 end

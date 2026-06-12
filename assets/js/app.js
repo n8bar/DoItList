@@ -1776,6 +1776,55 @@ Hooks.CollapseChildren = {
   },
 }
 
+// Selection-presence badges (m02.04 §1.12). The server pushes the full
+// "who has what selected" list (other members only); this hook stores it
+// window-level and paints [data-presence-slot] spans. Like collapse state,
+// the painted DOM is client-owned — the patch guard below re-applies it
+// after any morphdom pass wipes a slot.
+Hooks.PresenceBadges = {
+  mounted() {
+    window.DoitPresence = { selections: [] }
+    this.handleEvent("presence-selections", ({ selections }) => {
+      window.DoitPresence.selections = selections
+      applyPresenceBadges()
+    })
+  },
+  destroyed() {
+    window.DoitPresence = { selections: [] }
+  },
+}
+
+function applyPresenceBadges() {
+  const sels = (window.DoitPresence && window.DoitPresence.selections) || []
+  const byTask = new Map()
+  sels.forEach((s) => {
+    if (!s.task_id) return
+    const key = String(s.task_id)
+    const arr = byTask.get(key) || []
+    arr.push(s)
+    byTask.set(key, arr)
+  })
+  document.querySelectorAll("[data-presence-slot]").forEach((slot) => {
+    const list = byTask.get(slot.dataset.presenceSlot) || []
+    // Converge instead of loop: only rewrite when the badge set changed
+    // (the patch guard runs this after every DOM mutation, ours included).
+    const sig = list.map((s) => `${s.user_id}:${s.initials}:${s.bg}`).join("|")
+    if (slot.dataset.sig === sig) return
+    slot.dataset.sig = sig
+    slot.replaceChildren(
+      ...list.map((s) => {
+        const b = document.createElement("span")
+        b.className =
+          "inline-flex flex-none items-center justify-center w-4 h-4 rounded-full text-[8px] font-semibold text-white select-none"
+        b.style.backgroundColor = s.bg
+        b.textContent = s.initials
+        b.title = `${s.name} has this task selected`
+        return b
+      })
+    )
+  })
+}
+
 // The net under the hooks above: collapse state's source of truth is
 // localStorage and the server never renders collapsed-peek, but per-hook
 // updated() callbacks miss some patch paths (nodes moved optimistically by
@@ -1804,6 +1853,8 @@ new MutationObserver(() => {
     // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
     applyPendingMove()
     applyPendingToggle()
+    // Presence badges are client-painted (m02.04 §1.12) — same guard.
+    applyPresenceBadges()
     // While a confirm modal is up, its maybe-write hue is server-held —
     // disarm the client's safety timer so it can't strip it mid-decision.
     if (document.getElementById("completion-confirm")) releaseSavingHue()
