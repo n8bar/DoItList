@@ -54,6 +54,49 @@ defmodule DoIt.AccountsTest do
     end
   end
 
+  describe "change password (§1.7)" do
+    test "requires the correct current password" do
+      user = register!(%{"password" => "old-password"})
+
+      assert {:error, changeset} =
+               Accounts.update_password(user, %{
+                 "current_password" => "not-the-one",
+                 "password" => "new-password-9",
+                 "password_confirmation" => "new-password-9"
+               })
+
+      assert "is not your current password" in errors_on(changeset).current_password
+      assert {:ok, _} = Accounts.authenticate(user.email, "old-password")
+    end
+
+    test "requires the confirmation to match" do
+      user = register!(%{"password" => "old-password"})
+
+      assert {:error, changeset} =
+               Accounts.update_password(user, %{
+                 "current_password" => "old-password",
+                 "password" => "new-password-9",
+                 "password_confirmation" => "something-else"
+               })
+
+      assert "does not match new password" in errors_on(changeset).password_confirmation
+    end
+
+    test "changes the password" do
+      user = register!(%{"password" => "old-password"})
+
+      assert {:ok, _user} =
+               Accounts.update_password(user, %{
+                 "current_password" => "old-password",
+                 "password" => "new-password-9",
+                 "password_confirmation" => "new-password-9"
+               })
+
+      assert {:ok, _} = Accounts.authenticate(user.email, "new-password-9")
+      assert {:error, :invalid_credentials} = Accounts.authenticate(user.email, "old-password")
+    end
+  end
+
   describe "username rules (m02.04 §1.2)" do
     test "accepts the allowed charset, trims and downcases" do
       user = register!()

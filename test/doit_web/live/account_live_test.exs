@@ -61,6 +61,39 @@ defmodule DoItWeb.AccountLiveTest do
     end
   end
 
+  describe "change password (§1.7)" do
+    test "changes the password through the form", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      wrong =
+        view
+        |> form("#password-form",
+          user: %{
+            current_password: "nope",
+            password: "brand-new-pass",
+            password_confirmation: "brand-new-pass"
+          }
+        )
+        |> render_submit()
+
+      assert wrong =~ "is not your current password"
+
+      view
+      |> form("#password-form",
+        user: %{
+          current_password: "password123",
+          password: "brand-new-pass",
+          password_confirmation: "brand-new-pass"
+        }
+      )
+      |> render_submit()
+
+      assert render(view) =~ "Password updated."
+      assert {:ok, _} = Accounts.authenticate(user.email, "brand-new-pass")
+    end
+  end
+
   describe "username editing (§1.3)" do
     test "live-validates format and uniqueness as you type", %{conn: conn} do
       {other_conn, _other} = register_and_log_in(conn)

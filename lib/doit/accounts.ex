@@ -44,6 +44,27 @@ defmodule DoIt.Accounts do
     |> Repo.update()
   end
 
+  def change_password(%User{} = user, attrs \\ %{}) do
+    User.password_changeset(user, attrs)
+  end
+
+  @doc """
+  Change the password after verifying the current one. A wrong (or blank)
+  current password fails with an error on `:current_password`.
+  """
+  def update_password(%User{} = user, attrs) do
+    changeset = User.password_changeset(user, attrs)
+
+    if User.valid_password?(user, attrs["current_password"] || "") do
+      Repo.update(changeset)
+    else
+      {:error,
+       changeset
+       |> Ecto.Changeset.add_error(:current_password, "is not your current password")
+       |> Map.put(:action, :validate)}
+    end
+  end
+
   def change_username(%User{} = user, attrs \\ %{}) do
     User.username_changeset(user, attrs)
   end

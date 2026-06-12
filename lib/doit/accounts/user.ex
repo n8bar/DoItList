@@ -8,9 +8,24 @@ defmodule DoIt.Accounts.User do
     field :name, :string
     field :hashed_password, :string, redact: true
     field :password, :string, virtual: true, redact: true
+    field :current_password, :string, virtual: true, redact: true
     field :theme, :string
 
     timestamps(type: :utc_datetime)
+  end
+
+  @doc """
+  Changeset for changing the password. The current-password check lives in
+  `Accounts.update_password/2` (save-time only), so live validation doesn't
+  flag a half-typed current password.
+  """
+  def password_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:password, :current_password])
+    |> validate_required([:password])
+    |> validate_length(:password, min: 8, max: 72)
+    |> validate_confirmation(:password, message: "does not match new password")
+    |> hash_password()
   end
 
   @doc """

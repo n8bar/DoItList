@@ -11,7 +11,8 @@ defmodule DoItWeb.AccountLive do
      socket
      |> assign(:page_title, "Account")
      |> assign(:profile_form, to_form(Accounts.change_profile(user)))
-     |> assign(:username_form, to_form(Accounts.change_username(user)))}
+     |> assign(:username_form, to_form(Accounts.change_username(user)))
+     |> assign(:password_form, to_form(Accounts.change_password(user)))}
   end
 
   @impl true
@@ -35,6 +36,29 @@ defmodule DoItWeb.AccountLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, :profile_form, to_form(Map.put(changeset, :action, :validate)))}
+    end
+  end
+
+  def handle_event("validate_password", %{"user" => params}, socket) do
+    changeset =
+      socket.assigns.current_user
+      |> Accounts.change_password(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :password_form, to_form(changeset))}
+  end
+
+  def handle_event("save_password", %{"user" => params}, socket) do
+    case Accounts.update_password(socket.assigns.current_user, params) do
+      {:ok, user} ->
+        {:noreply,
+         socket
+         |> assign(:current_user, user)
+         |> assign(:password_form, to_form(Accounts.change_password(user)))
+         |> put_flash(:info, "Password updated.")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :password_form, to_form(changeset))}
     end
   end
 
@@ -134,6 +158,47 @@ defmodule DoItWeb.AccountLive do
             </p>
             <div class="flex justify-end">
               <.button type="submit" phx-disable-with="Saving...">Save username</.button>
+            </div>
+          </.form>
+        </section>
+
+        <section
+          id="account-security"
+          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+        >
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
+            Security
+          </h2>
+
+          <.form
+            for={@password_form}
+            id="password-form"
+            phx-change="validate_password"
+            phx-submit="save_password"
+            class="space-y-2"
+          >
+            <.input
+              field={@password_form[:current_password]}
+              type="password"
+              label="Current password"
+              autocomplete="current-password"
+            />
+            <.input
+              field={@password_form[:password]}
+              type="password"
+              label="New password (min 8 chars)"
+              phx-debounce="300"
+              autocomplete="new-password"
+            />
+            <.input
+              field={@password_form[:password_confirmation]}
+              type="password"
+              label="Confirm new password"
+              phx-debounce="300"
+              autocomplete="new-password"
+            />
+            <div class="flex justify-end">
+              <.button type="submit" phx-disable-with="Saving...">Change password</.button>
             </div>
           </.form>
         </section>
