@@ -24,7 +24,10 @@
 @plugin "../vendor/daisyui-theme" {
   name: "dark";
   default: false;
-  prefersdark: true;
+  /* No prefersdark: the boot script in root.html.heex resolves "system" to
+     an explicit data-theme before paint, so daisyUI vars and Tailwind's
+     dark: variant always key off the same attribute and can't split. */
+  prefersdark: false;
   color-scheme: "dark";
   --color-base-100: oklch(30.33% 0.016 252.42);
   --color-base-200: oklch(25.26% 0.014 253.1);

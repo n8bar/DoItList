@@ -87,7 +87,7 @@ defmodule DoItWeb.CoreComponents do
   ## Examples
 
       <.button>Send!</.button>
-      <.button phx-click="go" variant="primary">Send!</.button>
+      <.button phx-click="go">Send!</.button>
       <.button navigate={~p"/"}>Home</.button>
   """
   attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
@@ -96,11 +96,11 @@ defmodule DoItWeb.CoreComponents do
   slot :inner_block, required: true
 
   def button(%{rest: rest} = assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
-
+    # The app's solid-emerald CTA (not daisyUI's btn-primary/btn-soft, whose
+    # soft tint read as dark-on-dark in both themes). One look, both modes.
     assigns =
       assign_new(assigns, :class, fn ->
-        ["btn", Map.fetch!(variants, assigns[:variant])]
+        "inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-60 cursor-pointer"
       end)
 
     if rest[:href] || rest[:navigate] || rest[:patch] do

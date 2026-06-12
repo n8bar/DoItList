@@ -10,8 +10,9 @@ defmodule DoItWeb.Layouts do
 
   @doc """
   Returns the value to use for `<html data-theme=...>` based on the current
-  user's saved preference. Returns nil for "system" / no user, which omits
-  the attribute and lets DaisyUI's `prefersdark` handle it.
+  user's saved preference. Returns nil for "system" / no user — the boot
+  script in root.html.heex then resolves the OS preference to an explicit
+  light/dark before first paint.
   """
   def theme_attr(assigns) do
     case assigns[:current_user] do

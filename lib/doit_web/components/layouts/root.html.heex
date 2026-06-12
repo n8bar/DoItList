@@ -13,18 +13,29 @@
     </script>
     <script>
       (() => {
+        // "system" resolves to an explicit light/dark BEFORE first paint, so
+        // Tailwind's dark: variant and daisyUI's component vars always read
+        // the same data-theme — no attribute means neither ever goes dark.
+        const resolve = (theme) =>
+          theme === "light" || theme === "dark"
+            ? theme
+            : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
         const setTheme = (theme) => {
           if (theme === "system") {
             localStorage.removeItem("phx:theme");
-            document.documentElement.removeAttribute("data-theme");
           } else {
             localStorage.setItem("phx:theme", theme);
-            document.documentElement.setAttribute("data-theme", theme);
           }
+          document.documentElement.setAttribute("data-theme", resolve(theme));
+          // Marks "following the OS" so the media listener below knows to re-resolve.
+          document.documentElement.toggleAttribute("data-theme-system", theme === "system");
         };
         if (!document.documentElement.hasAttribute("data-theme")) {
           setTheme(localStorage.getItem("phx:theme") || "system");
         }
+        matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+          if (document.documentElement.hasAttribute("data-theme-system")) setTheme("system");
+        });
         window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
         
         window.addEventListener("phx:set-theme", (e) => {
