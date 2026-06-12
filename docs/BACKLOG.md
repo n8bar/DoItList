@@ -11,11 +11,14 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 ## Items
 
 ### Initiative lifecycle (M4 or later)
-- **Trash — owner-only soft-delete.** Delete routes to a recoverable Trash first; permanent deletion from Trash stays owner-only (today's hard delete becomes that final step). Global — a trashed initiative leaves every member's dashboard. Manual purge only for now (auto-purge TBD).
-- **Hidden — per-member.** Any member can hide an initiative from their own dashboard without touching anyone else's; restorable. Separate mechanism from Trash.
+- **Hidden — per-member.** Any member can hide an initiative from their own dashboard without touching anyone else's; restorable. Separate mechanism from Trash (promoted to `m02.06`).
 - **Leave an initiative.** Drop your own membership entirely — distinct from Hidden.
 - **Duplicate a non-owned initiative.** Copy it into a brand-new initiative you own — new tasks, fresh timestamps, _not_ a clone of the original's history. Owners can disable duplication per-initiative, but it's a soft barrier only (manual recreation is always possible; make owners aware).
-- **Trash ↔ duplicate interplay.** An owner-trashed initiative shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
+- **Trash ↔ duplicate interplay.** An owner-trashed initiative (Trash ships in `m02.06`) shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
+
+### Account (M4 or later)
+- **Avatar upload.** User-supplied avatar images replacing/augmenting the generated ones from `m02.04` — brings file storage, serving, size limits, image processing.
+- **Email infrastructure.** A mailer plus everything gated on it: email verification on change/registration, email-based password reset (account recovery ships mailer-free in `m02.04`), and the invite-by-email flow below.
 
 ### User preferences
 - **Persist Initiative-list sort server-side.** The Initiatives index sort (mode + reverse + manual drag order) ships in localStorage (per-browser) in M02 Arc 3 worklist 6. When user profile/preferences gets built, move it to proper per-user server storage so it follows the user across devices. Manual order would land on `initiative_members.sort_order` (per-membership); the mode/reverse on a user-preferences record.
