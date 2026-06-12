@@ -10,7 +10,13 @@
         autocomplete="username"
         required
       />
-      <.input field={f[:password]} type="password" label="Password" required />
+      <.input
+        field={f[:password]}
+        type="password"
+        label="Password"
+        autocomplete="current-password"
+        required
+      />
 
       <div class="flex items-center justify-between gap-4 pt-2">
         <.link

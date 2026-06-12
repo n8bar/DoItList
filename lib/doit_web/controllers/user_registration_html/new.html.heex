@@ -3,7 +3,10 @@
     <h1 class="text-2xl font-semibold mb-6">Create your account</h1>
 
     <.form :let={f} for={@form} action={~p"/users/register"} class="space-y-4">
-      <.input field={f[:name]} type="text" label="Name" required />
+      <%!-- Every field carries an explicit autocomplete: the DOM name
+           user[name] normalizes to "username" in password-manager
+           heuristics, so unannotated fields get misgrabbed. --%>
+      <.input field={f[:name]} type="text" label="Name" autocomplete="name" required />
       <.input
         field={f[:username]}
         type="text"
@@ -11,8 +14,14 @@
         autocomplete="username"
         required
       />
-      <.input field={f[:email]} type="email" label="Email" required />
-      <.input field={f[:password]} type="password" label="Password (min 8 chars)" required />
+      <.input field={f[:email]} type="email" label="Email" autocomplete="email" required />
+      <.input
+        field={f[:password]}
+        type="password"
+        label="Password (min 8 chars)"
+        autocomplete="new-password"
+        required
+      />
 
       <div class="flex items-center justify-between gap-4 pt-2">
         <.link
