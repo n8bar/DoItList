@@ -13,6 +13,13 @@ defmodule DoIt.Accounts do
     Repo.get_by(User, email: String.downcase(email))
   end
 
+  # Usernames can't contain "@", so a single lookup over both columns is
+  # unambiguous. Both columns store the downcased form.
+  def get_user_by_email_or_username(login) when is_binary(login) do
+    login = login |> String.trim() |> String.downcase()
+    Repo.one(from u in User, where: u.email == ^login or u.username == ^login)
+  end
+
   def list_users do
     Repo.all(from u in User, order_by: u.name)
   end
@@ -37,8 +44,8 @@ defmodule DoIt.Accounts do
     |> Repo.update()
   end
 
-  def authenticate(email, password) when is_binary(email) and is_binary(password) do
-    user = get_user_by_email(email)
+  def authenticate(login, password) when is_binary(login) and is_binary(password) do
+    user = get_user_by_email_or_username(login)
 
     if User.valid_password?(user, password) do
       {:ok, user}

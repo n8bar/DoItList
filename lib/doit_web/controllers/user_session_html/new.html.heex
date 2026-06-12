@@ -3,7 +3,13 @@
     <h1 class="text-2xl font-semibold mb-6">Log in</h1>
 
     <.form :let={f} for={@form} action={~p"/users/log_in"} class="space-y-4">
-      <.input field={f[:email]} type="email" label="Email" required />
+      <.input
+        field={f[:login]}
+        type="text"
+        label="Username or email"
+        autocomplete="username"
+        required
+      />
       <.input field={f[:password]} type="password" label="Password" required />
 
       <div class="flex items-center justify-between gap-4 pt-2">

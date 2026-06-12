@@ -34,6 +34,26 @@ defmodule DoIt.AccountsTest do
     end
   end
 
+  describe "login by username or email (§1.5)" do
+    test "authenticates by email or username, case-insensitively" do
+      user =
+        register!(%{
+          "username" => "loginuser",
+          "email" => "login-target@example.com",
+          "password" => "password123"
+        })
+
+      assert {:ok, %User{id: id}} = Accounts.authenticate("login-target@example.com", "password123")
+      assert id == user.id
+
+      assert {:ok, %User{id: ^id}} = Accounts.authenticate("LoginUser", "password123")
+      assert {:ok, %User{id: ^id}} = Accounts.authenticate("  loginuser  ", "password123")
+
+      assert {:error, :invalid_credentials} = Accounts.authenticate("loginuser", "wrong-pass")
+      assert {:error, :invalid_credentials} = Accounts.authenticate("nobody", "password123")
+    end
+  end
+
   describe "username rules (m02.04 §1.2)" do
     test "accepts the allowed charset, trims and downcases" do
       user = register!()

@@ -7,14 +7,14 @@ defmodule DoItWeb.UserSessionController do
   alias DoItWeb.UserAuth
 
   def new(conn, _params) do
-    form = to_form(%{"email" => "", "password" => ""}, as: :user)
+    form = to_form(%{"login" => "", "password" => ""}, as: :user)
     render(conn, :new, form: form)
   end
 
   def create(conn, %{"user" => params}) do
-    %{"email" => email, "password" => password} = params
+    %{"login" => login, "password" => password} = params
 
-    case Accounts.authenticate(email, password) do
+    case Accounts.authenticate(login, password) do
       {:ok, user} ->
         conn
         |> put_flash(:info, "Welcome back, #{user.name}.")
@@ -22,7 +22,7 @@ defmodule DoItWeb.UserSessionController do
 
       {:error, :invalid_credentials} ->
         conn
-        |> put_flash(:error, "Invalid email or password.")
+        |> put_flash(:error, "Invalid username/email or password.")
         |> redirect(to: ~p"/users/log_in")
     end
   end

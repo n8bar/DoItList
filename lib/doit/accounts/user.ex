@@ -53,13 +53,6 @@ defmodule DoIt.Accounts.User do
     |> hash_password()
   end
 
-  def login_changeset(attrs) do
-    {%{}, %{email: :string, password: :string}}
-    |> cast(attrs, [:email, :password])
-    |> validate_required([:email, :password])
-    |> update_change(:email, &String.downcase(&1))
-  end
-
   defp hash_password(changeset) do
     case get_change(changeset, :password) do
       nil ->
