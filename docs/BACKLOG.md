@@ -18,10 +18,9 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 
 ### Account (M4 or later)
 - **Avatar upload.** User-supplied avatar images replacing/augmenting the generated ones from `m02.04` — brings file storage, serving, size limits, image processing.
-- **Email infrastructure.** A mailer plus everything gated on it: email verification on change/registration, email-based password reset (account recovery ships mailer-free in `m02.04`), and the invite-by-email flow below.
-
-### User preferences
-- **Persist Initiative-list sort server-side.** The Initiatives index sort (mode + reverse + manual drag order) ships in localStorage (per-browser) in M02 Arc 3 worklist 6. When user profile/preferences gets built, move it to proper per-user server storage so it follows the user across devices. Manual order would land on `initiative_members.sort_order` (per-membership); the mode/reverse on a user-preferences record.
+- **Email infrastructure.** A mailer plus everything gated on it: email verification on change/registration, email-based password reset, and the invite-by-email flow below. Until it exists, forgotten passwords are admin resets (fine at private scale).
+- **Recovery codes — the public-opening gate.** One-time codes (generated on the account page, shown once, hashed at rest) with a "use a recovery code" login path. Required before opening to the public **if** the mailer isn't live by then; unnecessary while admin resets cover everyone.
+- **TOTP two-factor.** Security, not recovery — pairs with recovery codes (or a live mailer) so 2FA lockouts have an exit.
 
 ### Task row polish
 - **Color-coded priority pills.** Map each priority (`high` / `low` / etc.) to its own chip color instead of the current monochrome zinc, so priority reads at a glance. Default (`normal`) stays the empty dashed placeholder. One-spot change in `task_node/1`'s priority chip.
