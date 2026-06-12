@@ -1811,9 +1811,9 @@ defmodule DoItWeb.InitiativeShowLive do
           <span
             :if={@task.children != []}
             title="Leaves in this branch"
-            class="flex-none text-xs tabular-nums text-zinc-500 dark:text-zinc-400"
+            class="flex-none relative top-[-0.4em] text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
           >
-            ({leaf_count(@task)})
+            {leaf_count(@task)}
           </span>
 
           <%!-- No phx-click: app.js owns the click (.03.07.22) — it flips the
