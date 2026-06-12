@@ -41,7 +41,8 @@ defmodule DoItWeb.InitiativeShowLive do
               task_id: nil,
               name: user.name,
               initials: initials(user),
-              bg: avatar_bg(user)
+              bg: avatar_bg(user),
+              fg: avatar_fg(user)
             })
         end
 
@@ -96,7 +97,7 @@ defmodule DoItWeb.InitiativeShowLive do
       |> Enum.flat_map(fn {_key, %{metas: metas}} -> metas end)
       |> Enum.filter(&(&1.user_id != me and &1.task_id))
       |> Enum.uniq_by(&{&1.user_id, &1.task_id})
-      |> Enum.map(&Map.take(&1, [:user_id, :task_id, :name, :initials, :bg]))
+      |> Enum.map(&Map.take(&1, [:user_id, :task_id, :name, :initials, :bg, :fg]))
 
     push_event(socket, "presence-selections", %{selections: selections})
   end
@@ -1803,8 +1804,11 @@ defmodule DoItWeb.InitiativeShowLive do
             <span
               data-pill-avatar
               hidden={!(@task.assignee_id && @task.assignee)}
-              class="inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold text-white select-none"
-              style={@task.assignee && "background-color: #{avatar_bg(@task.assignee)}"}
+              class="avatar-emboss inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold select-none"
+              style={
+                @task.assignee &&
+                  "background-image: #{avatar_bg(@task.assignee)}; color: #{avatar_fg(@task.assignee)}"
+              }
               aria-hidden="true"
             >
               {@task.assignee && initials(@task.assignee)}
@@ -2427,6 +2431,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 title={m.user.name}
                 data-initials={initials(m.user)}
                 data-avatar-bg={avatar_bg(m.user)}
+                data-avatar-fg={avatar_fg(m.user)}
                 selected={@task.assignee_id == m.user.id}
               >
                 {m.user.username}

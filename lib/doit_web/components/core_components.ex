@@ -705,10 +705,10 @@ defmodule DoItWeb.CoreComponents do
     ~H"""
     <span
       class={[
-        "inline-flex flex-none items-center justify-center rounded-full font-semibold text-white select-none",
+        "avatar-emboss inline-flex flex-none items-center justify-center rounded-full font-semibold select-none",
         @class
       ]}
-      style={"background-color: #{avatar_bg(@user)}"}
+      style={"background-image: #{avatar_bg(@user)}; color: #{avatar_fg(@user)}"}
       title={@user.name}
       {@rest}
     >
@@ -717,11 +717,24 @@ defmodule DoItWeb.CoreComponents do
     """
   end
 
-  # Hex palette (not Tailwind classes) so client-side echoes can copy the
-  # color straight into an inline style. All ~600-weight for white text.
-  @avatar_palette ~w(#059669 #0284c7 #7c3aed #e11d48 #d97706 #4f46e5 #0d9488 #c026d3 #ea580c #65a30d)
+  # Four deterministic, independently-cycling channels: dark gradient start,
+  # dark gradient end, gradient angle, pale text tint. Hex values (not
+  # Tailwind classes) so client-side echoes copy them straight into inline
+  # styles. Palette sizes are pairwise coprime (10 / 9 / 7) indexed by
+  # rem(id, size), and the angle steps by 137° (coprime to 360 — the golden
+  # angle), so sequential user ids walk thousands of distinct looks before
+  # any repeat — and any pale tint stays legible on any dark gradient.
+  @avatar_bgs ~w(#059669 #0284c7 #7c3aed #e11d48 #d97706 #4f46e5 #0d9488 #c026d3 #ea580c #65a30d)
+  @avatar_grads ~w(#2563eb #9333ea #dc2626 #ca8a04 #0891b2 #db2777 #16a34a #4338ca #b45309)
+  @avatar_fgs ~w(#a7f3d0 #bae6fd #ddd6fe #fecdd3 #fde68a #f5d0fe #d9f99d)
 
-  def avatar_bg(%{id: id}), do: Enum.at(@avatar_palette, :erlang.phash2(id, length(@avatar_palette)))
+  def avatar_bg(%{id: id}) do
+    "linear-gradient(#{rem(id * 137, 360)}deg, #{pick(@avatar_bgs, id)}, #{pick(@avatar_grads, id)})"
+  end
+
+  def avatar_fg(%{id: id}), do: pick(@avatar_fgs, id)
+
+  defp pick(palette, id), do: Enum.at(palette, rem(id, length(palette)))
 
   # Generational/honorific suffixes ignored when picking the surname initial
   # ("Alvin Cubbins III" → AC, "Doris Fitzgerald Jr." → DF). Bare "i" stays

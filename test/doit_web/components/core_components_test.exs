@@ -24,10 +24,22 @@ defmodule DoItWeb.CoreComponentsTest do
       assert CoreComponents.initials(%{name: nil, username: "zed99"}) == "ZE"
     end
 
-    test "color is deterministic per user id" do
+    test "gradient and text color are deterministic per user id" do
       a = CoreComponents.avatar_bg(%{id: 1})
       assert a == CoreComponents.avatar_bg(%{id: 1})
-      assert String.starts_with?(a, "#")
+      assert a =~ ~r/^linear-gradient\(\d+deg, #[0-9a-f]{6}, #[0-9a-f]{6}\)$/
+
+      fg = CoreComponents.avatar_fg(%{id: 1})
+      assert fg == CoreComponents.avatar_fg(%{id: 1})
+      assert fg =~ ~r/^#[0-9a-f]{6}$/
+    end
+
+    test "sequential ids don't repeat a look" do
+      looks =
+        for id <- 1..40,
+            do: {CoreComponents.avatar_bg(%{id: id}), CoreComponents.avatar_fg(%{id: id})}
+
+      assert length(Enum.uniq(looks)) == 40
     end
   end
 end

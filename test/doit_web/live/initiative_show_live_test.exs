@@ -872,7 +872,8 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       badge = Enum.find(selections, &(&1.user_id == user_b.id))
       assert badge.initials != ""
-      assert String.starts_with?(badge.bg, "#")
+      assert String.starts_with?(badge.bg, "linear-gradient(")
+      assert String.starts_with?(badge.fg, "#")
 
       # B's own client never gets B's selection back.
       assert_push_event(view_b, "presence-selections", %{selections: own})

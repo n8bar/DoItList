@@ -552,7 +552,8 @@ document.addEventListener("input", (e) => {
         avatar.hidden = !opt
         if (opt) {
           avatar.textContent = opt.dataset.initials || ""
-          avatar.style.backgroundColor = opt.dataset.avatarBg || ""
+          avatar.style.backgroundImage = opt.dataset.avatarBg || ""
+          avatar.style.color = opt.dataset.avatarFg || ""
         }
       }
       return
@@ -1808,15 +1809,16 @@ function applyPresenceBadges() {
     const list = byTask.get(slot.dataset.presenceSlot) || []
     // Converge instead of loop: only rewrite when the badge set changed
     // (the patch guard runs this after every DOM mutation, ours included).
-    const sig = list.map((s) => `${s.user_id}:${s.initials}:${s.bg}`).join("|")
+    const sig = list.map((s) => `${s.user_id}:${s.initials}:${s.bg}:${s.fg}`).join("|")
     if (slot.dataset.sig === sig) return
     slot.dataset.sig = sig
     slot.replaceChildren(
       ...list.map((s) => {
         const b = document.createElement("span")
         b.className =
-          "inline-flex flex-none items-center justify-center w-4 h-4 rounded-full text-[8px] font-semibold text-white select-none"
-        b.style.backgroundColor = s.bg
+          "avatar-emboss inline-flex flex-none items-center justify-center w-4 h-4 rounded-full text-[8px] font-semibold select-none"
+        b.style.backgroundImage = s.bg
+        b.style.color = s.fg
         b.textContent = s.initials
         b.title = `${s.name} has this task selected`
         return b
