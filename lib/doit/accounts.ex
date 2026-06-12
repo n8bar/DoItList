@@ -5,7 +5,7 @@ defmodule DoIt.Accounts do
 
   import Ecto.Query, warn: false
   alias DoIt.Repo
-  alias DoIt.Accounts.User
+  alias DoIt.Accounts.{User, UserPreferences}
 
   def get_user(id), do: Repo.get(User, id)
 
@@ -83,6 +83,29 @@ defmodule DoIt.Accounts do
     else
       {:error, :invalid_credentials}
     end
+  end
+
+  @doc """
+  The user's preferences row, or an unsaved defaults struct when they've
+  never changed anything — callers read either the same way.
+  """
+  def get_preferences(%User{id: user_id}) do
+    Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
+  end
+
+  def get_preferences_by_user_id(user_id) do
+    Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
+  end
+
+  def change_preferences(%UserPreferences{} = prefs, attrs \\ %{}) do
+    UserPreferences.changeset(prefs, attrs)
+  end
+
+  def update_preferences(%User{} = user, attrs) do
+    user
+    |> get_preferences()
+    |> UserPreferences.changeset(attrs)
+    |> Repo.insert_or_update()
   end
 
   @doc """

@@ -37,9 +37,18 @@ defmodule DoIt.Initiatives do
   def get_initiative!(id), do: Repo.get!(Initiative, id)
   def get_initiative(id), do: Repo.get(Initiative, id)
 
-  @doc "Create an Initiative and make the creator its owner."
+  @doc """
+  Create an Initiative and make the creator its owner. The owner's "My
+  Initiative Defaults" (m02.04 §2.2) seed the progress calc and the root
+  task's sort — explicit attrs still win.
+  """
   def create_initiative(%User{} = owner, attrs) do
-    attrs = Map.put(stringify_keys(attrs), "owner_id", owner.id)
+    prefs = DoIt.Accounts.get_preferences(owner)
+
+    attrs =
+      stringify_keys(attrs)
+      |> Map.put("owner_id", owner.id)
+      |> maybe_default_progress_calc(prefs)
 
     Repo.transaction(fn ->
       with {:ok, initiative} <- %Initiative{} |> Initiative.changeset(attrs) |> Repo.insert(),
@@ -51,7 +60,7 @@ defmodule DoIt.Initiatives do
                role: "owner"
              })
              |> Repo.insert(),
-           {:ok, root} <- insert_root_task(initiative, owner),
+           {:ok, root} <- insert_root_task(initiative, owner, prefs),
            {:ok, initiative} <-
              initiative |> Ecto.Changeset.change(root_task_id: root.id) |> Repo.update() do
         initiative
@@ -61,12 +70,17 @@ defmodule DoIt.Initiatives do
     end)
   end
 
+  defp maybe_default_progress_calc(attrs, %{initiative_progress_calc: nil}), do: attrs
+
+  defp maybe_default_progress_calc(attrs, %{initiative_progress_calc: calc}),
+    do: Map.put_new(attrs, "progress_calc", calc)
+
   # The Initiative's system-managed root task: parent_id nil, title a single
   # space. Inserted as a struct (not a changeset) on purpose — Ecto's cast trims
   # whitespace-only strings to empty and validate_required would reject " ", but
   # the root title doubles as the (initially empty) subtitle and the column is
   # min-1. No activity event or broadcast for a system row.
-  defp insert_root_task(%Initiative{} = initiative, %User{} = owner) do
+  defp insert_root_task(%Initiative{} = initiative, %User{} = owner, prefs) do
     Repo.insert(%Task{
       initiative_id: initiative.id,
       created_by_id: owner.id,
@@ -76,7 +90,8 @@ defmodule DoIt.Initiatives do
       manual_progress: 0,
       computed_progress: 0,
       sort_order: 0,
-      sort_reverse: false
+      sort_mode: prefs.initiative_sort_mode,
+      sort_reverse: prefs.initiative_sort_reverse
     })
   end
 

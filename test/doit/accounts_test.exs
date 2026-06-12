@@ -132,6 +132,53 @@ defmodule DoIt.AccountsTest do
     end
   end
 
+  describe "preferences (§2)" do
+    alias DoIt.Initiatives, as: Inits
+
+    test "defaults exist without a row; saving creates one and round-trips" do
+      user = register!()
+      prefs = Accounts.get_preferences(user)
+      assert prefs.id == nil
+      assert prefs.task_priority == "normal"
+      assert prefs.show_task_activity
+
+      {:ok, saved} = Accounts.update_preferences(user, %{"initiative_progress_calc" => "single_level"})
+      assert saved.id
+      assert Accounts.get_preferences(user).initiative_progress_calc == "single_level"
+
+      {:error, changeset} = Accounts.update_preferences(user, %{"task_priority" => "bogus"})
+      refute changeset.valid?
+    end
+
+    test "My Initiative Defaults seed new initiatives (§2.2)" do
+      user = register!()
+
+      {:ok, _} =
+        Accounts.update_preferences(user, %{
+          "initiative_sort_mode" => "alphabetical",
+          "initiative_sort_reverse" => "true",
+          "initiative_progress_calc" => "single_level"
+        })
+
+      {:ok, initiative} = Inits.create_initiative(user, %{"name" => "Prefab"})
+      root = DoIt.Repo.get!(DoIt.Tasks.Task, initiative.root_task_id)
+
+      assert initiative.progress_calc == "single_level"
+      assert root.sort_mode == "alphabetical"
+      assert root.sort_reverse == true
+    end
+
+    test "no preferences row means today's defaults (§2.2)" do
+      user = register!()
+      {:ok, initiative} = Inits.create_initiative(user, %{"name" => "Plain"})
+      root = DoIt.Repo.get!(DoIt.Tasks.Task, initiative.root_task_id)
+
+      assert initiative.progress_calc == "leaf_average"
+      assert root.sort_mode == nil
+      assert root.sort_reverse == false
+    end
+  end
+
   describe "username rules (m02.04 §1.2)" do
     test "accepts the allowed charset, trims and downcases" do
       user = register!()

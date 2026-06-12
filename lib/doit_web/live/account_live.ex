@@ -12,7 +12,24 @@ defmodule DoItWeb.AccountLive do
      |> assign(:page_title, "Account")
      |> assign(:profile_form, to_form(Accounts.change_profile(user)))
      |> assign(:username_form, to_form(Accounts.change_username(user)))
-     |> assign(:password_form, to_form(Accounts.change_password(user)))}
+     |> assign(:password_form, to_form(Accounts.change_password(user)))
+     |> assign(:prefs_form, to_form(Accounts.change_preferences(Accounts.get_preferences(user))))}
+  end
+
+  # Preferences save on every change — a select/checkbox flip is its own
+  # confirmation; only failures get a flash.
+  @impl true
+  def handle_event("save_preferences", %{"user_preferences" => params}, socket) do
+    case Accounts.update_preferences(socket.assigns.current_user, params) do
+      {:ok, prefs} ->
+        {:noreply, assign(socket, :prefs_form, to_form(Accounts.change_preferences(prefs)))}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> assign(:prefs_form, to_form(Map.put(changeset, :action, :validate)))
+         |> put_flash(:error, "Couldn't save preferences.")}
+    end
   end
 
   @impl true
@@ -225,6 +242,53 @@ defmodule DoItWeb.AccountLive do
             <div class="flex justify-end">
               <.button type="submit" phx-disable-with="Saving...">Change password</.button>
             </div>
+          </.form>
+        </section>
+
+        <section
+          id="account-preferences"
+          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+        >
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
+            Preferences
+          </h2>
+
+          <.form for={@prefs_form} id="preferences-form" phx-change="save_preferences" class="space-y-6">
+            <fieldset class="space-y-2">
+              <legend class="text-sm font-medium text-zinc-700 dark:text-zinc-200">
+                My Initiative Defaults
+              </legend>
+              <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                Applied to Initiatives you create. Changes save immediately.
+              </p>
+              <.input
+                type="select"
+                field={@prefs_form[:initiative_sort_mode]}
+                label="Sort Lists by"
+                options={[
+                  {"Manual (default)", ""},
+                  {"Alphabetical", "alphabetical"},
+                  {"Completion %", "completion"},
+                  {"Priority", "priority"},
+                  {"First Created", "created"},
+                  {"Last Updated", "updated"}
+                ]}
+              />
+              <.input
+                type="checkbox"
+                field={@prefs_form[:initiative_sort_reverse]}
+                label="Reverse sort"
+              />
+              <.input
+                type="select"
+                field={@prefs_form[:initiative_progress_calc]}
+                label="Progress calculation"
+                options={[
+                  {"Leaf average (default)", ""},
+                  {"Single level", "single_level"}
+                ]}
+              />
+            </fieldset>
           </.form>
         </section>
 
