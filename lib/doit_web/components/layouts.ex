@@ -45,21 +45,38 @@ defmodule DoItWeb.Layouts do
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
               <.theme_toggle variant={:group} current_user={@current_user} />
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-              <.link
-                navigate={~p"/account"}
-                title="Account details"
-                class="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
-              >
-                <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
-                {@current_user.name}
-              </.link>
-              <.link
-                href={~p"/users/log_out"}
-                method="delete"
-                class="text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
-              >
-                Log out
-              </.link>
+              <%!-- Account menu — same JS-free details/summary pattern as the
+                   hamburger; root.html.heex's data-menu light-dismiss covers
+                   outside clicks and Escape. --%>
+              <details class="relative" data-menu>
+                <summary
+                  title="Account menu"
+                  class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
+                >
+                  <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
+                  {@current_user.name}
+                  <.icon name="hero-chevron-down" class="w-3 h-3" />
+                </summary>
+                <ul class="absolute right-0 mt-2 w-44 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+                  <li>
+                    <.link
+                      navigate={~p"/account"}
+                      class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    >
+                      Account details
+                    </.link>
+                  </li>
+                  <li>
+                    <.link
+                      href={~p"/users/log_out"}
+                      method="delete"
+                      class="block rounded px-2 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                    >
+                      Log out
+                    </.link>
+                  </li>
+                </ul>
+              </details>
             </div>
 
             <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too). --%>
