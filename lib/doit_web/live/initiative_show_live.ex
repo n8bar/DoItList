@@ -1798,16 +1798,23 @@ defmodule DoItWeb.InitiativeShowLive do
             data-initiative-id={@initiative_id}
             aria-controls={"children-#{@task.id}"}
             aria-label="Toggle children"
-            class="group flex-none inline-flex items-center gap-0.5 px-0.5 h-5 rounded text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 transition-colors motion-reduce:transition-none"
           >
             <.icon
-              name="hero-chevron-down"
+              name="hero-chevron-down-solid"
               class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
             />
-            <span class="hidden group-aria-[expanded=false]:inline text-xs tabular-nums">
-              ({leaf_count(@task)})
-            </span>
           </button>
+
+          <%!-- Leaf count lives OUTSIDE the phx-update="ignore" button so the
+               server keeps it live — inside, it froze at its mount-time value. --%>
+          <span
+            :if={@task.children != []}
+            title="Leaves in this branch"
+            class="flex-none text-xs tabular-nums text-zinc-500 dark:text-zinc-400"
+          >
+            ({leaf_count(@task)})
+          </span>
 
           <%!-- No phx-click: app.js owns the click (.03.07.22) — it flips the
                operated row optimistically (aria-pressed, data-done, bar) and
