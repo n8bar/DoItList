@@ -61,6 +61,30 @@ defmodule DoItWeb.AccountLiveTest do
     end
   end
 
+  describe "change email (§1.8)" do
+    test "saves a new email, downcased, and rejects a taken one", %{conn: conn} do
+      {other_conn, other} = register_and_log_in(conn)
+      {:ok, _other_view, _} = live(other_conn, ~p"/account")
+
+      {conn, user} = register_and_log_in(conn)
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      taken =
+        view
+        |> form("#profile-form", user: %{email: other.email})
+        |> render_change()
+
+      assert taken =~ "has already been taken"
+
+      view
+      |> form("#profile-form", user: %{email: "Fresh-Address@Example.com"})
+      |> render_submit()
+
+      assert render(view) =~ "Profile updated."
+      assert Accounts.get_user(user.id).email == "fresh-address@example.com"
+    end
+  end
+
   describe "change password (§1.7)" do
     test "changes the password through the form", %{conn: conn} do
       {conn, user} = register_and_log_in(conn)

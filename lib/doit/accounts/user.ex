@@ -30,13 +30,20 @@ defmodule DoIt.Accounts.User do
 
   @doc """
   Changeset for account-page profile edits. `name` stays the free-form
-  display label, distinct from the username.
+  display label, distinct from the username. Email is a plain edit — no
+  verification mail in M02, but it stays required so a future mailer never
+  inherits email-less accounts.
   """
   def profile_changeset(user, attrs) do
     user
-    |> cast(attrs, [:name])
-    |> validate_required([:name])
+    |> cast(attrs, [:name, :email])
+    |> validate_required([:name, :email])
     |> validate_length(:name, min: 1, max: 80)
+    |> validate_format(:email, ~r/^[^@\s]+@[^@\s]+\.[^@\s]+$/, message: "must be a valid email")
+    |> update_change(:email, &String.downcase(&1))
+    |> validate_length(:email, max: 160)
+    |> unsafe_validate_unique(:email, DoIt.Repo)
+    |> unique_constraint(:email)
   end
 
   @doc """

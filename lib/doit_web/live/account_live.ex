@@ -106,10 +106,6 @@ defmodule DoItWeb.AccountLive do
           </h2>
           <dl class="space-y-3 text-sm">
             <div class="flex items-baseline justify-between gap-4">
-              <dt class="text-zinc-500 dark:text-zinc-400">Email</dt>
-              <dd class="text-zinc-800 dark:text-zinc-100 font-medium">{@current_user.email}</dd>
-            </div>
-            <div class="flex items-baseline justify-between gap-4">
               <dt class="text-zinc-500 dark:text-zinc-400">Member since</dt>
               <dd class="text-zinc-800 dark:text-zinc-100">
                 {Calendar.strftime(@current_user.inserted_at, "%b %-d, %Y")}
@@ -134,8 +130,15 @@ defmodule DoItWeb.AccountLive do
             <p class="text-xs text-zinc-500 dark:text-zinc-400">
               Free-form — how your name reads to other members.
             </p>
+            <.input
+              field={@profile_form[:email]}
+              type="email"
+              label="Email"
+              phx-debounce="300"
+              autocomplete="email"
+            />
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save name</.button>
+              <.button type="submit" phx-disable-with="Saving...">Save profile</.button>
             </div>
           </.form>
 
