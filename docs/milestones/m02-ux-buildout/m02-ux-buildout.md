@@ -23,7 +23,6 @@ This is the milestone that earns the first public release.
 | 4 — Account Details | [`m02.04-account-details.md`](m02.04-account-details.md) | 11 | draft |
 | 5 — Wide-Width Layout | [`m02.05-wide-width-layout.md`](m02.05-wide-width-layout.md) | 12 | approved |
 | 6 — Undo / Redo | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 9 | drafted |
-| 7 — UI Polish | [`m02.07-ui-polish.md`](m02.07-ui-polish.md) | bucket | collecting |
 
 ## Non-Goals
 
