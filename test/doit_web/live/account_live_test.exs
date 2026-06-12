@@ -37,4 +37,44 @@ defmodule DoItWeb.AccountLiveTest do
     assert render(view) =~ user.email
     assert render(view) =~ user.name
   end
+
+  describe "username editing (§1.3)" do
+    test "live-validates format and uniqueness as you type", %{conn: conn} do
+      {other_conn, _other} = register_and_log_in(conn)
+      {:ok, other_view, _} = live(other_conn, ~p"/account")
+
+      other_view
+      |> form("#username-form", user: %{username: "taken-name"})
+      |> render_submit()
+
+      {conn, _user} = register_and_log_in(conn)
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      bad_format =
+        view
+        |> form("#username-form", user: %{username: "no spaces!"})
+        |> render_change()
+
+      assert bad_format =~ "use letters, numbers"
+
+      collision =
+        view
+        |> form("#username-form", user: %{username: "Taken-Name"})
+        |> render_change()
+
+      assert collision =~ "has already been taken"
+    end
+
+    test "saves a valid username, normalized", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      view
+      |> form("#username-form", user: %{username: "  New_Handle  "})
+      |> render_submit()
+
+      assert render(view) =~ "Username updated."
+      assert Accounts.get_user(user.id).username == "new_handle"
+    end
+  end
 end

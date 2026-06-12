@@ -1,9 +1,40 @@
 defmodule DoItWeb.AccountLive do
   use DoItWeb, :live_view
 
+  alias DoIt.Accounts
+
   @impl true
   def mount(_params, _session, socket) do
-    {:ok, assign(socket, :page_title, "Account")}
+    user = socket.assigns.current_user
+
+    {:ok,
+     socket
+     |> assign(:page_title, "Account")
+     |> assign(:username_form, to_form(Accounts.change_username(user)))}
+  end
+
+  @impl true
+  def handle_event("validate_username", %{"user" => params}, socket) do
+    changeset =
+      socket.assigns.current_user
+      |> Accounts.change_username(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :username_form, to_form(changeset))}
+  end
+
+  def handle_event("save_username", %{"user" => params}, socket) do
+    case Accounts.update_username(socket.assigns.current_user, params) do
+      {:ok, user} ->
+        {:noreply,
+         socket
+         |> assign(:current_user, user)
+         |> assign(:username_form, to_form(Accounts.change_username(user)))
+         |> put_flash(:info, "Username updated.")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :username_form, to_form(Map.put(changeset, :action, :validate)))}
+    end
   end
 
   @impl true
@@ -41,6 +72,28 @@ defmodule DoItWeb.AccountLive do
               </dd>
             </div>
           </dl>
+
+          <.form
+            for={@username_form}
+            id="username-form"
+            phx-change="validate_username"
+            phx-submit="save_username"
+            class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-2"
+          >
+            <.input
+              field={@username_form[:username]}
+              type="text"
+              label="Username"
+              phx-debounce="300"
+              autocomplete="username"
+            />
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+              3–30 characters: letters, numbers, _ and -. Your login and @handle across the app.
+            </p>
+            <div class="flex justify-end">
+              <.button type="submit" phx-disable-with="Saving...">Save username</.button>
+            </div>
+          </.form>
         </section>
       </div>
     </Layouts.app>

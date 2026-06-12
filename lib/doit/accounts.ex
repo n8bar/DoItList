@@ -27,6 +27,16 @@ defmodule DoIt.Accounts do
     User.registration_changeset(user, attrs)
   end
 
+  def change_username(%User{} = user, attrs \\ %{}) do
+    User.username_changeset(user, attrs)
+  end
+
+  def update_username(%User{} = user, attrs) do
+    user
+    |> User.username_changeset(attrs)
+    |> Repo.update()
+  end
+
   def authenticate(email, password) when is_binary(email) and is_binary(password) do
     user = get_user_by_email(email)
 
