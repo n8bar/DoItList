@@ -702,6 +702,28 @@ defmodule DoItWeb.InitiativeShowLive do
   # Permissive fallthrough: ignore non-arrow keys, missing modifiers, etc.
   def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
 
+  def handle_event("remove_member", %{"user-id" => user_id}, socket) do
+    initiative = socket.assigns.initiative
+    user_id = String.to_integer(user_id)
+
+    cond do
+      not socket.assigns.can_admin ->
+        {:noreply, put_flash(socket, :error, "Only the owner can remove members.")}
+
+      user_id == initiative.owner_id ->
+        {:noreply, put_flash(socket, :error, "The Initiative's owner can't be removed.")}
+
+      true ->
+        member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
+        {_count, _} = Initiatives.remove_member(initiative.id, user_id)
+
+        {:noreply,
+         socket
+         |> put_flash(:info, "Removed #{(member && member.user.name) || "member"}.")
+         |> assign(:members, Initiatives.list_members(initiative.id))}
+    end
+  end
+
   def handle_event("add_member", %{"member" => member, "role" => role}, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
@@ -1225,6 +1247,7 @@ defmodule DoItWeb.InitiativeShowLive do
               members={@members}
               can_admin={@can_admin}
               online_ids={@online_ids}
+              owner_id={@initiative.owner_id}
             />
           </div>
         </div>
@@ -1309,6 +1332,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 members={@members}
                 can_admin={@can_admin}
                 online_ids={@online_ids}
+                owner_id={@initiative.owner_id}
               />
             </div>
 
@@ -2253,6 +2277,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :members, :list, required: true
   attr :can_admin, :boolean, required: true
   attr :online_ids, :any, required: true
+  attr :owner_id, :integer, required: true
 
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
@@ -2331,7 +2356,22 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="truncate">{m.user.name}</span>
             <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate">@{m.user.username}</span>
           </span>
-          <span class="text-xs text-zinc-500 dark:text-zinc-400 flex-none">{m.role}</span>
+          <span class="flex items-center gap-1 flex-none">
+            <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+            <%!-- The initiative's owner row is never removable; membership is
+                 re-addable, so removal goes without a confirm. --%>
+            <button
+              :if={@can_admin && m.user_id != @owner_id}
+              type="button"
+              phx-click="remove_member"
+              phx-value-user-id={m.user_id}
+              title={"Remove #{m.user.name} from this Initiative"}
+              aria-label={"Remove #{m.user.name}"}
+              class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-950/40"
+            >
+              <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+            </button>
+          </span>
         </li>
       </ul>
     </div>

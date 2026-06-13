@@ -884,6 +884,25 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "remove member" do
+    test "owner removes a member; the owner row is protected", %{conn: conn} do
+      {conn, owner} = register_and_log_in(conn)
+      {_other_conn, other} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "editor")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+
+      removed = render_click(view, "remove_member", %{"user-id" => to_string(other.id)})
+      assert removed =~ "Removed #{other.name}"
+      refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
+
+      blocked = render_click(view, "remove_member", %{"user-id" => to_string(owner.id)})
+      assert blocked =~ "can&#39;t be removed"
+      assert Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == owner.id))
+    end
+  end
+
   describe "selection presence (m02.04 §1.12)" do
     setup %{conn: conn} do
       {conn_a, user_a} = register_and_log_in(conn)
