@@ -1,6 +1,8 @@
 defmodule DoItWeb.CoreComponentsTest do
   use ExUnit.Case, async: true
 
+  import Phoenix.LiveViewTest
+
   alias DoItWeb.CoreComponents
 
   describe "avatar derivation (m02.04 §1.11)" do
@@ -22,6 +24,17 @@ defmodule DoItWeb.CoreComponentsTest do
     test "falls back to the username when the name is blank" do
       assert CoreComponents.initials(%{name: "", username: "zed99"}) == "ZE"
       assert CoreComponents.initials(%{name: nil, username: "zed99"}) == "ZE"
+    end
+
+    test "online dot renders only when the user has the initiative open" do
+      user = %{id: 1, name: "Dot User", username: "dot"}
+
+      online = render_component(&CoreComponents.avatar/1, user: user, online: true)
+      assert online =~ "data-online-dot"
+      assert online =~ "(here now)"
+
+      offline = render_component(&CoreComponents.avatar/1, user: user)
+      refute offline =~ "data-online-dot"
     end
 
     test "gradient and text color are deterministic per user id" do

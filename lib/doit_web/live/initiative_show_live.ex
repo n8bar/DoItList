@@ -60,6 +60,10 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:comments, [])
          |> assign(:activity, [])
          |> assign(:show_task_activity, Accounts.get_preferences(user).show_task_activity)
+         |> assign(
+           :online_ids,
+           if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
+         )
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
@@ -71,6 +75,16 @@ defmodule DoItWeb.InitiativeShowLive do
   # --- Selection presence (.04.01.12) --------------------------------------
 
   defp presence_topic(initiative_id), do: "initiative_presence:#{initiative_id}"
+
+  # Everyone with this initiative open right now — presence keys are the
+  # tracked user ids. Feeds the avatar online dots (members panel + pane).
+  defp online_ids(initiative_id) do
+    initiative_id
+    |> presence_topic()
+    |> DoItWeb.Presence.list()
+    |> Map.keys()
+    |> MapSet.new(&String.to_integer/1)
+  end
 
   defp update_presence(socket, task_id) do
     if connected?(socket) do
@@ -842,9 +856,13 @@ defmodule DoItWeb.InitiativeShowLive do
 
   @impl true
   # A presence join/leave/move anywhere in the initiative: push the full
-  # selection list to this client; the PresenceBadges hook redraws rows.
+  # selection list to this client (the PresenceBadges hook redraws rows) and
+  # refresh who's-here for the server-rendered online dots.
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    {:noreply, push_presence(socket)}
+    {:noreply,
+     socket
+     |> assign(:online_ids, online_ids(socket.assigns.initiative.id))
+     |> push_presence()}
   end
 
   def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
@@ -1179,7 +1197,12 @@ defmodule DoItWeb.InitiativeShowLive do
             </button>
           </div>
           <div id="mobile-members" class="hidden mt-2">
-            <.members_panel id="members-mobile" members={@members} can_admin={@can_admin} />
+            <.members_panel
+              id="members-mobile"
+              members={@members}
+              can_admin={@can_admin}
+              online_ids={@online_ids}
+            />
           </div>
         </div>
 
@@ -1256,7 +1279,12 @@ defmodule DoItWeb.InitiativeShowLive do
             <%!-- Desktop/tablet: standalone Members panel. On phone it's hidden
                  in favor of the header's collapsible toggle (.05.04.1). --%>
             <div class="hidden sm:block">
-              <.members_panel id="members-desktop" members={@members} can_admin={@can_admin} />
+              <.members_panel
+                id="members-desktop"
+                members={@members}
+                can_admin={@can_admin}
+                online_ids={@online_ids}
+              />
             </div>
 
             <%!-- Persistent like the task pane (.03.07.08): always rendered,
@@ -1300,6 +1328,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 members={@members}
                 can_edit={@can_edit}
                 show_activity={@show_task_activity}
+                online_ids={@online_ids}
               />
             </div>
           </aside>
@@ -2181,6 +2210,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :id, :string, required: true
   attr :members, :list, required: true
   attr :can_admin, :boolean, required: true
+  attr :online_ids, :any, required: true
 
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
@@ -2251,7 +2281,11 @@ defmodule DoItWeb.InitiativeShowLive do
       <ul class="space-y-1 text-sm">
         <li :for={m <- @members} class="flex items-center justify-between">
           <span class="flex items-center gap-2 min-w-0 text-zinc-700 dark:text-zinc-200">
-            <.avatar user={m.user} class="w-6 h-6 text-xs" />
+            <.avatar
+              user={m.user}
+              online={MapSet.member?(@online_ids, m.user.id)}
+              class="w-6 h-6 text-xs"
+            />
             <span class="truncate">{m.user.name}</span>
             <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate">@{m.user.username}</span>
           </span>
@@ -2341,6 +2375,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :comments, :list, required: true
   attr :activity, :list, required: true
   attr :show_activity, :boolean, default: true
+  attr :online_ids, :any, required: true
   attr :members, :list, required: true
   attr :can_edit, :boolean, required: true
 
@@ -2498,6 +2533,7 @@ defmodule DoItWeb.InitiativeShowLive do
             Last updated by
             <span class="font-medium text-zinc-700 dark:text-zinc-200 inline-flex items-center gap-1 align-bottom"><.avatar
                 user={@task.updated_by}
+                online={MapSet.member?(@online_ids, @task.updated_by.id)}
                 class="w-4 h-4 text-[8px]"
               />{@task.updated_by.name}</span>
             <span title={@task.updated_at}>
@@ -2529,7 +2565,12 @@ defmodule DoItWeb.InitiativeShowLive do
         <ul data-async-list class="space-y-2 mb-2">
           <li :for={c <- @comments} class="text-sm">
             <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
-              <.avatar :if={c.user} user={c.user} class="w-4 h-4 text-[8px]" />
+              <.avatar
+                :if={c.user}
+                user={c.user}
+                online={c.user && MapSet.member?(@online_ids, c.user.id)}
+                class="w-4 h-4 text-[8px]"
+              />
               {c.user && c.user.name} · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
             <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
@@ -2567,6 +2608,7 @@ defmodule DoItWeb.InitiativeShowLive do
             · <span class="font-medium inline-flex items-center gap-1 align-bottom"><.avatar
                 :if={e.user}
                 user={e.user}
+                online={e.user && MapSet.member?(@online_ids, e.user.id)}
                 class="w-4 h-4 text-[8px]"
               />{(e.user && e.user.name) || "system"}</span>
             · {e.kind}

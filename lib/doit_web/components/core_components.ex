@@ -698,6 +698,7 @@ defmodule DoItWeb.CoreComponents do
   derivation into data attributes.
   """
   attr :user, :map, required: true
+  attr :online, :boolean, default: false, doc: "bright-green dot: user has this initiative open"
   attr :class, :string, default: "w-5 h-5 text-[10px]"
   attr :rest, :global
 
@@ -705,14 +706,22 @@ defmodule DoItWeb.CoreComponents do
     ~H"""
     <span
       class={[
-        "avatar-emboss inline-flex flex-none items-center justify-center rounded-full font-semibold select-none",
+        "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none",
         @class
       ]}
       style={"background-image: #{avatar_bg(@user)}; color: #{avatar_fg(@user)}"}
-      title={@user.name}
+      title={if @online, do: "#{@user.name} (here now)", else: @user.name}
       {@rest}
     >
       {initials(@user)}
+      <%!-- em-sized so it scales with the avatar, floored at 6px so it pops. --%>
+      <span
+        :if={@online}
+        data-online-dot
+        class="absolute -bottom-px -right-px w-[0.55em] min-w-1.5 h-[0.55em] min-h-1.5 rounded-full bg-green-400 ring-1 ring-white dark:ring-zinc-900"
+        aria-hidden="true"
+      >
+      </span>
     </span>
     """
   end

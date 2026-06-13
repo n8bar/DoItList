@@ -875,6 +875,10 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert String.starts_with?(badge.bg, "linear-gradient(")
       assert String.starts_with?(badge.fg, "#")
 
+      # By now A has processed presence diffs — the members panel marks B
+      # (and A) as having the initiative open.
+      assert render(view_a) =~ "data-online-dot"
+
       # B's own client never gets B's selection back.
       assert_push_event(view_b, "presence-selections", %{selections: own})
       refute Enum.any?(own, &(&1.user_id == user_b.id))
