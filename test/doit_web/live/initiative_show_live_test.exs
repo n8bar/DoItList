@@ -885,17 +885,29 @@ defmodule DoItWeb.InitiativeShowLiveTest do
   end
 
   describe "remove member" do
-    test "owner removes a member; the owner row is protected", %{conn: conn} do
+    test "removal confirms (suppressibly); the owner row is protected", %{conn: conn} do
       {conn, owner} = register_and_log_in(conn)
-      {_other_conn, other} = register_and_log_in(conn)
+      {_c1, other} = register_and_log_in(conn)
+      {_c2, third} = register_and_log_in(conn)
       initiative = create_initiative(owner)
       {:ok, _} = Initiatives.add_member(initiative.id, other.id, "editor")
+      {:ok, _} = Initiatives.add_member(initiative.id, third.id, "viewer")
 
       {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
 
-      removed = render_click(view, "remove_member", %{"user-id" => to_string(other.id)})
-      assert removed =~ "Removed #{other.name}"
+      # First removal: modal opens, confirm (with don't-ask-again) commits.
+      opened = render_click(view, "remove_member", %{"user-id" => to_string(other.id)})
+      assert opened =~ "Remove #{other.name} from this Initiative?"
+      assert Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
+
+      confirmed = render_click(view, "confirm_pending", %{"dont_show" => "true"})
+      assert confirmed =~ "Removed #{other.name}"
       refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
+
+      # Suppressed: the next removal commits without a modal.
+      direct = render_click(view, "remove_member", %{"user-id" => to_string(third.id)})
+      assert direct =~ "Removed #{third.name}"
+      refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == third.id))
 
       blocked = render_click(view, "remove_member", %{"user-id" => to_string(owner.id)})
       assert blocked =~ "can&#39;t be removed"

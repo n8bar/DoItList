@@ -666,6 +666,9 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :cascade_sort, task_id: task_id} ->
           commit_cascade_sort(socket, Tasks.get_task!(task_id))
 
+        %{kind: :remove_member, user_id: user_id} ->
+          commit_remove_member(socket, user_id)
+
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           # Failure pushed "confirm-cancelled" inside — the held flip reverts.
           case commit_cascade(socket, id, kind) do
@@ -758,14 +761,18 @@ defmodule DoItWeb.InitiativeShowLive do
       user_id == initiative.owner_id ->
         {:noreply, put_flash(socket, :error, "The Initiative's owner can't be removed.")}
 
+      skip_confirm?(socket, "remove-member") ->
+        {:noreply, commit_remove_member(socket, user_id)}
+
       true ->
         member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
-        {_count, _} = Initiatives.remove_member(initiative.id, user_id)
 
         {:noreply,
-         socket
-         |> put_flash(:info, "Removed #{(member && member.user.name) || "member"}.")
-         |> assign(:members, Initiatives.list_members(initiative.id))}
+         assign_pending(socket, %{
+           kind: :remove_member,
+           user_id: user_id,
+           name: (member && member.user.name) || "this member"
+         })}
     end
   end
 
@@ -918,6 +925,17 @@ defmodule DoItWeb.InitiativeShowLive do
     else
       socket
     end
+  end
+
+  defp commit_remove_member(socket, user_id) do
+    initiative = socket.assigns.initiative
+    member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
+    {_count, _} = Initiatives.remove_member(initiative.id, user_id)
+
+    socket
+    |> assign_pending(nil)
+    |> put_flash(:info, "Removed #{(member && member.user.name) || "member"}.")
+    |> assign(:members, Initiatives.list_members(initiative.id))
   end
 
   defp commit_move(socket, task, attrs) do
@@ -1599,6 +1617,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # (a destructive action always confirms).
   defp confirm_class(%{kind: kind}) when kind in [:move, :create], do: "completion-flip"
   defp confirm_class(%{kind: :cascade_sort}), do: "cascade-sort"
+  defp confirm_class(%{kind: :remove_member}), do: "remove-member"
 
   defp confirm_class(%{kind: kind}) when kind in [:cascade_complete, :cascade_incomplete],
     do: "cascade-complete"
@@ -1608,6 +1627,7 @@ defmodule DoItWeb.InitiativeShowLive do
   defp confirm_class_label("completion-flip"), do: "completion changes"
   defp confirm_class_label("cascade-sort"), do: "large branch reorgs"
   defp confirm_class_label("cascade-complete"), do: "branch completion changes"
+  defp confirm_class_label("remove-member"), do: "member removals"
 
   defp skip_confirm?(socket, class),
     do: not is_nil(class) and MapSet.member?(socket.assigns.confirm_skips, class)
@@ -1828,6 +1848,9 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :cascade_incomplete, title: t}, _verb),
     do: "Reopen \"#{t}\" and all its subtasks?"
+
+  defp confirm_body(%{kind: :remove_member, name: name}, _verb),
+    do: "Remove #{name} from this Initiative? Their task assignments stay; they can be re-added anytime."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -2453,8 +2476,9 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               <.icon name="hero-key" class="w-3.5 h-3.5" />
             </button>
-            <%!-- The initiative's owner row is never removable; membership is
-                 re-addable, so removal goes without a confirm. --%>
+            <%!-- The initiative's owner row is never removable. Removal runs
+                 through the suppressible confirm (.03.01.11, class
+                 "remove-member") — re-addable, so "don't ask again" is fine. --%>
             <button
               :if={@can_admin && m.user_id != @owner_id}
               type="button"
