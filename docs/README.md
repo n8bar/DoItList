@@ -75,4 +75,9 @@ Adding Subitems to an Arc-level Item decompresses the shortcut: that Item should
    - `[Guided]` — Claude and the operator together.
 5.2 The tag prefixes the subitem text. Define them only here — don't repeat the key in arc docs.
 
+### 6. Omissions & Corrections
+6.1 An arc doc may carry an `## Omissions & Corrections` section for bigger-than-tweak gaps whose home arc has closed — bugs and accidental omissions from earlier arcs. Any arc may pick such work up; the section is where the work gets documented first.
+6.2 Small tweaks never go here — those are fixed on the spot with a CHANGELOG line only.
+6.3 It's a work section, not a parking lot: its items are done within that arc. If the arc closes with one unfinished, the item moves to another arc explicitly.
+
 > Branch naming and repo workflow rules (specs-first, don't-merge-dirty, `main` canonical) live in [`../CLAUDE.md`](../CLAUDE.md) since they apply regardless of doc context.

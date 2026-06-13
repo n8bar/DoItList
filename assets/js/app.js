@@ -555,6 +555,10 @@ document.addEventListener("input", (e) => {
           avatar.style.backgroundImage = opt.dataset.avatarBg || ""
           avatar.style.color = opt.dataset.avatarFg || ""
         }
+        // Keep the online dot honest for the optimistic assignee too.
+        avatar.dataset.assigneeId = t.value || ""
+        const online = new Set(((window.DoitPresence && window.DoitPresence.online) || []).map(String))
+        avatar.classList.toggle("chip-online", !!t.value && online.has(t.value))
       }
       return
     }
@@ -1784,14 +1788,15 @@ Hooks.CollapseChildren = {
 // after any morphdom pass wipes a slot.
 Hooks.PresenceBadges = {
   mounted() {
-    window.DoitPresence = { selections: [] }
-    this.handleEvent("presence-selections", ({ selections }) => {
+    window.DoitPresence = { selections: [], online: [] }
+    this.handleEvent("presence-selections", ({ selections, online }) => {
       window.DoitPresence.selections = selections
+      window.DoitPresence.online = online || []
       applyPresenceBadges()
     })
   },
   destroyed() {
-    window.DoitPresence = { selections: [] }
+    window.DoitPresence = { selections: [], online: [] }
   },
 }
 
@@ -1824,6 +1829,13 @@ function applyPresenceBadges() {
         return b
       })
     )
+  })
+
+  // Assignee-chip online dots from the same push (classList.toggle is a
+  // no-op write when the state matches, so the patch guard converges).
+  const online = new Set(((window.DoitPresence && window.DoitPresence.online) || []).map(String))
+  document.querySelectorAll("[data-pill-avatar]").forEach((el) => {
+    el.classList.toggle("chip-online", !!el.dataset.assigneeId && online.has(el.dataset.assigneeId))
   })
 }
 

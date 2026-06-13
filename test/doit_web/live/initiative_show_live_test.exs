@@ -879,9 +879,12 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       # (and A) as having the initiative open.
       assert render(view_a) =~ "data-online-dot"
 
-      # B's own client never gets B's selection back.
-      assert_push_event(view_b, "presence-selections", %{selections: own})
+      # B's own client never gets B's selection back, but the online list
+      # (which feeds the assignee-chip dots) includes everyone, B too.
+      assert_push_event(view_b, "presence-selections", %{selections: own, online: online})
       refute Enum.any?(own, &(&1.user_id == user_b.id))
+      assert user_b.id in online
+      assert length(Enum.uniq(online)) >= 2
 
       render_click(view_b, "close_task", %{})
 

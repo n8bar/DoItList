@@ -104,16 +104,23 @@ defmodule DoItWeb.InitiativeShowLive do
   defp push_presence(socket) do
     me = socket.assigns.current_user.id
 
-    selections =
+    presences =
       socket.assigns.initiative.id
       |> presence_topic()
       |> DoItWeb.Presence.list()
+
+    selections =
+      presences
       |> Enum.flat_map(fn {_key, %{metas: metas}} -> metas end)
       |> Enum.filter(&(&1.user_id != me and &1.task_id))
       |> Enum.uniq_by(&{&1.user_id, &1.task_id})
       |> Enum.map(&Map.take(&1, [:user_id, :task_id, :name, :initials, :bg, :fg]))
 
-    push_event(socket, "presence-selections", %{selections: selections})
+    # Everyone here (self included) — the client paints assignee-chip online
+    # dots from this, so presence changes never re-render the tree.
+    online = presences |> Map.keys() |> Enum.map(&String.to_integer/1)
+
+    push_event(socket, "presence-selections", %{selections: selections, online: online})
   end
 
   defp load_tree(socket) do
@@ -1832,8 +1839,9 @@ defmodule DoItWeb.InitiativeShowLive do
                  optimistic echo can fill it from the pane select's data attrs. --%>
             <span
               data-pill-avatar
+              data-assignee-id={@task.assignee_id}
               hidden={!(@task.assignee_id && @task.assignee)}
-              class="avatar-emboss inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold select-none"
+              class="avatar-emboss relative inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold select-none"
               style={
                 @task.assignee &&
                   "background-image: #{avatar_bg(@task.assignee)}; color: #{avatar_fg(@task.assignee)}"

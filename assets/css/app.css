@@ -136,6 +136,24 @@
     0 1px 1px rgb(0 0 0 / 0.55);
 }
 
+/* Online dot on the task-row assignee chip. Client-painted: the
+   PresenceBadges hook toggles .chip-online, so presence joins/leaves never
+   re-render the tree. Mirrors the avatar component's data-online-dot. */
+[data-pill-avatar].chip-online::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background-color: #4ade80;
+  box-shadow: 0 0 0 1px #fff;
+}
+[data-theme="dark"] [data-pill-avatar].chip-online::after {
+  box-shadow: 0 0 0 1px #18181b;
+}
+
 /* Collapsed parent task: clip the children list to a 6px sliver so the top
    edge of the first child peeks out. Communicates "stuff is hidden under
    me" in a way a static border can't. */
