@@ -1811,7 +1811,7 @@ defmodule DoItWeb.InitiativeShowLive do
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
               "border border-dashed border-zinc-300 dark:border-zinc-600",
-              "data-pill-set:border-transparent data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
+              "data-pill-set:border-solid data-pill-set:border-zinc-400 dark:data-pill-set:border-zinc-500 data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
             ]}
             title={"Priority: #{@task.priority}"}
           >
@@ -1826,7 +1826,7 @@ defmodule DoItWeb.InitiativeShowLive do
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded-full text-xs flex-none cursor-pointer",
               "border border-dashed border-zinc-300 dark:border-zinc-600",
-              "data-pill-set:border-transparent data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
+              "data-pill-set:border-solid data-pill-set:border-zinc-400 dark:data-pill-set:border-zinc-500 data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
             ]}
             title={
               if(@task.assignee_id && @task.assignee,
