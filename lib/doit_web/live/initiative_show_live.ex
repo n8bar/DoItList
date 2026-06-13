@@ -1237,6 +1237,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   saving_ids={@pending_saving_ids}
                   recompute_ids={@pending_recompute_ids}
                   inherited_sort={@root_sort_mode}
+                  progress_calc={@initiative.progress_calc}
                 />
                 <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
               <% end %>
@@ -1725,6 +1726,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :saving_ids, :any, required: true
   attr :recompute_ids, :any, required: true
   attr :inherited_sort, :string, required: true
+  attr :progress_calc, :string, required: true
 
   def task_node(assigns) do
     assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
@@ -1934,10 +1936,10 @@ defmodule DoItWeb.InitiativeShowLive do
                server keeps it live — inside, it froze at its mount-time value. --%>
           <span
             :if={@task.children != []}
-            title="Leaves in this branch"
+            title={branch_unit_title(@progress_calc)}
             class="flex-none relative top-[-0.4em] text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
           >
-            {leaf_count(@task)}
+            {branch_unit_count(@task, @progress_calc)}
           </span>
 
           <%!-- No phx-click: app.js owns the click (.03.07.22) — it flips the
@@ -2034,6 +2036,7 @@ defmodule DoItWeb.InitiativeShowLive do
             saving_ids={@saving_ids}
             recompute_ids={@recompute_ids}
             inherited_sort={@resolved_sort}
+            progress_calc={@progress_calc}
           />
           <li id={"add-after-#{c.id}"} phx-update="ignore" class="empty:hidden"></li>
         <% end %>
@@ -2653,6 +2656,14 @@ defmodule DoItWeb.InitiativeShowLive do
   # immediate branches happen to wrap it.
   defp leaf_count(%{children: []}), do: 1
   defp leaf_count(%{children: children}), do: Enum.sum(Enum.map(children, &leaf_count/1))
+
+  # The chevron badge counts what the progress mode counts: every descendant
+  # leaf (leaf_average), or each direct child as one unit (single_level).
+  defp branch_unit_count(task, "single_level"), do: length(task.children)
+  defp branch_unit_count(task, _calc), do: leaf_count(task)
+
+  defp branch_unit_title("single_level"), do: "Direct children — each counts equally"
+  defp branch_unit_title(_calc), do: "Leaves in this branch"
 
   defp leaf?(%Task{} = task) do
     case Map.get(task, :children) do
