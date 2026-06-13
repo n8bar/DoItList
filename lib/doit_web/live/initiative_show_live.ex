@@ -973,6 +973,29 @@ defmodule DoItWeb.InitiativeShowLive do
      |> push_presence()}
   end
 
+  # Membership changed somewhere in this initiative: re-check OUR role —
+  # removed means ejected on the spot, not at the next refresh; a role change
+  # (e.g. an ownership transfer) re-renders the right controls live.
+  def handle_info({:members_changed, _initiative_id}, socket) do
+    initiative = Initiatives.get_initiative(socket.assigns.initiative.id)
+    role = initiative && Initiatives.get_role(initiative.id, socket.assigns.current_user.id)
+
+    if role do
+      {:noreply,
+       socket
+       |> assign(:initiative, initiative)
+       |> assign(:role, role)
+       |> assign(:can_edit, Initiatives.can_edit?(role))
+       |> assign(:can_admin, Initiatives.can_admin?(role))
+       |> assign(:members, Initiatives.list_members(initiative.id))}
+    else
+      {:noreply,
+       socket
+       |> put_flash(:error, "You no longer have access to that Initiative.")
+       |> push_navigate(to: ~p"/initiatives")}
+    end
+  end
+
   def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
 
   def handle_info({:task_updated, id}, socket), do: {:noreply, patch_task(socket, id)}

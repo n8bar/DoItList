@@ -923,6 +923,31 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "live membership changes (open views react without refresh)" do
+    test "a removed member's open view is ejected; a transfer re-renders roles live",
+         %{conn: conn} do
+      {conn_a, owner} = register_and_log_in(conn)
+      {conn_b, other} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "editor")
+
+      {:ok, view_a, _} = live(conn_a, ~p"/initiatives/#{initiative.id}")
+      {:ok, view_b, _} = live(conn_b, ~p"/initiatives/#{initiative.id}")
+
+      # B starts without owner controls; the transfer grants them live.
+      refute render(view_b) =~ ~s(phx-click="remove_member")
+      render_click(view_a, "transfer_ownership", %{"user-id" => to_string(other.id)})
+      render_click(view_a, "confirm_transfer", %{})
+      assert render(view_b) =~ ~s(phx-click="remove_member")
+
+      # New owner B removes A; A's open view is ejected on the spot.
+      render_click(view_b, "remove_member", %{"user-id" => to_string(owner.id)})
+      render_click(view_b, "confirm_pending", %{})
+      flash = assert_redirect(view_a, "/initiatives")
+      assert flash["error"] =~ "no longer have access"
+    end
+  end
+
   describe "transfer ownership" do
     test "confirmed transfer swaps owner_id and roles; old owner becomes editor", %{conn: conn} do
       {conn, owner} = register_and_log_in(conn)

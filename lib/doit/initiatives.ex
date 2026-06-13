@@ -243,6 +243,10 @@ defmodule DoIt.Initiatives do
     %InitiativeMember{}
     |> InitiativeMember.changeset(%{initiative_id: initiative_id, user_id: user_id, role: role})
     |> Repo.insert()
+    |> tap(fn
+      {:ok, _} -> broadcast_members_changed(initiative_id)
+      _ -> :ok
+    end)
   end
 
   def remove_member(initiative_id, user_id) do
@@ -250,6 +254,21 @@ defmodule DoIt.Initiatives do
       where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
     )
     |> Repo.delete_all()
+    |> tap(fn
+      {n, _} when n > 0 -> broadcast_members_changed(initiative_id)
+      _ -> :ok
+    end)
+  end
+
+  # Membership changes fan out on the initiative's existing topic so every
+  # open LiveView re-checks its own role — a removed member is ejected
+  # without waiting for a refresh, and role changes apply live.
+  defp broadcast_members_changed(initiative_id) do
+    Phoenix.PubSub.broadcast(
+      DoIt.PubSub,
+      "initiative:#{initiative_id}",
+      {:members_changed, initiative_id}
+    )
   end
 
   @doc """
@@ -272,14 +291,28 @@ defmodule DoIt.Initiatives do
           {:ok, updated} =
             initiative |> Ecto.Changeset.change(owner_id: new_owner_id) |> Repo.update()
 
-          {:ok, _} = update_member_role(initiative.id, new_owner_id, "owner")
-          {:ok, _} = update_member_role(initiative.id, old_owner_id, "editor")
+          {:ok, _} = do_update_member_role(initiative.id, new_owner_id, "owner")
+          {:ok, _} = do_update_member_role(initiative.id, old_owner_id, "editor")
           updated
+        end)
+        |> tap(fn
+          {:ok, _} -> broadcast_members_changed(initiative.id)
+          _ -> :ok
         end)
     end
   end
 
   def update_member_role(initiative_id, user_id, role) when role in ~w(owner editor viewer) do
+    do_update_member_role(initiative_id, user_id, role)
+    |> tap(fn
+      {:ok, _} -> broadcast_members_changed(initiative_id)
+      _ -> :ok
+    end)
+  end
+
+  # No broadcast — for callers inside a transaction (transfer_ownership
+  # broadcasts once, after commit).
+  defp do_update_member_role(initiative_id, user_id, role) do
     case Repo.get_by(InitiativeMember, initiative_id: initiative_id, user_id: user_id) do
       nil -> {:error, :not_found}
       member -> member |> InitiativeMember.changeset(%{role: role}) |> Repo.update()
