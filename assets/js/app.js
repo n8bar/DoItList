@@ -233,8 +233,9 @@ const DoitSelection = {
 
     set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
 
-    // The priority pill shows the value when ≠ normal; the title attr always
-    // carries it ("Priority: high").
+    // The title attr always carries the priority ("Priority: high"). Either
+    // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,
+    // the server render carries the truth.
     const priEl = row.querySelector("[data-pill='priority']")
     const pri = priEl ? (priEl.getAttribute("title") || "").replace("Priority: ", "") : ""
     if (pri) set(pane.querySelector("#task-field-priority"), pri)
@@ -242,7 +243,7 @@ const DoitSelection = {
     // Match the assignee option by its visible name (the pill shows "@name").
     const aSelect = pane.querySelector("#task-field-assignee")
     const aText = text("[data-pill='assignee'] [data-pill-text]")
-    if (aSelect && aSelect !== document.activeElement) {
+    if (aSelect && row.querySelector("[data-pill='assignee']") && aSelect !== document.activeElement) {
       const name = aText.startsWith("@") ? aText.slice(1) : ""
       const opt = name
         ? [...aSelect.options].find((o) => o.textContent.trim() === name)
@@ -530,9 +531,10 @@ document.addEventListener("input", (e) => {
     case "task-field-priority": {
       const pill = row.querySelector("[data-pill='priority']")
       if (!pill) return
-      const set = t.value !== "normal"
-      pill.toggleAttribute("data-pill-set", set)
-      pill.textContent = set ? t.value : ""
+      // Priority always has a value — the pill stays "set" and shows
+      // "normal" too.
+      pill.toggleAttribute("data-pill-set", true)
+      pill.textContent = t.value
       pill.title = "Priority: " + t.value
       return
     }

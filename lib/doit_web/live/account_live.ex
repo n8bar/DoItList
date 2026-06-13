@@ -359,6 +359,21 @@ defmodule DoItWeb.AccountLive do
                 field={@prefs_form[:show_task_activity]}
                 label="Show Task Activity log"
               />
+              <p class="text-xs text-zinc-500 dark:text-zinc-400 pt-1">
+                Task attributes shown on rows:
+              </p>
+              <.input type="checkbox" field={@prefs_form[:show_task_priority]} label="Priority" />
+              <.input type="checkbox" field={@prefs_form[:show_task_assignee]} label="Assignee" />
+              <.input
+                type="checkbox"
+                field={@prefs_form[:show_task_progress]}
+                label="Checkbox & progress bar"
+              />
+              <.input
+                type="checkbox"
+                field={@prefs_form[:show_task_count]}
+                label="Leaf / child count"
+              />
             </fieldset>
 
             <div class="flex justify-end">

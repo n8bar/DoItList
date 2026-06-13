@@ -30,6 +30,12 @@ defmodule DoIt.Accounts.UserPreferences do
     field :task_assign_owner, :boolean, default: false
 
     field :show_task_activity, :boolean, default: true
+    field :show_task_priority, :boolean, default: true
+    field :show_task_assignee, :boolean, default: true
+    # Checkbox + progress bar as one element.
+    field :show_task_progress, :boolean, default: true
+    # The chevron's leaf / child count badge.
+    field :show_task_count, :boolean, default: true
 
     timestamps(type: :utc_datetime)
   end
@@ -49,7 +55,11 @@ defmodule DoIt.Accounts.UserPreferences do
       :task_sort_mode,
       :task_priority,
       :task_assign_owner,
-      :show_task_activity
+      :show_task_activity,
+      :show_task_priority,
+      :show_task_assignee,
+      :show_task_progress,
+      :show_task_count
     ])
     |> validate_inclusion(:index_sort_mode, [nil | @index_sort_modes])
     |> validate_change(:index_sort_reverse_by_mode, fn _, map ->

@@ -819,6 +819,37 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "task-attribute display preferences (m02.04 §2.4)" do
+    test "hidden attributes leave the row; normal priority now shows", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      parent = create_task(user, initiative, nil, "Parent")
+      _child = create_task(user, initiative, parent, "Child")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      html = render(view)
+      assert html =~ ~s(data-pill="priority")
+      assert html =~ ">normal<" or html =~ "normal\n"
+      assert html =~ ~s(data-pill="assignee")
+      assert html =~ "data-complete-toggle"
+
+      {:ok, _} =
+        Accounts.update_preferences(user, %{
+          "show_task_priority" => "false",
+          "show_task_assignee" => "false",
+          "show_task_progress" => "false",
+          "show_task_count" => "false"
+        })
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      html = render(view)
+      refute html =~ ~s(data-pill="priority")
+      refute html =~ ~s(data-pill="assignee")
+      refute html =~ "data-complete-toggle"
+      refute html =~ "Leaves in this branch"
+    end
+  end
+
   describe "show-task-activity preference (m02.04 §2.4)" do
     test "pane hides the Activity section when the pref is off", %{conn: conn} do
       {conn, user} = register_and_log_in(conn)

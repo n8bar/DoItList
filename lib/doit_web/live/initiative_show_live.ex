@@ -59,7 +59,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:selected_task, nil)
          |> assign(:comments, [])
          |> assign(:activity, [])
-         |> assign(:show_task_activity, Accounts.get_preferences(user).show_task_activity)
+         |> assign_display_prefs(Accounts.get_preferences(user))
          |> assign(
            :online_ids,
            if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
@@ -70,6 +70,19 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
     end
+  end
+
+  # The viewing user's Display elements preferences (m02.04 §2.4): the
+  # activity-log toggle plus which task attributes render on rows.
+  defp assign_display_prefs(socket, prefs) do
+    socket
+    |> assign(:show_task_activity, prefs.show_task_activity)
+    |> assign(:display, %{
+      priority: prefs.show_task_priority,
+      assignee: prefs.show_task_assignee,
+      progress: prefs.show_task_progress,
+      count: prefs.show_task_count
+    })
   end
 
   # --- Selection presence (.04.01.12) --------------------------------------
@@ -1241,6 +1254,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   recompute_ids={@pending_recompute_ids}
                   inherited_sort={@root_sort_mode}
                   progress_calc={@initiative.progress_calc}
+                  display={@display}
                 />
                 <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
               <% end %>
@@ -1733,6 +1747,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :recompute_ids, :any, required: true
   attr :inherited_sort, :string, required: true
   attr :progress_calc, :string, required: true
+  attr :display, :map, required: true
 
   def task_node(assigns) do
     assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
@@ -1810,12 +1825,15 @@ defmodule DoItWeb.InitiativeShowLive do
                A pill tap selects + focuses its Details field client-side
                (data-pill names the field); the phx-click only loads pane
                data when the task wasn't selected yet (.03.07.17). --%>
+          <%!-- Priority always has a value, so the pill is always "set"
+               (solid border) and shows "normal" too. --%>
           <button
+            :if={@display.priority}
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
             data-pill="priority"
-            data-pill-set={@task.priority != "normal"}
+            data-pill-set
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
               "border border-dashed border-zinc-300 dark:border-zinc-600",
@@ -1823,9 +1841,10 @@ defmodule DoItWeb.InitiativeShowLive do
             ]}
             title={"Priority: #{@task.priority}"}
           >
-            {if @task.priority != "normal", do: @task.priority}
+            {@task.priority}
           </button>
           <button
+            :if={@display.assignee}
             type="button"
             phx-click="select_task"
             phx-value-id={@task.id}
@@ -1941,7 +1960,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <%!-- Leaf count lives OUTSIDE the phx-update="ignore" button so the
                server keeps it live — inside, it froze at its mount-time value. --%>
           <span
-            :if={@task.children != []}
+            :if={@task.children != [] && @display.count}
             title={branch_unit_title(@progress_calc)}
             class="flex-none relative top-[-0.4em] inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
           >
@@ -1957,7 +1976,7 @@ defmodule DoItWeb.InitiativeShowLive do
                pushes data-toggle-event with a reply, so a confirm-gated
                cascade can HOLD the flip while the modal decides (6.6). --%>
           <button
-            :if={@can_edit}
+            :if={@can_edit && @display.progress}
             type="button"
             data-toggle-event={
               cond do
@@ -2004,6 +2023,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </span>
 
         <div
+          :if={@display.progress}
           class={[
             "absolute bottom-1 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden",
             if(@can_edit, do: "left-9", else: "left-2")
@@ -2047,6 +2067,7 @@ defmodule DoItWeb.InitiativeShowLive do
             recompute_ids={@recompute_ids}
             inherited_sort={@resolved_sort}
             progress_calc={@progress_calc}
+            display={@display}
           />
           <li id={"add-after-#{c.id}"} phx-update="ignore" class="empty:hidden"></li>
         <% end %>
