@@ -1374,12 +1374,15 @@ defmodule DoItWeb.InitiativeShowLive do
           >
             Add
           </button>
+          <%!-- "Done", not "Cancel": the adder stays open across submits so
+               you can add several tasks; this button just closes it and
+               discards nothing already added. --%>
           <button
             type="button"
             data-add-cancel
             class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
           >
-            Cancel
+            Done
           </button>
         </form>
       </div>
