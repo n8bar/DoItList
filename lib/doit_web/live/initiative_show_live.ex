@@ -1341,6 +1341,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   inherited_sort={@root_sort_mode}
                   progress_calc={@initiative.progress_calc}
                   display={@display}
+                  member_ids={MapSet.new(@members, & &1.user_id)}
                 />
                 <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
               <% end %>
@@ -1877,6 +1878,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :inherited_sort, :string, required: true
   attr :progress_calc, :string, required: true
   attr :display, :map, required: true
+  attr :member_ids, :any, required: true
 
   def task_node(assigns) do
     assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
@@ -1984,12 +1986,7 @@ defmodule DoItWeb.InitiativeShowLive do
               "border border-dashed border-zinc-300 dark:border-zinc-600",
               "data-pill-set:border-solid data-pill-set:border-zinc-400 dark:data-pill-set:border-zinc-500 data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
             ]}
-            title={
-              if(@task.assignee_id && @task.assignee,
-                do: "Assignee: @#{@task.assignee.username}",
-                else: "Unassigned"
-              )
-            }
+            title={assignee_title(@task, @member_ids)}
           >
             <%!-- Avatar is always in the DOM (hidden when unassigned) so the
                  optimistic echo can fill it from the pane select's data attrs. --%>
@@ -2006,7 +2003,13 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               {@task.assignee && initials(@task.assignee)}
             </span>
-            <span class="truncate" data-pill-text>
+            <%!-- Struck through when the assignee is no longer a member —
+                 assignments survive removal ("their task assignments stay"),
+                 and the strike says so at a glance. --%>
+            <span
+              class={["truncate", ex_member?(@task, @member_ids) && "line-through"]}
+              data-pill-text
+            >
               {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.username}"}
             </span>
           </button>
@@ -2197,6 +2200,7 @@ defmodule DoItWeb.InitiativeShowLive do
             inherited_sort={@resolved_sort}
             progress_calc={@progress_calc}
             display={@display}
+            member_ids={@member_ids}
           />
           <li id={"add-after-#{c.id}"} phx-update="ignore" class="empty:hidden"></li>
         <% end %>
@@ -2844,6 +2848,20 @@ defmodule DoItWeb.InitiativeShowLive do
   # Collapsed-badge count: leaf tasks in the whole subtree, not direct
   # children — "(12)" tells you how much work is folded away, not how many
   # immediate branches happen to wrap it.
+  defp ex_member?(%{assignee_id: id, assignee: %{}}, member_ids) when not is_nil(id),
+    do: not MapSet.member?(member_ids, id)
+
+  defp ex_member?(_task, _member_ids), do: false
+
+  defp assignee_title(%{assignee_id: id, assignee: %{username: username}} = task, member_ids)
+       when not is_nil(id) do
+    if ex_member?(task, member_ids),
+      do: "Assignee: @#{username} (no longer a member)",
+      else: "Assignee: @#{username}"
+  end
+
+  defp assignee_title(_task, _member_ids), do: "Unassigned"
+
   defp leaf_count(%{children: []}), do: 1
   defp leaf_count(%{children: children}), do: Enum.sum(Enum.map(children, &leaf_count/1))
 

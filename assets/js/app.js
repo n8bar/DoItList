@@ -546,6 +546,8 @@ document.addEventListener("input", (e) => {
       const name = opt ? opt.textContent.trim() : ""
       pill.toggleAttribute("data-pill-set", !!name)
       span.textContent = name ? "@" + name : ""
+      // Any selectable assignee is a current member — clear an ex-member strike.
+      span.classList.remove("line-through")
       pill.title = name ? "Assignee: @" + name : "Unassigned"
       // Mirror the avatar from the option's data attrs (same derivation as
       // the server's avatar component).

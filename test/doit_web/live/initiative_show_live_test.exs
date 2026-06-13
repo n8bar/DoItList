@@ -904,10 +904,18 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert confirmed =~ "Removed #{other.name}"
       refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
 
-      # Suppressed: the next removal commits without a modal.
+      # Suppressed: the next removal commits without a modal. The removed
+      # member's surviving assignment strikes through on the chip.
+      task = create_task(owner, initiative, nil, "Assigned away")
+      {:ok, _} = Tasks.update_task(task, owner, %{"assignee_id" => third.id})
+
       direct = render_click(view, "remove_member", %{"user-id" => to_string(third.id)})
       assert direct =~ "Removed #{third.name}"
       refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == third.id))
+
+      html = render(view)
+      assert html =~ "line-through"
+      assert html =~ "no longer a member"
 
       blocked = render_click(view, "remove_member", %{"user-id" => to_string(owner.id)})
       assert blocked =~ "can&#39;t be removed"
