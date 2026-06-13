@@ -252,6 +252,33 @@ defmodule DoIt.Initiatives do
     |> Repo.delete_all()
   end
 
+  @doc """
+  Transfer ownership — the "transfer first" path that m02.04 §1.10's
+  delete-account block points at. The member becomes `owner_id` (+ role
+  owner); the previous owner is demoted to editor.
+  """
+  def transfer_ownership(%Initiative{} = initiative, new_owner_id) do
+    old_owner_id = initiative.owner_id
+
+    cond do
+      new_owner_id == old_owner_id ->
+        {:error, :already_owner}
+
+      is_nil(get_role(initiative.id, new_owner_id)) ->
+        {:error, :not_a_member}
+
+      true ->
+        Repo.transaction(fn ->
+          {:ok, updated} =
+            initiative |> Ecto.Changeset.change(owner_id: new_owner_id) |> Repo.update()
+
+          {:ok, _} = update_member_role(initiative.id, new_owner_id, "owner")
+          {:ok, _} = update_member_role(initiative.id, old_owner_id, "editor")
+          updated
+        end)
+    end
+  end
+
   def update_member_role(initiative_id, user_id, role) when role in ~w(owner editor viewer) do
     case Repo.get_by(InitiativeMember, initiative_id: initiative_id, user_id: user_id) do
       nil -> {:error, :not_found}

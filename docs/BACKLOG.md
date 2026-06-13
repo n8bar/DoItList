@@ -26,4 +26,5 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 - **Color-coded priority pills.** Map each priority (`high` / `low` / etc.) to its own chip color instead of the current monochrome zinc, so priority reads at a glance. Default (`normal`) stays the empty dashed placeholder. One-spot change in `task_node/1`'s priority chip.
 
 ### Membership (M4 or later)
+- **Admin role.** A delegated tier between owner and editor: manage the roster (add / remove members, change roles below admin) without ownership — no initiative delete, no ownership transfer. Lets owners hand off member management; pairs with invite-by-email below. When this lands, ownership transfer demotes the old owner to **admin** instead of today's editor.
 - **Invite-by-email for non-users.** Adding a member by an email that matches no account prompts to send an invitation instead. The pending add is tracked; if and when that person creates an account, they're added to the initiative automatically. Pending invitees show as **pending** in the member list and can be removed while still pending (cancels the tracked add, so they're not joined if no longer needed).

@@ -903,6 +903,35 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "transfer ownership" do
+    test "confirmed transfer swaps owner_id and roles; old owner becomes editor", %{conn: conn} do
+      {conn, owner} = register_and_log_in(conn)
+      {_other_conn, other} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "editor")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+
+      # Opening shows the modal with the demotion spelled out; cancel closes it.
+      opened = render_click(view, "transfer_ownership", %{"user-id" => to_string(other.id)})
+      assert opened =~ "demoted to"
+      render_click(view, "cancel_transfer", %{})
+      refute render(view) =~ "transfer-confirm"
+      assert Initiatives.get_initiative(initiative.id).owner_id == owner.id
+
+      render_click(view, "transfer_ownership", %{"user-id" => to_string(other.id)})
+      confirmed = render_click(view, "confirm_transfer", %{})
+
+      assert confirmed =~ "Ownership transferred to #{other.name}"
+      assert Initiatives.get_initiative(initiative.id).owner_id == other.id
+      assert Initiatives.get_role(initiative.id, other.id) == "owner"
+      assert Initiatives.get_role(initiative.id, owner.id) == "editor"
+
+      # Demoted on the spot: owner controls (remove/transfer buttons) are gone.
+      refute confirmed =~ "phx-click=\"remove_member\""
+    end
+  end
+
   describe "selection presence (m02.04 §1.12)" do
     setup %{conn: conn} do
       {conn_a, user_a} = register_and_log_in(conn)

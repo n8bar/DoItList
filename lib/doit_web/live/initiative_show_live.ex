@@ -67,6 +67,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
+         |> assign(:pending_transfer, nil)
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
     end
@@ -701,6 +702,50 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # Permissive fallthrough: ignore non-arrow keys, missing modifiers, etc.
   def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
+
+  # Ownership transfer (the "transfer first" path of §1.10's delete block).
+  # Opening sets the pending target; the modal's confirm commits it. Not
+  # suppressible — transferring ownership always asks.
+  def handle_event("transfer_ownership", %{"user-id" => user_id}, socket) do
+    user_id = String.to_integer(user_id)
+    member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
+
+    if socket.assigns.can_admin and member do
+      {:noreply, assign(socket, :pending_transfer, %{user_id: user_id, name: member.user.name})}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_transfer", _params, socket) do
+    {:noreply, assign(socket, :pending_transfer, nil)}
+  end
+
+  def handle_event("confirm_transfer", _params, socket) do
+    initiative = socket.assigns.initiative
+    pending = socket.assigns.pending_transfer
+
+    with true <- socket.assigns.can_admin and not is_nil(pending),
+         {:ok, updated} <- Initiatives.transfer_ownership(initiative, pending.user_id) do
+      role = Initiatives.get_role(updated.id, socket.assigns.current_user.id)
+
+      {:noreply,
+       socket
+       |> assign(:initiative, updated)
+       |> assign(:role, role)
+       |> assign(:can_edit, Initiatives.can_edit?(role))
+       |> assign(:can_admin, Initiatives.can_admin?(role))
+       |> assign(:members, Initiatives.list_members(updated.id))
+       |> assign(:pending_transfer, nil)
+       |> put_flash(:info, "Ownership transferred to #{pending.name}. You're now an editor.")}
+    else
+      _ ->
+        {:noreply,
+         socket
+         |> assign(:pending_transfer, nil)
+         |> put_flash(:error, "Couldn't transfer ownership.")}
+    end
+  end
 
   def handle_event("remove_member", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
@@ -1427,6 +1472,43 @@ defmodule DoItWeb.InitiativeShowLive do
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
+      <div
+        :if={@pending_transfer}
+        id="transfer-confirm"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      >
+        <div
+          phx-click-away="cancel_transfer"
+          class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
+        >
+          <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+            Transfer ownership
+          </h3>
+          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+            Make <span class="font-semibold">{@pending_transfer.name}</span>
+            the owner of <span class="font-semibold">{@initiative.name}</span>?
+            This is a transfer — you'll be demoted to
+            <span class="font-semibold">editor</span> and lose owner controls.
+          </p>
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              phx-click="cancel_transfer"
+              class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              id="transfer-confirm-proceed"
+              phx-click="confirm_transfer"
+              class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
+            >
+              Transfer ownership
+            </button>
+          </div>
+        </div>
+      </div>
       <.shortcuts_overlay />
       <%!-- Anchor for the selection-presence channel (.04.01.12): receives
            presence-selections pushes and paints row badges client-side. --%>
@@ -2358,6 +2440,19 @@ defmodule DoItWeb.InitiativeShowLive do
           </span>
           <span class="flex items-center gap-1 flex-none">
             <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+            <%!-- Transfer ownership: always confirmed (the modal spells out
+                 the demotion-to-editor consequence). --%>
+            <button
+              :if={@can_admin && m.user_id != @owner_id}
+              type="button"
+              phx-click="transfer_ownership"
+              phx-value-user-id={m.user_id}
+              title={"Transfer ownership to #{m.user.name}"}
+              aria-label={"Transfer ownership to #{m.user.name}"}
+              class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-amber-600 hover:bg-amber-50 dark:text-zinc-500 dark:hover:text-amber-400 dark:hover:bg-amber-950/40"
+            >
+              <.icon name="hero-key" class="w-3.5 h-3.5" />
+            </button>
             <%!-- The initiative's owner row is never removable; membership is
                  re-addable, so removal goes without a confirm. --%>
             <button
