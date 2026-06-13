@@ -944,7 +944,30 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       render_click(view_b, "remove_member", %{"user-id" => to_string(owner.id)})
       render_click(view_b, "confirm_pending", %{})
       flash = assert_redirect(view_a, "/initiatives")
-      assert flash["error"] =~ "no longer have access"
+      assert flash["info"] =~ "no longer a member"
+    end
+  end
+
+  describe "leave initiative" do
+    test "a non-owner leaves via confirm and is ejected; owners are refused", %{conn: conn} do
+      {conn_a, owner} = register_and_log_in(conn)
+      {conn_b, other} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "editor")
+
+      # Owner can't leave — transfer first.
+      {:ok, view_a, _} = live(conn_a, ~p"/initiatives/#{initiative.id}")
+      refused = render_click(view_a, "leave_initiative", %{})
+      assert refused =~ "transfer ownership before leaving"
+
+      {:ok, view_b, _} = live(conn_b, ~p"/initiatives/#{initiative.id}")
+      opened = render_click(view_b, "leave_initiative", %{})
+      assert opened =~ "Only the owner can add you back"
+
+      render_click(view_b, "confirm_pending", %{})
+      flash = assert_redirect(view_b, "/initiatives")
+      assert flash["info"] =~ "no longer a member"
+      refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
     end
   end
 

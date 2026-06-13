@@ -12,7 +12,6 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 
 ### Initiative lifecycle (M4 or later)
 - **Hidden — per-member.** Any member can hide an initiative from their own dashboard without touching anyone else's; restorable. Separate mechanism from Trash (promoted to `m02.06`).
-- **Leave an initiative.** Drop your own membership entirely — distinct from Hidden.
 - **Duplicate a non-owned initiative.** Copy it into a brand-new initiative you own — new tasks, fresh timestamps, _not_ a clone of the original's history. Owners can disable duplication per-initiative, but it's a soft barrier only (manual recreation is always possible; make owners aware).
 - **Trash ↔ duplicate interplay.** An owner-trashed initiative (Trash ships in `m02.06`) shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
 

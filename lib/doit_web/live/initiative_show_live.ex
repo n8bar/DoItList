@@ -669,6 +669,19 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :remove_member, user_id: user_id} ->
           commit_remove_member(socket, user_id)
 
+        %{kind: :leave_initiative} ->
+          # The broadcast this triggers ejects our own view via
+          # {:members_changed} — no navigation needed here.
+          if socket.assigns.current_user.id != socket.assigns.initiative.owner_id do
+            {_count, _} =
+              Initiatives.remove_member(
+                socket.assigns.initiative.id,
+                socket.assigns.current_user.id
+              )
+          end
+
+          assign_pending(socket, nil)
+
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           # Failure pushed "confirm-cancelled" inside — the held flip reverts.
           case commit_cascade(socket, id, kind) do
@@ -747,6 +760,19 @@ defmodule DoItWeb.InitiativeShowLive do
          socket
          |> assign(:pending_transfer, nil)
          |> put_flash(:error, "Couldn't transfer ownership.")}
+    end
+  end
+
+  # Leave (m02.04-era pull-forward of BACKLOG's "Leave an initiative"):
+  # remove your own membership. Always confirmed — only the owner can add
+  # you back. The commit's members_changed broadcast ejects this view.
+  def handle_event("leave_initiative", _params, socket) do
+    me = socket.assigns.current_user.id
+
+    if me == socket.assigns.initiative.owner_id do
+      {:noreply, put_flash(socket, :error, "Owners transfer ownership before leaving.")}
+    else
+      {:noreply, assign_pending(socket, %{kind: :leave_initiative})}
     end
   end
 
@@ -991,7 +1017,7 @@ defmodule DoItWeb.InitiativeShowLive do
     else
       {:noreply,
        socket
-       |> put_flash(:error, "You no longer have access to that Initiative.")
+       |> put_flash(:info, "You're no longer a member of that Initiative.")
        |> push_navigate(to: ~p"/initiatives")}
     end
   end
@@ -1334,6 +1360,7 @@ defmodule DoItWeb.InitiativeShowLive do
               can_admin={@can_admin}
               online_ids={@online_ids}
               owner_id={@initiative.owner_id}
+              me={@current_user.id}
             />
           </div>
         </div>
@@ -1420,6 +1447,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 can_admin={@can_admin}
                 online_ids={@online_ids}
                 owner_id={@initiative.owner_id}
+                me={@current_user.id}
               />
             </div>
 
@@ -1875,6 +1903,9 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :remove_member, name: name}, _verb),
     do: "Remove #{name} from this Initiative? Their task assignments stay; they can be re-added anytime."
+
+  defp confirm_body(%{kind: :leave_initiative}, _verb),
+    do: "Leave this Initiative? Only the owner can add you back."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -2410,6 +2441,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :can_admin, :boolean, required: true
   attr :online_ids, :any, required: true
   attr :owner_id, :integer, required: true
+  attr :me, :integer, required: true
 
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
@@ -2490,6 +2522,19 @@ defmodule DoItWeb.InitiativeShowLive do
           </span>
           <span class="flex items-center gap-1 flex-none">
             <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+            <%!-- Leave (own row, non-owners): always confirmed — only the
+                 owner can add you back. The members_changed broadcast ejects
+                 this very view on commit. --%>
+            <button
+              :if={m.user_id == @me && @me != @owner_id}
+              type="button"
+              phx-click="leave_initiative"
+              title="Leave this Initiative"
+              aria-label="Leave this Initiative"
+              class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-950/40"
+            >
+              <.icon name="hero-arrow-right-start-on-rectangle" class="w-3.5 h-3.5" />
+            </button>
             <%!-- Transfer ownership: always confirmed (the modal spells out
                  the demotion-to-editor consequence). --%>
             <button
