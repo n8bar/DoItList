@@ -165,14 +165,15 @@ ul.collapsed-peek {
 
 /* Client-owned selection (UX_GUARDRAILS 6.5): the highlight + shortcut-key
    underlines key off the client-set data-selected attribute, so selecting a
-   row never re-renders the tree. Colors mirror the old server-rendered
-   emerald classes (emerald-50/100 light, emerald-950/900 dark). Scoped with
-   `>` so a selected branch doesn't tint its children's rows. */
+   row never re-renders the tree. Light mode runs a step deeper than the old
+   server-rendered classes (emerald-100/200 — 50/100 read as nearly white);
+   dark keeps emerald-950/900. Scoped with `>` so a selected branch doesn't
+   tint its children's rows. */
 li[data-selected] > [data-task-row] {
-  background-color: #ecfdf5;
+  background-color: #d1fae5;
 }
 li[data-selected] > [data-task-row]:hover {
-  background-color: #d1fae5;
+  background-color: #a7f3d0;
 }
 [data-theme=dark] li[data-selected] > [data-task-row] {
   background-color: #022c22;
