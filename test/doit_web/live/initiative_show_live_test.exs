@@ -837,6 +837,22 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "add member by email or @username" do
+    test "owner adds by @username; unknown logins flash", %{conn: conn} do
+      {conn, owner} = register_and_log_in(conn)
+      {_other_conn, other} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+
+      render_click(view, "add_member", %{"member" => "@#{other.username}", "role" => "editor"})
+      assert Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
+
+      miss = render_click(view, "add_member", %{"member" => "nobody-here", "role" => "editor"})
+      assert miss =~ "No user with that email or username"
+    end
+  end
+
   describe "selection presence (m02.04 §1.12)" do
     setup %{conn: conn} do
       {conn_a, user_a} = register_and_log_in(conn)

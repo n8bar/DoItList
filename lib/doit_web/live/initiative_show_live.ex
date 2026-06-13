@@ -689,15 +689,18 @@ defmodule DoItWeb.InitiativeShowLive do
   # Permissive fallthrough: ignore non-arrow keys, missing modifiers, etc.
   def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
 
-  def handle_event("add_member", %{"email" => email, "role" => role}, socket) do
+  def handle_event("add_member", %{"member" => member, "role" => role}, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
     else
       initiative = socket.assigns.initiative
+      # Email or username, with or without the @ (usernames can't contain
+      # one, so stripping a leading @ is unambiguous).
+      login = member |> String.trim() |> String.trim_leading("@")
 
-      case Accounts.get_user_by_email(email) do
+      case Accounts.get_user_by_email_or_username(login) do
         nil ->
-          {:noreply, put_flash(socket, :error, "No user with that email.")}
+          {:noreply, put_flash(socket, :error, "No user with that email or username.")}
 
         user ->
           case Initiatives.add_member(initiative.id, user.id, role) do
@@ -1937,8 +1940,12 @@ defmodule DoItWeb.InitiativeShowLive do
           <span
             :if={@task.children != []}
             title={branch_unit_title(@progress_calc)}
-            class="flex-none relative top-[-0.4em] text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
+            class="flex-none relative top-[-0.4em] inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
           >
+            <%!-- The unit's icon: green leaf (leaf_average) / amber branch
+                 (single_level) — mode tellable at a glance. Leaf inherits
+                 the count's emerald via currentColor. --%>
+            <.botanical_icon kind={badge_icon(@progress_calc)} class={badge_icon_class(@progress_calc)} />
             {branch_unit_count(@task, @progress_calc)}
           </span>
 
@@ -2252,10 +2259,10 @@ defmodule DoItWeb.InitiativeShowLive do
         <div>
           <form phx-submit="add_member" class="flex flex-col gap-2">
             <input
-              type="email"
-              name="email"
-              placeholder="email@example.com"
-              aria-label="Member email"
+              type="text"
+              name="member"
+              placeholder="email or @username"
+              aria-label="Member email or username"
               required
               phx-mounted={Phoenix.LiveView.JS.focus()}
               class="w-full input input-bordered input-sm"
@@ -2664,6 +2671,12 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp branch_unit_title("single_level"), do: "Direct children — each counts equally"
   defp branch_unit_title(_calc), do: "Leaves in this branch"
+
+  defp badge_icon("single_level"), do: :branch
+  defp badge_icon(_calc), do: :leaf
+
+  defp badge_icon_class("single_level"), do: "w-3 h-3 flex-none text-amber-700 dark:text-amber-600"
+  defp badge_icon_class(_calc), do: "w-3 h-3 flex-none"
 
   defp leaf?(%Task{} = task) do
     case Map.get(task, :children) do
