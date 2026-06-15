@@ -9,3 +9,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-06-15  Arc 5 O&C: swapped items 17/18 (optimistic co-assignee now 17, Viewer+ now 18 — done last per sequence); tightened the Viewer+ wording.
 2026-06-15  Arc 5 O&C item 18 (Viewer+) reworked: grant is direct-assignee-only (not co); a viewer+ leads its subtree (progress/comments) and may assign descendants only to that task's existing co's — no team expansion.
 2026-06-15  Arc 5 O&C item 18 (Viewer+): a viewer+ lead can staff descendants with primary AND co-assignees, but only from a fixed pool (their led task's co's) — pool only shrinks down-tree, so no team expansion.
+2026-06-15  Arc 5 O&C item 18 (Viewer+) restructured into action subitems 18.1-18.6 (setting/seed, direct grant, descendant staffing, pool-limited dropdowns, label, tests); invariant rationale stays prose on the parent. Convention upheld, not relaxed.
