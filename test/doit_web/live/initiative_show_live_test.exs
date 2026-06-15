@@ -1000,6 +1000,57 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
+  describe "create-task optimism — preview row precedes the confirm" do
+    setup %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      parent = create_task(user, initiative, nil, "Done Parent")
+      {:ok, _} = Tasks.update_task(parent, user, %{"status" => "done"})
+      %{conn: conn, initiative: initiative, parent: parent}
+    end
+
+    # parent_id / after_id are hidden inputs the client sets via JS; form/3
+    # won't change a hidden value, so pass them as extra submit params.
+    defp submit_add(view, parent_id, title) do
+      view
+      |> form("#add-task-form", %{"title" => title})
+      |> render_submit(%{"parent_id" => to_string(parent_id), "after_id" => ""})
+    end
+
+    test "a create that flips an ancestor shows a pending pink row WITH the modal; confirm persists",
+         %{conn: conn, initiative: initiative, parent: parent} do
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+
+      submit_add(view, parent.id, "Fresh child")
+
+      # Optimism: new row on screen (sentinel #task-0, maybe-write hue) at the
+      # same time as the confirm modal — not after it.
+      assert has_element?(view, "#completion-confirm")
+      assert has_element?(view, "#task-0 [data-task-row].is-saving")
+      assert render(view) =~ "Fresh child"
+
+      render_click(view, "confirm_pending", %{})
+
+      refute has_element?(view, "#completion-confirm")
+      {:ok, _v, html} = live(conn, ~p"/initiatives/#{initiative.id}")
+      assert html =~ "Fresh child"
+    end
+
+    test "cancel drops the preview row and persists nothing",
+         %{conn: conn, initiative: initiative, parent: parent} do
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+
+      submit_add(view, parent.id, "Ghost child")
+      assert has_element?(view, "#task-0")
+
+      render_click(view, "cancel_pending", %{})
+
+      refute has_element?(view, "#task-0")
+      {:ok, _v, html} = live(conn, ~p"/initiatives/#{initiative.id}")
+      refute html =~ "Ghost child"
+    end
+  end
+
   describe "selection presence (m02.04 §1.12)" do
     setup %{conn: conn} do
       {conn_a, user_a} = register_and_log_in(conn)

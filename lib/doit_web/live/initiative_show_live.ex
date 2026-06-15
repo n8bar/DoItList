@@ -290,13 +290,26 @@ defmodule DoItWeb.InitiativeShowLive do
           if skip_confirm?(socket, "completion-flip") do
             {:noreply, commit_create(socket, attrs)}
           else
+            # Optimism (§8.20, parity with a held move): the task must SHOW UP
+            # before the confirm decides. Splice a preview row into the tree at
+            # the target, marked maybe-write (pink) via pending_saving_ids;
+            # confirm → real create + load_tree replaces it, cancel → reload
+            # drops it.
+            preview = preview_task(title)
+
             {:noreply,
-             assign_pending(socket, %{
+             socket
+             |> assign(
+               :tree,
+               splice_preview(socket.assigns.tree, initiative.root_task_id, parent_id, position, preview)
+             )
+             |> assign_pending(%{
                kind: :create,
                attrs: attrs,
                scenario: scenario,
                titles: titles,
-               flip_ids: flip_ids
+               flip_ids: flip_ids,
+               preview_id: preview.id
              })}
           end
 
@@ -701,7 +714,14 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("cancel_pending", _params, socket) do
     # The client may hold optimistic state for the pending op (a drag's
-    # placement, §8.20) — announce the cancellation so it reverts.
+    # placement, §8.20) — announce the cancellation so it reverts. A create's
+    # preview row is server-rendered, so drop it by reloading the tree.
+    socket =
+      case socket.assigns.pending_action do
+        %{kind: :create} -> load_tree(socket)
+        _ -> socket
+      end
+
     {:noreply, socket |> assign_pending(nil) |> push_event("confirm-cancelled", %{})}
   end
 
@@ -846,6 +866,42 @@ defmodule DoItWeb.InitiativeShowLive do
         |> assign_pending(nil)
         |> put_flash(:error, "Couldn't create task: #{summarize_errors(cs)}.")
     end
+  end
+
+  # An optimistic, un-persisted leaf for the create-confirm hold. Sentinel id
+  # 0 (no real task collides); renders as a plain 0% leaf via task_node.
+  defp preview_task(title) do
+    %Task{
+      id: 0,
+      title: title,
+      description: nil,
+      status: "open",
+      priority: "normal",
+      manual_progress: 0,
+      computed_progress: 0,
+      sort_order: 0,
+      sort_mode: nil,
+      sort_reverse: false,
+      assignee_id: nil,
+      assignee: nil,
+      children: []
+    }
+  end
+
+  # Splice the preview leaf into the rendered tree at the create's target.
+  # parent == the system root means top level; otherwise find the parent
+  # branch anywhere in the tree and insert among its children.
+  defp splice_preview(tree, root_task_id, root_task_id, position, preview),
+    do: List.insert_at(tree, position || -1, preview)
+
+  defp splice_preview(tree, _root_task_id, parent_id, position, preview) do
+    Enum.map(tree, fn node ->
+      if node.id == parent_id do
+        %{node | children: List.insert_at(node.children, position || -1, preview)}
+      else
+        %{node | children: splice_preview(node.children, nil, parent_id, position, preview)}
+      end
+    end)
   end
 
   defp commit_cascade_sort(socket, task) do
@@ -1714,13 +1770,20 @@ defmodule DoItWeb.InitiativeShowLive do
   defp pending_saving_ids(%{kind: :move, task_id: id, flip_ids: flip_ids}),
     do: MapSet.new([id | flip_ids])
 
-  defp pending_saving_ids(%{kind: :create, flip_ids: flip_ids}), do: MapSet.new(flip_ids)
+  defp pending_saving_ids(%{kind: :create, flip_ids: flip_ids, preview_id: preview_id}),
+    do: MapSet.new([preview_id | flip_ids])
+
   defp pending_saving_ids(_), do: MapSet.new()
 
   # The held-modal era's indeterminate bars (.03.07.23): every maybe-write row
   # whose % is genuinely unknown — i.e. all of them EXCEPT the operated row
   # (its values are client-held optimistically). Sort-only confirms move no %.
   defp pending_recompute_ids(%{kind: :cascade_sort}, _saving), do: MapSet.new()
+
+  # The preview row's % is known (a new 0% leaf) — only the flipping ancestors
+  # are genuinely indeterminate.
+  defp pending_recompute_ids(%{kind: :create, preview_id: preview_id}, saving),
+    do: MapSet.delete(saving, preview_id)
 
   defp pending_recompute_ids(%{task_id: id}, saving), do: MapSet.delete(saving, id)
   defp pending_recompute_ids(_, saving), do: saving
