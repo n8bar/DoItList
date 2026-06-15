@@ -20,16 +20,17 @@ This is the milestone that earns the first public release.
 | 1 — Bring M01 to spec | [`m02.01-bring-to-spec.md`](m02.01-bring-to-spec.md) | 2 | complete |
 | 2 — Design Refinements | [`m02.02-design-refinements.md`](m02.02-design-refinements.md) | 27 | complete |
 | 3 — Task Tree: Reorganization & Layout | [`m02.03-task-tree.md`](m02.03-task-tree.md) | 11 worklists | complete |
-| 4 — Account Details | [`m02.04-account-details.md`](m02.04-account-details.md) | 3 worklists | in progress |
-| 5 — Wide-Width Layout | [`m02.05-wide-width-layout.md`](m02.05-wide-width-layout.md) | 12 | approved |
+| 4 — Account Details | [`m02.04-account-details.md`](m02.04-account-details.md) | 3 worklists | complete |
+| 5 — Wide-Width Layout | [`m02.05-wide-width-layout.md`](m02.05-wide-width-layout.md) | 12 + 2 O&C | in progress |
 | 6 — Undo & Trash | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 13 | drafted |
+| 7 — Personal Workspace | [`m02.07-personal-workspace.md`](m02.07-personal-workspace.md) | 8 | draft |
 
 ## Non-Goals
 
 - Status field redesign — explicitly removed from UI; revisit later as a fuller idea.
 - Renaming List/Task to Tree/Leaf in vocabulary — the metaphor stays icon-only.
-- Notifications, attachments, board/calendar views, public sharing, AI features — unchanged from M01 non-goals.
-- Schema migrations beyond what individual items require (none, in current scope).
+- Attachments, board/calendar views, public sharing, AI features — unchanged from M01 non-goals. (Notifications moved *into* scope — Arc 7 item 6.)
+- Schema migrations beyond what individual items require (Arcs 4/5/7 add the ones their items need).
 
 ## Acceptance Criteria
 
