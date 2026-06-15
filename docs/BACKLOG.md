@@ -1,5 +1,5 @@
 # BACKLOG
-_Last updated: 2026-06-05_
+_Last updated: 2026-06-15_
 
 Work for releases _after_ the upcoming one. The currently-targeted release and its milestones live in [`PLAN.md`](PLAN.md); this file is for everything beyond that.
 
@@ -12,6 +12,7 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 
 ### Initiative lifecycle (M4 or later)
 - **Hidden — per-member.** Any member can hide an initiative from their own dashboard without touching anyone else's; restorable. Separate mechanism from Trash (promoted to `m02.06`).
+- **Archive — completed initiatives.** A global "done & kept" shelf, distinct from per-member Hidden (personal view) and Trash (going away): an owner archives a wrapped initiative — restorable — dropping it from the active index + ultrawide rail into an *Archived* filter. General access from the initiatives list views; on an open initiative, hitting 100% surfaces an "Archive this Initiative" offer. Suppressible confirm when archiving one that isn't complete.
 - **Duplicate a non-owned initiative.** Copy it into a brand-new initiative you own — new tasks, fresh timestamps, _not_ a clone of the original's history. Owners can disable duplication per-initiative, but it's a soft barrier only (manual recreation is always possible; make owners aware).
 - **Trash ↔ duplicate interplay.** An owner-trashed initiative (Trash ships in `m02.06`) shows to its members as an unowned item in their Trash; unless the owner disabled duplication, they can duplicate it before it's permanently purged.
 
