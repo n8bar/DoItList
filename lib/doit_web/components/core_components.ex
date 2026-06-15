@@ -688,6 +688,20 @@ defmodule DoItWeb.CoreComponents do
   end
 
   @doc """
+  Tailwind classes for a role badge (owner / editor / viewer), shared by the
+  Initiatives index card and the ultrawide left-rail entry so the colors stay
+  in one place.
+  """
+  def role_badge_class("owner"),
+    do: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
+
+  def role_badge_class("editor"),
+    do: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
+
+  def role_badge_class(_),
+    do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+
+  @doc """
   Generated initials avatar (m02.04 §1.11) — a colored disc with the user's
   initials. No uploads in M02: the color is derived deterministically from
   the user id, so a user looks the same everywhere they appear (member list,

@@ -50,6 +50,7 @@ defmodule DoItWeb.InitiativeShowLive do
          socket
          |> assign(:page_title, initiative.name)
          |> assign(:initiative, initiative)
+         |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
          |> assign(:subtitle, Initiatives.subtitle(initiative))
          |> assign(:role, role)
          |> assign(:can_edit, Initiatives.can_edit?(role))
@@ -107,7 +108,12 @@ defmodule DoItWeb.InitiativeShowLive do
       topic = presence_topic(socket.assigns.initiative.id)
 
       {:ok, _} =
-        DoItWeb.Presence.update(self(), topic, to_string(user.id), &Map.put(&1, :task_id, task_id))
+        DoItWeb.Presence.update(
+          self(),
+          topic,
+          to_string(user.id),
+          &Map.put(&1, :task_id, task_id)
+        )
     end
 
     socket
@@ -302,7 +308,13 @@ defmodule DoItWeb.InitiativeShowLive do
              socket
              |> assign(
                :tree,
-               splice_preview(socket.assigns.tree, initiative.root_task_id, parent_id, position, preview)
+               splice_preview(
+                 socket.assigns.tree,
+                 initiative.root_task_id,
+                 parent_id,
+                 position,
+                 preview
+               )
              )
              |> assign_pending(%{
                kind: :create,
@@ -851,8 +863,7 @@ defmodule DoItWeb.InitiativeShowLive do
         {:noreply, commit_remove_member(socket, user_id)}
 
       true ->
-        {:noreply,
-         assign_pending(socket, %{kind: :remove_member, user_id: user_id, name: name})}
+        {:noreply, assign_pending(socket, %{kind: :remove_member, user_id: user_id, name: name})}
     end
   end
 
@@ -874,7 +885,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
     if socket.assigns.can_admin and pending do
       {:ok, _} =
-        Tasks.handoff_member_assignments(initiative.id, socket.assigns.current_user, pending.user_id,
+        Tasks.handoff_member_assignments(
+          initiative.id,
+          socket.assigns.current_user,
+          pending.user_id,
           takeover_id: takeover_id,
           promote_co: promote_co
         )
@@ -1182,7 +1196,13 @@ defmodule DoItWeb.InitiativeShowLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_user={@current_user}>
+    <Layouts.app
+      flash={@flash}
+      current_user={@current_user}
+      width={:wide}
+      rail_initiatives={@rail_initiatives}
+      rail_current_id={@initiative.id}
+    >
       <div id="initiative-show-root" phx-hook=".TaskKeys">
         <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
           export default {
@@ -1508,7 +1528,7 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6">
           <%!-- min-w-0 keeps this grid column from expanding to fit deep rows;
                overflow-x-auto lets the tree scroll horizontally inside it when
                indentation + the row's min width exceed the column. --%>
@@ -1707,8 +1727,13 @@ defmodule DoItWeb.InitiativeShowLive do
           </p>
 
           <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
-            <input type="checkbox" name="promote_co" value="true" checked={@pending_handoff.promote_default} class="checkbox checkbox-sm" />
-            Promote the next co-assignee in line where one exists
+            <input
+              type="checkbox"
+              name="promote_co"
+              value="true"
+              checked={@pending_handoff.promote_default}
+              class="checkbox checkbox-sm"
+            /> Promote the next co-assignee in line where one exists
           </label>
 
           <label class="mt-3 block text-xs text-zinc-500 dark:text-zinc-400">
@@ -1758,8 +1783,8 @@ defmodule DoItWeb.InitiativeShowLive do
           <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
             Make <span class="font-semibold">{@pending_transfer.name}</span>
             the owner of <span class="font-semibold">{@initiative.name}</span>?
-            This is a transfer — you'll be demoted to
-            <span class="font-semibold">editor</span> and lose owner controls.
+            This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
+            and lose owner controls.
           </p>
           <div class="mt-5 flex justify-end gap-2">
             <button
@@ -2110,7 +2135,8 @@ defmodule DoItWeb.InitiativeShowLive do
     do: "Reopen \"#{t}\" and all its subtasks?"
 
   defp confirm_body(%{kind: :remove_member, name: name}, _verb),
-    do: "Remove #{name} from this Initiative? Their task assignments stay; they can be re-added anytime."
+    do:
+      "Remove #{name} from this Initiative? Their task assignments stay; they can be re-added anytime."
 
   defp confirm_body(%{kind: :leave_initiative}, _verb),
     do: "Leave this Initiative? Only the owner can add you back."
@@ -2165,7 +2191,7 @@ defmodule DoItWeb.InitiativeShowLive do
         data-task-row
         data-done={@task.status == "done"}
         class={[
-          "group/row relative flex flex-wrap items-center gap-x-2 gap-y-1 px-3 pt-2 pb-6 min-w-[240px] cursor-pointer",
+          "group/row relative flex flex-wrap items-center gap-x-2 xl:gap-x-3 gap-y-1 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px] cursor-pointer",
           MapSet.member?(@saving_ids, @task.id) && "is-saving",
           MapSet.member?(@recompute_ids, @task.id) && "is-recomputing",
           "hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
@@ -2389,7 +2415,10 @@ defmodule DoItWeb.InitiativeShowLive do
             <%!-- The unit's icon: green leaf (leaf_average) / amber branch
                  (single_level) — mode tellable at a glance. Leaf inherits
                  the count's emerald via currentColor. --%>
-            <.botanical_icon kind={badge_icon(@progress_calc)} class={badge_icon_class(@progress_calc)} />
+            <.botanical_icon
+              kind={badge_icon(@progress_calc)}
+              class={badge_icon_class(@progress_calc)}
+            />
             {branch_unit_count(@task, @progress_calc)}
           </span>
 
@@ -2425,7 +2454,7 @@ defmodule DoItWeb.InitiativeShowLive do
             data-task-title
             class={[
               "flex-1 min-w-0",
-              @depth == 0 && "text-xl font-bold",
+              @depth == 0 && "text-xl 2xl:text-2xl font-bold",
               @depth > 0 && "text-sm font-medium",
               "group-data-done/row:line-through group-data-done/row:text-zinc-400 dark:group-data-done/row:text-zinc-500"
             ]}
@@ -2434,12 +2463,14 @@ defmodule DoItWeb.InitiativeShowLive do
           </span>
         </div>
 
-        <%!-- Row 3: description, its own truncated line. Always in the DOM
-             (hidden when empty) so the optimistic row echo can fill it. --%>
+        <%!-- Row 3: description. Single-line truncate on narrow; once there's
+             room (xl:) it relaxes to a two-line clamp so wide rows show more
+             without letting heights vary unbounded. Always in the DOM (hidden
+             when empty) so the optimistic row echo can fill it. --%>
         <span
           data-task-description
           hidden={is_nil(@task.description) or @task.description == ""}
-          class="w-full min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate"
+          class="w-full min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate xl:whitespace-normal xl:line-clamp-2"
         >
           {@task.description}
         </span>
@@ -3122,7 +3153,10 @@ defmodule DoItWeb.InitiativeShowLive do
             </button>
           </li>
         </ul>
-        <p :if={@task.co_assignee_links == []} class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic">
+        <p
+          :if={@task.co_assignee_links == []}
+          class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic"
+        >
           None yet.
         </p>
         <form :if={@can_edit} id="add-co-assignee-form" phx-change="add_co_assignee" class="mt-1">
@@ -3139,11 +3173,13 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
             Last updated by
-            <span class="font-medium text-zinc-700 dark:text-zinc-200 inline-flex items-center gap-1 align-bottom"><.avatar
+            <span class="font-medium text-zinc-700 dark:text-zinc-200 inline-flex items-center gap-1 align-bottom">
+              <.avatar
                 user={@task.updated_by}
                 online={MapSet.member?(@online_ids, @task.updated_by.id)}
                 class="w-4 h-4 text-[8px]"
-              />{@task.updated_by.name}</span>
+              />{@task.updated_by.name}
+            </span>
             <span title={@task.updated_at}>
               ({Calendar.strftime(@task.updated_at, "%b %-d %H:%M")})
             </span>
@@ -3225,12 +3261,15 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="text-zinc-500 dark:text-zinc-400">
               {Calendar.strftime(e.inserted_at, "%b %-d %H:%M")}
             </span>
-            · <span class="font-medium inline-flex items-center gap-1 align-bottom"><.avatar
+            ·
+            <span class="font-medium inline-flex items-center gap-1 align-bottom">
+              <.avatar
                 :if={e.user}
                 user={e.user}
                 online={e.user && MapSet.member?(@online_ids, e.user.id)}
                 class="w-4 h-4 text-[8px]"
-              />{(e.user && e.user.name) || "system"}</span>
+              />{(e.user && e.user.name) || "system"}
+            </span>
             · {event_label(e, @members)}
             <span
               :if={Map.get(e.data, "from") || Map.get(e.data, "to")}
@@ -3359,7 +3398,9 @@ defmodule DoItWeb.InitiativeShowLive do
   defp badge_icon("single_level"), do: :branch
   defp badge_icon(_calc), do: :leaf
 
-  defp badge_icon_class("single_level"), do: "w-3 h-3 flex-none text-amber-700 dark:text-amber-600"
+  defp badge_icon_class("single_level"),
+    do: "w-3 h-3 flex-none text-amber-700 dark:text-amber-600"
+
   defp badge_icon_class(_calc), do: "w-3 h-3 flex-none"
 
   defp leaf?(%Task{} = task) do

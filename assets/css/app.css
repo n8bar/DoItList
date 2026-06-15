@@ -94,6 +94,14 @@
   --noise: 0;
 }
 
+/* Custom breakpoint above 2xl (m02.05 item 4): the ultrawide threshold where
+   the layout becomes left-rail · main · right-rail. Sized to where three
+   comfortable columns fit (~1800 px), not to when a monitor counts as
+   "ultrawide". Enables the `3xl:` variant. */
+@theme {
+  --breakpoint-3xl: 112.5rem;
+}
+
 /* Add variants based on LiveView classes */
 @custom-variant phx-click-loading (.phx-click-loading&, .phx-click-loading &);
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);

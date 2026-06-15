@@ -32,7 +32,14 @@ defmodule DoItWeb.InitiativeIndexLiveTest do
     initiative
   end
 
-  defp html_order(html, names), do: Enum.sort_by(names, &elem(:binary.match(html, &1), 0))
+  # On wide screens the page lists initiatives twice — the ultrawide left rail
+  # (chrome, in `Layouts.app`) and the main card list. Sort order is a property
+  # of the main list, so scope the position check to the `#initiatives`
+  # container (everything after the rail).
+  defp html_order(html, names) do
+    [_rail_and_chrome, list_html] = String.split(html, ~s(id="initiatives"), parts: 2)
+    Enum.sort_by(names, &elem(:binary.match(list_html, &1), 0))
+  end
 
   test "mode + per-mode reverse persist to prefs and seed the next mount", %{conn: conn} do
     {conn, user} = register_and_log_in(conn)

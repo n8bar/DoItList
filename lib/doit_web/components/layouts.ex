@@ -23,12 +23,32 @@ defmodule DoItWeb.Layouts do
 
   attr :flash, :map, required: true
   attr :current_user, :map, default: nil
+  attr :width, :atom, values: [:default, :wide], default: :default
+  attr :rail_initiatives, :list, default: nil
+  attr :rail_current_id, :any, default: nil
+  slot :rail_right, doc: "Optional ultrawide right (third) pane, a sibling of the left rail."
   slot :inner_block, required: true
 
   def app(assigns) do
+    # The container cap is shared chrome: the header mirrors the body so the
+    # two stay visually aligned at every width (m02.05 item 1). `:default`
+    # keeps the readable 6xl column (login / account / marketing); `:wide`
+    # lets the Initiative pages breathe on big monitors, stepping up at
+    # xl:/2xl: but staying bounded so body text never sprawls. At `3xl:` the
+    # cap jumps wider so the ultrawide left rail (item 4) is *added* width —
+    # not stolen from the main column, which would shrink it crossing the
+    # threshold (jank).
+    container =
+      case assigns.width do
+        :wide -> "mx-auto max-w-6xl xl:max-w-7xl 2xl:max-w-[90rem] 3xl:max-w-[140rem]"
+        :default -> "mx-auto max-w-6xl"
+      end
+
+    assigns = assign(assigns, :container, container)
+
     ~H"""
     <header class="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-      <div class="mx-auto max-w-6xl flex items-center justify-between px-4 sm:px-6 py-3">
+      <div class={[@container, "flex items-center justify-between px-4 sm:px-6 py-3"]}>
         <a href="/" class="flex items-center gap-2 font-semibold text-zinc-800 dark:text-zinc-100">
           <span class="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Do It List
         </a>
@@ -142,12 +162,106 @@ defmodule DoItWeb.Layouts do
     </header>
 
     <main class="flex-1 overflow-y-auto">
-      <div class="mx-auto max-w-6xl px-1 sm:px-6 py-8">
-        {render_slot(@inner_block)}
+      <div class={[@container, "px-1 sm:px-6 py-8"]}>
+        <%= if @rail_initiatives do %>
+          <%!-- Ultrawide triple-pane (m02.05 items 4–7): the left rail joins
+               the layout at 3xl as the Initiatives index in chrome, and an
+               optional right pane (rail_right) rides alongside as its sibling
+               — e.g. the index's "Assigned to Me" pane (item 6). Both flank
+               the page content; the column count flexes on whether a right
+               pane was given. Below 3xl neither rail is in flow (both render
+               hidden), so the page is the wide-tuned two-pane from items 1–3. --%>
+          <div class={[
+            "3xl:grid 3xl:gap-6 3xl:items-start",
+            if(@rail_right != [],
+              do: "3xl:grid-cols-[17rem_minmax(0,1fr)_27.5rem]",
+              else: "3xl:grid-cols-[17rem_minmax(0,1fr)]"
+            )
+          ]}>
+            <.left_rail initiatives={@rail_initiatives} current_id={@rail_current_id} />
+            <div class="min-w-0">
+              {render_slot(@inner_block)}
+            </div>
+            <aside
+              :if={@rail_right != []}
+              class="hidden 3xl:block 3xl:sticky 3xl:top-8 3xl:self-start"
+            >
+              {render_slot(@rail_right)}
+            </aside>
+          </div>
+        <% else %>
+          {render_slot(@inner_block)}
+        <% end %>
       </div>
     </main>
 
     <.flash_group flash={@flash} />
+    """
+  end
+
+  @doc """
+  Ultrawide left rail (m02.05 item 5): the Initiatives index rendered in
+  compressed form for the rail width — the same list, not a bespoke widget.
+  Each entry carries the grove icon, name, role badge, and a small progress
+  bar; the current Initiative is highlighted. Clicking the current entry
+  navigates back to `/initiatives` (item 7 — closes it); any other entry
+  opens that Initiative. Hidden below the `3xl:` threshold.
+  """
+  attr :initiatives, :list, required: true
+  attr :current_id, :any, default: nil
+
+  def left_rail(assigns) do
+    ~H"""
+    <aside class="hidden 3xl:block 3xl:sticky 3xl:top-8 3xl:self-start 3xl:max-h-[calc(100dvh-7rem)] overflow-y-auto [scrollbar-gutter:stable]">
+      <h2 class="px-2 mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+        Initiatives
+      </h2>
+      <nav class="space-y-0.5">
+        <.link
+          :for={init <- @initiatives}
+          navigate={
+            if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")
+          }
+          aria-current={(init.id == @current_id && "page") || nil}
+          class={[
+            "group block rounded px-2 py-1.5",
+            if(init.id == @current_id,
+              do: "bg-emerald-50 dark:bg-emerald-900/30",
+              else: "hover:bg-zinc-100 dark:hover:bg-zinc-800"
+            )
+          ]}
+        >
+          <div class="flex items-center gap-2 min-w-0">
+            <.botanical_icon
+              kind={:grove}
+              class="w-4 h-4 flex-none text-emerald-600 dark:text-emerald-400"
+            />
+            <span class={[
+              "flex-1 min-w-0 truncate text-sm",
+              if(init.id == @current_id,
+                do: "font-semibold text-emerald-800 dark:text-emerald-300",
+                else: "text-zinc-700 dark:text-zinc-200"
+              )
+            ]}>
+              {init.name}
+            </span>
+            <span
+              :if={init.my_role}
+              class={[
+                "flex-none text-[9px] uppercase tracking-wide font-semibold px-1 py-0.5 rounded",
+                role_badge_class(init.my_role)
+              ]}
+              title={"Your role: #{init.my_role}"}
+            >
+              {init.my_role}
+            </span>
+          </div>
+          <div class="mt-1 h-1 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
+            <div class="h-full bg-emerald-400" style={"width: #{init.progress || 0}%"}></div>
+          </div>
+        </.link>
+      </nav>
+    </aside>
     """
   end
 

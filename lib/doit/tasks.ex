@@ -34,7 +34,8 @@ defmodule DoIt.Tasks do
           :created_by,
           :updated_by,
           :parent,
-          co_assignee_links: ^from(c in TaskCoAssignee, order_by: [asc: c.sort_order, asc: c.id], preload: [:user])
+          co_assignee_links:
+            ^from(c in TaskCoAssignee, order_by: [asc: c.sort_order, asc: c.id], preload: [:user])
         ]
     )
   end
@@ -54,8 +55,8 @@ defmodule DoIt.Tasks do
   separate Lists), each with a `:children` list, recursively.
   """
   # How many co-assignee avatars the row chip shows before overflowing to
-  # "+N" (m02.05 item 16). Start at 3; bump after testing.
-  @co_avatar_cap 3
+  # "+N" (m02.05 item 15).
+  @co_avatar_cap 8
 
   def initiative_task_tree(initiative_id) do
     initiative_id
@@ -187,7 +188,9 @@ defmodule DoIt.Tasks do
   end
 
   defp apply_default_sort(attrs, %{task_sort_mode: "match_parent"}), do: attrs
-  defp apply_default_sort(attrs, %{task_sort_mode: mode}), do: Map.put_new(attrs, "sort_mode", mode)
+
+  defp apply_default_sort(attrs, %{task_sort_mode: mode}),
+    do: Map.put_new(attrs, "sort_mode", mode)
 
   # "Match parent" copies the parent's priority; under the system root that's
   # "normal" by construction, which is the documented root-level fallback.
@@ -1327,7 +1330,9 @@ defmodule DoIt.Tasks do
       links = list_co_assignees(task.id)
       by_user = Map.new(links, &{&1.user_id, &1})
 
-      ordered = Enum.map(ordered_user_ids, &parse_int/1) |> Enum.filter(&Map.has_key?(by_user, &1))
+      ordered =
+        Enum.map(ordered_user_ids, &parse_int/1) |> Enum.filter(&Map.has_key?(by_user, &1))
+
       remainder = Enum.reject(Enum.map(links, & &1.user_id), &(&1 in ordered))
 
       (ordered ++ remainder)
@@ -1446,7 +1451,9 @@ defmodule DoIt.Tasks do
   defp first_handoff_co(task, leaving_id) do
     case task.id
          |> list_co_assignees()
-         |> Enum.find(&(&1.user_id != leaving_id and current_member?(task.initiative_id, &1.user_id))) do
+         |> Enum.find(
+           &(&1.user_id != leaving_id and current_member?(task.initiative_id, &1.user_id))
+         ) do
       nil -> nil
       link -> link.user_id
     end
@@ -1495,7 +1502,10 @@ defmodule DoIt.Tasks do
   end
 
   defp compact_co_order(task_id) do
-    from(c in TaskCoAssignee, where: c.task_id == ^task_id, order_by: [asc: c.sort_order, asc: c.id])
+    from(c in TaskCoAssignee,
+      where: c.task_id == ^task_id,
+      order_by: [asc: c.sort_order, asc: c.id]
+    )
     |> Repo.all()
     |> Enum.with_index()
     |> Enum.each(fn {link, idx} ->

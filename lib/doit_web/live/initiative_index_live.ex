@@ -153,17 +153,6 @@ defmodule DoItWeb.InitiativeIndexLive do
   defp maybe_reverse(list, true), do: Enum.reverse(list)
   defp maybe_reverse(list, _), do: list
 
-  defp role_badge_class("owner"),
-    do: "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300"
-
-  defp role_badge_class("editor"),
-    do: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300"
-
-  defp role_badge_class("viewer"),
-    do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-
-  defp role_badge_class(_), do: "bg-zinc-100 text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
-
   # The Initiative's subtitle (root task title) for the card, or nil when blank
   # (stored as a single space). nil hides the row via `:if`.
   defp subtitle_text(%{subtitle: s}) when is_binary(s) do
@@ -182,7 +171,13 @@ defmodule DoItWeb.InitiativeIndexLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_user={@current_user}>
+    <Layouts.app
+      flash={@flash}
+      current_user={@current_user}
+      width={:wide}
+      rail_initiatives={@initiatives}
+      rail_current_id={nil}
+    >
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
           <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">My Initiatives</h1>
@@ -232,7 +227,7 @@ defmodule DoItWeb.InitiativeIndexLive do
         phx-hook="InitiativeSort"
         phx-update="ignore"
         data-reverse-by-mode={Jason.encode!(@reverse_by_mode)}
-        class="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300"
+        class="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300 3xl:hidden"
       >
         <label for="initiative-sort-mode" class="text-xs">Sort</label>
         <select id="initiative-sort-mode" name="mode" class="select select-bordered select-sm">
@@ -254,7 +249,12 @@ defmodule DoItWeb.InitiativeIndexLive do
         </label>
       </form>
 
-      <div id="initiatives" phx-update="stream" class="space-y-2">
+      <%!-- Card list: full-width below 3xl. At 3xl the left rail (Layouts
+           chrome) covers it, so it hides and the center shows a "pick an
+           Initiative" prompt; the "Assigned to Me" pane rides the layout's
+           right pane (a sibling of the left rail, via <:rail_right> below),
+           not this column. --%>
+      <div id="initiatives" phx-update="stream" class="space-y-2 3xl:hidden">
         <%!-- Sort keys ride the card as data attributes so the sort control
              reorders the list client-side at the change (UX_GUARDRAILS 6.5);
              the server re-stream confirms the same order. --%>
@@ -345,6 +345,14 @@ defmodule DoItWeb.InitiativeIndexLive do
         </div>
       </div>
 
+      <%!-- Center prompt at 3xl: the rail covers the list, so this column
+               just asks the user to pick one. --%>
+      <div class="hidden 3xl:flex flex-col items-center justify-center text-center py-24 text-zinc-500 dark:text-zinc-400">
+        <.botanical_icon kind={:grove} class="w-12 h-12 mb-3 text-zinc-300 dark:text-zinc-600" />
+        <p class="text-lg font-medium text-zinc-600 dark:text-zinc-300">Pick an Initiative</p>
+        <p class="text-sm">Choose one from the list on the left to open it.</p>
+      </div>
+
       <p :if={@initiative_count == 0} class="text-zinc-500 dark:text-zinc-400 mt-4">
         No initiatives yet. Create one to get started.
       </p>
@@ -362,6 +370,22 @@ defmodule DoItWeb.InitiativeIndexLive do
       </div>
 
       <.shortcuts_overlay />
+
+      <%!-- Right (third) pane, a sibling of the left rail (item 6): the
+           reserved "Assigned to Me" home. Placeholder until Arc 7 (m02.07)
+           builds the cross-Initiative list; fills the pane height. --%>
+      <:rail_right>
+        <div class="flex min-h-[calc(100dvh-9rem)] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-300 px-6 text-center dark:border-zinc-700">
+          <.botanical_icon
+            kind={:leaf}
+            class="w-10 h-10 text-emerald-500/70 dark:text-emerald-400/70"
+          />
+          <h2 class="text-lg font-semibold text-zinc-700 dark:text-zinc-200">Assigned to Me</h2>
+          <p class="text-sm text-zinc-500 dark:text-zinc-400">
+            Every task on your plate, across all your Initiatives, will gather here — coming soon.
+          </p>
+        </div>
+      </:rail_right>
     </Layouts.app>
     """
   end
