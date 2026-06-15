@@ -51,6 +51,37 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
+  Tasks that `user_id` *leads* under Viewer+ (m02.05 item 12.6): every task
+  where they are the direct (primary) assignee, plus all descendants — the
+  subtree they may edit (progress / comments) and staff. A `MapSet` of task ids.
+  The caller gates on the Initiative's `viewer_plus` flag and the user's role;
+  this is just the assignment-derived reach (a recursive walk down from each
+  led root).
+  """
+  def viewer_plus_led_ids(initiative_id, user_id) do
+    roots =
+      from(t in Task,
+        where: t.initiative_id == ^initiative_id and t.assignee_id == ^user_id,
+        select: %{id: t.id}
+      )
+
+    descendants =
+      from(t in Task,
+        join: led in "led",
+        on: t.parent_id == led.id,
+        select: %{id: t.id}
+      )
+
+    led_query = union(roots, ^descendants)
+
+    from(l in "led", select: l.id)
+    |> recursive_ctes(true)
+    |> with_cte("led", as: ^led_query)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
   Builds a tree of tasks for an Initiative. Returns a list of root tasks (the
   separate Lists), each with a `:children` list, recursively.
   """
