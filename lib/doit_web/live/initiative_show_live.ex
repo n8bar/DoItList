@@ -2372,13 +2372,13 @@ defmodule DoItWeb.InitiativeShowLive do
                  overflow. Corrects on the server patch after an optimistic
                  primary change (the echo can't synthesize co's). --%>
             <span
-              :if={@task.co_assignee_count > 0}
               data-co-count
+              hidden={@task.co_assignee_count == 0}
               title={"#{@task.co_assignee_count} co-assignee(s)"}
               class="ml-0.5 flex-none inline-flex items-center"
             >
               <span class="text-[10px] font-semibold opacity-80">+</span>
-              <span class="inline-flex items-center -space-x-1 ml-0.5">
+              <span data-co-chip-avatars class="inline-flex items-center -space-x-1 ml-0.5">
                 <.avatar
                   :for={u <- @task.co_assignee_users}
                   user={u}
@@ -2386,7 +2386,8 @@ defmodule DoItWeb.InitiativeShowLive do
                 />
               </span>
               <span
-                :if={@task.co_assignee_count > length(@task.co_assignee_users)}
+                data-co-overflow
+                hidden={@task.co_assignee_count <= length(@task.co_assignee_users)}
                 class="ml-0.5 text-[10px] font-semibold opacity-80"
               >
                 +{@task.co_assignee_count - length(@task.co_assignee_users)}
@@ -3163,11 +3164,21 @@ defmodule DoItWeb.InitiativeShowLive do
            promotion order. The primary stays the assignee select above.
            MUST live OUTSIDE the update_task form — its own add-form can't be
            nested in another form (the browser drops nested forms). --%>
-      <div :if={@can_edit or @task.co_assignee_links != []}>
+      <div
+        :if={@can_edit or @task.co_assignee_links != []}
+        id="co-assignees"
+        phx-hook="CoAssignees"
+      >
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
-        <ul class="mt-1 space-y-1">
+        <ul data-co-list class="mt-1 space-y-1">
           <li
             :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
+            data-co-row
+            data-co-user-id={link.user_id}
+            data-name={link.user.username}
+            data-initials={initials(link.user)}
+            data-avatar-bg={avatar_bg(link.user)}
+            data-avatar-fg={avatar_fg(link.user)}
             class="flex items-center gap-2 text-sm"
           >
             <.avatar
@@ -3218,15 +3229,23 @@ defmodule DoItWeb.InitiativeShowLive do
           </li>
         </ul>
         <p
-          :if={@task.co_assignee_links == []}
+          data-co-empty
+          hidden={@task.co_assignee_links != []}
           class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic"
         >
           None yet.
         </p>
         <form :if={@can_edit} id="add-co-assignee-form" phx-change="add_co_assignee" class="mt-1">
-          <select name="user_id" class="w-full select select-bordered select-sm">
+          <select name="user_id" data-co-add class="w-full select select-bordered select-sm">
             <option value="">+ Add co-assignee…</option>
-            <option :for={m <- eligible_co_members(@members, @task)} value={m.user.id}>
+            <option
+              :for={m <- eligible_co_members(@members, @task)}
+              value={m.user.id}
+              data-name={m.user.username}
+              data-initials={initials(m.user)}
+              data-avatar-bg={avatar_bg(m.user)}
+              data-avatar-fg={avatar_fg(m.user)}
+            >
               {m.user.username}
             </option>
           </select>

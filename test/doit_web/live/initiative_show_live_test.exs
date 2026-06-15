@@ -880,7 +880,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
-  describe "co-assignees in the pane (m02.05 item 13)" do
+  describe "co-assignees in the pane (m02.05 item 12.1)" do
     test "add shows the co-assignee + a +N chip; remove clears both", %{conn: conn} do
       {conn, owner} = register_and_log_in(conn)
       {_c, co} = register_and_log_in(conn)
@@ -893,18 +893,21 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       added = render_click(view, "add_co_assignee", %{"user_id" => to_string(co.id)})
       assert added =~ "@#{co.username}"
-      # Co shows as an overlapping avatar in the chip (item 16), not "+1" text.
-      assert has_element?(view, "[data-co-count]")
+      # Co shows as an overlapping avatar in the chip (item 12.4), not "+1" text.
+      # The chip is always in the DOM (item 12.5 syncs it optimistically); a
+      # populated one is the *visible* (not-hidden) co-count.
+      assert has_element?(view, "[data-co-count]:not([hidden])")
       assert [%{user_id: id}] = DoIt.Tasks.list_co_assignees(task.id)
       assert id == co.id
 
-      removed = render_click(view, "remove_co_assignee", %{"user-id" => to_string(co.id)})
+      _removed = render_click(view, "remove_co_assignee", %{"user-id" => to_string(co.id)})
       assert DoIt.Tasks.list_co_assignees(task.id) == []
-      refute removed =~ "data-co-count"
+      # Cleared → the chip is hidden, not removed.
+      assert has_element?(view, "[data-co-count][hidden]")
     end
   end
 
-  describe "change member role (m02.05 item 14)" do
+  describe "change member role (m02.05 item 12.2)" do
     test "owner changes a member's role; it persists and re-roles the open view", %{conn: conn} do
       {conn_a, owner} = register_and_log_in(conn)
       {conn_b, member} = register_and_log_in(conn)
@@ -931,7 +934,7 @@ defmodule DoItWeb.InitiativeShowLiveTest do
     end
   end
 
-  describe "member-removal hand-off (m02.05 item 13.5)" do
+  describe "member-removal hand-off (m02.05 item 12.1.5)" do
     test "removing a member who holds assignments opens the modal; confirm hands off + removes",
          %{conn: conn} do
       {conn, owner} = register_and_log_in(conn)

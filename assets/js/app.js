@@ -2278,6 +2278,166 @@ Hooks.CollaboratorDrag = {
   },
 }
 
+// Optimistic co-assignees (m02.05 item 12.5): the Details-pane add / remove /
+// reorder apply to the DOM at the gesture; the existing phx-change/phx-click
+// still fire, so the server patch reconciles (and a rejected write reverts via
+// morphdom). Each change is mirrored onto the selected row's chip stack. The
+// mutation is deferred to a microtask so LiveView reads the form / phx-values
+// off the live DOM *before* we move or drop anything.
+const CO_AVATAR_CAP = 8
+const CO_ROW_HTML = `
+  <span class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"></span>
+  <span class="flex-1 min-w-0 truncate text-zinc-700 dark:text-zinc-200"></span>
+  <button type="button" phx-click="move_co_assignee" phx-value-dir="up" aria-label="Move up" class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"><span class="hero-chevron-up w-3.5 h-3.5"></span></button>
+  <button type="button" phx-click="move_co_assignee" phx-value-dir="down" aria-label="Move down" class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"><span class="hero-chevron-down w-3.5 h-3.5"></span></button>
+  <button type="button" phx-click="remove_co_assignee" aria-label="Remove co-assignee" class="px-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"><span class="hero-x-mark w-3.5 h-3.5"></span></button>
+`
+
+Hooks.CoAssignees = {
+  mounted() {
+    this.onChange = (e) => {
+      const sel = e.target.closest("[data-co-add]")
+      if (!sel || !this.el.contains(sel) || !sel.value) return
+      const opt = sel.options[sel.selectedIndex]
+      const d = {
+        userId: sel.value,
+        name: opt.dataset.name,
+        initials: opt.dataset.initials,
+        bg: opt.dataset.avatarBg,
+        fg: opt.dataset.avatarFg,
+      }
+      queueMicrotask(() => this.add(d))
+    }
+    this.onClick = (e) => {
+      const rm = e.target.closest("[phx-click='remove_co_assignee']")
+      if (rm && this.el.contains(rm)) {
+        const li = rm.closest("[data-co-row]")
+        return queueMicrotask(() => this.removeRow(li))
+      }
+      const mv = e.target.closest("[phx-click='move_co_assignee']")
+      if (mv && this.el.contains(mv)) {
+        const li = mv.closest("[data-co-row]")
+        const dir = mv.getAttribute("phx-value-dir")
+        queueMicrotask(() => this.moveRow(li, dir))
+      }
+    }
+    this.el.addEventListener("change", this.onChange)
+    this.el.addEventListener("click", this.onClick)
+  },
+  destroyed() {
+    this.el.removeEventListener("change", this.onChange)
+    this.el.removeEventListener("click", this.onClick)
+  },
+  list() {
+    return this.el.querySelector("[data-co-list]")
+  },
+  add(d) {
+    const list = this.list()
+    if (!list || list.querySelector(`[data-co-row][data-co-user-id="${d.userId}"]`)) return
+    list.appendChild(this.buildRow(d))
+    const empty = this.el.querySelector("[data-co-empty]")
+    if (empty) empty.hidden = true
+    this.refreshDisabled()
+    this.syncChip()
+  },
+  removeRow(li) {
+    if (!li || !li.isConnected) return
+    li.remove()
+    if (!this.list().querySelector("[data-co-row]")) {
+      const empty = this.el.querySelector("[data-co-empty]")
+      if (empty) empty.hidden = false
+    }
+    this.refreshDisabled()
+    this.syncChip()
+  },
+  moveRow(li, dir) {
+    if (!li || !li.isConnected) return
+    if (dir === "up" && li.previousElementSibling) {
+      li.parentNode.insertBefore(li, li.previousElementSibling)
+    } else if (dir === "down" && li.nextElementSibling) {
+      li.parentNode.insertBefore(li.nextElementSibling, li)
+    }
+    this.refreshDisabled()
+    this.syncChip()
+  },
+  refreshDisabled() {
+    const rows = [...this.list().querySelectorAll("[data-co-row]")]
+    rows.forEach((li, i) => {
+      const up = li.querySelector("[phx-value-dir='up']")
+      const down = li.querySelector("[phx-value-dir='down']")
+      if (up) up.disabled = i === 0
+      if (down) down.disabled = i === rows.length - 1
+    })
+  },
+  buildRow(d) {
+    const tmpl = this.list().querySelector("[data-co-row]")
+    let li
+    if (tmpl) {
+      li = tmpl.cloneNode(true)
+    } else {
+      li = document.createElement("li")
+      li.className = "flex items-center gap-2 text-sm"
+      li.innerHTML = CO_ROW_HTML
+    }
+    li.setAttribute("data-co-row", "")
+    li.dataset.coUserId = d.userId
+    li.dataset.name = d.name || ""
+    li.dataset.initials = d.initials || ""
+    li.dataset.avatarBg = d.bg || ""
+    li.dataset.avatarFg = d.fg || ""
+    const avatar = li.querySelector(".avatar-emboss")
+    if (avatar) {
+      const dot = avatar.querySelector("[data-online-dot]")
+      if (dot) dot.remove()
+      avatar.textContent = d.initials || ""
+      avatar.style.backgroundImage = d.bg || ""
+      avatar.style.color = d.fg || ""
+    }
+    const nameEl = li.querySelector(".flex-1")
+    if (nameEl) {
+      nameEl.textContent = "@" + (d.name || "")
+      nameEl.classList.remove("line-through")
+    }
+    li.querySelectorAll("[phx-value-user-id]").forEach((b) =>
+      b.setAttribute("phx-value-user-id", d.userId),
+    )
+    const rm = li.querySelector("[phx-click='remove_co_assignee']")
+    if (rm) rm.setAttribute("aria-label", "Remove co-assignee @" + (d.name || ""))
+    return li
+  },
+  // Rebuild the selected row's chip avatar stack from the pane rows (the chip
+  // only exists when the Assignee display pref is on — bail otherwise).
+  syncChip() {
+    const sel = selectedLi()
+    const row = sel && sel.querySelector(":scope > [data-task-row]")
+    const chip = row && row.querySelector("[data-co-count]")
+    if (!chip) return
+    const rows = [...this.list().querySelectorAll("[data-co-row]")]
+    const count = rows.length
+    chip.hidden = count === 0
+    chip.title = `${count} co-assignee(s)`
+    const box = chip.querySelector("[data-co-chip-avatars]")
+    if (box) {
+      box.innerHTML = ""
+      rows.slice(0, CO_AVATAR_CAP).forEach((r) => {
+        const a = document.createElement("span")
+        a.className =
+          "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-3.5 h-3.5 text-[7px] ring-1 ring-white dark:ring-zinc-900"
+        a.style.backgroundImage = r.dataset.avatarBg || ""
+        a.style.color = r.dataset.avatarFg || ""
+        a.textContent = r.dataset.initials || ""
+        box.appendChild(a)
+      })
+    }
+    const overflow = chip.querySelector("[data-co-overflow]")
+    if (overflow) {
+      const extra = count - Math.min(count, CO_AVATAR_CAP)
+      overflow.hidden = extra <= 0
+      overflow.textContent = "+" + extra
+    }
+  },
+}
+
 // The keyboard-shortcuts help overlay. Toggled by a "doit:shortcuts-toggle"
 // event (dispatched by the `?` key or the ⌨ affordance); closed by Escape, the
 // backdrop, or the X (anything with [data-close]).
