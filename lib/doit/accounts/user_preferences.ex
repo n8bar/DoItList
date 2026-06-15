@@ -25,6 +25,8 @@ defmodule DoIt.Accounts.UserPreferences do
     field :initiative_sort_reverse, :boolean, default: false
     field :initiative_progress_calc, :string
     field :initiative_auto_promote, :boolean, default: false
+    # Seeds initiatives.viewer_plus on create (m02.05 item 12.6); default ON.
+    field :initiative_viewer_plus, :boolean, default: true
 
     field :task_sort_mode, :string, default: "match_parent"
     field :task_priority, :string, default: "normal"
@@ -54,6 +56,7 @@ defmodule DoIt.Accounts.UserPreferences do
       :initiative_sort_reverse,
       :initiative_progress_calc,
       :initiative_auto_promote,
+      :initiative_viewer_plus,
       :task_sort_mode,
       :task_priority,
       :task_assign_owner,

@@ -128,7 +128,8 @@ defmodule DoItWeb.AccountLive do
          |> put_flash(:info, "Username updated.")}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :username_form, to_form(Map.put(changeset, :action, :validate)))}
+        {:noreply,
+         assign(socket, :username_form, to_form(Map.put(changeset, :action, :validate)))}
     end
   end
 
@@ -308,6 +309,12 @@ defmodule DoItWeb.AccountLive do
                   {"Leaf average (default)", ""},
                   {"Single level", "single_level"}
                 ]}
+              />
+              <%!-- m02.05 item 12.6: seeds initiatives.viewer_plus on create. --%>
+              <.input
+                type="checkbox"
+                field={@prefs_form[:initiative_viewer_plus]}
+                label="Viewer+ (a viewer assigned a task leads its subtree)"
               />
             </fieldset>
 

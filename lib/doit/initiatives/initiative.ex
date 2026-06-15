@@ -10,9 +10,13 @@ defmodule DoIt.Initiatives.Initiative do
     field :name, :string
     field :description, :string
     field :progress_calc, :string, default: "leaf_average"
-    # m02.05 item 13: when on, clearing a task's primary assignee backfills
+    # m02.05 item 12.1: when on, clearing a task's primary assignee backfills
     # from the co-assignee list (first current member in manual order).
     field :auto_promote_co_assignees, :boolean, default: false
+    # m02.05 item 12.6: when on, a viewer who is a task's direct (primary)
+    # assignee leads its subtree — edits progress/comments and staffs
+    # descendants from the led task's co-assignee pool.
+    field :viewer_plus, :boolean, default: true
     field :my_role, :string, virtual: true
     # The viewing member's manual index order (initiative_members.sort_order).
     field :my_sort_order, :integer, virtual: true
@@ -34,7 +38,14 @@ defmodule DoIt.Initiatives.Initiative do
 
   def changeset(initiative, attrs) do
     initiative
-    |> cast(attrs, [:name, :description, :progress_calc, :auto_promote_co_assignees, :owner_id])
+    |> cast(attrs, [
+      :name,
+      :description,
+      :progress_calc,
+      :auto_promote_co_assignees,
+      :viewer_plus,
+      :owner_id
+    ])
     |> validate_required([:name, :owner_id])
     |> validate_inclusion(:progress_calc, ~w(leaf_average single_level))
     |> validate_length(:name, min: 1, max: 120)

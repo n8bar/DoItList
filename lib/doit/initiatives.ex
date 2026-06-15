@@ -77,6 +77,7 @@ defmodule DoIt.Initiatives do
       |> Map.put("owner_id", owner.id)
       |> maybe_default_progress_calc(prefs)
       |> Map.put_new("auto_promote_co_assignees", prefs.initiative_auto_promote)
+      |> Map.put_new("viewer_plus", prefs.initiative_viewer_plus)
 
     Repo.transaction(fn ->
       with {:ok, initiative} <- %Initiative{} |> Initiative.changeset(attrs) |> Repo.insert(),

@@ -461,6 +461,31 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # m02.05 item 12.6: owner-only — it's a permission policy. Re-notify the tree
+  # so any viewer+ lead's edit-ability re-evaluates live for open views.
+  def handle_event("set_viewer_plus", params, socket) do
+    if not socket.assigns.can_admin do
+      {:noreply, put_flash(socket, :error, "Only the owner can change this.")}
+    else
+      on = params["viewer_plus"] in ["true", "on"]
+
+      case Initiatives.update_initiative(socket.assigns.initiative, %{"viewer_plus" => on}) do
+        {:ok, updated} ->
+          Tasks.notify_tree_changed(updated.id, updated.root_task_id)
+
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> load_tree()
+           |> refresh_selected()}
+
+        {:error, cs} ->
+          {:noreply,
+           put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
   def handle_event("update_initiative", %{"initiative" => params}, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission to edit this initiative.")}
@@ -2749,6 +2774,25 @@ defmodule DoItWeb.InitiativeShowLive do
                   Single-level average — each child one unit
                 </option>
               </select>
+            </form>
+          </div>
+
+          <%!-- m02.05 item 12.6: owner-only, since it's a permission policy. --%>
+          <div :if={@can_admin}>
+            <form phx-change="set_viewer_plus">
+              <label class="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 select-none">
+                <input
+                  type="checkbox"
+                  name="viewer_plus"
+                  value="true"
+                  checked={@initiative.viewer_plus}
+                  class="checkbox checkbox-sm"
+                /> Viewer+ — an assigned viewer leads their subtree
+              </label>
+              <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                A viewer who is a task's assignee can update its progress and comments (and
+                everything below it), and staff descendants from that task's co-assignees.
+              </p>
             </form>
           </div>
         </div>
