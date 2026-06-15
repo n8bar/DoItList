@@ -2912,6 +2912,11 @@ defmodule DoItWeb.InitiativeShowLive do
         </button>
       </div>
 
+      <%!-- Pane field order (m02.05 item 15): title, description, progress,
+           sorting, priority, assignee — so Assignee sits directly against the
+           Co-assignees block below. sort_menu + co-assignees have their own
+           forms, so the update_task form splits around them (the echo keys off
+           element IDs, so the split is harmless). --%>
       <form phx-change="update_task" phx-submit="update_task" class="space-y-3">
         <div>
           <label for="task-field-title" class="text-xs text-zinc-500 dark:text-zinc-400">
@@ -2940,56 +2945,6 @@ defmodule DoItWeb.InitiativeShowLive do
             disabled={not @can_edit}
             phx-debounce="600"
           >{@task.description}</textarea>
-        </div>
-
-        <div class="grid grid-cols-2 gap-3">
-          <div>
-            <label for="task-field-priority" class="text-xs text-zinc-500 dark:text-zinc-400">
-              <span class={@can_edit && "underline"}>P</span>riority
-            </label>
-            <select
-              id="task-field-priority"
-              name="task[priority]"
-              class="w-full select select-bordered select-sm"
-              disabled={not @can_edit}
-            >
-              <option
-                :for={p <- DoIt.Tasks.Task.priorities()}
-                value={p}
-                selected={@task.priority == p}
-              >
-                {p}
-              </option>
-            </select>
-          </div>
-          <div>
-            <label for="task-field-assignee" class="text-xs text-zinc-500 dark:text-zinc-400">
-              <span class={@can_edit && "underline"}>A</span>ssignee
-            </label>
-            <select
-              id="task-field-assignee"
-              name="task[assignee_id]"
-              class="w-full select select-bordered select-sm"
-              disabled={not @can_edit}
-            >
-              <%!-- Option text is the bare username: the optimistic echo in
-                   app.js builds the chip's "@username" from it, and the
-                   pane-skeleton sync matches it back. Display name rides
-                   the option title. --%>
-              <option value="">Unassigned</option>
-              <option
-                :for={m <- @members}
-                value={m.user.id}
-                title={m.user.name}
-                data-initials={initials(m.user)}
-                data-avatar-bg={avatar_bg(m.user)}
-                data-avatar-fg={avatar_fg(m.user)}
-                selected={@task.assignee_id == m.user.id}
-              >
-                {m.user.username}
-              </option>
-            </select>
-          </div>
         </div>
 
         <%!-- One progress block for leaf and branch alike — the branch-only
@@ -3042,11 +2997,63 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
+      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" />
+
+      <form phx-change="update_task" phx-submit="update_task" class="grid grid-cols-2 gap-3">
+        <div>
+          <label for="task-field-priority" class="text-xs text-zinc-500 dark:text-zinc-400">
+            <span class={@can_edit && "underline"}>P</span>riority
+          </label>
+          <select
+            id="task-field-priority"
+            name="task[priority]"
+            class="w-full select select-bordered select-sm"
+            disabled={not @can_edit}
+          >
+            <option
+              :for={p <- DoIt.Tasks.Task.priorities()}
+              value={p}
+              selected={@task.priority == p}
+            >
+              {p}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label for="task-field-assignee" class="text-xs text-zinc-500 dark:text-zinc-400">
+            <span class={@can_edit && "underline"}>A</span>ssignee
+          </label>
+          <select
+            id="task-field-assignee"
+            name="task[assignee_id]"
+            class="w-full select select-bordered select-sm"
+            disabled={not @can_edit}
+          >
+            <%!-- Option text is the bare username: the optimistic echo in
+                 app.js builds the chip's "@username" from it, and the
+                 pane-skeleton sync matches it back. Display name rides
+                 the option title. --%>
+            <option value="">Unassigned</option>
+            <option
+              :for={m <- @members}
+              value={m.user.id}
+              title={m.user.name}
+              data-initials={initials(m.user)}
+              data-avatar-bg={avatar_bg(m.user)}
+              data-avatar-fg={avatar_fg(m.user)}
+              selected={@task.assignee_id == m.user.id}
+            >
+              {m.user.username}
+            </option>
+          </select>
+        </div>
+      </form>
+
       <%!-- Co-assignees (m02.05 item 13): ordered, manual — position is
            promotion order. The primary stays the assignee select above.
            MUST live OUTSIDE the update_task form — its own add-form can't be
            nested in another form (the browser drops nested forms). --%>
-      <div :if={@can_edit or @task.co_assignee_links != []} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <div :if={@can_edit or @task.co_assignee_links != []}>
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
         <ul class="mt-1 space-y-1">
           <li
@@ -3112,8 +3119,6 @@ defmodule DoItWeb.InitiativeShowLive do
           </select>
         </form>
       </div>
-
-      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" />
 
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
