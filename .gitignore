@@ -40,3 +40,6 @@ npm-debug.log
 # (LAN IP / port bindings live here so the base compose stays portable.)
 /compose.override.yaml
 /.env
+
+# Local scratch dir (screenshots, notes shared with the agent) — never committed.
+/.cybercreek/
