@@ -992,4 +992,170 @@ defmodule DoIt.TasksTest do
       assert Tasks.resolve_sort(-1) == {"manual", false}
     end
   end
+
+  describe "co-assignees (m02.05 item 13)" do
+    defp member(initiative, name) do
+      {:ok, u} =
+        Accounts.register_user(%{
+          "email" => "#{name}-#{System.unique_integer([:positive])}@example.com",
+          "username" => "#{name}-#{System.unique_integer([:positive])}",
+          "name" => String.capitalize(name),
+          "password" => "password123"
+        })
+
+      {:ok, _} = Initiatives.add_member(initiative.id, u.id, "editor")
+      u
+    end
+
+    test "add appends in order; list returns them ordered with users", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+      a = member(initiative, "amy")
+      b = member(initiative, "bo")
+
+      {:ok, _} = Tasks.add_co_assignee(task, owner, a.id)
+      {:ok, _} = Tasks.add_co_assignee(task, owner, b.id)
+
+      links = Tasks.list_co_assignees(task.id)
+      assert Enum.map(links, & &1.user_id) == [a.id, b.id]
+      assert Enum.map(links, & &1.user.id) == [a.id, b.id]
+      assert Enum.map(links, & &1.sort_order) == [0, 1]
+    end
+
+    test "exclusivity: can't co-assign the primary; promoting a co drops them from the list", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      a = member(initiative, "amy")
+      task = new_task(owner, initiative, %{"title" => "T", "assignee_id" => owner.id})
+
+      assert {:error, :is_primary} = Tasks.add_co_assignee(task, owner, owner.id)
+
+      {:ok, _} = Tasks.add_co_assignee(task, owner, a.id)
+      assert {:error, :already_co} = Tasks.add_co_assignee(task, owner, a.id)
+
+      # Make the co-assignee the primary → exclusivity removes them from the co-list.
+      {:ok, _} = Tasks.update_task(task, owner, %{"assignee_id" => a.id})
+      assert Tasks.list_co_assignees(task.id) == []
+    end
+
+    test "remove compacts order; reorder sets manual position", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+      [a, b, c] = for n <- ~w(amy bo cy), do: member(initiative, n)
+
+      for u <- [a, b, c], do: {:ok, _} = Tasks.add_co_assignee(task, owner, u.id)
+
+      {:ok, _} = Tasks.remove_co_assignee(task, owner, b.id)
+      links = Tasks.list_co_assignees(task.id)
+      assert Enum.map(links, & &1.user_id) == [a.id, c.id]
+      assert Enum.map(links, & &1.sort_order) == [0, 1]
+
+      {:ok, _} = Tasks.reorder_co_assignees(task, owner, [c.id, a.id])
+      assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [c.id, a.id]
+    end
+
+    test "auto-promote backfills the primary from the co-list, skipping non-members", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      {:ok, initiative} = Initiatives.update_initiative(initiative, %{"auto_promote_co_assignees" => true})
+
+      gone = member(initiative, "gone")
+      keep = member(initiative, "keep")
+      task = new_task(owner, initiative, %{"title" => "T", "assignee_id" => owner.id})
+
+      # Co-list order: gone, keep. gone then leaves the Initiative.
+      {:ok, _} = Tasks.add_co_assignee(task, owner, gone.id)
+      {:ok, _} = Tasks.add_co_assignee(task, owner, keep.id)
+      {_, _} = Initiatives.remove_member(initiative.id, gone.id)
+
+      # Clear the primary → first CURRENT-MEMBER co (keep) is promoted; gone is skipped.
+      {:ok, updated} = Tasks.update_task(task, owner, %{"assignee_id" => nil})
+      assert updated.assignee_id == keep.id
+      # The promoted user leaves the co-list; the skipped non-member stays.
+      assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [gone.id]
+    end
+
+    test "auto-promote off: clearing the primary leaves the task unassigned, co-list intact", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      a = member(initiative, "amy")
+      task = new_task(owner, initiative, %{"title" => "T", "assignee_id" => owner.id})
+      {:ok, _} = Tasks.add_co_assignee(task, owner, a.id)
+
+      {:ok, updated} = Tasks.update_task(task, owner, %{"assignee_id" => nil})
+      assert updated.assignee_id == nil
+      assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [a.id]
+    end
+
+    test "My Initiative Defaults seed auto-promote onto new Initiatives", ctx do
+      %{user: owner} = ctx
+      {:ok, _} = Accounts.update_preferences(owner, %{"initiative_auto_promote" => "true"})
+      {:ok, seeded} = Initiatives.create_initiative(owner, %{"name" => "Seeded"})
+      assert seeded.auto_promote_co_assignees == true
+    end
+
+    test "member_assignment_count counts primary + co", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      a = member(initiative, "amy")
+      t1 = new_task(owner, initiative, %{"title" => "T1", "assignee_id" => a.id})
+      t2 = new_task(owner, initiative, %{"title" => "T2"})
+      {:ok, _} = Tasks.add_co_assignee(t2, owner, a.id)
+      _ = t1
+
+      assert Tasks.member_assignment_count(initiative.id, a.id) == 2
+    end
+
+    test "handoff: promote_co wins where a co exists, else takeover, else clear; co-assignments dropped", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      leaving = member(initiative, "leaving")
+      co = member(initiative, "co")
+      taker = member(initiative, "taker")
+
+      # primary-with-co → promote the co
+      with_co = new_task(owner, initiative, %{"title" => "with-co", "assignee_id" => leaving.id})
+      {:ok, _} = Tasks.add_co_assignee(with_co, owner, co.id)
+      # primary-without-co → takeover
+      no_co = new_task(owner, initiative, %{"title" => "no-co", "assignee_id" => leaving.id})
+      # leaving is a co elsewhere → dropped
+      elsewhere = new_task(owner, initiative, %{"title" => "elsewhere", "assignee_id" => owner.id})
+      {:ok, _} = Tasks.add_co_assignee(elsewhere, owner, leaving.id)
+
+      {:ok, _} =
+        Tasks.handoff_member_assignments(initiative.id, owner, leaving.id, %{
+          takeover_id: taker.id,
+          promote_co: true
+        })
+
+      assert DoIt.Repo.get(Task, with_co.id).assignee_id == co.id
+      assert Tasks.list_co_assignees(with_co.id) == []
+      assert DoIt.Repo.get(Task, no_co.id).assignee_id == taker.id
+      assert Tasks.list_co_assignees(elsewhere.id) == []
+      assert Tasks.member_assignment_count(initiative.id, leaving.id) == 0
+    end
+
+    test "handoff with promote_co off and no takeover clears the primary", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      leaving = member(initiative, "leaving")
+      co = member(initiative, "co")
+      task = new_task(owner, initiative, %{"title" => "T", "assignee_id" => leaving.id})
+      {:ok, _} = Tasks.add_co_assignee(task, owner, co.id)
+
+      {:ok, _} =
+        Tasks.handoff_member_assignments(initiative.id, owner, leaving.id, %{
+          takeover_id: nil,
+          promote_co: false
+        })
+
+      assert DoIt.Repo.get(Task, task.id).assignee_id == nil
+      # The co stays (not promoted, not the leaver).
+      assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [co.id]
+    end
+
+    test "co-assignee links cascade-delete with the task", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+      a = member(initiative, "amy")
+      {:ok, _} = Tasks.add_co_assignee(task, owner, a.id)
+
+      {:ok, _} = Tasks.delete_task(task, owner)
+      assert Tasks.list_co_assignees(task.id) == []
+    end
+  end
 end

@@ -24,6 +24,7 @@ defmodule DoIt.Accounts.UserPreferences do
     field :initiative_sort_mode, :string
     field :initiative_sort_reverse, :boolean, default: false
     field :initiative_progress_calc, :string
+    field :initiative_auto_promote, :boolean, default: false
 
     field :task_sort_mode, :string, default: "match_parent"
     field :task_priority, :string, default: "normal"
@@ -52,6 +53,7 @@ defmodule DoIt.Accounts.UserPreferences do
       :initiative_sort_mode,
       :initiative_sort_reverse,
       :initiative_progress_calc,
+      :initiative_auto_promote,
       :task_sort_mode,
       :task_priority,
       :task_assign_owner,

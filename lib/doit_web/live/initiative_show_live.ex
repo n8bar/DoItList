@@ -68,6 +68,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
          |> assign(:pending_transfer, nil)
+         |> assign(:pending_handoff, nil)
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
     end
@@ -466,6 +467,30 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply, socket |> assign(:selected_task_id, nil) |> update_presence(nil)}
   end
 
+  # --- Co-assignees (m02.05 item 13) ---------------------------------------
+
+  def handle_event("add_co_assignee", %{"user_id" => uid}, socket) when uid != "" do
+    with_co(socket, fn task, user ->
+      Tasks.add_co_assignee(task, user, String.to_integer(uid))
+    end)
+  end
+
+  def handle_event("add_co_assignee", _params, socket), do: {:noreply, socket}
+
+  def handle_event("remove_co_assignee", %{"user-id" => uid}, socket) do
+    with_co(socket, fn task, user ->
+      Tasks.remove_co_assignee(task, user, String.to_integer(uid))
+    end)
+  end
+
+  def handle_event("move_co_assignee", %{"user-id" => uid, "dir" => dir}, socket)
+      when dir in ~w(up down) do
+    with_co(socket, fn task, user ->
+      ids = Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id)
+      Tasks.reorder_co_assignees(task, user, shift(ids, String.to_integer(uid), dir))
+    end)
+  end
+
   def handle_event("update_task", %{"task" => params}, socket) do
     if not socket.assigns.can_edit do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
@@ -800,6 +825,9 @@ defmodule DoItWeb.InitiativeShowLive do
     initiative = socket.assigns.initiative
     user_id = String.to_integer(user_id)
 
+    member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
+    name = (member && member.user.name) || "this member"
+
     cond do
       not socket.assigns.can_admin ->
         {:noreply, put_flash(socket, :error, "Only the owner can remove members.")}
@@ -807,18 +835,77 @@ defmodule DoItWeb.InitiativeShowLive do
       user_id == initiative.owner_id ->
         {:noreply, put_flash(socket, :error, "The Initiative's owner can't be removed.")}
 
+      # Holds assignments → the hand-off modal (13.5), so removal leaves no
+      # struck residue. Always asks (it needs decisions), even if the plain
+      # remove confirm was suppressed.
+      Tasks.member_assignment_count(initiative.id, user_id) > 0 ->
+        {:noreply,
+         assign(socket, :pending_handoff, %{
+           user_id: user_id,
+           name: name,
+           count: Tasks.member_assignment_count(initiative.id, user_id),
+           promote_default: initiative.auto_promote_co_assignees
+         })}
+
       skip_confirm?(socket, "remove-member") ->
         {:noreply, commit_remove_member(socket, user_id)}
 
       true ->
-        member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
-
         {:noreply,
-         assign_pending(socket, %{
-           kind: :remove_member,
-           user_id: user_id,
-           name: (member && member.user.name) || "this member"
-         })}
+         assign_pending(socket, %{kind: :remove_member, user_id: user_id, name: name})}
+    end
+  end
+
+  def handle_event("cancel_handoff", _params, socket) do
+    {:noreply, assign(socket, :pending_handoff, nil)}
+  end
+
+  def handle_event("confirm_handoff", params, socket) do
+    initiative = socket.assigns.initiative
+    pending = socket.assigns.pending_handoff
+
+    takeover_id =
+      case params["takeover"] do
+        id when is_binary(id) and id != "" -> String.to_integer(id)
+        _ -> nil
+      end
+
+    promote_co = params["promote_co"] in ["true", "on"]
+
+    if socket.assigns.can_admin and pending do
+      {:ok, _} =
+        Tasks.handoff_member_assignments(initiative.id, socket.assigns.current_user, pending.user_id,
+          takeover_id: takeover_id,
+          promote_co: promote_co
+        )
+
+      {_n, _} = Initiatives.remove_member(initiative.id, pending.user_id)
+
+      {:noreply,
+       socket
+       |> assign(:pending_handoff, nil)
+       |> assign(:members, Initiatives.list_members(initiative.id))
+       |> put_flash(:info, "Removed #{pending.name}; their assignments were handed off.")
+       |> load_tree()
+       |> refresh_selected()}
+    else
+      {:noreply, assign(socket, :pending_handoff, nil)}
+    end
+  end
+
+  def handle_event("update_member_role", %{"user_id" => uid, "role" => role}, socket) do
+    initiative = socket.assigns.initiative
+    uid = String.to_integer(uid)
+
+    if socket.assigns.can_admin and uid != initiative.owner_id and role in ~w(editor viewer) do
+      {:ok, _} = Initiatives.update_member_role(initiative.id, uid, role)
+
+      {:noreply,
+       socket
+       |> assign(:members, Initiatives.list_members(initiative.id))
+       |> put_flash(:info, "Role updated.")}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -1598,6 +1685,64 @@ defmodule DoItWeb.InitiativeShowLive do
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
+      <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
+      <div
+        :if={@pending_handoff}
+        id="handoff-confirm"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      >
+        <form
+          :if={@pending_handoff}
+          id="handoff-form"
+          phx-submit="confirm_handoff"
+          phx-click-away="cancel_handoff"
+          class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
+        >
+          <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+            Remove {@pending_handoff.name}
+          </h3>
+          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+            They hold {@pending_handoff.count} assignment(s) here. Choose what happens to those,
+            then they'll be removed.
+          </p>
+
+          <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
+            <input type="checkbox" name="promote_co" value="true" checked={@pending_handoff.promote_default} class="checkbox checkbox-sm" />
+            Promote the next co-assignee in line where one exists
+          </label>
+
+          <label class="mt-3 block text-xs text-zinc-500 dark:text-zinc-400">
+            Otherwise hand their tasks to
+          </label>
+          <select name="takeover" class="mt-1 w-full select select-bordered select-sm">
+            <option value="">No one — leave those tasks unassigned</option>
+            <option
+              :for={m <- @members}
+              :if={m.user_id != @pending_handoff.user_id}
+              value={m.user_id}
+            >
+              {m.user.name} (@{m.user.username})
+            </option>
+          </select>
+
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              phx-click="cancel_handoff"
+              class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              phx-disable-with="Removing..."
+              class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700"
+            >
+              Remove &amp; hand off
+            </button>
+          </div>
+        </form>
+      </div>
       <div
         :if={@pending_transfer}
         id="transfer-confirm"
@@ -2097,7 +2242,10 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-click="select_task"
             phx-value-id={@task.id}
             data-pill="assignee"
-            data-pill-set={not is_nil(@task.assignee_id) and not is_nil(@task.assignee)}
+            data-pill-set={
+              (not is_nil(@task.assignee_id) and not is_nil(@task.assignee)) or
+                @task.co_assignee_count > 0
+            }
             class={[
               "inline-flex items-center justify-center h-5 min-w-9 max-w-[45%] px-1.5 rounded-full text-xs flex-none cursor-pointer",
               "border border-dashed border-zinc-300 dark:border-zinc-600",
@@ -2128,6 +2276,16 @@ defmodule DoItWeb.InitiativeShowLive do
               data-pill-text
             >
               {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.username}"}
+            </span>
+            <%!-- "+N" co-assignee hint (m02.05 .13.2); corrects on the server
+                 patch after an optimistic primary change. --%>
+            <span
+              :if={@task.co_assignee_count > 0}
+              data-co-count
+              title={"#{@task.co_assignee_count} co-assignee(s)"}
+              class="ml-0.5 flex-none text-[10px] font-semibold opacity-80"
+            >
+              +{@task.co_assignee_count}
             </span>
           </button>
 
@@ -2584,7 +2742,30 @@ defmodule DoItWeb.InitiativeShowLive do
             <span class="text-xs text-zinc-400 dark:text-zinc-500 truncate">@{m.user.username}</span>
           </span>
           <span class="flex items-center gap-1 flex-none">
-            <span class="text-xs text-zinc-500 dark:text-zinc-400">{m.role}</span>
+            <%!-- Change role (m02.05 item 14): owner-only, non-owner rows,
+                 editor ↔ viewer. update_member_role broadcasts members_changed
+                 so open views re-role live. --%>
+            <form
+              :if={@can_admin and m.user_id != @owner_id}
+              phx-change="update_member_role"
+              class="flex-none"
+            >
+              <input type="hidden" name="user_id" value={m.user_id} />
+              <select
+                name="role"
+                aria-label={"Role for #{m.user.name}"}
+                class="select select-bordered select-xs"
+              >
+                <option value="editor" selected={m.role == "editor"}>editor</option>
+                <option value="viewer" selected={m.role == "viewer"}>viewer</option>
+              </select>
+            </form>
+            <span
+              :if={not (@can_admin and m.user_id != @owner_id)}
+              class="text-xs text-zinc-500 dark:text-zinc-400"
+            >
+              {m.role}
+            </span>
             <%!-- Leave (own row, non-owners): always confirmed — only the
                  owner can add you back. The members_changed broadcast ejects
                  this very view on commit. --%>
@@ -2861,6 +3042,77 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
+      <%!-- Co-assignees (m02.05 item 13): ordered, manual — position is
+           promotion order. The primary stays the assignee select above.
+           MUST live OUTSIDE the update_task form — its own add-form can't be
+           nested in another form (the browser drops nested forms). --%>
+      <div :if={@can_edit or @task.co_assignee_links != []} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+        <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
+        <ul class="mt-1 space-y-1">
+          <li
+            :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
+            class="flex items-center gap-2 text-sm"
+          >
+            <.avatar
+              user={link.user}
+              online={MapSet.member?(@online_ids, link.user_id)}
+              class="w-5 h-5 text-[10px]"
+            />
+            <span class={[
+              "flex-1 min-w-0 truncate text-zinc-700 dark:text-zinc-200",
+              not member_user?(@members, link.user_id) && "line-through"
+            ]}>
+              @{link.user.username}
+            </span>
+            <button
+              :if={@can_edit}
+              type="button"
+              phx-click="move_co_assignee"
+              phx-value-user-id={link.user_id}
+              phx-value-dir="up"
+              disabled={idx == 0}
+              aria-label="Move up"
+              class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"
+            >
+              <.icon name="hero-chevron-up" class="w-3.5 h-3.5" />
+            </button>
+            <button
+              :if={@can_edit}
+              type="button"
+              phx-click="move_co_assignee"
+              phx-value-user-id={link.user_id}
+              phx-value-dir="down"
+              disabled={idx == length(@task.co_assignee_links) - 1}
+              aria-label="Move down"
+              class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"
+            >
+              <.icon name="hero-chevron-down" class="w-3.5 h-3.5" />
+            </button>
+            <button
+              :if={@can_edit}
+              type="button"
+              phx-click="remove_co_assignee"
+              phx-value-user-id={link.user_id}
+              aria-label={"Remove co-assignee @#{link.user.username}"}
+              class="px-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
+            >
+              <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+            </button>
+          </li>
+        </ul>
+        <p :if={@task.co_assignee_links == []} class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic">
+          None yet.
+        </p>
+        <form :if={@can_edit} id="add-co-assignee-form" phx-change="add_co_assignee" class="mt-1">
+          <select name="user_id" class="w-full select select-bordered select-sm">
+            <option value="">+ Add co-assignee…</option>
+            <option :for={m <- eligible_co_members(@members, @task)} value={m.user.id}>
+              {m.user.username}
+            </option>
+          </select>
+        </form>
+      </div>
+
       <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" />
 
       <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
@@ -2930,9 +3182,21 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <%!-- Hideable per user preference (m02.04 §2.4). --%>
-      <div :if={@show_activity} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
-        <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Activity</h4>
+      <%!-- Hideable per user preference (m02.04 §2.4); collapsed by default,
+           expandable. KeepOpen persists the user's open/closed choice across
+           pane patches. --%>
+      <details
+        :if={@show_activity}
+        id="task-activity"
+        phx-hook="KeepOpen"
+        class="group border-t border-zinc-100 dark:border-zinc-700 pt-3"
+      >
+        <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">
+          <.icon
+            name="hero-chevron-right"
+            class="w-3.5 h-3.5 transition-transform group-open:rotate-90"
+          /> Activity
+        </summary>
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic">
           Loading…
         </p>
@@ -2947,7 +3211,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 online={e.user && MapSet.member?(@online_ids, e.user.id)}
                 class="w-4 h-4 text-[8px]"
               />{(e.user && e.user.name) || "system"}</span>
-            · {e.kind}
+            · {event_label(e, @members)}
             <span
               :if={Map.get(e.data, "from") || Map.get(e.data, "to")}
               class="text-zinc-500 dark:text-zinc-400"
@@ -2956,7 +3220,7 @@ defmodule DoItWeb.InitiativeShowLive do
             </span>
           </li>
         </ul>
-      </div>
+      </details>
     </div>
     """
   end
@@ -2979,6 +3243,74 @@ defmodule DoItWeb.InitiativeShowLive do
   # Collapsed-badge count: leaf tasks in the whole subtree, not direct
   # children — "(12)" tells you how much work is folded away, not how many
   # immediate branches happen to wrap it.
+  # Run a co-assignee mutation against the selected task (edit-gated), then
+  # patch the tree for the actor (updates the row's "+N"); patch_task also
+  # refreshes the pane. Other clients update via the Tasks fn's broadcast.
+  defp with_co(socket, fun) do
+    task = socket.assigns.selected_task
+
+    if socket.assigns.can_edit and task do
+      _ = fun.(task, socket.assigns.current_user)
+      {:noreply, patch_task(socket, task.id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Move `id` one slot up/down within the ordered id list.
+  defp shift(ids, id, dir) do
+    case Enum.find_index(ids, &(&1 == id)) do
+      nil ->
+        ids
+
+      i ->
+        j = if dir == "up", do: i - 1, else: i + 1
+
+        if j in 0..(length(ids) - 1) do
+          a = Enum.at(ids, i)
+          b = Enum.at(ids, j)
+          ids |> List.replace_at(i, b) |> List.replace_at(j, a)
+        else
+          ids
+        end
+    end
+  end
+
+  defp member_user?(members, user_id), do: Enum.any?(members, &(&1.user_id == user_id))
+
+  # Readable activity labels for the co-assignee event kinds (m02.05 .13.7);
+  # everything else keeps its raw kind, as before.
+  defp event_label(%{kind: "co_assignee_added", data: d}, members),
+    do: "added co-assignee #{event_username(d, members)}"
+
+  defp event_label(%{kind: "co_assignee_removed", data: d}, members),
+    do: "removed co-assignee #{event_username(d, members)}"
+
+  defp event_label(%{kind: "co_assignee_promoted", data: d}, members),
+    do: "promoted #{event_username(d, members)} to assignee"
+
+  defp event_label(%{kind: "co_assignees_reordered"}, _members), do: "reordered co-assignees"
+  defp event_label(%{kind: kind}, _members), do: kind
+
+  defp event_username(%{"user_id" => uid}, members) do
+    case Enum.find(members, &(&1.user_id == uid)) do
+      nil -> "a member"
+      m -> "@#{m.user.username}"
+    end
+  end
+
+  defp event_username(_, _), do: "a member"
+
+  # Members eligible to ADD as a co-assignee: not the primary, not already on
+  # the co-list.
+  defp eligible_co_members(members, task) do
+    co_ids = MapSet.new(task.co_assignee_links, & &1.user_id)
+
+    Enum.reject(members, fn m ->
+      m.user_id == task.assignee_id or MapSet.member?(co_ids, m.user_id)
+    end)
+  end
+
   defp ex_member?(%{assignee_id: id, assignee: %{}}, member_ids) when not is_nil(id),
     do: not MapSet.member?(member_ids, id)
 

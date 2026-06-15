@@ -20,6 +20,9 @@ defmodule DoIt.Tasks.Task do
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
+    # Count of co-assignees (m02.05 item 13), attached for tree/lineage
+    # rendering so the row's "+N" chip hint needs no per-row query.
+    field :co_assignee_count, :integer, virtual: true, default: 0
 
     belongs_to :initiative, Initiative
     belongs_to :parent, Task
@@ -29,6 +32,9 @@ defmodule DoIt.Tasks.Task do
 
     has_many :children, Task, foreign_key: :parent_id
     has_many :comments, Comment
+
+    # Ordered co-assignee list (m02.05 item 13); primary stays on assignee_id.
+    has_many :co_assignee_links, DoIt.Tasks.TaskCoAssignee, preload_order: [asc: :sort_order]
 
     timestamps(type: :utc_datetime)
   end

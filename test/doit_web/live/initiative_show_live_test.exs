@@ -858,13 +858,118 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
       render_click(view, "select_task", %{"id" => to_string(task.id)})
-      assert render(view) =~ ">Activity<"
+      assert has_element?(view, "#task-activity")
 
       {:ok, _} = Accounts.update_preferences(user, %{"show_task_activity" => "false"})
 
       {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
       render_click(view, "select_task", %{"id" => to_string(task.id)})
-      refute render(view) =~ ">Activity<"
+      refute has_element?(view, "#task-activity")
+    end
+
+    test "the Activity section is collapsed by default (a <details> without open)", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      task = create_task(user, initiative, nil, "Watched")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      render_click(view, "select_task", %{"id" => to_string(task.id)})
+
+      assert has_element?(view, "details#task-activity")
+      refute has_element?(view, "details#task-activity[open]")
+    end
+  end
+
+  describe "co-assignees in the pane (m02.05 item 13)" do
+    test "add shows the co-assignee + a +N chip; remove clears both", %{conn: conn} do
+      {conn, owner} = register_and_log_in(conn)
+      {_c, co} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, co.id, "editor")
+      task = create_task(owner, initiative, nil, "Shared task")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      render_click(view, "select_task", %{"id" => to_string(task.id)})
+
+      added = render_click(view, "add_co_assignee", %{"user_id" => to_string(co.id)})
+      assert added =~ "@#{co.username}"
+      assert added =~ ~r/\+1/
+      assert [%{user_id: id}] = DoIt.Tasks.list_co_assignees(task.id)
+      assert id == co.id
+
+      removed = render_click(view, "remove_co_assignee", %{"user-id" => to_string(co.id)})
+      assert DoIt.Tasks.list_co_assignees(task.id) == []
+      refute removed =~ "data-co-count"
+    end
+  end
+
+  describe "change member role (m02.05 item 14)" do
+    test "owner changes a member's role; it persists and re-roles the open view", %{conn: conn} do
+      {conn_a, owner} = register_and_log_in(conn)
+      {conn_b, member} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, member.id, "editor")
+
+      create_task(owner, initiative, nil, "A task")
+
+      {:ok, view_a, _} = live(conn_a, ~p"/initiatives/#{initiative.id}")
+      {:ok, view_b, _} = live(conn_b, ~p"/initiatives/#{initiative.id}")
+
+      # Editor B sees the per-row "add" affordance (can_edit-gated).
+      assert has_element?(view_b, "[data-add-child]")
+
+      render_click(view_a, "update_member_role", %{
+        "user_id" => to_string(member.id),
+        "role" => "viewer"
+      })
+
+      assert Initiatives.get_role(initiative.id, member.id) == "viewer"
+      # The members_changed broadcast re-roles B's open view live → viewer
+      # loses the add affordance, no refresh.
+      refute has_element?(view_b, "[data-add-child]")
+    end
+  end
+
+  describe "member-removal hand-off (m02.05 item 13.5)" do
+    test "removing a member who holds assignments opens the modal; confirm hands off + removes",
+         %{conn: conn} do
+      {conn, owner} = register_and_log_in(conn)
+      {_c, leaving} = register_and_log_in(conn)
+      {_c2, co} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, leaving.id, "editor")
+      {:ok, _} = Initiatives.add_member(initiative.id, co.id, "editor")
+      task = create_task(owner, initiative, nil, "Leaver's task")
+      {:ok, _} = Tasks.update_task(task, owner, %{"assignee_id" => leaving.id})
+      {:ok, _} = Tasks.add_co_assignee(task, owner, co.id)
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+
+      opened = render_click(view, "remove_member", %{"user-id" => to_string(leaving.id)})
+      assert opened =~ "assignment(s)"
+      assert has_element?(view, "#handoff-form")
+      # Not removed yet.
+      assert Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == leaving.id))
+
+      render_click(view, "confirm_handoff", %{"takeover" => "", "promote_co" => "true"})
+
+      refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == leaving.id))
+      # The co was promoted to primary; no struck residue.
+      assert DoIt.Repo.get(DoIt.Tasks.Task, task.id).assignee_id == co.id
+    end
+
+    test "a member with no assignments uses the plain remove confirm, not the hand-off",
+         %{conn: conn} do
+      {conn, owner} = register_and_log_in(conn)
+      {_c, plain} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, plain.id, "viewer")
+
+      {:ok, view, _} = live(conn, ~p"/initiatives/#{initiative.id}")
+      render_click(view, "remove_member", %{"user-id" => to_string(plain.id)})
+
+      refute has_element?(view, "#handoff-form")
+      assert has_element?(view, "#completion-confirm")
     end
   end
 
@@ -904,18 +1009,12 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert confirmed =~ "Removed #{other.name}"
       refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == other.id))
 
-      # Suppressed: the next removal commits without a modal. The removed
-      # member's surviving assignment strikes through on the chip.
-      task = create_task(owner, initiative, nil, "Assigned away")
-      {:ok, _} = Tasks.update_task(task, owner, %{"assignee_id" => third.id})
-
+      # Suppressed: removing a member with NO assignments commits without a
+      # modal. (A member WITH assignments routes to the hand-off modal — see
+      # the "member-removal hand-off" describe; owner-removal never strikes.)
       direct = render_click(view, "remove_member", %{"user-id" => to_string(third.id)})
       assert direct =~ "Removed #{third.name}"
       refute Enum.any?(Initiatives.list_members(initiative.id), &(&1.user_id == third.id))
-
-      html = render(view)
-      assert html =~ "line-through"
-      assert html =~ "no longer a member"
 
       blocked = render_click(view, "remove_member", %{"user-id" => to_string(owner.id)})
       assert blocked =~ "can&#39;t be removed"

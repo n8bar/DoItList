@@ -55,6 +55,7 @@ defmodule DoIt.Initiatives do
       stringify_keys(attrs)
       |> Map.put("owner_id", owner.id)
       |> maybe_default_progress_calc(prefs)
+      |> Map.put_new("auto_promote_co_assignees", prefs.initiative_auto_promote)
 
     Repo.transaction(fn ->
       with {:ok, initiative} <- %Initiative{} |> Initiative.changeset(attrs) |> Repo.insert(),

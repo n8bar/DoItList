@@ -18,7 +18,7 @@ defmodule DoIt.Tasks do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
-  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Sort, Task}
+  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Sort, Task, TaskCoAssignee}
 
   # --- Queries ---------------------------------------------------------------
 
@@ -29,7 +29,13 @@ defmodule DoIt.Tasks do
     Repo.one(
       from t in Task,
         where: t.id == ^id,
-        preload: [:assignee, :created_by, :updated_by, :parent]
+        preload: [
+          :assignee,
+          :created_by,
+          :updated_by,
+          :parent,
+          co_assignee_links: ^from(c in TaskCoAssignee, order_by: [asc: c.sort_order, asc: c.id], preload: [:user])
+        ]
     )
   end
 
@@ -50,7 +56,25 @@ defmodule DoIt.Tasks do
   def initiative_task_tree(initiative_id) do
     initiative_id
     |> list_initiative_tasks()
+    |> with_co_counts()
     |> assemble_tree()
+  end
+
+  # Attach each task's co-assignee count (one grouped query) for the "+N"
+  # chip hint — used on both the full tree load and the incremental lineage.
+  defp with_co_counts(tasks) do
+    ids = Enum.map(tasks, & &1.id)
+
+    counts =
+      from(c in TaskCoAssignee,
+        where: c.task_id in ^ids,
+        group_by: c.task_id,
+        select: {c.task_id, count(c.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+
+    Enum.map(tasks, &%{&1 | co_assignee_count: Map.get(counts, &1.id, 0)})
   end
 
   defp assemble_tree(tasks) do
@@ -199,6 +223,21 @@ defmodule DoIt.Tasks do
           {:ok, updated} ->
             updated = maybe_set_done_progress(updated, task)
             record_diff_events(task, updated, actor)
+
+            # Exclusivity (m02.05 item 13): a user is either primary or
+            # co-assignee, never both — promoting/assigning someone who's on
+            # the co-list removes them from it.
+            if updated.assignee_id && updated.assignee_id != task.assignee_id do
+              drop_co_assignee(updated.id, updated.assignee_id)
+            end
+
+            # Auto-promote: an explicit clear of the primary backfills from the
+            # co-list (first current member in manual order) when the
+            # Initiative's setting is on.
+            updated =
+              if is_nil(updated.assignee_id) and not is_nil(task.assignee_id),
+                do: maybe_auto_promote(updated, actor),
+                else: updated
 
             # Re-compute progress for old and new parents (parent reparent)
             old_parent = task.parent_id
@@ -880,6 +919,7 @@ defmodule DoIt.Tasks do
     |> Repo.all()
     |> Enum.map(&Ecto.put_meta(&1, source: Task.__schema__(:source)))
     |> Repo.preload([:assignee, :updated_by])
+    |> with_co_counts()
   end
 
   @doc "Child ids of `parent_id` in display order."
@@ -1212,6 +1252,256 @@ defmodule DoIt.Tasks do
     )
     |> Repo.all()
   end
+
+  # --- Co-assignees (m02.05 item 13) ----------------------------------------
+
+  @doc "Ordered co-assignee links for a task, each with its `user` preloaded."
+  def list_co_assignees(task_id) do
+    from(c in TaskCoAssignee,
+      where: c.task_id == ^task_id,
+      order_by: [asc: c.sort_order, asc: c.id],
+      preload: [:user]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Append a co-assignee to the end of the task's list. Exclusivity: the
+  current primary can't also be a co-assignee (no-op); an existing co-assignee
+  is a no-op too.
+  """
+  def add_co_assignee(%Task{} = task, %User{} = actor, user_id) do
+    cond do
+      task.assignee_id == user_id ->
+        {:error, :is_primary}
+
+      Repo.get_by(TaskCoAssignee, task_id: task.id, user_id: user_id) ->
+        {:error, :already_co}
+
+      true ->
+        Repo.transaction(fn ->
+          next = next_co_sort_order(task.id)
+
+          {:ok, link} =
+            %TaskCoAssignee{}
+            |> TaskCoAssignee.changeset(%{task_id: task.id, user_id: user_id, sort_order: next})
+            |> Repo.insert()
+
+          record_event(task, actor, "co_assignee_added", %{user_id: user_id})
+          broadcast_change(task.initiative_id, {:task_updated, task.id})
+          link
+        end)
+    end
+  end
+
+  @doc "Remove a co-assignee and compact the remaining order."
+  def remove_co_assignee(%Task{} = task, %User{} = actor, user_id) do
+    Repo.transaction(fn ->
+      n = drop_co_assignee(task.id, user_id)
+      if n > 0, do: record_event(task, actor, "co_assignee_removed", %{user_id: user_id})
+      broadcast_change(task.initiative_id, {:task_updated, task.id})
+      n
+    end)
+  end
+
+  @doc """
+  Set the manual co-assignee order from a full list of user ids (position =
+  promotion order). Ids not currently on the list are ignored; missing ones
+  keep their relative order after the supplied ones.
+  """
+  def reorder_co_assignees(%Task{} = task, %User{} = actor, ordered_user_ids) do
+    Repo.transaction(fn ->
+      links = list_co_assignees(task.id)
+      by_user = Map.new(links, &{&1.user_id, &1})
+
+      ordered = Enum.map(ordered_user_ids, &parse_int/1) |> Enum.filter(&Map.has_key?(by_user, &1))
+      remainder = Enum.reject(Enum.map(links, & &1.user_id), &(&1 in ordered))
+
+      (ordered ++ remainder)
+      |> Enum.with_index()
+      |> Enum.each(fn {user_id, idx} ->
+        from(c in TaskCoAssignee, where: c.task_id == ^task.id and c.user_id == ^user_id)
+        |> Repo.update_all(set: [sort_order: idx])
+      end)
+
+      record_event(task, actor, "co_assignees_reordered", %{order: ordered ++ remainder})
+      broadcast_change(task.initiative_id, {:task_updated, task.id})
+      :ok
+    end)
+  end
+
+  @doc """
+  Backfill the primary from the co-list when the Initiative's auto-promote
+  setting is on: promote the first co-assignee in manual order who is a
+  current member (non-members keep their place but are skipped). Returns the
+  (possibly updated) task. Shared by the in-pane clear and member removal.
+  """
+  def maybe_auto_promote(%Task{} = task, %User{} = actor) do
+    if auto_promote_on?(task.initiative_id) do
+      promoted =
+        task.id
+        |> list_co_assignees()
+        |> Enum.find(&current_member?(task.initiative_id, &1.user_id))
+
+      case promoted do
+        nil -> task
+        link -> promote_co_to_primary(task, actor, link.user_id)
+      end
+    else
+      task
+    end
+  end
+
+  @doc "How many tasks in the Initiative the user is primary or co-assignee on."
+  def member_assignment_count(initiative_id, user_id) do
+    primary =
+      Repo.aggregate(
+        from(t in Task, where: t.initiative_id == ^initiative_id and t.assignee_id == ^user_id),
+        :count
+      )
+
+    co =
+      Repo.aggregate(
+        from(c in TaskCoAssignee,
+          join: t in Task,
+          on: t.id == c.task_id,
+          where: t.initiative_id == ^initiative_id and c.user_id == ^user_id
+        ),
+        :count
+      )
+
+    primary + co
+  end
+
+  @doc """
+  Resolve a departing member's assignments (m02.05 item 13.5) so removal
+  leaves no struck-through residue. For each task they're PRIMARY on:
+  promote the next eligible co (when `promote_co` and one exists), else hand
+  to `takeover_id`, else clear. Their CO-assignments are dropped. Runs in one
+  transaction; each touched task broadcasts.
+  """
+  def handoff_member_assignments(initiative_id, %User{} = actor, leaving_user_id, opts \\ %{}) do
+    # opts may be a map or keyword list — use Access on both.
+    takeover_id = opts[:takeover_id]
+    promote_co = opts[:promote_co] || false
+
+    Repo.transaction(fn ->
+      from(t in Task,
+        where: t.initiative_id == ^initiative_id and t.assignee_id == ^leaving_user_id
+      )
+      |> Repo.all()
+      |> Enum.each(&resolve_primary_handoff(&1, actor, leaving_user_id, takeover_id, promote_co))
+
+      from(c in TaskCoAssignee,
+        join: t in Task,
+        on: t.id == c.task_id,
+        where: t.initiative_id == ^initiative_id and c.user_id == ^leaving_user_id,
+        select: c.task_id
+      )
+      |> Repo.all()
+      |> Enum.each(fn task_id ->
+        drop_co_assignee(task_id, leaving_user_id)
+        broadcast_change(initiative_id, {:task_updated, task_id})
+      end)
+
+      :ok
+    end)
+  end
+
+  defp resolve_primary_handoff(task, actor, leaving_id, takeover_id, promote_co) do
+    co = if promote_co, do: first_handoff_co(task, leaving_id), else: nil
+    new_assignee = co || takeover_id
+
+    {:ok, _} =
+      task
+      |> Ecto.Changeset.change(assignee_id: new_assignee, updated_by_id: actor.id)
+      |> Repo.update()
+
+    # Exclusivity: the new primary leaves the co-list (covers a promoted co or
+    # a takeover who happened to be a co-assignee).
+    if new_assignee, do: drop_co_assignee(task.id, new_assignee)
+
+    if co,
+      do: record_event(task, actor, "co_assignee_promoted", %{user_id: co}),
+      else: record_event(task, actor, "assignee_changed", %{from: leaving_id, to: new_assignee})
+
+    broadcast_change(task.initiative_id, {:task_updated, task.id})
+  end
+
+  # First co-assignee in manual order who's a current member and not the
+  # departing user.
+  defp first_handoff_co(task, leaving_id) do
+    case task.id
+         |> list_co_assignees()
+         |> Enum.find(&(&1.user_id != leaving_id and current_member?(task.initiative_id, &1.user_id))) do
+      nil -> nil
+      link -> link.user_id
+    end
+  end
+
+  defp auto_promote_on?(initiative_id) do
+    Repo.one(
+      from i in DoIt.Initiatives.Initiative,
+        where: i.id == ^initiative_id,
+        select: i.auto_promote_co_assignees
+    ) || false
+  end
+
+  defp current_member?(initiative_id, user_id) do
+    Repo.exists?(
+      from m in DoIt.Initiatives.InitiativeMember,
+        where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
+    )
+  end
+
+  defp promote_co_to_primary(%Task{} = task, %User{} = actor, user_id) do
+    {:ok, updated} =
+      task
+      |> Ecto.Changeset.change(assignee_id: user_id, updated_by_id: actor.id)
+      |> Repo.update()
+
+    drop_co_assignee(task.id, user_id)
+    record_event(task, actor, "co_assignee_promoted", %{user_id: user_id})
+    updated
+  end
+
+  defp next_co_sort_order(task_id) do
+    (Repo.one(from c in TaskCoAssignee, where: c.task_id == ^task_id, select: max(c.sort_order)) ||
+       -1) + 1
+  end
+
+  # Delete a co-assignee link and compact the survivors' sort_order. Returns
+  # the delete count. No broadcast/event — callers own those.
+  defp drop_co_assignee(task_id, user_id) do
+    {n, _} =
+      from(c in TaskCoAssignee, where: c.task_id == ^task_id and c.user_id == ^user_id)
+      |> Repo.delete_all()
+
+    if n > 0, do: compact_co_order(task_id)
+    n
+  end
+
+  defp compact_co_order(task_id) do
+    from(c in TaskCoAssignee, where: c.task_id == ^task_id, order_by: [asc: c.sort_order, asc: c.id])
+    |> Repo.all()
+    |> Enum.with_index()
+    |> Enum.each(fn {link, idx} ->
+      if link.sort_order != idx do
+        link |> Ecto.Changeset.change(sort_order: idx) |> Repo.update()
+      end
+    end)
+  end
+
+  defp parse_int(n) when is_integer(n), do: n
+
+  defp parse_int(n) when is_binary(n) do
+    case Integer.parse(n) do
+      {i, ""} -> i
+      _ -> nil
+    end
+  end
+
+  defp parse_int(_), do: nil
 
   defp record_event(%Task{} = task, %User{} = actor, kind, data) do
     record_event_for(task.id, task.initiative_id, actor, kind, data)
