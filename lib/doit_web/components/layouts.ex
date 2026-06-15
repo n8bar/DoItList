@@ -261,9 +261,12 @@ defmodule DoItWeb.Layouts do
           "3xl:sticky 3xl:top-8 3xl:self-start 3xl:max-h-[calc(100dvh-7rem)] overflow-y-auto [scrollbar-gutter:stable]",
           # Closed: hidden below 3xl, always shown at 3xl. Open (flyout, item 11):
           # a fixed left overlay below 3xl; at 3xl the data-open overrides drop
-          # back to the inline sticky column (handles resize-while-open).
-          "not-data-open:hidden 3xl:block",
-          "data-open:fixed 3xl:data-open:static data-open:inset-y-0 data-open:left-0 data-open:z-40 data-open:w-72",
+          # back to the inline sticky column (handles resize-while-open). The
+          # 3xl "show" must match `not-data-open:hidden`'s specificity, so it's
+          # `3xl:not-data-open:block` (not plain `3xl:block`, which loses to the
+          # :not() selector and collapses the rail) — mirrors the right rail.
+          "not-data-open:hidden 3xl:not-data-open:block",
+          "data-open:block data-open:fixed 3xl:data-open:static data-open:inset-y-0 data-open:left-0 data-open:z-40 data-open:w-72",
           "data-open:bg-white dark:data-open:bg-zinc-900 3xl:data-open:bg-transparent",
           "data-open:shadow-xl 3xl:data-open:shadow-none data-open:p-4 3xl:data-open:p-0"
         ]
