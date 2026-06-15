@@ -20,9 +20,11 @@ defmodule DoIt.Tasks.Task do
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
-    # Count of co-assignees (m02.05 item 13), attached for tree/lineage
-    # rendering so the row's "+N" chip hint needs no per-row query.
+    # Co-assignees attached for tree/lineage rendering (m02.05 items 13/16):
+    # the total count plus a capped list of co-assignee users for the
+    # overlapping-avatar chip — so the row needs no per-row query.
     field :co_assignee_count, :integer, virtual: true, default: 0
+    field :co_assignee_users, {:array, :map}, virtual: true, default: []
 
     belongs_to :initiative, Initiative
     belongs_to :parent, Task

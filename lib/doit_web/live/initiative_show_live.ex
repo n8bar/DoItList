@@ -2277,15 +2277,30 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               {if @task.assignee_id && @task.assignee, do: "@#{@task.assignee.username}"}
             </span>
-            <%!-- "+N" co-assignee hint (m02.05 .13.2); corrects on the server
-                 patch after an optimistic primary change. --%>
+            <%!-- Co-assignees (m02.05 item 16): "+" then their overlapping
+                 avatars (capped server-side), with a "+N" tail for any
+                 overflow. Corrects on the server patch after an optimistic
+                 primary change (the echo can't synthesize co's). --%>
             <span
               :if={@task.co_assignee_count > 0}
               data-co-count
               title={"#{@task.co_assignee_count} co-assignee(s)"}
-              class="ml-0.5 flex-none text-[10px] font-semibold opacity-80"
+              class="ml-0.5 flex-none inline-flex items-center"
             >
-              +{@task.co_assignee_count}
+              <span class="text-[10px] font-semibold opacity-80">+</span>
+              <span class="inline-flex items-center -space-x-1 ml-0.5">
+                <.avatar
+                  :for={u <- @task.co_assignee_users}
+                  user={u}
+                  class="w-3.5 h-3.5 text-[7px] ring-1 ring-white dark:ring-zinc-900"
+                />
+              </span>
+              <span
+                :if={@task.co_assignee_count > length(@task.co_assignee_users)}
+                class="ml-0.5 text-[10px] font-semibold opacity-80"
+              >
+                +{@task.co_assignee_count - length(@task.co_assignee_users)}
+              </span>
             </span>
           </button>
 

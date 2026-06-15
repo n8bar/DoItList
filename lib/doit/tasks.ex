@@ -53,6 +53,10 @@ defmodule DoIt.Tasks do
   Builds a tree of tasks for an Initiative. Returns a list of root tasks (the
   separate Lists), each with a `:children` list, recursively.
   """
+  # How many co-assignee avatars the row chip shows before overflowing to
+  # "+N" (m02.05 item 16). Start at 3; bump after testing.
+  @co_avatar_cap 3
+
   def initiative_task_tree(initiative_id) do
     initiative_id
     |> list_initiative_tasks()
@@ -60,21 +64,30 @@ defmodule DoIt.Tasks do
     |> assemble_tree()
   end
 
-  # Attach each task's co-assignee count (one grouped query) for the "+N"
-  # chip hint — used on both the full tree load and the incremental lineage.
+  # Attach each task's co-assignee count + a capped, ordered list of
+  # co-assignee users (one query) for the overlapping-avatar chip (item 16)
+  # — used on both the full tree load and the incremental lineage.
   defp with_co_counts(tasks) do
     ids = Enum.map(tasks, & &1.id)
 
-    counts =
+    by_task =
       from(c in TaskCoAssignee,
         where: c.task_id in ^ids,
-        group_by: c.task_id,
-        select: {c.task_id, count(c.id)}
+        order_by: [asc: c.sort_order, asc: c.id],
+        preload: [:user]
       )
       |> Repo.all()
-      |> Map.new()
+      |> Enum.group_by(& &1.task_id)
 
-    Enum.map(tasks, &%{&1 | co_assignee_count: Map.get(counts, &1.id, 0)})
+    Enum.map(tasks, fn t ->
+      links = Map.get(by_task, t.id, [])
+
+      %{
+        t
+        | co_assignee_count: length(links),
+          co_assignee_users: links |> Enum.take(@co_avatar_cap) |> Enum.map(& &1.user)
+      }
+    end)
   end
 
   defp assemble_tree(tasks) do

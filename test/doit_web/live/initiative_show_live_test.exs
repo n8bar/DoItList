@@ -893,7 +893,8 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       added = render_click(view, "add_co_assignee", %{"user_id" => to_string(co.id)})
       assert added =~ "@#{co.username}"
-      assert added =~ ~r/\+1/
+      # Co shows as an overlapping avatar in the chip (item 16), not "+1" text.
+      assert has_element?(view, "[data-co-count]")
       assert [%{user_id: id}] = DoIt.Tasks.list_co_assignees(task.id)
       assert id == co.id
 
