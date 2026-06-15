@@ -14,6 +14,13 @@ defmodule DoItWeb.InitiativeIndexLive do
     user = socket.assigns.current_user
     initiatives = Initiatives.list_visible_initiatives(user)
 
+    # Global presence (m02.05 item 8): light up Collaborators avatars for
+    # anyone connected to the app. The on_mount hook already tracks us here;
+    # we just subscribe to learn when others come and go.
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
+    end
+
     # Sort preference follows the account (m02.04 §2.6): mode + per-mode
     # reverse on the prefs record, manual order on the membership rows.
     prefs = Accounts.get_preferences(user)
@@ -31,6 +38,8 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> assign(:page_title, "Initiatives")
      |> assign(:initiative_count, length(initiatives))
      |> assign(:initiatives, initiatives)
+     |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+     |> assign(:collaborator_online_ids, online_ids(socket))
      |> assign(:sort_state, sort_state)
      |> assign(:reverse_by_mode, reverse_by_mode)
      |> assign(:form, build_empty_form())
@@ -106,6 +115,44 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> restream_sorted()}
   end
 
+  # Drag-drop add from the Collaborators pane onto a rail Initiative entry
+  # (m02.05 item 10). Same permission-checked context call as the show page;
+  # refresh the pane so shared counts stay current.
+  def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
+    user = socket.assigns.current_user
+
+    socket =
+      case Initiatives.add_collaborator_as_viewer(
+             user,
+             String.to_integer(iid),
+             String.to_integer(uid)
+           ) do
+        {:ok, added} ->
+          put_flash(socket, :info, "Added #{added.name} as a viewer.")
+
+        {:error, :already_member} ->
+          put_flash(socket, :info, "They're already a member there.")
+
+        {:error, :forbidden} ->
+          put_flash(socket, :error, "Only that Initiative's owner can add members.")
+
+        {:error, :failed} ->
+          put_flash(socket, :error, "Couldn't add them.")
+      end
+
+    {:noreply, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
+  end
+
+  @impl true
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
+    {:noreply, assign(socket, :collaborator_online_ids, DoItWeb.Presence.global_online_ids())}
+  end
+
+  # Global online set for the Collaborators avatars — empty until connected.
+  defp online_ids(socket) do
+    if connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new()
+  end
+
   # Keep the in-memory my_sort_order in step with a freshly pushed order, so
   # re-renders (and the cards' data-my-order) reflect what was just saved.
   defp reindex_order(initiatives, []), do: initiatives
@@ -177,6 +224,8 @@ defmodule DoItWeb.InitiativeIndexLive do
       width={:wide}
       rail_initiatives={@initiatives}
       rail_current_id={nil}
+      rail_collaborators={@rail_collaborators}
+      rail_online_ids={@collaborator_online_ids}
     >
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>

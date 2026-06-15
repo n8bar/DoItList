@@ -113,6 +113,14 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* Ultrawide left rail: an Initiative entry highlighted as the live drop target
+   while dragging a Collaborator onto it (m02.05 item 10). */
+.rail-drop-target {
+  outline: 2px solid var(--color-emerald-500);
+  outline-offset: 1px;
+  background-color: color-mix(in oklab, var(--color-emerald-500) 12%, transparent);
+}
+
 /* Progress underbar text — high-contrast outline so the percentage stays
    readable regardless of the fill color behind it. Light-mode text is dark
    with a white outline; dark-mode flips both. */

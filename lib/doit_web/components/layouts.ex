@@ -26,6 +26,10 @@ defmodule DoItWeb.Layouts do
   attr :width, :atom, values: [:default, :wide], default: :default
   attr :rail_initiatives, :list, default: nil
   attr :rail_current_id, :any, default: nil
+  attr :rail_current_name, :string, default: nil
+  attr :rail_collaborators, :list, default: []
+  attr :rail_online_ids, :any, default: %MapSet{}
+  attr :rail_member_ids, :any, default: %MapSet{}
   slot :rail_right, doc: "Optional ultrawide right (third) pane, a sibling of the left rail."
   slot :inner_block, required: true
 
@@ -164,6 +168,33 @@ defmodule DoItWeb.Layouts do
     <main class="flex-1 overflow-y-auto">
       <div class={[@container, "px-1 sm:px-6 py-8"]}>
         <%= if @rail_initiatives do %>
+          <%!-- Narrow flyout (item 11): below 3xl the rail isn't in the layout;
+               on an open Initiative (current_id) a left-edge tab slides it in as
+               an overlay. Absent on the plain index — there the index IS the
+               main column. Pure client toggle (no round trip). --%>
+          <button
+            :if={@rail_current_id}
+            type="button"
+            phx-click={
+              JS.set_attribute({"data-open", "true"}, to: "#left-rail")
+              |> JS.remove_class("hidden", to: "#left-rail-backdrop")
+            }
+            aria-label="Open Initiatives panel"
+            title="Initiatives"
+            class="3xl:hidden fixed left-0 top-1/2 z-20 inline-flex h-12 w-7 -translate-y-1/2 items-center justify-center rounded-r-lg bg-zinc-200/90 text-zinc-600 shadow hover:bg-zinc-300 dark:bg-zinc-800/90 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          >
+            <.icon name="hero-chevron-right" class="w-5 h-5" />
+          </button>
+          <div
+            id="left-rail-backdrop"
+            phx-click={
+              JS.remove_attribute("data-open", to: "#left-rail")
+              |> JS.add_class("hidden", to: "#left-rail-backdrop")
+            }
+            class="hidden 3xl:hidden fixed inset-0 z-30 bg-black/50"
+            aria-hidden="true"
+          >
+          </div>
           <%!-- Ultrawide triple-pane (m02.05 items 4–7): the left rail joins
                the layout at 3xl as the Initiatives index in chrome, and an
                optional right pane (rail_right) rides alongside as its sibling
@@ -178,7 +209,14 @@ defmodule DoItWeb.Layouts do
               else: "3xl:grid-cols-[17rem_minmax(0,1fr)]"
             )
           ]}>
-            <.left_rail initiatives={@rail_initiatives} current_id={@rail_current_id} />
+            <.left_rail
+              initiatives={@rail_initiatives}
+              current_id={@rail_current_id}
+              current_name={@rail_current_name}
+              collaborators={@rail_collaborators}
+              online_ids={@rail_online_ids}
+              member_ids={@rail_member_ids}
+            />
             <div class="min-w-0">
               {render_slot(@inner_block)}
             </div>
@@ -209,10 +247,43 @@ defmodule DoItWeb.Layouts do
   """
   attr :initiatives, :list, required: true
   attr :current_id, :any, default: nil
+  attr :current_name, :string, default: nil
+  attr :collaborators, :list, default: []
+  attr :online_ids, :any, default: %MapSet{}
+  attr :member_ids, :any, default: %MapSet{}
 
   def left_rail(assigns) do
     ~H"""
-    <aside class="hidden 3xl:block 3xl:sticky 3xl:top-8 3xl:self-start 3xl:max-h-[calc(100dvh-7rem)] overflow-y-auto [scrollbar-gutter:stable]">
+    <aside
+      id="left-rail"
+      class={
+        [
+          "3xl:sticky 3xl:top-8 3xl:self-start 3xl:max-h-[calc(100dvh-7rem)] overflow-y-auto [scrollbar-gutter:stable]",
+          # Closed: hidden below 3xl, always shown at 3xl. Open (flyout, item 11):
+          # a fixed left overlay below 3xl; at 3xl the data-open overrides drop
+          # back to the inline sticky column (handles resize-while-open).
+          "not-data-open:hidden 3xl:block",
+          "data-open:fixed 3xl:data-open:static data-open:inset-y-0 data-open:left-0 data-open:z-40 data-open:w-72",
+          "data-open:bg-white dark:data-open:bg-zinc-900 3xl:data-open:bg-transparent",
+          "data-open:shadow-xl 3xl:data-open:shadow-none data-open:p-4 3xl:data-open:p-0"
+        ]
+      }
+    >
+      <%!-- Flyout close (item 11): visible only as the narrow overlay. --%>
+      <div class="3xl:hidden mb-2 flex justify-end">
+        <button
+          type="button"
+          phx-click={
+            JS.remove_attribute("data-open", to: "#left-rail")
+            |> JS.add_class("hidden", to: "#left-rail-backdrop")
+          }
+          aria-label="Close Initiatives panel"
+          title="Close"
+          class="inline-flex h-8 w-8 items-center justify-center rounded bg-zinc-500/20 text-zinc-700 hover:bg-zinc-500/40 dark:text-zinc-200"
+        >
+          <.icon name="hero-x-mark" class="w-5 h-5" />
+        </button>
+      </div>
       <h2 class="px-2 mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
         Initiatives
       </h2>
@@ -223,6 +294,7 @@ defmodule DoItWeb.Layouts do
             if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")
           }
           aria-current={(init.id == @current_id && "page") || nil}
+          data-rail-initiative-id={init.id}
           class={[
             "group block rounded px-2 py-1.5",
             if(init.id == @current_id,
@@ -261,9 +333,106 @@ defmodule DoItWeb.Layouts do
           </div>
         </.link>
       </nav>
+
+      <%!-- Collaborators pane (item 8): everyone the user shares an Initiative
+           with, most-shared-first. Renders nothing when there's no one — no
+           empty-state hint. --%>
+      <div :if={@collaborators != []} class="mt-6">
+        <h2 class="px-2 mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+          My Collaborators
+        </h2>
+        <ul class="space-y-0.5">
+          <%!-- Each row is draggable onto an Initiative rail entry to add the
+               person there as a viewer (item 10, desktop-only; CollaboratorDrag
+               suppresses the click after a real drag so the item-9 menu won't
+               pop). A plain click falls through to that menu. --%>
+          <li
+            :for={collab <- @collaborators}
+            id={"collabrow-#{collab.user.id}"}
+            phx-hook="CollaboratorDrag"
+            data-user-id={collab.user.id}
+            class="min-w-0"
+          >
+            <%!-- With an Initiative open (current_id), clicking a collaborator
+                 opens a client-toggled menu (item 9, no round trip) with the
+                 contextual add/remove. On the plain index there's no current
+                 Initiative, so the row is display-only (a no-op). --%>
+            <details
+              :if={@current_id}
+              id={"collab-#{collab.user.id}"}
+              data-menu
+              class="relative"
+            >
+              <summary class="flex items-center gap-2 rounded px-2 py-1.5 min-w-0 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <.avatar
+                  user={collab.user}
+                  online={MapSet.member?(@online_ids, collab.user.id)}
+                  class="w-6 h-6 text-[10px] flex-none"
+                />
+                <span class="flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200">
+                  {collab.user.name}
+                </span>
+                <span class="flex-none text-xs tabular-nums text-zinc-400 dark:text-zinc-500">
+                  {collab.shared_count}
+                </span>
+              </summary>
+              <div class="absolute left-2 right-0 z-50 mt-1 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                <button
+                  :if={MapSet.member?(@member_ids, collab.user.id)}
+                  type="button"
+                  phx-click={
+                    JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})
+                    |> JS.remove_attribute("open", to: "#collab-#{collab.user.id}")
+                  }
+                  class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                >
+                  Remove from {@current_name}
+                </button>
+                <button
+                  :if={not MapSet.member?(@member_ids, collab.user.id)}
+                  type="button"
+                  phx-click={
+                    JS.push("add_collaborator_to",
+                      value: %{
+                        "user-id" => to_string(collab.user.id),
+                        "initiative-id" => to_string(@current_id)
+                      }
+                    )
+                    |> JS.remove_attribute("open", to: "#collab-#{collab.user.id}")
+                  }
+                  class="block w-full rounded px-2 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
+                >
+                  Add to {@current_name}
+                </button>
+              </div>
+            </details>
+
+            <div :if={!@current_id} class="flex items-center gap-2 rounded px-2 py-1.5 min-w-0">
+              <.avatar
+                user={collab.user}
+                online={MapSet.member?(@online_ids, collab.user.id)}
+                class="w-6 h-6 text-[10px] flex-none"
+              />
+              <span class="flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200">
+                {collab.user.name}
+              </span>
+              <span
+                class="flex-none text-xs tabular-nums text-zinc-400 dark:text-zinc-500"
+                title={"#{collab.shared_count} shared #{ngettext_initiative(collab.shared_count)}"}
+              >
+                {collab.shared_count}
+              </span>
+            </div>
+          </li>
+        </ul>
+      </div>
     </aside>
     """
   end
+
+  # "Initiative" / "Initiatives" for the Collaborators shared-count tooltip.
+  defp ngettext_initiative(1), do: "Initiative"
+  defp ngettext_initiative(_), do: "Initiatives"
 
   @doc """
   Three-state theme toggle (System / Light / Dark). Each button dispatches

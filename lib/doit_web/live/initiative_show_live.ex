@@ -44,6 +44,12 @@ defmodule DoItWeb.InitiativeShowLive do
               bg: avatar_bg(user),
               fg: avatar_fg(user)
             })
+
+          # Global presence (m02.05 item 8): the Collaborators pane lights up
+          # avatars for anyone online anywhere. on_mount already tracks us;
+          # subscribe to follow others. Distinct from the per-initiative topic
+          # above — the presence_diff handler tells them apart by topic.
+          Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
         end
 
         {:ok,
@@ -51,6 +57,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:page_title, initiative.name)
          |> assign(:initiative, initiative)
          |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
+         |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
          |> assign(:subtitle, Initiatives.subtitle(initiative))
          |> assign(:role, role)
          |> assign(:can_edit, Initiatives.can_edit?(role))
@@ -64,6 +71,10 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(
            :online_ids,
            if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
+         )
+         |> assign(
+           :collaborator_online_ids,
+           if(connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new())
          )
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
@@ -952,6 +963,41 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Add a collaborator as a viewer (m02.05 items 9 + 10) — the menu's "Add"
+  # targets the current Initiative; a drag-drop targets whichever rail entry it
+  # landed on. Both route through the same permission-checked context call; the
+  # role is bumped afterward in that Initiative's Members panel. Removal reuses
+  # "remove_member" (with its hand-off flow).
+  def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
+    user = socket.assigns.current_user
+    iid = String.to_integer(iid)
+    uid = String.to_integer(uid)
+
+    socket =
+      case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
+        {:ok, added} ->
+          put_flash(socket, :info, "Added #{added.name} as a viewer.")
+
+        {:error, :already_member} ->
+          put_flash(socket, :info, "They're already a member there.")
+
+        {:error, :forbidden} ->
+          put_flash(socket, :error, "Only that Initiative's owner can add members.")
+
+        {:error, :failed} ->
+          put_flash(socket, :error, "Couldn't add them.")
+      end
+
+    socket = assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
+
+    socket =
+      if iid == socket.assigns.initiative.id,
+        do: assign(socket, :members, Initiatives.list_members(iid)),
+        else: socket
+
+    {:noreply, socket}
+  end
+
   # --- Pending-action commits -----------------------------------------------
 
   defp commit_create(socket, attrs) do
@@ -1146,6 +1192,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # --- PubSub ---------------------------------------------------------------
 
   @impl true
+  # A global presence join/leave (item 8): just refresh the Collaborators
+  # pane's online set. Matched first (topic is DoItWeb.Presence.global_topic/0;
+  # literal here since guards can't call it) so the per-initiative head below
+  # only handles the initiative topic.
+  def handle_info(
+        %Phoenix.Socket.Broadcast{event: "presence_diff", topic: "presence:online"},
+        socket
+      ) do
+    {:noreply, assign(socket, :collaborator_online_ids, DoItWeb.Presence.global_online_ids())}
+  end
+
   # A presence join/leave/move anywhere in the initiative: push the full
   # selection list to this client (the PresenceBadges hook redraws rows) and
   # refresh who's-here for the server-rendered online dots.
@@ -1170,7 +1227,10 @@ defmodule DoItWeb.InitiativeShowLive do
        |> assign(:role, role)
        |> assign(:can_edit, Initiatives.can_edit?(role))
        |> assign(:can_admin, Initiatives.can_admin?(role))
-       |> assign(:members, Initiatives.list_members(initiative.id))}
+       |> assign(:members, Initiatives.list_members(initiative.id))
+       # A removal here may drop the last Initiative shared with someone, so
+       # refresh the Collaborators pane too (item 9).
+       |> assign(:rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
     else
       {:noreply,
        socket
@@ -1202,6 +1262,10 @@ defmodule DoItWeb.InitiativeShowLive do
       width={:wide}
       rail_initiatives={@rail_initiatives}
       rail_current_id={@initiative.id}
+      rail_current_name={@initiative.name}
+      rail_collaborators={@rail_collaborators}
+      rail_online_ids={@collaborator_online_ids}
+      rail_member_ids={MapSet.new(@members, & &1.user_id)}
     >
       <div id="initiative-show-root" phx-hook=".TaskKeys">
         <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">

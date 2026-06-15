@@ -40,6 +40,27 @@ defmodule DoIt.Initiatives do
     |> Repo.all()
   end
 
+  @doc """
+  Everyone the given user shares at least one Initiative with (m02.05 item 8),
+  deduplicated across Initiatives. Each row is `%{user: %User{}, shared_count:
+  n}` — the count of Initiatives in common — sorted most-shared-first, then by
+  name. The cross-Initiative people pane in the ultrawide left rail; one query
+  (initiatives → members → users), no new schema.
+  """
+  def list_collaborators(%User{id: user_id}) do
+    mine = from(m in InitiativeMember, where: m.user_id == ^user_id, select: m.initiative_id)
+
+    from(m in InitiativeMember,
+      where: m.initiative_id in subquery(mine) and m.user_id != ^user_id,
+      join: u in User,
+      on: u.id == m.user_id,
+      group_by: u.id,
+      select: %{user: u, shared_count: count(m.initiative_id, :distinct)},
+      order_by: [desc: count(m.initiative_id, :distinct), asc: u.name]
+    )
+    |> Repo.all()
+  end
+
   def get_initiative!(id), do: Repo.get!(Initiative, id)
   def get_initiative(id), do: Repo.get(Initiative, id)
 
@@ -248,6 +269,29 @@ defmodule DoIt.Initiatives do
       {:ok, _} -> broadcast_members_changed(initiative_id)
       _ -> :ok
     end)
+  end
+
+  @doc """
+  Add `user_id` to `initiative_id` as a **viewer** on behalf of `actor` — the
+  one-gesture default from the Collaborators pane (m02.05 items 9–10: click-add
+  and drag-add). Checks the actor can administer the target Initiative, and
+  treats an existing member as a no-op. Returns `{:ok, %User{}}` (the added
+  user) or `{:error, :forbidden | :already_member | :failed}`.
+  """
+  def add_collaborator_as_viewer(%User{} = actor, initiative_id, user_id) do
+    cond do
+      not can_admin?(get_role(initiative_id, actor.id)) ->
+        {:error, :forbidden}
+
+      get_role(initiative_id, user_id) != nil ->
+        {:error, :already_member}
+
+      true ->
+        case add_member(initiative_id, user_id, "viewer") do
+          {:ok, _} -> {:ok, Repo.get(User, user_id)}
+          {:error, _} -> {:error, :failed}
+        end
+    end
   end
 
   def remove_member(initiative_id, user_id) do

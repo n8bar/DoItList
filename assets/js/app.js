@@ -2182,6 +2182,102 @@ Hooks.InitiativeDrag = {
   },
 }
 
+// Drag a Collaborator (left-rail pane) onto an Initiative rail entry to add
+// them there as a viewer (m02.05 item 10). Desktop-only — touch users use the
+// click menu (item 9). A real drag suppresses the row's click so the item-9
+// menu won't pop; a plain click (no drag) falls through to it.
+Hooks.CollaboratorDrag = {
+  mounted() {
+    this.userId = this.el.dataset.userId
+    this.onDown = (e) => this.start(e)
+    this.el.addEventListener("pointerdown", this.onDown)
+  },
+  destroyed() {
+    this.cleanup()
+    if (this.onDown) this.el.removeEventListener("pointerdown", this.onDown)
+  },
+  start(e) {
+    if (e.pointerType === "touch") return
+    if (e.button !== undefined && e.button !== 0) return
+    if (this.armed || this.dragging) return
+    this.startX = e.clientX
+    this.startY = e.clientY
+    this.pid = e.pointerId
+    this.armed = true
+    this.dragging = false
+    this.onMove = (ev) => this.move(ev)
+    this.onUp = (ev) => this.up(ev)
+    this.onCancel = () => this.cleanup()
+    document.addEventListener("pointermove", this.onMove)
+    document.addEventListener("pointerup", this.onUp)
+    document.addEventListener("pointercancel", this.onCancel)
+  },
+  begin() {
+    this.dragging = true
+    this.el.style.opacity = "0.5"
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "grabbing"
+  },
+  move(e) {
+    if (!this.armed) return
+    if (this.pid !== undefined && e.pointerId !== this.pid) return
+    if (!this.dragging) {
+      if (
+        Math.abs(e.clientX - this.startX) < INIT_DRAG_THRESHOLD_PX &&
+        Math.abs(e.clientY - this.startY) < INIT_DRAG_THRESHOLD_PX
+      ) {
+        return
+      }
+      this.begin()
+    }
+    const under = document.elementFromPoint(e.clientX, e.clientY)
+    this.highlight(under && under.closest("[data-rail-initiative-id]"))
+  },
+  highlight(entry) {
+    if (entry === this.target) return
+    if (this.target) this.target.classList.remove("rail-drop-target")
+    this.target = entry || null
+    if (this.target) this.target.classList.add("rail-drop-target")
+  },
+  up(e) {
+    if (!this.armed) return
+    if (this.pid !== undefined && e.pointerId !== this.pid) return
+    if (this.dragging) {
+      this.suppressClick()
+      if (this.target) {
+        this.pushEvent("add_collaborator_to", {
+          "user-id": this.userId,
+          "initiative-id": this.target.dataset.railInitiativeId,
+        })
+      }
+    }
+    this.cleanup()
+  },
+  suppressClick() {
+    const swallow = (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      document.removeEventListener("click", swallow, true)
+      clearTimeout(t)
+    }
+    document.addEventListener("click", swallow, true)
+    const t = setTimeout(() => document.removeEventListener("click", swallow, true), 50)
+  },
+  cleanup() {
+    if (this.onMove) document.removeEventListener("pointermove", this.onMove)
+    if (this.onUp) document.removeEventListener("pointerup", this.onUp)
+    if (this.onCancel) document.removeEventListener("pointercancel", this.onCancel)
+    this.onMove = this.onUp = this.onCancel = null
+    if (this.target) this.target.classList.remove("rail-drop-target")
+    this.target = null
+    this.el.style.opacity = ""
+    document.body.style.userSelect = ""
+    document.body.style.cursor = ""
+    this.armed = false
+    this.dragging = false
+  },
+}
+
 // The keyboard-shortcuts help overlay. Toggled by a "doit:shortcuts-toggle"
 // event (dispatched by the `?` key or the ⌨ affordance); closed by Escape, the
 // backdrop, or the X (anything with [data-close]).

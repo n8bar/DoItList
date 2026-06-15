@@ -84,6 +84,11 @@ defmodule DoItWeb.UserAuth do
     user = user_id && Accounts.get_user(user_id)
 
     if user do
+      # Mark the user online app-wide (m02.05 item 8) so the Collaborators pane
+      # lights up whenever they're connected anywhere, not just in one
+      # Initiative. Tracked per LiveView process; drops when the last one dies.
+      if Phoenix.LiveView.connected?(socket), do: DoItWeb.Presence.track_global(self(), user.id)
+
       socket =
         socket
         |> Phoenix.Component.assign(:current_user, user)
