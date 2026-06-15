@@ -6,3 +6,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 
 2026-06-15  Rotated the changelog: full prior history → CHANGELOG.archive.log; adopted a one-line, concise entry style (entries had grown into paragraphs).
 2026-06-15  Arc 5 O&C +item 18: make co-assignee add/remove/reorder optimistic (round-trips today, feels sluggish; UX_GUARDRAILS §6).
+2026-06-15  Arc 5 O&C: swapped items 17/18 (optimistic co-assignee now 17, Viewer+ now 18 — done last per sequence); tightened the Viewer+ wording.
