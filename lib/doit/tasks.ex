@@ -55,7 +55,7 @@ defmodule DoIt.Tasks do
   separate Lists), each with a `:children` list, recursively.
   """
   # How many co-assignee avatars the row chip shows before overflowing to
-  # "+N" (m02.05 item 15).
+  # "+N" (m02.05 item 12.4).
   @co_avatar_cap 8
 
   def initiative_task_tree(initiative_id) do
@@ -66,7 +66,7 @@ defmodule DoIt.Tasks do
   end
 
   # Attach each task's co-assignee count + a capped, ordered list of
-  # co-assignee users (one query) for the overlapping-avatar chip (item 16)
+  # co-assignee users (one query) for the overlapping-avatar chip (item 12.4)
   # — used on both the full tree load and the incremental lineage.
   defp with_co_counts(tasks) do
     ids = Enum.map(tasks, & &1.id)
@@ -240,7 +240,7 @@ defmodule DoIt.Tasks do
             updated = maybe_set_done_progress(updated, task)
             record_diff_events(task, updated, actor)
 
-            # Exclusivity (m02.05 item 13): a user is either primary or
+            # Exclusivity (m02.05 item 12.1): a user is either primary or
             # co-assignee, never both — promoting/assigning someone who's on
             # the co-list removes them from it.
             if updated.assignee_id && updated.assignee_id != task.assignee_id do
@@ -1269,7 +1269,7 @@ defmodule DoIt.Tasks do
     |> Repo.all()
   end
 
-  # --- Co-assignees (m02.05 item 13) ----------------------------------------
+  # --- Co-assignees (m02.05 item 12.1) --------------------------------------
 
   @doc "Ordered co-assignee links for a task, each with its `user` preloaded."
   def list_co_assignees(task_id) do
@@ -1392,7 +1392,7 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Resolve a departing member's assignments (m02.05 item 13.5) so removal
+  Resolve a departing member's assignments (m02.05 item 12.1.5) so removal
   leaves no struck-through residue. For each task they're PRIMARY on:
   promote the next eligible co (when `promote_co` and one exists), else hand
   to `takeover_id`, else clear. Their CO-assignments are dropped. Runs in one
