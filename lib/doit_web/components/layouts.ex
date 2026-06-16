@@ -353,9 +353,9 @@ defmodule DoItWeb.Layouts do
         </.link>
       </nav>
 
-      <%!-- Collaborators pane (item 8): everyone the user shares an Initiative
-           with, most-shared-first. Renders nothing when there's no one — no
-           empty-state hint. --%>
+      <%!-- Collaborators pane (items 8 + 12.10): everyone the user has ever
+           worked with, current first then past (muted). Renders nothing when
+           the list is empty — no empty-state hint. --%>
       <div :if={@collaborators != []} class="mt-6">
         <h2 class="px-2 mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
           My Collaborators
@@ -363,8 +363,7 @@ defmodule DoItWeb.Layouts do
         <ul class="space-y-0.5">
           <%!-- Each row is draggable onto an Initiative rail entry to add the
                person there as a viewer (item 10, desktop-only; CollaboratorDrag
-               suppresses the click after a real drag so the item-9 menu won't
-               pop). A plain click falls through to that menu. --%>
+               suppresses the click after a real drag so the menu won't pop). --%>
           <li
             :for={collab <- @collaborators}
             id={"collabrow-#{collab.user.id}"}
@@ -372,17 +371,21 @@ defmodule DoItWeb.Layouts do
             data-user-id={collab.user.id}
             class="min-w-0"
           >
-            <%!-- With an Initiative open (current_id), clicking a collaborator
-                 opens a client-toggled menu (item 9, no round trip) with the
-                 contextual add/remove. On the plain index there's no current
-                 Initiative, so the row is display-only (a no-op). --%>
-            <details
-              :if={@current_id}
-              id={"collab-#{collab.user.id}"}
-              data-menu
-              class="relative"
-            >
-              <summary class="flex items-center gap-2 rounded px-2 py-1.5 min-w-0 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            <%!-- The menu opens when there's an action to offer: a current
+                 Initiative is open (item 9 add/remove) OR the person is a past
+                 collaborator who can be pruned (item 12.11). It's a native
+                 popover so it renders in the top layer — never clipped by, nor
+                 growing, the scrolling rail (item 12.9). Past collaborators (0
+                 shared) read muted with no count (item 12.10.5). --%>
+            <%= if @current_id || collab.shared_count == 0 do %>
+              <button
+                type="button"
+                popovertarget={"collab-pop-#{collab.user.id}"}
+                class={[
+                  "flex w-full items-center gap-2 rounded px-2 py-1.5 min-w-0 text-left hover:bg-zinc-100 dark:hover:bg-zinc-800",
+                  collab.shared_count == 0 && "opacity-60"
+                ]}
+              >
                 <.avatar
                   user={collab.user}
                   online={MapSet.member?(@online_ids, collab.user.id)}
@@ -391,57 +394,109 @@ defmodule DoItWeb.Layouts do
                 <span class="flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200">
                   {collab.user.name}
                 </span>
-                <span class="flex-none text-xs tabular-nums text-zinc-400 dark:text-zinc-500">
+                <span
+                  :if={collab.shared_count > 0}
+                  class="flex-none text-xs tabular-nums text-zinc-400 dark:text-zinc-500"
+                  title={"#{collab.shared_count} shared #{ngettext_initiative(collab.shared_count)}"}
+                >
                   {collab.shared_count}
                 </span>
-              </summary>
-              <div class="absolute left-2 right-0 z-50 mt-1 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
-                <button
-                  :if={MapSet.member?(@member_ids, collab.user.id)}
-                  type="button"
-                  phx-click={
-                    JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})
-                    |> JS.remove_attribute("open", to: "#collab-#{collab.user.id}")
-                  }
-                  class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
-                >
-                  Remove from {@current_name}
-                </button>
-                <button
-                  :if={not MapSet.member?(@member_ids, collab.user.id)}
-                  type="button"
-                  phx-click={
-                    JS.push("add_collaborator_to",
-                      value: %{
-                        "user-id" => to_string(collab.user.id),
-                        "initiative-id" => to_string(@current_id)
-                      }
-                    )
-                    |> JS.remove_attribute("open", to: "#collab-#{collab.user.id}")
-                  }
-                  class="block w-full rounded px-2 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
-                >
-                  Add to {@current_name}
-                </button>
-              </div>
-            </details>
-
-            <div :if={!@current_id} class="flex items-center gap-2 rounded px-2 py-1.5 min-w-0">
-              <.avatar
-                user={collab.user}
-                online={MapSet.member?(@online_ids, collab.user.id)}
-                class="w-6 h-6 text-[10px] flex-none"
-              />
-              <span class="flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200">
-                {collab.user.name}
-              </span>
-              <span
-                class="flex-none text-xs tabular-nums text-zinc-400 dark:text-zinc-500"
-                title={"#{collab.shared_count} shared #{ngettext_initiative(collab.shared_count)}"}
+              </button>
+              <div
+                id={"collab-pop-#{collab.user.id}"}
+                popover
+                phx-hook="Popover"
+                class="w-56 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
               >
-                {collab.shared_count}
-              </span>
-            </div>
+                <div id={"collab-menu-#{collab.user.id}"} data-menu-step>
+                  <button
+                    :if={@current_id && MapSet.member?(@member_ids, collab.user.id)}
+                    type="button"
+                    phx-click={JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})}
+                    popovertarget={"collab-pop-#{collab.user.id}"}
+                    popovertargetaction="hide"
+                    class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  >
+                    Remove from {@current_name}
+                  </button>
+                  <button
+                    :if={@current_id && not MapSet.member?(@member_ids, collab.user.id)}
+                    type="button"
+                    phx-click={
+                      JS.push("add_collaborator_to",
+                        value: %{
+                          "user-id" => to_string(collab.user.id),
+                          "initiative-id" => to_string(@current_id)
+                        }
+                      )
+                    }
+                    popovertarget={"collab-pop-#{collab.user.id}"}
+                    popovertargetaction="hide"
+                    class="block w-full rounded px-2 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
+                  >
+                    Add to {@current_name}
+                  </button>
+                  <%!-- Past-only prune (item 12.11): reveals an inline confirm
+                       in the same popover — client-toggled, no round trip, so
+                       it works in both the index and show rails. --%>
+                  <button
+                    :if={collab.shared_count == 0}
+                    type="button"
+                    phx-click={
+                      JS.add_class("hidden", to: "#collab-menu-#{collab.user.id}")
+                      |> JS.remove_class("hidden", to: "#collab-confirm-#{collab.user.id}")
+                    }
+                    class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
+                  >
+                    Remove from My Collaborators
+                  </button>
+                </div>
+                <div id={"collab-confirm-#{collab.user.id}"} data-confirm-step class="hidden">
+                  <p class="px-2 py-1.5 text-xs text-zinc-600 dark:text-zinc-300">
+                    Remove {collab.user.name} from your collaborators?
+                  </p>
+                  <div class="flex gap-1 p-1">
+                    <button
+                      type="button"
+                      phx-click={JS.push("remove_collaborator", value: %{"user-id" => to_string(collab.user.id)})}
+                      popovertarget={"collab-pop-#{collab.user.id}"}
+                      popovertargetaction="hide"
+                      class="flex-1 rounded px-2 py-1 text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+                    >
+                      Remove
+                    </button>
+                    <button
+                      type="button"
+                      phx-click={
+                        JS.add_class("hidden", to: "#collab-confirm-#{collab.user.id}")
+                        |> JS.remove_class("hidden", to: "#collab-menu-#{collab.user.id}")
+                      }
+                      class="flex-1 rounded px-2 py-1 text-sm text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            <% else %>
+              <%!-- A current collaborator with no Initiative open: display-only. --%>
+              <div class="flex items-center gap-2 rounded px-2 py-1.5 min-w-0">
+                <.avatar
+                  user={collab.user}
+                  online={MapSet.member?(@online_ids, collab.user.id)}
+                  class="w-6 h-6 text-[10px] flex-none"
+                />
+                <span class="flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200">
+                  {collab.user.name}
+                </span>
+                <span
+                  class="flex-none text-xs tabular-nums text-zinc-400 dark:text-zinc-500"
+                  title={"#{collab.shared_count} shared #{ngettext_initiative(collab.shared_count)}"}
+                >
+                  {collab.shared_count}
+                </span>
+              </div>
+            <% end %>
           </li>
         </ul>
       </div>

@@ -1712,6 +1712,10 @@ Hooks.Popover = {
   mounted() {
     this._onToggle = (e) => {
       if (e.newState !== "open") return
+      // Reset any inline confirm step (e.g. the collaborators menu) so a
+      // re-open always shows the default panel, never a stale confirm.
+      this.el.querySelectorAll("[data-confirm-step]").forEach((el) => el.classList.add("hidden"))
+      this.el.querySelectorAll("[data-menu-step]").forEach((el) => el.classList.remove("hidden"))
       const btn = document.querySelector(`[popovertarget='${this.el.id}']`)
       if (!btn) return
       const r = btn.getBoundingClientRect()

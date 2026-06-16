@@ -147,6 +147,23 @@ defmodule DoItWeb.InitiativeIndexLive do
     {:noreply, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
   end
 
+  # Prune a past collaborator from My Collaborators (m02.05 item 12.11). The
+  # index has no open Initiative, so this is the only collaborator action here.
+  def handle_event("remove_collaborator", %{"user-id" => uid}, socket) do
+    user = socket.assigns.current_user
+
+    socket =
+      case Initiatives.remove_collaborator(user, String.to_integer(uid)) do
+        {:ok, _} ->
+          assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
+
+        {:error, :still_collaborating} ->
+          put_flash(socket, :error, "You still share an Initiative with them.")
+      end
+
+    {:noreply, socket}
+  end
+
   # Trash (m02.06 item 10): owner-only restore / permanent delete. Both refresh
   # the live index too — a restored Initiative reappears there.
   def handle_event("restore_initiative", %{"id" => id}, socket) do

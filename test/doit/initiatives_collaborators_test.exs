@@ -53,6 +53,86 @@ defmodule DoIt.InitiativesCollaboratorsTest do
     assert Initiatives.list_collaborators(loner) == []
   end
 
+  describe "persistence (item 12.10)" do
+    test "a collaborator persists for both people after sharing ends" do
+      ann = user("Ann")
+      bob = user("Bob")
+      {:ok, i1} = Initiatives.create_initiative(ann, %{"name" => "One"})
+      {:ok, _} = Initiatives.add_member(i1.id, bob.id, "editor")
+
+      # Stop sharing: remove Bob from the only shared Initiative.
+      Initiatives.remove_member(i1.id, bob.id)
+
+      # Bob is still listed for Ann, now a past collaborator (0 shared) …
+      assert [%{user: u_b, shared_count: 0}] = Initiatives.list_collaborators(ann)
+      assert u_b.id == bob.id
+      # … and the record is both-directional, so Bob still keeps Ann too.
+      assert [%{user: u_a, shared_count: 0}] = Initiatives.list_collaborators(bob)
+      assert u_a.id == ann.id
+    end
+
+    test "past collaborators sort below current ones" do
+      ann = user("Ann")
+      bob = user("Bob")
+      cal = user("Cal")
+      {:ok, i1} = Initiatives.create_initiative(ann, %{"name" => "One"})
+      {:ok, i2} = Initiatives.create_initiative(ann, %{"name" => "Two"})
+      {:ok, _} = Initiatives.add_member(i1.id, bob.id, "editor")
+      {:ok, _} = Initiatives.add_member(i2.id, cal.id, "viewer")
+      # Cal becomes a past collaborator; Bob stays current.
+      Initiatives.remove_member(i2.id, cal.id)
+
+      assert [%{user: u1, shared_count: 1}, %{user: u2, shared_count: 0}] =
+               Initiatives.list_collaborators(ann)
+
+      assert u1.id == bob.id
+      assert u2.id == cal.id
+    end
+  end
+
+  describe "remove_collaborator/2 (item 12.11)" do
+    test "removing a past collaborator drops them from your list only" do
+      ann = user("Ann")
+      bob = user("Bob")
+      {:ok, i1} = Initiatives.create_initiative(ann, %{"name" => "One"})
+      {:ok, _} = Initiatives.add_member(i1.id, bob.id, "editor")
+      Initiatives.remove_member(i1.id, bob.id)
+
+      assert {:ok, _} = Initiatives.remove_collaborator(ann, bob.id)
+      assert Initiatives.list_collaborators(ann) == []
+      # The reciprocal row is untouched — it's a personal list.
+      assert [%{user: u}] = Initiatives.list_collaborators(bob)
+      assert u.id == ann.id
+    end
+
+    test "removing a current collaborator is rejected" do
+      ann = user("Ann")
+      bob = user("Bob")
+      {:ok, i1} = Initiatives.create_initiative(ann, %{"name" => "One"})
+      {:ok, _} = Initiatives.add_member(i1.id, bob.id, "editor")
+
+      assert {:error, :still_collaborating} = Initiatives.remove_collaborator(ann, bob.id)
+      assert [%{user: u}] = Initiatives.list_collaborators(ann)
+      assert u.id == bob.id
+    end
+
+    test "re-collaborating restores a removed collaborator" do
+      ann = user("Ann")
+      bob = user("Bob")
+      {:ok, i1} = Initiatives.create_initiative(ann, %{"name" => "One"})
+      {:ok, _} = Initiatives.add_member(i1.id, bob.id, "editor")
+      Initiatives.remove_member(i1.id, bob.id)
+      {:ok, _} = Initiatives.remove_collaborator(ann, bob.id)
+      assert Initiatives.list_collaborators(ann) == []
+
+      {:ok, i2} = Initiatives.create_initiative(ann, %{"name" => "Two"})
+      {:ok, _} = Initiatives.add_member(i2.id, bob.id, "viewer")
+
+      assert [%{user: u, shared_count: 1}] = Initiatives.list_collaborators(ann)
+      assert u.id == bob.id
+    end
+  end
+
   describe "add_collaborator_as_viewer/3 (items 9–10)" do
     test "owner adds a known user as viewer" do
       ann = user("Ann")

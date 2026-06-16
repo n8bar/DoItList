@@ -11,7 +11,7 @@ defmodule DoIt.Initiatives do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
-  alias DoIt.Initiatives.{Initiative, InitiativeMember}
+  alias DoIt.Initiatives.{Initiative, InitiativeMember, Collaborator}
   alias DoIt.Tasks.Task
 
   @doc """
@@ -42,24 +42,90 @@ defmodule DoIt.Initiatives do
   end
 
   @doc """
-  Everyone the given user shares at least one Initiative with (m02.05 item 8),
-  deduplicated across Initiatives. Each row is `%{user: %User{}, shared_count:
-  n}` — the count of Initiatives in common — sorted most-shared-first, then by
-  name. The cross-Initiative people pane in the ultrawide left rail; one query
-  (initiatives → members → users), no new schema.
+  Everyone the given user has ever worked with (m02.05 items 8 + 12.10), drawn
+  from the persistent `collaborators` table so people stay after a shared
+  Initiative ends. Each row is `%{user: %User{}, shared_count: n}` — `n` is the
+  **live** count of Initiatives currently in common (0 for a past collaborator).
+  Sorted most-shared-first then by name, so past collaborators (0) sink to the
+  bottom. The cross-Initiative people pane in the ultrawide left rail.
   """
   def list_collaborators(%User{id: user_id}) do
-    mine = from(m in InitiativeMember, where: m.user_id == ^user_id, select: m.initiative_id)
+    shared =
+      from(m1 in InitiativeMember,
+        join: m2 in InitiativeMember,
+        on: m1.initiative_id == m2.initiative_id,
+        where: m1.user_id == ^user_id and m2.user_id != ^user_id,
+        group_by: m2.user_id,
+        select: %{user_id: m2.user_id, count: count(m1.initiative_id, :distinct)}
+      )
 
-    from(m in InitiativeMember,
-      where: m.initiative_id in subquery(mine) and m.user_id != ^user_id,
+    from(c in Collaborator,
+      where: c.user_id == ^user_id,
       join: u in User,
-      on: u.id == m.user_id,
-      group_by: u.id,
-      select: %{user: u, shared_count: count(m.initiative_id, :distinct)},
-      order_by: [desc: count(m.initiative_id, :distinct), asc: u.name]
+      on: u.id == c.collaborator_id,
+      left_join: s in subquery(shared),
+      on: s.user_id == c.collaborator_id,
+      select: %{user: u, shared_count: coalesce(s.count, 0)},
+      order_by: [desc: coalesce(s.count, 0), asc: u.name]
     )
     |> Repo.all()
+  end
+
+  @doc """
+  Remove a past collaborator from the actor's list (m02.05 item 12.11). Deletes
+  only the actor's own `(actor → collaborator)` row — the reciprocal stays, as
+  it's a personal list. Rejected with `{:error, :still_collaborating}` while the
+  two still share any Initiative (removal there would be undone on the next
+  co-membership). Returns `{:ok, count}` otherwise.
+  """
+  def remove_collaborator(%User{id: user_id}, collaborator_id) do
+    if shared_initiative_count(user_id, collaborator_id) > 0 do
+      {:error, :still_collaborating}
+    else
+      {count, _} =
+        from(c in Collaborator,
+          where: c.user_id == ^user_id and c.collaborator_id == ^collaborator_id
+        )
+        |> Repo.delete_all()
+
+      {:ok, count}
+    end
+  end
+
+  defp shared_initiative_count(user_id, other_id) do
+    Repo.aggregate(
+      from(m1 in InitiativeMember,
+        join: m2 in InitiativeMember,
+        on: m1.initiative_id == m2.initiative_id,
+        where: m1.user_id == ^user_id and m2.user_id == ^other_id
+      ),
+      :count
+    )
+  end
+
+  # Record the persistent collaborator edges (m02.05 item 12.10) for a member
+  # who just joined `initiative_id`: both directions between them and every
+  # other current member. Idempotent via the unique index, so re-joins and
+  # multi-Initiative overlaps never raise.
+  defp record_collaborators(initiative_id, new_user_id) do
+    others =
+      Repo.all(
+        from m in InitiativeMember,
+          where: m.initiative_id == ^initiative_id and m.user_id != ^new_user_id,
+          select: m.user_id
+      )
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    rows =
+      Enum.flat_map(others, fn other ->
+        [
+          %{user_id: new_user_id, collaborator_id: other, inserted_at: now, updated_at: now},
+          %{user_id: other, collaborator_id: new_user_id, inserted_at: now, updated_at: now}
+        ]
+      end)
+
+    if rows != [], do: Repo.insert_all(Collaborator, rows, on_conflict: :nothing)
   end
 
   def get_initiative!(id), do: Repo.get!(Initiative, id)
@@ -315,8 +381,12 @@ defmodule DoIt.Initiatives do
     |> InitiativeMember.changeset(%{initiative_id: initiative_id, user_id: user_id, role: role})
     |> Repo.insert()
     |> tap(fn
-      {:ok, _} -> broadcast_members_changed(initiative_id)
-      _ -> :ok
+      {:ok, _} ->
+        record_collaborators(initiative_id, user_id)
+        broadcast_members_changed(initiative_id)
+
+      _ ->
+        :ok
     end)
   end
 

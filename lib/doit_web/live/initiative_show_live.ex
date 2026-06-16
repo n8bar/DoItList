@@ -1250,6 +1250,24 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply, socket}
   end
 
+  # Prune a past collaborator from My Collaborators (m02.05 item 12.11). Only
+  # offered for someone with no current shared Initiative; the context re-guards
+  # that and removes just this user's own edge.
+  def handle_event("remove_collaborator", %{"user-id" => uid}, socket) do
+    user = socket.assigns.current_user
+
+    socket =
+      case Initiatives.remove_collaborator(user, String.to_integer(uid)) do
+        {:ok, _} ->
+          assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
+
+        {:error, :still_collaborating} ->
+          put_flash(socket, :error, "You still share an Initiative with them.")
+      end
+
+    {:noreply, socket}
+  end
+
   # --- Pending-action commits -----------------------------------------------
 
   defp commit_create(socket, attrs) do
