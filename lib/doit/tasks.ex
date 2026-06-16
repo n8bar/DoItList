@@ -463,15 +463,23 @@ defmodule DoIt.Tasks do
       end
 
     with :ok <- validate_move(task, new_parent_id) do
+      # Capture the prior slot for undo (m02.06): old parent + index among its
+      # live children, so the inverse puts the task back exactly where it was.
+      old_index = old_parent_id |> ordered_child_ids() |> Enum.find_index(&(&1 == task.id))
+      inverse = %{"parent_id" => old_parent_id, "position" => old_index}
+
       moved = perform_move(task, new_parent_id, position, actor)
 
       if old_parent_id != new_parent_id do
-        record_event(moved, actor, "parent_changed", %{
-          from: old_parent_id,
-          to: new_parent_id
-        })
+        record_event(
+          moved,
+          actor,
+          "parent_changed",
+          %{from: old_parent_id, to: new_parent_id, position: position},
+          inverse
+        )
       else
-        record_event(moved, actor, "reordered", %{parent_id: new_parent_id})
+        record_event(moved, actor, "reordered", %{parent_id: new_parent_id, position: position}, inverse)
       end
 
       if old_parent_id && old_parent_id != new_parent_id,
@@ -643,6 +651,9 @@ defmodule DoIt.Tasks do
     case Repo.get(Task, new_parent_id) do
       nil ->
         {:error, :cycle}
+
+      %Task{deleted_at: deleted_at} when not is_nil(deleted_at) ->
+        {:error, :parent_deleted}
 
       %Task{initiative_id: pid_initiative} when pid_initiative != task.initiative_id ->
         {:error, :cross_initiative}
@@ -858,6 +869,251 @@ defmodule DoIt.Tasks do
       :ok
     end)
   end
+
+  # --- Undo / redo engine (m02.06 items 2/3) ---------------------------------
+
+  # The mutations a v1 undo reverses. Status changes (not recorded as events)
+  # and the co-assignee set events are out of scope for now.
+  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed)
+
+  @doc """
+  The next event `user_id` could undo on `initiative_id` (their newest applied
+  undoable event), or nil. Only the user's own events — another member's edits
+  in between are stepped over (m02.06 item 3).
+  """
+  def undo_candidate(user_id, initiative_id) do
+    from(e in ActivityEvent,
+      where:
+        e.user_id == ^user_id and e.initiative_id == ^initiative_id and
+          e.kind in @undoable_kinds and is_nil(e.undone_at),
+      order_by: [desc: e.id],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  @doc """
+  The next event `user_id` could redo, or nil. The most-recently-undone event —
+  but only while it's still the top of the stack: any newer *applied* action
+  (a fresh edit after the undo) invalidates the redo, as in any editor.
+  """
+  def redo_candidate(user_id, initiative_id) do
+    candidate =
+      from(e in ActivityEvent,
+        where:
+          e.user_id == ^user_id and e.initiative_id == ^initiative_id and
+            e.kind in @undoable_kinds and not is_nil(e.undone_at),
+        order_by: [desc: e.undone_at, desc: e.id],
+        limit: 1
+      )
+      |> Repo.one()
+
+    case candidate do
+      nil ->
+        nil
+
+      ev ->
+        max_done_id =
+          from(e in ActivityEvent,
+            where:
+              e.user_id == ^user_id and e.initiative_id == ^initiative_id and
+                e.kind in @undoable_kinds and is_nil(e.undone_at),
+            select: max(e.id)
+          )
+          |> Repo.one()
+
+        if is_nil(max_done_id) or ev.id > max_done_id, do: ev, else: nil
+    end
+  end
+
+  @doc """
+  Undo `user`'s newest undoable event on `initiative_id`. Returns
+  `{:ok, description}`, `{:error, :nothing_to_undo}`, or `{:error, {:conflict,
+  description}}` when the target is gone (the dead entry is skipped so the user
+  is never stuck). Broadcasts a reload like any mutation.
+  """
+  def undo(%User{} = user, initiative_id) do
+    case undo_candidate(user.id, initiative_id) do
+      nil -> {:error, :nothing_to_undo}
+      event -> apply_reversal(event, user, :undo)
+    end
+  end
+
+  @doc "Redo `user`'s most-recently-undone event on `initiative_id`. See `undo/2`."
+  def redo(%User{} = user, initiative_id) do
+    case redo_candidate(user.id, initiative_id) do
+      nil -> {:error, :nothing_to_redo}
+      event -> apply_reversal(event, user, :redo)
+    end
+  end
+
+  defp apply_reversal(event, user, direction) do
+    outcome =
+      Repo.transaction(fn ->
+        case reverse(event, direction) do
+          :ok -> :ok
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case outcome do
+      {:ok, :ok} ->
+        set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
+        record_undo_meta(event, user, direction)
+        broadcast_change(event.initiative_id, {:task_created, event.task_id})
+        {:ok, describe_event(event)}
+
+      {:error, _reason} ->
+        # Conflict (target deleted, parent gone…): step past the dead entry so
+        # the stack never stalls (item 7).
+        set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
+        {:error, {:conflict, describe_event(event)}}
+    end
+  end
+
+  # reverse/2 applies the state change. :undo runs the inverse; :redo re-runs the
+  # forward action. Low-level (no new undoable events) — only the undid/redid
+  # meta event is recorded, keeping the stack linear.
+  defp reverse(%{kind: kind} = event, direction)
+       when kind in ~w(parent_changed reordered) do
+    target = if direction == :undo, do: event.inverse_payload, else: forward_move(event)
+
+    case get_task(event.task_id) do
+      nil ->
+        {:error, :task_gone}
+
+      %Task{} = task ->
+        parent_id = normalize_id(target["parent_id"])
+
+        with :ok <- validate_move(task, parent_id) do
+          old_parent = task.parent_id
+          perform_move(task, parent_id, target["position"], event_actor(event))
+          if old_parent && old_parent != parent_id, do: recompute_ancestors(old_parent)
+          recompute_ancestors(parent_id)
+          :ok
+        end
+    end
+  end
+
+  defp reverse(%{kind: "child_deleted"} = event, direction) do
+    ids = event.inverse_payload["deleted_ids"] || []
+    parent_id = event.task_id
+
+    {_n, _} =
+      if direction == :undo do
+        from(t in Task, where: t.id in ^ids) |> Repo.update_all(set: [deleted_at: nil])
+      else
+        from(t in Task, where: t.id in ^ids)
+        |> Repo.update_all(set: [deleted_at: now_seconds()])
+      end
+
+    if parent_id, do: recompute_ancestors(parent_id)
+    :ok
+  end
+
+  defp reverse(%{kind: "created"} = event, direction) do
+    case get_task(event.task_id) do
+      nil ->
+        {:error, :task_gone}
+
+      %Task{} = task ->
+        ids = subtree_ids_any(task.id)
+
+        {_n, _} =
+          if direction == :undo do
+            from(t in Task, where: t.id in ^ids)
+            |> Repo.update_all(set: [deleted_at: now_seconds()])
+          else
+            from(t in Task, where: t.id in ^ids) |> Repo.update_all(set: [deleted_at: nil])
+          end
+
+        if task.parent_id, do: recompute_ancestors(task.parent_id)
+        :ok
+    end
+  end
+
+  # Attribute diffs (m02.06): the events already store from/to, so the inverse
+  # is "set the field back". Progress feeds the roll-up; the rest are local.
+  defp reverse(%{kind: kind} = event, direction)
+       when kind in ~w(title_changed progress_changed priority_changed assignee_changed) do
+    field = undo_field(kind)
+    value = if direction == :undo, do: event.data["from"], else: event.data["to"]
+
+    case get_task(event.task_id) do
+      nil ->
+        {:error, :task_gone}
+
+      %Task{} = task ->
+        task
+        |> Ecto.Changeset.change(%{field => value})
+        |> Repo.update()
+        |> case do
+          {:ok, updated} ->
+            if kind == "progress_changed", do: recompute_ancestors(updated.parent_id)
+            :ok
+
+          {:error, _} ->
+            {:error, :invalid}
+        end
+    end
+  end
+
+  defp undo_field("title_changed"), do: :title
+  defp undo_field("progress_changed"), do: :manual_progress
+  defp undo_field("priority_changed"), do: :priority
+  defp undo_field("assignee_changed"), do: :assignee_id
+
+  # Redo of a move re-runs the forward landing (stored alongside from/to).
+  defp forward_move(%{kind: "parent_changed", data: data}),
+    do: %{"parent_id" => data["to"], "position" => data["position"]}
+
+  defp forward_move(%{kind: "reordered", data: data}),
+    do: %{"parent_id" => data["parent_id"], "position" => data["position"]}
+
+  # Subtree ids regardless of deleted_at — used when re-deleting / restoring a
+  # `created` task whose rows may already be soft-deleted.
+  defp subtree_ids_any(task_id) do
+    descendants =
+      from(t in Task, inner_join: d in "tree", on: t.parent_id == d.id)
+
+    initial = from(t in Task, where: t.id == ^task_id)
+
+    [task_id] ++
+      (from(t in "tree", select: t.id, where: t.id != ^task_id)
+       |> recursive_ctes(true)
+       |> with_cte("tree", as: ^union_all(initial, ^descendants))
+       |> Repo.all())
+  end
+
+  defp set_undone(event, value) do
+    event
+    |> Ecto.Changeset.change(undone_at: value)
+    |> Repo.update!()
+  end
+
+  defp now_seconds, do: DateTime.utc_now() |> DateTime.truncate(:second)
+
+  defp event_actor(%{user_id: user_id}), do: Repo.get!(User, user_id)
+
+  # The undid / redid feed entry (item 8) — labeled, never hiding the round-trip.
+  defp record_undo_meta(event, user, direction) do
+    kind = if direction == :undo, do: "undid", else: "redid"
+    record_event_for(event.task_id, event.initiative_id, user, kind, %{"of" => event.kind}, nil)
+  end
+
+  @doc """
+  A short human label for an undoable event — drives the toolbar tooltip and the
+  undo/redo flash (m02.06 items 5/7).
+  """
+  def describe_event(%{kind: "parent_changed"}), do: "move"
+  def describe_event(%{kind: "reordered"}), do: "reorder"
+  def describe_event(%{kind: "child_deleted", data: data}), do: "delete \"#{data["title"]}\""
+  def describe_event(%{kind: "created", data: data}), do: "create \"#{data["title"]}\""
+  def describe_event(%{kind: "title_changed"}), do: "rename"
+  def describe_event(%{kind: "progress_changed"}), do: "progress change"
+  def describe_event(%{kind: "priority_changed"}), do: "priority change"
+  def describe_event(%{kind: "assignee_changed"}), do: "assignee change"
+  def describe_event(_), do: "change"
 
   defp maybe_set_done_progress(%Task{} = task), do: task
 
