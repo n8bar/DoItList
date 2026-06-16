@@ -65,6 +65,7 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:members, Initiatives.list_members(initiative.id))
          |> assign(:selected_task_id, nil)
          |> assign(:selected_task, nil)
+         |> assign(:selected_staff_pool, nil)
          |> assign(:comments, [])
          |> assign(:activity, [])
          |> assign_display_prefs(Accounts.get_preferences(user))
@@ -197,6 +198,63 @@ defmodule DoItWeb.InitiativeShowLive do
   defp can_progress?(socket, task_id),
     do: socket.assigns.can_edit or leads_task?(socket, task_id)
 
+  # Set the selected task and, with it, the current user's staffing pool for it
+  # (item 12.6.3/12.6.4) — recomputed only when the selection actually changes,
+  # so the editor's selectors and the co/assignee gates read one ready value.
+  defp assign_selected(socket, task) do
+    socket
+    |> assign(:selected_task, task)
+    |> assign(:selected_staff_pool, selected_staff_pool(socket, task))
+  end
+
+  # The pool of user ids the current user may staff the selected task with:
+  #   :all  — an editor/owner (any member; no pool limit)
+  #   nil   — may not staff this task (selectors absent / disabled)
+  #   MapSet — a viewer+ lead, limited to the people they were handed (item 12.6).
+  defp selected_staff_pool(_socket, nil), do: nil
+
+  defp selected_staff_pool(socket, %{} = task) do
+    cond do
+      socket.assigns.can_edit -> :all
+      socket.assigns.role == "viewer" and socket.assigns.initiative.viewer_plus ->
+        Tasks.viewer_staff_pool(socket.assigns.current_user.id, task)
+
+      true -> nil
+    end
+  end
+
+  # Whether the current user may staff the selected task at all (set primary /
+  # co-assignees). Drives the editor's assignee + co surfaces and the co events.
+  defp can_staff?(socket), do: socket.assigns.selected_staff_pool != nil
+
+  # Whether `uid` is allowed in the selected task's pool — editors (:all) place
+  # anyone; a viewer+ only the handed pool. Empty string (unassign) is allowed
+  # for any staffer.
+  defp staff_pool_allows?(socket, uid) do
+    case socket.assigns.selected_staff_pool do
+      :all -> true
+      nil -> false
+      %MapSet{} = pool -> uid in ["", nil] or MapSet.member?(pool, to_int(uid))
+    end
+  end
+
+  defp to_int(n) when is_integer(n), do: n
+  defp to_int(s) when is_binary(s), do: String.to_integer(s)
+
+  # The params a viewer+ may actually apply to the selected task: manual_progress
+  # (progress grant, item 12.6.2) plus a pool-valid assignee_id when the task is
+  # staffable (item 12.6.3). Everything else the form posted is dropped.
+  defp viewer_allowed_params(socket, params) do
+    progress = Map.take(params, ["manual_progress"])
+
+    if can_staff?(socket) and Map.has_key?(params, "assignee_id") and
+         staff_pool_allows?(socket, params["assignee_id"]) do
+      Map.put(progress, "assignee_id", params["assignee_id"])
+    else
+      progress
+    end
+  end
+
   # Attribute-level changes patch the loaded tree instead of reloading the
   # initiative (.03.04.03, ProductSpec § Collaboration Model): merge the
   # written task + its ancestor roll-ups, re-key the parent's child order
@@ -277,7 +335,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
           task ->
             socket
-            |> assign(:selected_task, task)
+            |> assign_selected(task)
             |> assign(:comments, Tasks.list_comments(id))
             |> assign(:activity, Tasks.list_task_activity(id))
         end
@@ -387,7 +445,7 @@ defmodule DoItWeb.InitiativeShowLive do
              socket
              |> assign(:editing_initiative?, false)
              |> assign(:selected_task_id, id)
-             |> assign(:selected_task, task)
+             |> assign_selected(task)
              |> assign(:comments, Tasks.list_comments(id))
              |> assign(:activity, Tasks.list_task_activity(id))
              |> update_presence(id)}
@@ -541,7 +599,11 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("add_co_assignee", %{"user_id" => uid}, socket) when uid != "" do
     with_co(socket, fn task, user ->
-      Tasks.add_co_assignee(task, user, String.to_integer(uid))
+      # Viewer+ may only add from the handed pool (item 12.6.3); an out-of-pool
+      # add fails so the optimistic row reverts. Editors place anyone.
+      if staff_pool_allows?(socket, uid),
+        do: Tasks.add_co_assignee(task, user, String.to_integer(uid)),
+        else: {:error, :not_in_pool}
     end)
   end
 
@@ -575,12 +637,21 @@ defmodule DoItWeb.InitiativeShowLive do
             {:noreply, put_flash(socket, :error, "Couldn't save task: #{summarize_errors(cs)}.")}
         end
 
-      # Viewer+ (item 12.6): a lead may move progress and nothing else, so
-      # take ONLY manual_progress regardless of what the form posted.
+      # Viewer+ (item 12.6): a lead may move progress on the led subtree and set
+      # a *descendant's* primary from the handed pool (item 12.6.3) — nothing
+      # else. Build the allowed subset explicitly; never trust the posted keys.
       task && leads_task?(socket, task.id) ->
-        case Tasks.update_task(task, user, Map.take(params, ["manual_progress"])) do
-          {:ok, _} -> {:noreply, patch_task(socket, task.id)}
-          {:error, cs} -> {:noreply, put_flash(socket, :error, "Invalid progress: #{summarize_errors(cs)}.")}
+        allowed = viewer_allowed_params(socket, params)
+
+        cond do
+          allowed == %{} ->
+            {:noreply, socket}
+
+          true ->
+            case Tasks.update_task(task, user, allowed) do
+              {:ok, _} -> {:noreply, patch_task(socket, task.id)}
+              {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't save: #{summarize_errors(cs)}.")}
+            end
         end
 
       true ->
@@ -1779,6 +1850,8 @@ defmodule DoItWeb.InitiativeShowLive do
                 members={@members}
                 can_edit={@can_edit}
                 can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task.id)}
+                can_staff={@selected_staff_pool != nil}
+                staff_pool={@selected_staff_pool}
                 show_activity={@show_task_activity}
                 online_ids={@online_ids}
               />
@@ -3093,8 +3166,13 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :members, :list, required: true
   attr :can_edit, :boolean, required: true
   # Viewer+ (item 12.6): edit progress + comments on a led task without the
-  # full can_edit (title / priority / staffing stay can_edit / pool-gated).
+  # full can_edit (title / priority stay can_edit).
   attr :can_progress, :boolean, default: false
+  # Viewer+ staffing (item 12.6.3/12.6.4): may this user set this task's primary
+  # / co-assignees, and from which pool (:all for an editor, a MapSet for a
+  # viewer+, nil when they can't staff it).
+  attr :can_staff, :boolean, default: false
+  attr :staff_pool, :any, default: nil
 
   def task_editor(assigns) do
     ~H"""
@@ -3227,15 +3305,16 @@ defmodule DoItWeb.InitiativeShowLive do
             id="task-field-assignee"
             name="task[assignee_id]"
             class="w-full select select-bordered select-sm"
-            disabled={not @can_edit}
+            disabled={not (@can_edit or @can_staff)}
           >
             <%!-- Option text is the bare username: the optimistic echo in
                  app.js builds the chip's "@username" from it, and the
                  pane-skeleton sync matches it back. Display name rides
-                 the option title. --%>
+                 the option title. A viewer+ sees only their handed pool
+                 (item 12.6.4) plus the current assignee so it reads true. --%>
             <option value="">Unassigned</option>
             <option
-              :for={m <- @members}
+              :for={m <- assignable_members(@members, @task, @can_edit, @staff_pool)}
               value={m.user.id}
               title={m.user.name}
               data-initials={initials(m.user)}
@@ -3253,7 +3332,11 @@ defmodule DoItWeb.InitiativeShowLive do
            promotion order. The primary stays the assignee select above.
            MUST live OUTSIDE the update_task form — its own add-form can't be
            nested in another form (the browser drops nested forms). --%>
-      <div :if={@can_edit or @task.co_assignee_links != []} id="co-assignees" phx-hook="CoAssignees">
+      <div
+        :if={@can_edit or @can_staff or @task.co_assignee_links != []}
+        id="co-assignees"
+        phx-hook="CoAssignees"
+      >
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
         <%!-- Item 12.5: the list is hook-owned (phx-update="ignore") so optimistic
              add/remove/reorder apply at the gesture without morphdom fighting
@@ -3285,7 +3368,7 @@ defmodule DoItWeb.InitiativeShowLive do
               @{link.user.username}
             </span>
             <button
-              :if={@can_edit}
+              :if={@can_edit or @can_staff}
               type="button"
               data-co-move
               data-dir="up"
@@ -3297,7 +3380,7 @@ defmodule DoItWeb.InitiativeShowLive do
               <.icon name="hero-chevron-up" class="w-3.5 h-3.5" />
             </button>
             <button
-              :if={@can_edit}
+              :if={@can_edit or @can_staff}
               type="button"
               data-co-move
               data-dir="down"
@@ -3309,7 +3392,7 @@ defmodule DoItWeb.InitiativeShowLive do
               <.icon name="hero-chevron-down" class="w-3.5 h-3.5" />
             </button>
             <button
-              :if={@can_edit}
+              :if={@can_edit or @can_staff}
               type="button"
               data-co-remove
               data-user-id={link.user_id}
@@ -3327,11 +3410,11 @@ defmodule DoItWeb.InitiativeShowLive do
             None yet.
           </li>
         </ul>
-        <form :if={@can_edit} id="add-co-assignee-form" class="mt-1">
+        <form :if={@can_edit or @can_staff} id="add-co-assignee-form" class="mt-1">
           <select name="user_id" data-co-add class="w-full select select-bordered select-sm">
             <option value="">+ Add co-assignee…</option>
             <option
-              :for={m <- eligible_co_members(@members, @task)}
+              :for={m <- eligible_co_members(@members, @task, @can_edit, @staff_pool)}
               value={m.user.id}
               data-name={m.user.username}
               data-initials={initials(m.user)}
@@ -3486,9 +3569,14 @@ defmodule DoItWeb.InitiativeShowLive do
   defp with_co(socket, fun) do
     task = socket.assigns.selected_task
 
-    if socket.assigns.can_edit and task do
-      _ = fun.(task, socket.assigns.current_user)
-      {:reply, %{ok: true}, patch_task(socket, task.id)}
+    # Editors/owners anywhere; a viewer+ only on a staffable descendant within
+    # their pool (item 12.6.3). The reply drives the optimistic hook: a refused
+    # or failed write returns ok: false so the change reverts instead of lying.
+    if task && can_staff?(socket) do
+      case fun.(task, socket.assigns.current_user) do
+        {:error, _} -> {:reply, %{ok: false}, socket}
+        _ -> {:reply, %{ok: true}, patch_task(socket, task.id)}
+      end
     else
       {:reply, %{ok: false}, socket}
     end
@@ -3547,6 +3635,36 @@ defmodule DoItWeb.InitiativeShowLive do
       m.user_id == task.assignee_id or MapSet.member?(co_ids, m.user_id)
     end)
   end
+
+  # Same, narrowed to the staffer's pool: an editor (can_edit) draws from all
+  # members; a viewer+ only from their handed pool (item 12.6.4).
+  defp eligible_co_members(members, task, can_edit, staff_pool) do
+    members
+    |> within_pool(can_edit, staff_pool)
+    |> eligible_co_members(task)
+  end
+
+  # Members a staffer may set as the task's PRIMARY: an editor sees everyone; a
+  # viewer+ sees their pool, plus the current assignee so the select reads true
+  # even if that person sits outside the pool (item 12.6.4).
+  defp assignable_members(members, _task, true, _staff_pool), do: members
+
+  defp assignable_members(members, task, false, staff_pool) do
+    pool = within_pool(members, false, staff_pool)
+
+    if task.assignee_id && not Enum.any?(pool, &(&1.user_id == task.assignee_id)) do
+      pool ++ Enum.filter(members, &(&1.user_id == task.assignee_id))
+    else
+      pool
+    end
+  end
+
+  defp within_pool(members, true, _staff_pool), do: members
+  defp within_pool(_members, _can_edit, nil), do: []
+  defp within_pool(members, _can_edit, :all), do: members
+
+  defp within_pool(members, _can_edit, %MapSet{} = pool),
+    do: Enum.filter(members, &MapSet.member?(pool, &1.user_id))
 
   defp ex_member?(%{assignee_id: id, assignee: %{}}, member_ids) when not is_nil(id),
     do: not MapSet.member?(member_ids, id)

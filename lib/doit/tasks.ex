@@ -82,6 +82,60 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
+  The Viewer+ staffing pool for `viewer_id` acting on `task` (m02.05 item 12.6):
+  the set of user ids they may set as `task`'s primary or co-assignees, drawn
+  from the **nearest strict ancestor they directly lead** — the people they were
+  handed there.
+
+  Returns `nil` when the viewer may not staff `task` at all: either it's a task
+  they directly lead (its own co-list is owner-seeded, off-limits) or no strict
+  ancestor is theirs. A `MapSet` of user ids otherwise (possibly empty — a led
+  task with no co-assignees hands down an empty pool).
+  """
+  def viewer_staff_pool(viewer_id, %Task{} = task) do
+    if task.assignee_id == viewer_id do
+      nil
+    else
+      case nearest_led_ancestor_id(viewer_id, task) do
+        nil -> nil
+        ancestor_id -> co_assignee_ids(ancestor_id)
+      end
+    end
+  end
+
+  # Walks `task`'s strict-ancestor chain from the parent up, returning the id of
+  # the first ancestor the viewer is the direct assignee of — or nil. One query
+  # loads the chain; the walk happens in memory (chains are shallow).
+  defp nearest_led_ancestor_id(_viewer_id, %Task{parent_id: nil}), do: nil
+
+  defp nearest_led_ancestor_id(viewer_id, %Task{} = task) do
+    by_id =
+      task.id
+      |> ancestor_chain_query()
+      |> select([t], {t.id, t.parent_id, t.assignee_id})
+      |> Repo.all()
+      |> Map.new(fn {id, parent_id, assignee_id} -> {id, {parent_id, assignee_id}} end)
+
+    walk_to_led(by_id, task.parent_id, viewer_id)
+  end
+
+  defp walk_to_led(_by_id, nil, _viewer_id), do: nil
+
+  defp walk_to_led(by_id, id, viewer_id) do
+    case Map.get(by_id, id) do
+      {_parent_id, ^viewer_id} -> id
+      {parent_id, _assignee_id} -> walk_to_led(by_id, parent_id, viewer_id)
+      nil -> nil
+    end
+  end
+
+  defp co_assignee_ids(task_id) do
+    from(c in TaskCoAssignee, where: c.task_id == ^task_id, select: c.user_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @doc """
   Builds a tree of tasks for an Initiative. Returns a list of root tasks (the
   separate Lists), each with a `:children` list, recursively.
   """

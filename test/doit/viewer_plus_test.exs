@@ -55,4 +55,55 @@ defmodule DoIt.ViewerPlusTest do
     # Someone who is the primary of nothing leads nothing.
     assert Tasks.viewer_plus_led_ids(init.id, owner.id) |> MapSet.size() == 0
   end
+
+  test "viewer_staff_pool = the led task's co-assignees, for its descendants only" do
+    owner = user("Owner")
+    viewer = user("Viewer")
+    x = user("X")
+    y = user("Y")
+    {:ok, init} = Initiatives.create_initiative(owner, %{"name" => "Init"})
+
+    a = task(owner, init, nil, "A")
+    b = task(owner, init, a, "B", %{"assignee_id" => viewer.id})
+    c = task(owner, init, b, "C")
+    d = task(owner, init, nil, "D")
+
+    # Owner hands the led task B a pool of {X, Y}.
+    {:ok, _} = Tasks.add_co_assignee(b, owner, x.id)
+    {:ok, _} = Tasks.add_co_assignee(b, owner, y.id)
+
+    # A descendant of B draws from B's co-assignees.
+    assert Tasks.viewer_staff_pool(viewer.id, c) == MapSet.new([x.id, y.id])
+
+    # The led task itself is off-limits (its co-list is owner-seeded).
+    assert Tasks.viewer_staff_pool(viewer.id, b) == nil
+
+    # Tasks outside the led subtree give no pool at all.
+    assert Tasks.viewer_staff_pool(viewer.id, a) == nil
+    assert Tasks.viewer_staff_pool(viewer.id, d) == nil
+  end
+
+  test "viewer_staff_pool shrinks to the NEAREST led ancestor's co-assignees" do
+    owner = user("Owner")
+    viewer = user("Viewer")
+    x = user("X")
+    y = user("Y")
+    {:ok, init} = Initiatives.create_initiative(owner, %{"name" => "Init"})
+
+    b = task(owner, init, nil, "B", %{"assignee_id" => viewer.id})
+    c = task(owner, init, b, "C")
+    # The viewer also directly leads E (deeper), with a narrower pool {X}.
+    e = task(owner, init, c, "E", %{"assignee_id" => viewer.id})
+    f = task(owner, init, e, "F")
+
+    {:ok, _} = Tasks.add_co_assignee(b, owner, x.id)
+    {:ok, _} = Tasks.add_co_assignee(b, owner, y.id)
+    {:ok, _} = Tasks.add_co_assignee(e, owner, x.id)
+
+    # Between B and E, the pool is B's {X, Y}.
+    assert Tasks.viewer_staff_pool(viewer.id, c) == MapSet.new([x.id, y.id])
+
+    # Under E, the nearest led ancestor is E, so the pool narrows to {X}.
+    assert Tasks.viewer_staff_pool(viewer.id, f) == MapSet.new([x.id])
+  end
 end
