@@ -134,6 +134,69 @@ defmodule DoItWeb.ViewerPlusLiveTest do
     end
   end
 
+  describe "member drag → assign (item 12.8)" do
+    test "an editor drop assigns primary if empty, else stacks a co", %{conn: conn} do
+      %{owner: owner, x: x, y: y, init: init, d: d} = setup_tree(true)
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{init.id}")
+
+      drop = fn u ->
+        render_hook(view, "assign_member", %{
+          "user-id" => Integer.to_string(u.id),
+          "task-id" => Integer.to_string(d.id)
+        })
+      end
+
+      # d starts unassigned → first drop is the primary.
+      drop.(x)
+      assert Tasks.get_task!(d.id).assignee_id == x.id
+
+      # Second drop stacks as a co, never clobbering the primary.
+      drop.(y)
+      assert Tasks.get_task!(d.id).assignee_id == x.id
+      assert Tasks.list_co_assignees(d.id) |> Enum.map(& &1.user_id) == [y.id]
+
+      # Dropping the existing primary again is a no-op (not added as a co).
+      drop.(x)
+      assert Tasks.get_task!(d.id).assignee_id == x.id
+      assert Tasks.list_co_assignees(d.id) |> Enum.map(& &1.user_id) == [y.id]
+    end
+
+    test "a viewer+ may drop a pool member on a descendant, never an outsider", %{conn: conn} do
+      %{viewer: viewer, x: x, z: z, init: init, c: c} = setup_tree(true)
+      {:ok, view, _} = live(log_in(conn, viewer), ~p"/initiatives/#{init.id}")
+
+      # c is a descendant of the led task; x is in the handed pool → assigned.
+      render_hook(view, "assign_member", %{
+        "user-id" => Integer.to_string(x.id),
+        "task-id" => Integer.to_string(c.id)
+      })
+
+      assert Tasks.get_task!(c.id).assignee_id == x.id
+
+      # z is outside the pool → refused, nothing changes.
+      render_hook(view, "assign_member", %{
+        "user-id" => Integer.to_string(z.id),
+        "task-id" => Integer.to_string(c.id)
+      })
+
+      assert Tasks.get_task!(c.id).assignee_id == x.id
+      assert Tasks.list_co_assignees(c.id) == []
+    end
+
+    test "a viewer+ can't assign outside their led subtree", %{conn: conn} do
+      %{viewer: viewer, x: x, init: init, a: a} = setup_tree(true)
+      {:ok, view, _} = live(log_in(conn, viewer), ~p"/initiatives/#{init.id}")
+
+      # a is the ancestor of the led task — outside the grant.
+      render_hook(view, "assign_member", %{
+        "user-id" => Integer.to_string(x.id),
+        "task-id" => Integer.to_string(a.id)
+      })
+
+      assert Tasks.get_task!(a.id).assignee_id == nil
+    end
+  end
+
   describe "viewer_plus off" do
     test "no progress grant and no viewer+ label", %{conn: conn} do
       %{viewer: viewer, init: init, c: c} = setup_tree(false)

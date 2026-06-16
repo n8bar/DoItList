@@ -2278,6 +2278,100 @@ Hooks.CollaboratorDrag = {
   },
 }
 
+// Drag a member from the Members panel onto a task row to assign them
+// (m02.05 item 12.8). Pointer-based, mirroring CollaboratorDrag: arm on the
+// handle's pointerdown, begin past the threshold, highlight the [data-task-id]
+// row under the cursor, and on release push assign_member with a reply. Honest
+// optimism (item 12.5): the target row shows the "saving" hue while the write
+// is in flight; the server patch lands the assignee chip (or a flash on an
+// illegal drop). The assignee select / co-list stay the a11y + touch path.
+Hooks.MemberDrag = {
+  mounted() {
+    this.userId = this.el.dataset.userId
+    this.onDown = (e) => this.start(e)
+    this.el.addEventListener("pointerdown", this.onDown)
+  },
+  destroyed() {
+    this.cleanup()
+    if (this.onDown) this.el.removeEventListener("pointerdown", this.onDown)
+  },
+  start(e) {
+    if (e.pointerType === "touch") return
+    if (e.button !== undefined && e.button !== 0) return
+    if (this.armed || this.dragging) return
+    this.startX = e.clientX
+    this.startY = e.clientY
+    this.pid = e.pointerId
+    this.armed = true
+    this.dragging = false
+    this.onMove = (ev) => this.move(ev)
+    this.onUp = (ev) => this.up(ev)
+    this.onCancel = () => this.cleanup()
+    document.addEventListener("pointermove", this.onMove)
+    document.addEventListener("pointerup", this.onUp)
+    document.addEventListener("pointercancel", this.onCancel)
+  },
+  begin() {
+    this.dragging = true
+    this.el.style.opacity = "0.5"
+    document.body.style.userSelect = "none"
+    document.body.style.cursor = "grabbing"
+  },
+  move(e) {
+    if (!this.armed) return
+    if (this.pid !== undefined && e.pointerId !== this.pid) return
+    if (!this.dragging) {
+      if (
+        Math.abs(e.clientX - this.startX) < INIT_DRAG_THRESHOLD_PX &&
+        Math.abs(e.clientY - this.startY) < INIT_DRAG_THRESHOLD_PX
+      ) {
+        return
+      }
+      this.begin()
+    }
+    const under = document.elementFromPoint(e.clientX, e.clientY)
+    this.highlight(under && under.closest("[data-task-id]"))
+  },
+  highlight(row) {
+    if (row === this.target) return
+    if (this.target) this.target.classList.remove("member-drop-target")
+    this.target = row || null
+    if (this.target) this.target.classList.add("member-drop-target")
+  },
+  up(e) {
+    if (!this.armed) return
+    if (this.pid !== undefined && e.pointerId !== this.pid) return
+    if (this.dragging && this.target) {
+      const row = this.target
+      const taskId = row.dataset.taskId
+      row.classList.add("is-saving")
+      let settled = false
+      const done = () => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        row.classList.remove("is-saving")
+      }
+      const timer = setTimeout(done, CO_REPLY_TIMEOUT_MS)
+      this.pushEvent("assign_member", { "user-id": this.userId, "task-id": taskId }, () => done())
+    }
+    this.cleanup()
+  },
+  cleanup() {
+    if (this.onMove) document.removeEventListener("pointermove", this.onMove)
+    if (this.onUp) document.removeEventListener("pointerup", this.onUp)
+    if (this.onCancel) document.removeEventListener("pointercancel", this.onCancel)
+    this.onMove = this.onUp = this.onCancel = null
+    if (this.target) this.target.classList.remove("member-drop-target")
+    this.target = null
+    this.el.style.opacity = ""
+    document.body.style.userSelect = ""
+    document.body.style.cursor = ""
+    this.armed = false
+    this.dragging = false
+  },
+}
+
 // Optimistic co-assignees (m02.05 item 12.5). The pane list (#co-assignees's
 // keyed <ul>) is hook-owned (phx-update="ignore"), so add/remove/reorder apply
 // at the gesture without morphdom fighting them. Each change snapshots the

@@ -253,6 +253,34 @@ defmodule DoItWeb.InitiativeShowLive do
   defp to_int(n) when is_integer(n), do: n
   defp to_int(s) when is_binary(s), do: String.to_integer(s)
 
+  defp assign_result(socket, task, {:ok, _}),
+    do: {:reply, %{ok: true}, patch_task(socket, task.id)}
+
+  defp assign_result(socket, _task, {:error, _}), do: {:reply, %{ok: false}, socket}
+
+  defp member_id?(socket, uid), do: Enum.any?(socket.assigns.members, &(&1.user_id == uid))
+
+  defp co_assignee?(task_id, uid),
+    do: Enum.any?(Tasks.list_co_assignees(task_id), &(&1.user_id == uid))
+
+  # May the current user assign `uid` onto `task` (item 12.8 drop validation)?
+  # Editors/owners anywhere; a viewer+ only on a staffable task, from its pool.
+  defp assign_allowed?(socket, task, uid) do
+    cond do
+      socket.assigns.can_edit ->
+        true
+
+      socket.assigns.role == "viewer" and socket.assigns.initiative.viewer_plus ->
+        case Tasks.viewer_staff_pool(socket.assigns.current_user.id, task) do
+          nil -> false
+          pool -> MapSet.member?(pool, uid)
+        end
+
+      true ->
+        false
+    end
+  end
+
   # The params a viewer+ may actually apply to the selected task: manual_progress
   # (progress grant, item 12.6.2) plus a pool-valid assignee_id when the task is
   # staffable (item 12.6.3). Everything else the form posted is dropped.
@@ -637,6 +665,38 @@ defmodule DoItWeb.InitiativeShowLive do
       ids = Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id)
       Tasks.reorder_co_assignees(task, user, shift(ids, String.to_integer(uid), dir))
     end)
+  end
+
+  # Drag a member from the Members panel onto any task row (item 12.8): assign
+  # them as PRIMARY when the task has none, else stack them as a CO-assignee —
+  # never clobbering an existing primary. Validated per the *dropped* task:
+  # editor/owner anywhere; a viewer+ only within a led subtree, from its pool.
+  # Replies ok:bool so the drag's optimistic row settles (item 12.5).
+  def handle_event("assign_member", %{"user-id" => uid, "task-id" => tid}, socket) do
+    uid = String.to_integer(uid)
+    task = Tasks.get_task(String.to_integer(tid))
+    user = socket.assigns.current_user
+
+    cond do
+      is_nil(task) or task.initiative_id != socket.assigns.initiative.id ->
+        {:reply, %{ok: false}, socket}
+
+      not member_id?(socket, uid) ->
+        {:reply, %{ok: false}, socket}
+
+      not assign_allowed?(socket, task, uid) ->
+        {:reply, %{ok: false}, put_flash(socket, :error, "You can't assign someone there.")}
+
+      # Already the primary, or already a co — nothing to stack.
+      task.assignee_id == uid or co_assignee?(task.id, uid) ->
+        {:reply, %{ok: false}, socket}
+
+      is_nil(task.assignee_id) ->
+        assign_result(socket, task, Tasks.update_task(task, user, %{"assignee_id" => to_string(uid)}))
+
+      true ->
+        assign_result(socket, task, Tasks.add_co_assignee(task, user, uid))
+    end
   end
 
   def handle_event("update_task", %{"task" => params}, socket) do
@@ -1742,6 +1802,7 @@ defmodule DoItWeb.InitiativeShowLive do
               me={@current_user.id}
               assignee_ids={@direct_assignee_ids}
               viewer_plus_on={@initiative.viewer_plus}
+              can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
             />
           </div>
         </div>
@@ -1832,6 +1893,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 me={@current_user.id}
                 assignee_ids={@direct_assignee_ids}
                 viewer_plus_on={@initiative.viewer_plus}
+                can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
               />
             </div>
 
@@ -2964,6 +3026,9 @@ defmodule DoItWeb.InitiativeShowLive do
   # reads "viewer+".
   attr :assignee_ids, :any, default: %MapSet{}
   attr :viewer_plus_on, :boolean, default: false
+  # Item 12.8.1: show the drag handle (and arm member→task drag) only when the
+  # current user can assign anyone (editor/owner, or a viewer+ who leads a task).
+  attr :can_assign, :boolean, default: false
 
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
@@ -3033,7 +3098,22 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <ul class="space-y-1 text-sm">
         <li :for={m <- @members} class="flex items-center justify-between">
-          <span class="flex items-center gap-2 min-w-0 text-zinc-700 dark:text-zinc-200">
+          <span class="flex items-center gap-1 min-w-0 text-zinc-700 dark:text-zinc-200">
+            <%!-- Drag handle (item 12.8.1): grab a member and drop them on a
+                 task to assign. Shown only when this user can assign; desktop
+                 pointer drag, with the assignee select / co-list as the a11y
+                 + touch path. --%>
+            <span
+              :if={@can_assign}
+              id={"member-drag-#{@id}-#{m.user_id}"}
+              phx-hook="MemberDrag"
+              data-user-id={m.user_id}
+              title={"Drag #{m.user.name} onto a task to assign"}
+              aria-hidden="true"
+              class="flex-none -ml-1 cursor-grab touch-none text-zinc-300 hover:text-zinc-500 dark:text-zinc-600 dark:hover:text-zinc-400"
+            >
+              <.icon name="hero-ellipsis-vertical" class="w-4 h-4" />
+            </span>
             <.avatar
               user={m.user}
               online={MapSet.member?(@online_ids, m.user.id)}
