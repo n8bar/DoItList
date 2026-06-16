@@ -175,6 +175,18 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
     |> assign(:initiative_progress, (root && root.computed_progress) || 0)
     |> assign(:led_task_ids, viewer_led_ids(socket))
+    |> assign(:direct_assignee_ids, tree_assignee_ids(tree))
+  end
+
+  # User ids that are the direct (primary) assignee of any task in the loaded
+  # tree (item 12.6.5). Derived in-memory from the already-loaded tree — no extra
+  # query — and refreshed wherever the tree is (load_tree / patch_task). The
+  # members panel reads it to label a viewer who holds an assignment "viewer+".
+  defp tree_assignee_ids(tree), do: Enum.reduce(tree, MapSet.new(), &collect_assignee_ids/2)
+
+  defp collect_assignee_ids(task, acc) do
+    acc = if task.assignee_id, do: MapSet.put(acc, task.assignee_id), else: acc
+    Enum.reduce(task.children || [], acc, &collect_assignee_ids/2)
   end
 
   # Viewer+ (m02.05 item 12.6): the set of tasks the current user leads — only
@@ -275,6 +287,10 @@ defmodule DoItWeb.InitiativeShowLive do
           socket
           |> assign(:tree, patched_tree(socket, task, lineage))
           |> maybe_refresh_root_sort(task, root_id)
+
+        # An assignment may have changed in the patched rows — re-derive the
+        # viewer+ label set (item 12.6.5) from the in-memory tree.
+        socket = assign(socket, :direct_assignee_ids, tree_assignee_ids(socket.assigns.tree))
 
         # Any in-tree lineage tops out at the system root — its fresh roll-up
         # drives the header bar and the initiative editor's computed line.
@@ -1718,6 +1734,8 @@ defmodule DoItWeb.InitiativeShowLive do
               online_ids={@online_ids}
               owner_id={@initiative.owner_id}
               me={@current_user.id}
+              assignee_ids={@direct_assignee_ids}
+              viewer_plus_on={@initiative.viewer_plus}
             />
           </div>
         </div>
@@ -1806,6 +1824,8 @@ defmodule DoItWeb.InitiativeShowLive do
                 online_ids={@online_ids}
                 owner_id={@initiative.owner_id}
                 me={@current_user.id}
+                assignee_ids={@direct_assignee_ids}
+                viewer_plus_on={@initiative.viewer_plus}
               />
             </div>
 
@@ -2933,6 +2953,11 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :online_ids, :any, required: true
   attr :owner_id, :integer, required: true
   attr :me, :integer, required: true
+  # Viewer+ label (item 12.6.5): user ids that are a direct assignee somewhere,
+  # and whether the Initiative's viewer_plus setting is on — a viewer in both
+  # reads "viewer+".
+  attr :assignee_ids, :any, default: %MapSet{}
+  attr :viewer_plus_on, :boolean, default: false
 
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
@@ -2942,7 +2967,7 @@ defmodule DoItWeb.InitiativeShowLive do
   """
   def members_panel(assigns) do
     ~H"""
-    <div class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+    <div id={@id} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
       <div class="flex items-center justify-between mb-2">
         <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
         <button
@@ -3030,11 +3055,20 @@ defmodule DoItWeb.InitiativeShowLive do
                 <option value="viewer" selected={m.role == "viewer"}>viewer</option>
               </select>
             </form>
+            <%!-- Item 12.6.5: admins keep the editable select (DB role stays
+                 viewer); a small badge marks the *effective* viewer+. --%>
+            <span
+              :if={@can_admin and m.user_id != @owner_id and viewer_plus?(m, @assignee_ids, @viewer_plus_on)}
+              class="text-[10px] font-semibold px-1 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+              title="A viewer who is a task's assignee — leads that task and its subtree"
+            >
+              viewer+
+            </span>
             <span
               :if={not (@can_admin and m.user_id != @owner_id)}
               class="text-xs text-zinc-500 dark:text-zinc-400"
             >
-              {m.role}
+              {role_label(m, @assignee_ids, @viewer_plus_on)}
             </span>
             <%!-- Leave (own row, non-owners): always confirmed — only the
                  owner can add you back. The members_changed broadcast ejects
@@ -3602,6 +3636,15 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp member_user?(members, user_id), do: Enum.any?(members, &(&1.user_id == user_id))
+
+  # A member reads "viewer+" when the Initiative setting is on, their role is
+  # viewer, and they're the direct assignee of at least one task (item 12.6.5).
+  defp viewer_plus?(member, assignee_ids, viewer_plus_on),
+    do: viewer_plus_on and member.role == "viewer" and MapSet.member?(assignee_ids, member.user_id)
+
+  defp role_label(member, assignee_ids, viewer_plus_on) do
+    if viewer_plus?(member, assignee_ids, viewer_plus_on), do: "viewer+", else: member.role
+  end
 
   # Readable activity labels for the co-assignee event kinds (m02.05 .13.7);
   # everything else keeps its raw kind, as before.
