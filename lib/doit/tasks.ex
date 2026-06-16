@@ -40,10 +40,10 @@ defmodule DoIt.Tasks do
     )
   end
 
-  @doc "All tasks for an Initiative, ordered for tree assembly."
+  @doc "All *live* tasks for an Initiative, ordered for tree assembly."
   def list_initiative_tasks(initiative_id) do
     from(t in Task,
-      where: t.initiative_id == ^initiative_id,
+      where: t.initiative_id == ^initiative_id and is_nil(t.deleted_at),
       order_by: [asc: t.sort_order, asc: t.inserted_at],
       preload: [:assignee, :updated_by]
     )
@@ -61,7 +61,9 @@ defmodule DoIt.Tasks do
   def viewer_plus_led_ids(initiative_id, user_id) do
     roots =
       from(t in Task,
-        where: t.initiative_id == ^initiative_id and t.assignee_id == ^user_id,
+        where:
+          t.initiative_id == ^initiative_id and t.assignee_id == ^user_id and
+            is_nil(t.deleted_at),
         select: %{id: t.id}
       )
 
@@ -69,6 +71,7 @@ defmodule DoIt.Tasks do
       from(t in Task,
         join: led in "led",
         on: t.parent_id == led.id,
+        where: is_nil(t.deleted_at),
         select: %{id: t.id}
       )
 
@@ -659,7 +662,7 @@ defmodule DoIt.Tasks do
     # task in at `position` (or at the end when nil).
     siblings =
       from(t in Task,
-        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id,
+        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
         order_by: [asc: t.sort_order, asc: t.inserted_at]
       )
       |> with_parent(new_parent_id)
@@ -696,7 +699,7 @@ defmodule DoIt.Tasks do
     if task.parent_id != new_parent_id do
       source_siblings =
         from(t in Task,
-          where: t.initiative_id == ^task.initiative_id and t.id != ^task.id,
+          where: t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
           order_by: [asc: t.sort_order, asc: t.inserted_at]
         )
         |> with_parent(task.parent_id)
@@ -719,7 +722,7 @@ defmodule DoIt.Tasks do
   defp insert_at_position(%Task{} = task, parent_id, index) do
     siblings =
       from(t in Task,
-        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id,
+        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
         order_by: [asc: t.sort_order, asc: t.inserted_at]
       )
       |> with_parent(parent_id)
@@ -800,37 +803,59 @@ defmodule DoIt.Tasks do
     :ok
   end
 
+  @doc """
+  Soft-delete a task and its whole live subtree (m02.06): stamp `deleted_at` on
+  every row so the id, comments, co-assignees, and descendants survive for undo
+  / Trash. Records a `child_deleted` event on the parent carrying the deleted
+  ids in `inverse_payload`, so the undo engine can restore exactly this set.
+  """
   def delete_task(%Task{} = task, %User{} = actor) do
     with_resort_batching(fn ->
       Repo.transaction(fn ->
         parent_id = task.parent_id
         initiative_id = task.initiative_id
         title = task.title
+        ids = subtree_ids(task.id)
+        now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-        case Repo.delete(task) do
-          {:ok, _deleted} ->
-            # The "deleted" event lives on the PARENT's timeline — the task is
-            # gone, and an activity row FK'd to it (task_id null: false,
-            # on_delete: :delete_all) would fail to insert and roll the whole
-            # delete back. Skip the event for a parentless task.
-            if parent_id do
-              case record_event_for(parent_id, initiative_id, actor, "child_deleted", %{
-                     title: title
-                   }) do
-                {:ok, _} -> :ok
-                {:error, cs} -> Repo.rollback(cs)
-              end
+        {_n, _} =
+          from(t in Task, where: t.id in ^ids)
+          |> Repo.update_all(set: [deleted_at: now])
 
-              recompute_ancestors(parent_id)
-            end
+        # The "deleted" event lives on the PARENT's timeline (the task drops out
+        # of the tree). Every real task has a parent in the single-root model;
+        # only the system root is parentless and it isn't user-deletable.
+        if parent_id do
+          case record_event_for(parent_id, initiative_id, actor, "child_deleted", %{title: title},
+                 %{"deleted_ids" => ids, "task_id" => task.id}
+               ) do
+            {:ok, _} -> :ok
+            {:error, cs} -> Repo.rollback(cs)
+          end
 
-            broadcast_change(initiative_id, {:task_deleted, task.id})
-            task
-
-          {:error, cs} ->
-            Repo.rollback(cs)
+          recompute_ancestors(parent_id)
         end
+
+        broadcast_change(initiative_id, {:task_deleted, task.id})
+        task
       end)
+    end)
+  end
+
+  @doc """
+  Restore a set of soft-deleted task ids (the undo of a `child_deleted`): clear
+  `deleted_at`, recompute the ancestors' roll-ups, and broadcast a reload so the
+  subtree reappears. Ids already live are left untouched.
+  """
+  def restore_tasks(ids, parent_id, initiative_id) when is_list(ids) do
+    Repo.transaction(fn ->
+      {_n, _} =
+        from(t in Task, where: t.id in ^ids and not is_nil(t.deleted_at))
+        |> Repo.update_all(set: [deleted_at: nil])
+
+      if parent_id, do: recompute_ancestors(parent_id)
+      broadcast_change(initiative_id, {:task_created, parent_id || List.first(ids)})
+      :ok
     end)
   end
 
@@ -904,7 +929,7 @@ defmodule DoIt.Tasks do
         :ok
 
       parent ->
-        siblings = Repo.all(from t in Task, where: t.parent_id == ^parent.id)
+        siblings = Repo.all(from t in Task, where: t.parent_id == ^parent.id and is_nil(t.deleted_at))
         all_done? = siblings != [] and Enum.all?(siblings, &(&1.status == "done"))
 
         if all_done? and parent.status != "done" do
@@ -986,12 +1011,13 @@ defmodule DoIt.Tasks do
   # One recursive CTE for the whole subtree — the per-node query loop this
   # replaces cost ~7ms per task and made big-branch operations feel sluggish.
   defp list_descendants(task_id) do
-    initial = from(t in Task, where: t.parent_id == ^task_id)
+    initial = from(t in Task, where: t.parent_id == ^task_id and is_nil(t.deleted_at))
 
     recursion =
       from(t in Task,
         inner_join: d in "descendants",
-        on: t.parent_id == d.id
+        on: t.parent_id == d.id,
+        where: is_nil(t.deleted_at)
       )
 
     {"descendants", Task}
@@ -1023,20 +1049,20 @@ defmodule DoIt.Tasks do
     |> with_co_counts()
   end
 
-  @doc "Child ids of `parent_id` in display order."
+  @doc "Live child ids of `parent_id` in display order."
   def ordered_child_ids(parent_id) do
     Repo.all(
       from t in Task,
-        where: t.parent_id == ^parent_id,
+        where: t.parent_id == ^parent_id and is_nil(t.deleted_at),
         order_by: [asc: t.sort_order, asc: t.inserted_at],
         select: t.id
     )
   end
 
-  @doc "Display-ordered child ids for several parents, one query: %{parent_id => [ids]}."
+  @doc "Display-ordered live child ids for several parents, one query: %{parent_id => [ids]}."
   def ordered_child_ids_by_parent(parent_ids) do
     from(t in Task,
-      where: t.parent_id in ^parent_ids,
+      where: t.parent_id in ^parent_ids and is_nil(t.deleted_at),
       order_by: [asc: t.sort_order, asc: t.inserted_at],
       select: {t.parent_id, t.id}
     )
@@ -1174,7 +1200,7 @@ defmodule DoIt.Tasks do
     task_id
     |> list_descendants()
     |> Enum.filter(fn t ->
-      Repo.exists?(from c in Task, where: c.parent_id == ^t.id)
+      Repo.exists?(from c in Task, where: c.parent_id == ^t.id and is_nil(c.deleted_at))
     end)
   end
 
@@ -1292,7 +1318,7 @@ defmodule DoIt.Tasks do
 
   defp immediate_children(parent_id) do
     from(t in Task,
-      where: t.parent_id == ^parent_id,
+      where: t.parent_id == ^parent_id and is_nil(t.deleted_at),
       order_by: [asc: t.sort_order, asc: t.inserted_at]
     )
     |> Repo.all()
@@ -1301,7 +1327,7 @@ defmodule DoIt.Tasks do
   defp next_sort_order(initiative_id, parent_id) do
     query =
       from t in Task,
-        where: t.initiative_id == ^initiative_id,
+        where: t.initiative_id == ^initiative_id and is_nil(t.deleted_at),
         select: max(t.sort_order)
 
     query =
@@ -1611,20 +1637,22 @@ defmodule DoIt.Tasks do
 
   defp parse_int(_), do: nil
 
-  defp record_event(%Task{} = task, %User{} = actor, kind, data) do
-    record_event_for(task.id, task.initiative_id, actor, kind, data)
+  defp record_event(%Task{} = task, %User{} = actor, kind, data, inverse \\ nil) do
+    record_event_for(task.id, task.initiative_id, actor, kind, data, inverse)
   end
 
   # Record against task/initiative ids directly — used when no live %Task{}
   # struct is on hand (e.g. logging a deletion on the surviving parent).
-  defp record_event_for(task_id, initiative_id, %User{} = actor, kind, data) do
+  # `inverse` is the undo payload (m02.06), or nil.
+  defp record_event_for(task_id, initiative_id, %User{} = actor, kind, data, inverse) do
     %ActivityEvent{}
     |> ActivityEvent.changeset(%{
       task_id: task_id,
       initiative_id: initiative_id,
       user_id: actor.id,
       kind: kind,
-      data: data
+      data: data,
+      inverse_payload: inverse
     })
     |> Repo.insert()
   end

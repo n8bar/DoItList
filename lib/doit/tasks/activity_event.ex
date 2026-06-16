@@ -9,6 +9,9 @@ defmodule DoIt.Tasks.ActivityEvent do
   schema "activity_events" do
     field :kind, :string
     field :data, :map, default: %{}
+    # Reversal data for the undo engine (m02.06): extras beyond the from/to in
+    # `data` that an inverse needs — e.g. a move's prior sort position.
+    field :inverse_payload, :map
 
     belongs_to :task, Task
     belongs_to :initiative, Initiative
@@ -19,7 +22,7 @@ defmodule DoIt.Tasks.ActivityEvent do
 
   def changeset(event, attrs) do
     event
-    |> cast(attrs, [:task_id, :initiative_id, :user_id, :kind, :data])
+    |> cast(attrs, [:task_id, :initiative_id, :user_id, :kind, :data, :inverse_payload])
     |> validate_required([:task_id, :initiative_id, :kind])
     |> validate_length(:kind, min: 1, max: 60)
   end

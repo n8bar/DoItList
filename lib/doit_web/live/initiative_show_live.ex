@@ -3834,7 +3834,11 @@ defmodule DoItWeb.InitiativeShowLive do
         children == []
 
       _ ->
-        Repo.one(from t in Task, where: t.parent_id == ^task.id, select: count(t.id)) == 0
+        Repo.one(
+          from t in Task,
+            where: t.parent_id == ^task.id and is_nil(t.deleted_at),
+            select: count(t.id)
+        ) == 0
     end
   end
 

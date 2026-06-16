@@ -787,7 +787,9 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       render_hook(view, "delete_task", %{"id" => Integer.to_string(t.id)})
 
-      assert Tasks.get_task(t.id) == nil
+      # Soft-delete (m02.06): the row survives (deleted_at set) but drops out of
+      # the rendered tree.
+      assert Tasks.get_task(t.id).deleted_at
       refute has_element?(view, "#task-#{t.id}")
     end
   end

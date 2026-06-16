@@ -844,15 +844,38 @@ defmodule DoIt.TasksTest do
 
       assert {:ok, _} = Tasks.delete_task(Tasks.get_task!(child.id), user)
 
-      # The delete actually commits — the FK'd "deleted" event no longer rolls
-      # it back — and the cascade takes the whole subtree.
-      assert Tasks.get_task(child.id) == nil
-      assert Tasks.get_task(grandchild.id) == nil
+      # Soft-delete (m02.06): the rows survive (id/comments/co-assignees kept for
+      # undo) but the whole subtree drops out of the live tree.
+      assert Tasks.get_task(child.id).deleted_at
+      assert Tasks.get_task(grandchild.id).deleted_at
+      live_ids = initiative.id |> Tasks.list_initiative_tasks() |> Enum.map(& &1.id)
+      refute child.id in live_ids
+      refute grandchild.id in live_ids
 
-      # Parent survives and carries the deletion on its own timeline.
+      # Parent survives and carries the deletion on its own timeline, with the
+      # deleted ids stashed for the undo engine.
       assert Tasks.get_task(parent.id)
-      kinds = parent.id |> Tasks.list_task_activity() |> Enum.map(& &1.kind)
-      assert "child_deleted" in kinds
+      event = parent.id |> Tasks.list_task_activity() |> Enum.find(&(&1.kind == "child_deleted"))
+      assert event
+      assert event.inverse_payload["deleted_ids"] |> Enum.sort() == Enum.sort([child.id, grandchild.id])
+    end
+
+    test "restore_tasks brings the soft-deleted subtree back into the live tree", %{
+      user: user,
+      initiative: initiative
+    } do
+      parent = new_task(user, initiative, %{"title" => "P"})
+      child = new_task(user, initiative, %{"parent_id" => parent.id, "title" => "C"})
+      grandchild = new_task(user, initiative, %{"parent_id" => child.id, "title" => "GC"})
+
+      {:ok, _} = Tasks.delete_task(Tasks.get_task!(child.id), user)
+      {:ok, _} = Tasks.restore_tasks([child.id, grandchild.id], parent.id, initiative.id)
+
+      assert Tasks.get_task(child.id).deleted_at == nil
+      assert Tasks.get_task(grandchild.id).deleted_at == nil
+      live_ids = initiative.id |> Tasks.list_initiative_tasks() |> Enum.map(& &1.id)
+      assert child.id in live_ids
+      assert grandchild.id in live_ids
     end
   end
 
@@ -1148,14 +1171,18 @@ defmodule DoIt.TasksTest do
       assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [co.id]
     end
 
-    test "co-assignee links cascade-delete with the task", ctx do
+    test "co-assignee links survive a soft-delete (preserved for undo)", ctx do
       %{user: owner, initiative: initiative} = ctx
       task = new_task(owner, initiative, %{"title" => "T"})
       a = member(initiative, "amy")
       {:ok, _} = Tasks.add_co_assignee(task, owner, a.id)
 
       {:ok, _} = Tasks.delete_task(task, owner)
-      assert Tasks.list_co_assignees(task.id) == []
+
+      # Soft-delete (m02.06) keeps the row and its co-assignee links so a restore
+      # brings back the full state.
+      assert Tasks.get_task(task.id).deleted_at
+      assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [a.id]
     end
   end
 end

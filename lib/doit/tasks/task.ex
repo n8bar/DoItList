@@ -20,6 +20,10 @@ defmodule DoIt.Tasks.Task do
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
+    # Soft-delete (m02.06): a deleted task keeps its row (id, comments,
+    # co-assignees, events all preserved) so undo / Trash can restore it. Set
+    # programmatically — never cast from user params. Reads filter it out.
+    field :deleted_at, :utc_datetime
     # Co-assignees attached for tree/lineage rendering (m02.05 items 13/16):
     # the total count plus a capped list of co-assignee users for the
     # overlapping-avatar chip — so the row needs no per-row query.
