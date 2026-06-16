@@ -173,7 +173,29 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:root_task, root)
     |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
     |> assign(:initiative_progress, (root && root.computed_progress) || 0)
+    |> assign(:led_task_ids, viewer_led_ids(socket))
   end
+
+  # Viewer+ (m02.05 item 12.6): the set of tasks the current user leads — only
+  # populated for a global *viewer* in a viewer_plus Initiative; editors/owners
+  # already edit everything via can_edit, so they get the empty set. Refreshed
+  # with the tree, so a changed assignment re-scopes the grant.
+  defp viewer_led_ids(socket) do
+    if socket.assigns.role == "viewer" and socket.assigns.initiative.viewer_plus do
+      Tasks.viewer_plus_led_ids(socket.assigns.initiative.id, socket.assigns.current_user.id)
+    else
+      MapSet.new()
+    end
+  end
+
+  # Whether the current user may edit a task's progress / comments: editors and
+  # owners anywhere; a viewer+ on a task they lead (item 12.6). NOT title /
+  # priority / structure — those stay can_edit only.
+  defp leads_task?(socket, task_id),
+    do: MapSet.member?(socket.assigns.led_task_ids, task_id)
+
+  defp can_progress?(socket, task_id),
+    do: socket.assigns.can_edit or leads_task?(socket, task_id)
 
   # Attribute-level changes patch the loaded tree instead of reloading the
   # initiative (.03.04.03, ProductSpec § Collaboration Model): merge the
@@ -540,19 +562,29 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   def handle_event("update_task", %{"task" => params}, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
-    else
-      task = socket.assigns.selected_task
-      user = socket.assigns.current_user
+    task = socket.assigns.selected_task
+    user = socket.assigns.current_user
 
-      case Tasks.update_task(task, user, params) do
-        {:ok, _updated} ->
-          {:noreply, socket |> put_flash(:info, "Saved.") |> patch_task(task.id)}
+    cond do
+      socket.assigns.can_edit ->
+        case Tasks.update_task(task, user, params) do
+          {:ok, _updated} ->
+            {:noreply, socket |> put_flash(:info, "Saved.") |> patch_task(task.id)}
 
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't save task: #{summarize_errors(cs)}.")}
-      end
+          {:error, cs} ->
+            {:noreply, put_flash(socket, :error, "Couldn't save task: #{summarize_errors(cs)}.")}
+        end
+
+      # Viewer+ (item 12.6): a lead may move progress and nothing else, so
+      # take ONLY manual_progress regardless of what the form posted.
+      task && leads_task?(socket, task.id) ->
+        case Tasks.update_task(task, user, Map.take(params, ["manual_progress"])) do
+          {:ok, _} -> {:noreply, patch_task(socket, task.id)}
+          {:error, cs} -> {:noreply, put_flash(socket, :error, "Invalid progress: #{summarize_errors(cs)}.")}
+        end
+
+      true ->
+        {:noreply, put_flash(socket, :error, "You don't have permission.")}
     end
   end
 
@@ -603,10 +635,11 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   def handle_event("set_progress", %{"value" => value}, socket) do
-    if not socket.assigns.can_edit do
+    task = socket.assigns.selected_task
+
+    if not (task && can_progress?(socket, task.id)) do
       {:noreply, socket}
     else
-      task = socket.assigns.selected_task
       user = socket.assigns.current_user
 
       case Tasks.update_task(task, user, %{"manual_progress" => value}) do
@@ -622,7 +655,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # Replies so the client's optimistic flip (.03.07.22) can settle: ok: false
   # reverts it, committed: true releases it to the patch.
   def handle_event("toggle_complete", %{"id" => id}, socket) do
-    if not socket.assigns.can_edit do
+    if not can_progress?(socket, String.to_integer(id)) do
       {:reply, %{ok: false}, put_flash(socket, :error, "You don't have permission.")}
     else
       task = Tasks.get_task!(String.to_integer(id))
@@ -648,10 +681,11 @@ defmodule DoItWeb.InitiativeShowLive do
     do: request_cascade(socket, String.to_integer(id), :cascade_incomplete)
 
   def handle_event("add_comment", %{"comment" => %{"body" => body}}, socket) do
-    if not socket.assigns.can_edit do
+    task = socket.assigns.selected_task
+
+    if not (task && can_progress?(socket, task.id)) do
       {:noreply, put_flash(socket, :error, "You don't have permission.")}
     else
-      task = socket.assigns.selected_task
       user = socket.assigns.current_user
 
       case Tasks.add_comment(task, user, body) do
@@ -1100,7 +1134,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # the modal decides (6.6); committed: true releases it; ok: false reverts.
   defp request_cascade(socket, id, kind) do
     cond do
-      not socket.assigns.can_edit ->
+      not can_progress?(socket, id) ->
         {:reply, %{ok: false}, put_flash(socket, :error, "You don't have permission.")}
 
       skip_confirm?(socket, "cascade-complete") ->
@@ -1644,6 +1678,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   progress_calc={@initiative.progress_calc}
                   display={@display}
                   member_ids={MapSet.new(@members, & &1.user_id)}
+                  led_ids={@led_task_ids}
                 />
                 <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
               <% end %>
@@ -1743,6 +1778,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 activity={@activity}
                 members={@members}
                 can_edit={@can_edit}
+                can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task.id)}
                 show_activity={@show_task_activity}
                 online_ids={@online_ids}
               />
@@ -2256,9 +2292,15 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :progress_calc, :string, required: true
   attr :display, :map, required: true
   attr :member_ids, :any, required: true
+  attr :led_ids, :any, default: %MapSet{}
 
   def task_node(assigns) do
     assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
+
+    # Viewer+ (item 12.6): a viewer who leads this task may flip its progress,
+    # even without can_edit. Other affordances stay can_edit only.
+    assigns =
+      assign(assigns, :can_progress, assigns.can_edit or MapSet.member?(assigns.led_ids, assigns.task.id))
 
     ~H"""
     <%!-- Selection is client-owned (UX_GUARDRAILS 6.5): the data-selected attr
@@ -2516,7 +2558,7 @@ defmodule DoItWeb.InitiativeShowLive do
                pushes data-toggle-event with a reply, so a confirm-gated
                cascade can HOLD the flip while the modal decides (6.6). --%>
           <button
-            :if={@can_edit && @display.progress}
+            :if={@can_progress && @display.progress}
             type="button"
             data-toggle-event={
               cond do
@@ -2611,6 +2653,7 @@ defmodule DoItWeb.InitiativeShowLive do
             progress_calc={@progress_calc}
             display={@display}
             member_ids={@member_ids}
+            led_ids={@led_ids}
           />
           <li id={"add-after-#{c.id}"} phx-update="ignore" class="empty:hidden"></li>
         <% end %>
@@ -3049,6 +3092,9 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :online_ids, :any, required: true
   attr :members, :list, required: true
   attr :can_edit, :boolean, required: true
+  # Viewer+ (item 12.6): edit progress + comments on a led task without the
+  # full can_edit (title / priority / staffing stay can_edit / pool-gated).
+  attr :can_progress, :boolean, default: false
 
   def task_editor(assigns) do
     ~H"""
@@ -3128,7 +3174,7 @@ defmodule DoItWeb.InitiativeShowLive do
             step="5"
             value={@task.manual_progress}
             class="w-full"
-            disabled={not @can_edit or not leaf?(@task)}
+            disabled={not @can_progress or not leaf?(@task)}
             phx-debounce="200"
             aria-label={
               if leaf?(@task),
@@ -3349,7 +3395,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
           </li>
         </ul>
-        <form :if={@can_edit} phx-submit="add_comment" class="flex gap-2">
+        <form :if={@can_progress} phx-submit="add_comment" class="flex gap-2">
           <input
             type="text"
             name="comment[body]"
