@@ -876,20 +876,39 @@ defmodule DoIt.Tasks do
   # and the co-assignee set events are out of scope for now.
   @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed)
 
+  # Bounded depth (m02.06 item 6): only the most recent N undoable events per
+  # (user, Initiative) are reversible; older history drops off the stack.
+  @undo_depth 50
+
   @doc """
   The next event `user_id` could undo on `initiative_id` (their newest applied
-  undoable event), or nil. Only the user's own events — another member's edits
-  in between are stepped over (m02.06 item 3).
+  undoable event within the last #{@undo_depth}), or nil. Only the user's own
+  events — another member's edits in between are stepped over (m02.06 item 3).
   """
   def undo_candidate(user_id, initiative_id) do
-    from(e in ActivityEvent,
-      where:
-        e.user_id == ^user_id and e.initiative_id == ^initiative_id and
-          e.kind in @undoable_kinds and is_nil(e.undone_at),
-      order_by: [desc: e.id],
-      limit: 1
-    )
-    |> Repo.one()
+    window =
+      from(e in ActivityEvent,
+        where:
+          e.user_id == ^user_id and e.initiative_id == ^initiative_id and
+            e.kind in @undoable_kinds,
+        order_by: [desc: e.id],
+        limit: @undo_depth,
+        select: e.id
+      )
+      |> Repo.all()
+
+    case window do
+      [] ->
+        nil
+
+      ids ->
+        from(e in ActivityEvent,
+          where: e.id in ^ids and is_nil(e.undone_at),
+          order_by: [desc: e.id],
+          limit: 1
+        )
+        |> Repo.one()
+    end
   end
 
   @doc """
@@ -1098,7 +1117,7 @@ defmodule DoIt.Tasks do
   # The undid / redid feed entry (item 8) — labeled, never hiding the round-trip.
   defp record_undo_meta(event, user, direction) do
     kind = if direction == :undo, do: "undid", else: "redid"
-    record_event_for(event.task_id, event.initiative_id, user, kind, %{"of" => event.kind}, nil)
+    record_event_for(event.task_id, event.initiative_id, user, kind, %{"of" => describe_event(event)}, nil)
   end
 
   @doc """

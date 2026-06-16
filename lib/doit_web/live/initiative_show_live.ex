@@ -176,6 +176,43 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:initiative_progress, (root && root.computed_progress) || 0)
     |> assign(:led_task_ids, viewer_led_ids(socket))
     |> assign(:direct_assignee_ids, tree_assignee_ids(tree))
+    |> assign_undo_state()
+  end
+
+  # Undo / redo availability for the toolbar (m02.06 items 4/5): the labels of
+  # the next undoable / redoable action, or nil when the stack is empty that
+  # way. Refreshed wherever the tree is (load_tree / patch_task / after undo).
+  defp assign_undo_state(socket) do
+    uid = socket.assigns.current_user.id
+    iid = socket.assigns.initiative.id
+    undo = Tasks.undo_candidate(uid, iid)
+    redo = Tasks.redo_candidate(uid, iid)
+
+    socket
+    |> assign(:undo_label, undo && Tasks.describe_event(undo))
+    |> assign(:redo_label, redo && Tasks.describe_event(redo))
+  end
+
+  defp do_undo_redo(socket, dir) do
+    user = socket.assigns.current_user
+    iid = socket.assigns.initiative.id
+    result = if dir == :undo, do: Tasks.undo(user, iid), else: Tasks.redo(user, iid)
+    socket = load_tree(socket)
+    verb = if dir == :undo, do: "Undid", else: "Redid"
+
+    case result do
+      {:ok, desc} ->
+        put_flash(socket, :info, "#{verb} #{desc}.")
+
+      {:error, :nothing_to_undo} ->
+        put_flash(socket, :error, "Nothing to undo.")
+
+      {:error, :nothing_to_redo} ->
+        put_flash(socket, :error, "Nothing to redo.")
+
+      {:error, {:conflict, desc}} ->
+        put_flash(socket, :error, "Couldn't #{dir} #{desc} — it may have changed since.")
+    end
   end
 
   # User ids that are the direct (primary) assignee of any task in the loaded
@@ -318,7 +355,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
         # An assignment may have changed in the patched rows — re-derive the
         # viewer+ label set (item 12.6.5) from the in-memory tree.
-        socket = assign(socket, :direct_assignee_ids, tree_assignee_ids(socket.assigns.tree))
+        socket =
+          socket
+          |> assign(:direct_assignee_ids, tree_assignee_ids(socket.assigns.tree))
+          |> assign_undo_state()
 
         # Any in-tree lineage tops out at the system root — its fresh roll-up
         # drives the header bar and the initiative editor's computed line.
@@ -638,6 +678,12 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("close_task", _params, socket) do
     {:noreply, socket |> assign(:selected_task_id, nil) |> update_presence(nil)}
   end
+
+  # Undo / redo (m02.06 items 4/5). The engine reverses the user's own newest
+  # undoable event; we reload the tree for immediate feedback (the broadcast
+  # reloads other members) and flash the outcome.
+  def handle_event("undo", _params, socket), do: {:noreply, do_undo_redo(socket, :undo)}
+  def handle_event("redo", _params, socket), do: {:noreply, do_undo_redo(socket, :redo)}
 
   # --- Co-assignees (m02.05 item 13) ---------------------------------------
 
@@ -1504,8 +1550,18 @@ defmodule DoItWeb.InitiativeShowLive do
               this._paneT = setTimeout(() => this.pushEvent("select_task", {id: id}), 150);
             },
             handle(e) {
-              // Suppression: a text-accepting element has focus — fall through.
+              // Suppression: a text-accepting element has focus — fall through
+              // (so native field-level undo still works).
               if (this.inField()) return;
+              // Undo / redo (m02.06 item 4): Ctrl/Cmd+Z = undo; +Shift or Ctrl+Y
+              // = redo. Handled before the idclip letter-buffer so "z" isn't
+              // swallowed. No selection required.
+              if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
+                e.preventDefault();
+                const redo = /^y$/i.test(e.key) || e.shiftKey;
+                this.pushEvent(redo ? "redo" : "undo", {});
+                return;
+              }
               const k = e.key;
               // Easter egg (idclip — Doom's noclip): "see through" to each row's
               // task/parent IDs as a debug pill. Type the code outside any field.
@@ -1694,8 +1750,37 @@ defmodule DoItWeb.InitiativeShowLive do
               </span>
               Close Initiative
             </.link>
-            <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
-              Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+            <div class="flex items-center gap-3">
+              <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
+                   that way; the tooltip names the action. Ctrl+Z / Ctrl+Shift+Z
+                   drive the same handlers (KbdNav hook). --%>
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  id="undo-button"
+                  phx-click="undo"
+                  disabled={is_nil(@undo_label)}
+                  title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
+                  aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
+                  class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                >
+                  <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  id="redo-button"
+                  phx-click="redo"
+                  disabled={is_nil(@redo_label)}
+                  title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
+                  aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
+                  class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                >
+                  <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
+                </button>
+              </div>
+              <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+                Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+              </div>
             </div>
           </div>
 
@@ -3744,6 +3829,9 @@ defmodule DoItWeb.InitiativeShowLive do
     do: "promoted #{event_username(d, members)} to assignee"
 
   defp event_label(%{kind: "co_assignees_reordered"}, _members), do: "reordered co-assignees"
+  # Undo / redo feed entries (m02.06 item 8) — labeled, never hiding the round-trip.
+  defp event_label(%{kind: "undid", data: d}, _members), do: "undid #{d["of"] || "a change"}"
+  defp event_label(%{kind: "redid", data: d}, _members), do: "redid #{d["of"] || "a change"}"
   defp event_label(%{kind: kind}, _members), do: kind
 
   defp event_username(%{"user_id" => uid}, members) do
