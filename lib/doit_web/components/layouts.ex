@@ -88,7 +88,7 @@ defmodule DoItWeb.Layouts do
                       navigate={~p"/account"}
                       class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                     >
-                      Account details
+                      Account &amp; preferences
                     </.link>
                   </li>
                   <li>
