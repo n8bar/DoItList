@@ -3217,6 +3217,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <ul data-co-list class="mt-1 space-y-1">
           <li
             :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
+            id={"co-row-#{link.user_id}"}
             data-co-row
             data-co-user-id={link.user_id}
             data-name={link.user.username}

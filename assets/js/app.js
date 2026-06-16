@@ -2380,6 +2380,7 @@ Hooks.CoAssignees = {
       li.innerHTML = CO_ROW_HTML
     }
     li.setAttribute("data-co-row", "")
+    li.id = "co-row-" + d.userId
     li.dataset.coUserId = d.userId
     li.dataset.name = d.name || ""
     li.dataset.initials = d.initials || ""
