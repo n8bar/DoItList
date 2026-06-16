@@ -2508,8 +2508,7 @@ defmodule DoItWeb.InitiativeShowLive do
     do: "Reopen \"#{t}\" and all its subtasks?"
 
   defp confirm_body(%{kind: :remove_member, name: name}, _verb),
-    do:
-      "Remove #{name} from this Initiative? Their task assignments stay; they can be re-added anytime."
+    do: "Remove #{name} from this Initiative? They can be re-added anytime."
 
   defp confirm_body(%{kind: :leave_initiative}, _verb),
     do: "Leave this Initiative? Only the owner can add you back."
@@ -2674,8 +2673,9 @@ defmodule DoItWeb.InitiativeShowLive do
               {@task.assignee && initials(@task.assignee)}
             </span>
             <%!-- Struck through when the assignee is no longer a member —
-                 assignments survive removal ("their task assignments stay"),
-                 and the strike says so at a glance. --%>
+                 a member who leaves voluntarily keeps their assignments
+                 (owner-initiated removal hands them off instead), and the
+                 strike says so at a glance. --%>
             <span
               class={["truncate", ex_member?(@task, @member_ids) && "line-through"]}
               data-pill-text
