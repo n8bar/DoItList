@@ -1620,13 +1620,19 @@ defmodule DoItWeb.InitiativeShowLive do
           }
         </script>
         <div class="relative mb-6 pb-6">
-          <%!-- Back link + role on the same row. --%>
+          <%!-- Close (back to the index) + role on the same row. The little red
+               X (item 12.7) reads as "close this Initiative" rather than a plain
+               back arrow — matching the task pane's close affordance. --%>
           <div class="flex items-center justify-between gap-2">
             <.link
               navigate={~p"/initiatives"}
-              class="text-sm text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+              title="Close this Initiative — back to all Initiatives"
+              class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
             >
-              ← All initiatives
+              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
+                <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+              </span>
+              Close Initiative
             </.link>
             <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
               Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
