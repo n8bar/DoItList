@@ -894,16 +894,13 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       added = render_click(view, "add_co_assignee", %{"user_id" => to_string(co.id)})
       assert added =~ "@#{co.username}"
       # Co shows as an overlapping avatar in the chip (item 12.4), not "+1" text.
-      # The chip is always in the DOM (item 12.5 syncs it optimistically); a
-      # populated one is the *visible* (not-hidden) co-count.
-      assert has_element?(view, "[data-co-count]:not([hidden])")
+      assert has_element?(view, "[data-co-count]")
       assert [%{user_id: id}] = DoIt.Tasks.list_co_assignees(task.id)
       assert id == co.id
 
-      _removed = render_click(view, "remove_co_assignee", %{"user-id" => to_string(co.id)})
+      removed = render_click(view, "remove_co_assignee", %{"user-id" => to_string(co.id)})
       assert DoIt.Tasks.list_co_assignees(task.id) == []
-      # Cleared → the chip is hidden, not removed.
-      assert has_element?(view, "[data-co-count][hidden]")
+      refute removed =~ "data-co-count"
     end
   end
 
