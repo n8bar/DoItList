@@ -3219,24 +3219,23 @@ defmodule DoItWeb.InitiativeShowLive do
               class="flex-none"
             >
               <input type="hidden" name="user_id" value={m.user_id} />
+              <%!-- Item 12.6.5: the effective role shows IN the dropdown — a
+                   viewer who holds an assignment reads "viewer+" (its value is
+                   still "viewer", so leaving it set is a no-op; the DB role
+                   stays viewer). --%>
               <select
                 name="role"
                 aria-label={"Role for #{m.user.name}"}
                 class="select select-bordered select-xs"
               >
                 <option value="editor" selected={m.role == "editor"}>editor</option>
-                <option value="viewer" selected={m.role == "viewer"}>viewer</option>
+                <%= if viewer_plus?(m, @assignee_ids, @viewer_plus_on) do %>
+                  <option value="viewer" selected>viewer+</option>
+                <% else %>
+                  <option value="viewer" selected={m.role == "viewer"}>viewer</option>
+                <% end %>
               </select>
             </form>
-            <%!-- Item 12.6.5: admins keep the editable select (DB role stays
-                 viewer); a small badge marks the *effective* viewer+. --%>
-            <span
-              :if={@can_admin and m.user_id != @owner_id and viewer_plus?(m, @assignee_ids, @viewer_plus_on)}
-              class="text-[10px] font-semibold px-1 rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-              title="A viewer who is a task's assignee — leads that task and its subtree"
-            >
-              viewer+
-            </span>
             <span
               :if={not (@can_admin and m.user_id != @owner_id)}
               class="text-xs text-zinc-500 dark:text-zinc-400"

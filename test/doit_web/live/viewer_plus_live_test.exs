@@ -132,6 +132,16 @@ defmodule DoItWeb.ViewerPlusLiveTest do
 
       assert view |> element("#members-desktop") |> render() =~ "viewer+"
     end
+
+    test "the owner sees \"viewer+\" as the selected role option in the dropdown", %{conn: conn} do
+      %{owner: owner, init: init} = setup_tree(true)
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{init.id}")
+
+      # The editable role select carries a selected "viewer+" option (value still
+      # "viewer") rather than a separate pill.
+      html = view |> element("#members-desktop") |> render()
+      assert html =~ ~r/<option value="viewer" selected="">\s*viewer\+/
+    end
   end
 
   describe "member drag → assign (item 12.8)" do
