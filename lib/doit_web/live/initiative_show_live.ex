@@ -1387,10 +1387,12 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp commit_delete_initiative(socket) do
-    {:ok, _} = Initiatives.delete_initiative(socket.assigns.initiative)
+    # Trash, not hard-delete (m02.06 item 10): the owner can restore it from the
+    # Trash on the index, or purge it permanently there.
+    {:ok, _} = Initiatives.trash_initiative(socket.assigns.initiative)
 
     socket
-    |> put_flash(:info, "Initiative deleted.")
+    |> put_flash(:info, "Initiative moved to Trash.")
     |> push_navigate(to: ~p"/initiatives")
   end
 

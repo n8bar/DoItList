@@ -817,7 +817,9 @@ defmodule DoItWeb.InitiativeShowLiveTest do
                render_click(view, "delete_initiative", %{})
 
       assert to == ~p"/initiatives"
-      refute Initiatives.get_initiative(initiative.id)
+      # Trash, not hard-delete (m02.06 item 10): the row survives with trashed_at
+      # set (visibility filtering is covered in the Trash tests).
+      assert Initiatives.get_initiative(initiative.id).trashed_at
     end
   end
 

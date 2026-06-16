@@ -12,6 +12,9 @@ defmodule DoItWeb.InitiativeIndexLive do
 
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
+    # Lazy retention sweep (m02.06 item 11): purge anything past the window on
+    # the way in, so the Trash never shows stale, already-expired entries.
+    Initiatives.purge_expired_trash()
     initiatives = Initiatives.list_visible_initiatives(user)
 
     # Global presence (m02.05 item 8): light up Collaborators avatars for
@@ -43,6 +46,7 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> assign(:sort_state, sort_state)
      |> assign(:reverse_by_mode, reverse_by_mode)
      |> assign(:form, build_empty_form())
+     |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
      |> stream(:initiatives, sort_initiatives(initiatives, sort_state))}
   end
 
@@ -143,9 +147,41 @@ defmodule DoItWeb.InitiativeIndexLive do
     {:noreply, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
   end
 
+  # Trash (m02.06 item 10): owner-only restore / permanent delete. Both refresh
+  # the live index too — a restored Initiative reappears there.
+  def handle_event("restore_initiative", %{"id" => id}, socket) do
+    {:noreply, with_owned_trashed(socket, id, &Initiatives.restore_initiative/1, "Initiative restored.")}
+  end
+
+  def handle_event("purge_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_owned_trashed(socket, id, &Initiatives.purge_initiative/1, "Initiative permanently deleted.")}
+  end
+
   @impl true
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
     {:noreply, assign(socket, :collaborator_online_ids, DoItWeb.Presence.global_online_ids())}
+  end
+
+  # Owner-gated Trash action (m02.06 item 10): apply `fun` to the named trashed
+  # Initiative the current user owns, then refresh both the Trash list and the
+  # live index stream (a restore reappears there).
+  defp with_owned_trashed(socket, id, fun, msg) do
+    user = socket.assigns.current_user
+    initiative = Initiatives.get_initiative(String.to_integer(id))
+
+    if initiative && initiative.owner_id == user.id && initiative.trashed_at do
+      {:ok, _} = fun.(initiative)
+      visible = Initiatives.list_visible_initiatives(user)
+
+      socket
+      |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
+      |> assign(:initiative_count, length(visible))
+      |> stream(:initiatives, sort_initiatives(visible, socket.assigns.sort_state), reset: true)
+      |> put_flash(:info, msg)
+    else
+      put_flash(socket, :error, "Couldn't find that Initiative in your Trash.")
+    end
   end
 
   # Global online set for the Collaborators avatars — empty until connected.
@@ -405,6 +441,52 @@ defmodule DoItWeb.InitiativeIndexLive do
       <p :if={@initiative_count == 0} class="text-zinc-500 dark:text-zinc-400 mt-4">
         No initiatives yet. Create one to get started.
       </p>
+
+      <%!-- Trash (m02.06 item 10): the owner's soft-deleted Initiatives, with
+           Restore and permanent delete. Hidden when empty. Auto-purges after
+           the retention window. --%>
+      <section :if={@trashed != []} id="trash" class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+        <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+          <.icon name="hero-trash" class="w-4 h-4" /> Trash
+          <span class="font-normal text-xs text-zinc-400 dark:text-zinc-500">
+            · auto-deletes after {Initiatives.trash_retention_days()} days
+          </span>
+        </h2>
+        <ul class="mt-2 space-y-1">
+          <li
+            :for={t <- @trashed}
+            id={"trashed-#{t.id}"}
+            class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+          >
+            <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+              <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+              <span class="truncate">{t.name}</span>
+              <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
+                trashed {Calendar.strftime(t.trashed_at, "%b %-d")}
+              </span>
+            </span>
+            <span class="flex items-center gap-1 flex-none">
+              <button
+                type="button"
+                phx-click="restore_initiative"
+                phx-value-id={t.id}
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              >
+                <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+              </button>
+              <button
+                type="button"
+                phx-click="purge_initiative"
+                phx-value-id={t.id}
+                data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
+                class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+              >
+                <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
+              </button>
+            </span>
+          </li>
+        </ul>
+      </section>
 
       <%!-- Desktop-only entry to the keyboard-shortcuts help (.07.2.1); hidden on
            mobile, which won't use shortcuts. --%>

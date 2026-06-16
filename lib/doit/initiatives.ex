@@ -21,6 +21,7 @@ defmodule DoIt.Initiatives do
   """
   def list_visible_initiatives(%User{id: user_id}) do
     from(i in Initiative,
+      where: is_nil(i.trashed_at),
       join: m in InitiativeMember,
       on: m.initiative_id == i.id and m.user_id == ^user_id,
       left_join: rt in Task,
@@ -160,13 +161,60 @@ defmodule DoIt.Initiatives do
     end
   end
 
+  # Trash retention (m02.06 item 11): trashed Initiatives purge automatically
+  # after this many days; the owner can purge sooner.
+  @trash_retention_days 30
+
+  def trash_retention_days, do: @trash_retention_days
+
   @doc """
-  Deletes an initiative. Its tasks, members, and activity cascade away via the
-  database FK constraints (ON DELETE CASCADE). Caller must enforce that the
+  Move an Initiative to Trash (m02.06 item 10) — a soft delete that drops it
+  from every member's dashboard until restored or purged. Caller enforces the
   actor is the owner.
   """
-  def delete_initiative(%Initiative{} = initiative) do
+  def trash_initiative(%Initiative{} = initiative) do
+    initiative
+    |> Ecto.Changeset.change(trashed_at: DateTime.utc_now() |> DateTime.truncate(:second))
+    |> Repo.update()
+  end
+
+  @doc "Restore a trashed Initiative back to every member's dashboard."
+  def restore_initiative(%Initiative{} = initiative) do
+    initiative
+    |> Ecto.Changeset.change(trashed_at: nil)
+    |> Repo.update()
+  end
+
+  @doc """
+  Permanently delete an Initiative. Its tasks, members, and activity cascade
+  away via the FK constraints. The final step out of Trash (owner-only) and
+  what the retention sweep calls.
+  """
+  def purge_initiative(%Initiative{} = initiative) do
     Repo.delete(initiative)
+  end
+
+  @doc "The owner's trashed Initiatives, newest-trashed first (the Trash surface)."
+  def list_trashed_initiatives(%User{id: user_id}) do
+    from(i in Initiative,
+      where: i.owner_id == ^user_id and not is_nil(i.trashed_at),
+      order_by: [desc: i.trashed_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Purge every Initiative trashed longer than the retention window (item 11).
+  Returns the number purged. Safe to call opportunistically or from a job.
+  """
+  def purge_expired_trash do
+    cutoff = DateTime.utc_now() |> DateTime.add(-@trash_retention_days * 24 * 3600, :second)
+
+    {n, _} =
+      from(i in Initiative, where: not is_nil(i.trashed_at) and i.trashed_at < ^cutoff)
+      |> Repo.delete_all()
+
+    n
   end
 
   @doc """

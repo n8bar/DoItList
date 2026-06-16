@@ -17,6 +17,8 @@ defmodule DoIt.Initiatives.Initiative do
     # assignee leads its subtree — edits progress/comments and staffs
     # descendants from the led task's co-assignee pool.
     field :viewer_plus, :boolean, default: true
+    # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
+    field :trashed_at, :utc_datetime
     field :my_role, :string, virtual: true
     # The viewing member's manual index order (initiative_members.sort_order).
     field :my_sort_order, :integer, virtual: true
