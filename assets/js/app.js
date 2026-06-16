@@ -2278,6 +2278,138 @@ Hooks.CollaboratorDrag = {
   },
 }
 
+// Optimistic co-assignees (m02.05 item 12.5). The pane list (#co-assignees's
+// keyed <ul>) is hook-owned (phx-update="ignore"), so add/remove/reorder apply
+// at the gesture without morphdom fighting them. Each change snapshots the
+// list, applies it, then pushes the server event WITH A REPLY: on {ok:false} —
+// or no reply within the timeout — the snapshot is restored, so a write that
+// didn't land never sticks (it can't lie). The chip + dropdown stay
+// server-driven (they update on the success patch). Add synthesizes a co-row
+// from the selected option's avatar data.
+const CO_REPLY_TIMEOUT_MS = 8000
+const CO_ROW_INNER = `
+  <span class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"></span>
+  <span class="flex-1 min-w-0 truncate text-zinc-700 dark:text-zinc-200"></span>
+  <button type="button" data-co-move data-dir="up" aria-label="Move up" class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"><span class="hero-chevron-up w-3.5 h-3.5"></span></button>
+  <button type="button" data-co-move data-dir="down" aria-label="Move down" class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"><span class="hero-chevron-down w-3.5 h-3.5"></span></button>
+  <button type="button" data-co-remove aria-label="Remove co-assignee" class="px-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"><span class="hero-x-mark w-3.5 h-3.5"></span></button>
+`
+
+Hooks.CoAssignees = {
+  mounted() {
+    this.onChange = (e) => {
+      const sel = e.target.closest("[data-co-add]")
+      if (sel && this.el.contains(sel) && sel.value) this.add(sel)
+    }
+    this.onClick = (e) => {
+      const rm = e.target.closest("[data-co-remove]")
+      if (rm && this.el.contains(rm)) return this.remove(rm.dataset.userId)
+      const mv = e.target.closest("[data-co-move]")
+      if (mv && this.el.contains(mv) && !mv.disabled) this.move(mv.dataset.userId, mv.dataset.dir)
+    }
+    this.el.addEventListener("change", this.onChange)
+    this.el.addEventListener("click", this.onClick)
+  },
+  destroyed() {
+    this.el.removeEventListener("change", this.onChange)
+    this.el.removeEventListener("click", this.onClick)
+  },
+  list() {
+    return this.el.querySelector('[id^="co-list-"]')
+  },
+  rowFor(id) {
+    const ul = this.list()
+    return ul && ul.querySelector(`[data-co-row][data-user-id="${id}"]`)
+  },
+  // Snapshot the list, apply `change`, push `event` with a reply, and restore
+  // the snapshot on failure or timeout — so a write that didn't land reverts.
+  commit(event, payload, change) {
+    const ul = this.list()
+    if (!ul) return
+    const snapshot = ul.innerHTML
+    change(ul)
+    this.refreshDisabled(ul)
+    let settled = false
+    const finish = (ok) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (!ok) ul.innerHTML = snapshot
+    }
+    const timer = setTimeout(() => finish(false), CO_REPLY_TIMEOUT_MS)
+    this.pushEvent(event, payload, (reply) => finish(!!(reply && reply.ok)))
+  },
+  add(sel) {
+    const id = sel.value
+    const data = sel.options[sel.selectedIndex].dataset
+    sel.value = ""
+    if (this.rowFor(id)) return
+    this.commit("add_co_assignee", {user_id: id}, (ul) => {
+      const empty = ul.querySelector("[data-co-empty]")
+      if (empty) empty.remove()
+      ul.appendChild(this.buildRow(id, data))
+    })
+  },
+  remove(id) {
+    const row = this.rowFor(id)
+    if (!row) return
+    this.commit("remove_co_assignee", {"user-id": id}, (ul) => {
+      row.remove()
+      if (!ul.querySelector("[data-co-row]")) ul.appendChild(this.emptyRow())
+    })
+  },
+  move(id, dir) {
+    const row = this.rowFor(id)
+    if (!row) return
+    const sib = dir === "up" ? row.previousElementSibling : row.nextElementSibling
+    if (!sib || !sib.hasAttribute("data-co-row")) return
+    this.commit("move_co_assignee", {"user-id": id, dir}, () => {
+      if (dir === "up") row.parentNode.insertBefore(row, sib)
+      else row.parentNode.insertBefore(sib, row)
+    })
+  },
+  refreshDisabled(ul) {
+    const rows = [...ul.querySelectorAll("[data-co-row]")]
+    rows.forEach((li, i) => {
+      const up = li.querySelector("[data-dir='up']")
+      const down = li.querySelector("[data-dir='down']")
+      if (up) up.disabled = i === 0
+      if (down) down.disabled = i === rows.length - 1
+    })
+  },
+  emptyRow() {
+    const li = document.createElement("li")
+    li.setAttribute("data-co-empty", "")
+    li.className = "text-xs text-zinc-400 dark:text-zinc-500 italic"
+    li.textContent = "None yet."
+    return li
+  },
+  buildRow(id, data) {
+    const li = document.createElement("li")
+    li.id = "co-row-" + id
+    li.setAttribute("data-co-row", "")
+    li.dataset.userId = id
+    li.dataset.name = data.name || ""
+    li.dataset.initials = data.initials || ""
+    li.dataset.avatarBg = data.avatarBg || ""
+    li.dataset.avatarFg = data.avatarFg || ""
+    li.className = "flex items-center gap-2 text-sm"
+    li.innerHTML = CO_ROW_INNER
+    const avatar = li.querySelector(".avatar-emboss")
+    if (avatar) {
+      avatar.textContent = data.initials || ""
+      avatar.style.backgroundImage = data.avatarBg || ""
+      avatar.style.color = data.avatarFg || ""
+    }
+    const name = li.querySelector(".flex-1")
+    if (name) name.textContent = "@" + (data.name || "")
+    li.querySelectorAll("[data-co-move], [data-co-remove]").forEach((b) => (b.dataset.userId = id))
+    const rm = li.querySelector("[data-co-remove]")
+    if (rm) rm.setAttribute("aria-label", "Remove co-assignee @" + (data.name || ""))
+    return li
+  },
+}
+
 // The keyboard-shortcuts help overlay. Toggled by a "doit:shortcuts-toggle"
 // event (dispatched by the `?` key or the ⌨ affordance); closed by Escape, the
 // backdrop, or the X (anything with [data-close]).

@@ -3207,11 +3207,24 @@ defmodule DoItWeb.InitiativeShowLive do
            promotion order. The primary stays the assignee select above.
            MUST live OUTSIDE the update_task form — its own add-form can't be
            nested in another form (the browser drops nested forms). --%>
-      <div :if={@can_edit or @task.co_assignee_links != []}>
+      <div :if={@can_edit or @task.co_assignee_links != []} id="co-assignees" phx-hook="CoAssignees">
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
-        <ul class="mt-1 space-y-1">
+        <%!-- Item 12.5: the list is hook-owned (phx-update="ignore") so optimistic
+             add/remove/reorder apply at the gesture without morphdom fighting
+             them; the hook reverts from the server's reply (or a timeout) when a
+             write doesn't land — never sticking a change the server refused.
+             Keyed by task id so selecting another task re-renders from the
+             server. The chip + dropdown stay server-driven (truthful). --%>
+        <ul id={"co-list-#{@task.id}"} phx-update="ignore" class="mt-1 space-y-1">
           <li
             :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
+            id={"co-row-#{link.user_id}"}
+            data-co-row
+            data-user-id={link.user_id}
+            data-name={link.user.username}
+            data-initials={initials(link.user)}
+            data-avatar-bg={avatar_bg(link.user)}
+            data-avatar-fg={avatar_fg(link.user)}
             class="flex items-center gap-2 text-sm"
           >
             <.avatar
@@ -3228,9 +3241,9 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               :if={@can_edit}
               type="button"
-              phx-click="move_co_assignee"
-              phx-value-user-id={link.user_id}
-              phx-value-dir="up"
+              data-co-move
+              data-dir="up"
+              data-user-id={link.user_id}
               disabled={idx == 0}
               aria-label="Move up"
               class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"
@@ -3240,9 +3253,9 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               :if={@can_edit}
               type="button"
-              phx-click="move_co_assignee"
-              phx-value-user-id={link.user_id}
-              phx-value-dir="down"
+              data-co-move
+              data-dir="down"
+              data-user-id={link.user_id}
               disabled={idx == length(@task.co_assignee_links) - 1}
               aria-label="Move down"
               class="px-1 text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200 disabled:opacity-30"
@@ -3252,25 +3265,33 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               :if={@can_edit}
               type="button"
-              phx-click="remove_co_assignee"
-              phx-value-user-id={link.user_id}
+              data-co-remove
+              data-user-id={link.user_id}
               aria-label={"Remove co-assignee @#{link.user.username}"}
               class="px-1 text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
             >
               <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
             </button>
           </li>
+          <li
+            :if={@task.co_assignee_links == []}
+            data-co-empty
+            class="text-xs text-zinc-400 dark:text-zinc-500 italic"
+          >
+            None yet.
+          </li>
         </ul>
-        <p
-          :if={@task.co_assignee_links == []}
-          class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic"
-        >
-          None yet.
-        </p>
-        <form :if={@can_edit} id="add-co-assignee-form" phx-change="add_co_assignee" class="mt-1">
-          <select name="user_id" class="w-full select select-bordered select-sm">
+        <form :if={@can_edit} id="add-co-assignee-form" class="mt-1">
+          <select name="user_id" data-co-add class="w-full select select-bordered select-sm">
             <option value="">+ Add co-assignee…</option>
-            <option :for={m <- eligible_co_members(@members, @task)} value={m.user.id}>
+            <option
+              :for={m <- eligible_co_members(@members, @task)}
+              value={m.user.id}
+              data-name={m.user.username}
+              data-initials={initials(m.user)}
+              data-avatar-bg={avatar_bg(m.user)}
+              data-avatar-fg={avatar_fg(m.user)}
+            >
               {m.user.username}
             </option>
           </select>
@@ -3413,14 +3434,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # Run a co-assignee mutation against the selected task (edit-gated), then
   # patch the tree for the actor (updates the row's "+N"); patch_task also
   # refreshes the pane. Other clients update via the Tasks fn's broadcast.
+  # Co-assignee mutation, edit-gated. Replies `%{ok: bool}` so the optimistic
+  # CoAssignees hook (item 12.5) can keep the change or revert it — a write
+  # that didn't land (or wasn't allowed) snaps the list back, never sticks.
   defp with_co(socket, fun) do
     task = socket.assigns.selected_task
 
     if socket.assigns.can_edit and task do
       _ = fun.(task, socket.assigns.current_user)
-      {:noreply, patch_task(socket, task.id)}
+      {:reply, %{ok: true}, patch_task(socket, task.id)}
     else
-      {:noreply, socket}
+      {:reply, %{ok: false}, socket}
     end
   end
 
