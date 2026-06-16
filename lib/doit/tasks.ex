@@ -106,6 +106,18 @@ defmodule DoIt.Tasks do
     end
   end
 
+  @doc """
+  The nearest strict ancestor of `task` that `viewer_id` directly leads (m02.05
+  item 12.6) — the task whose co-assignees form the staffing pool — or nil.
+  Names the source in the viewer+ assign-denied toast.
+  """
+  def viewer_led_ancestor(viewer_id, %Task{} = task) do
+    case nearest_led_ancestor_id(viewer_id, task) do
+      nil -> nil
+      id -> Repo.get(Task, id)
+    end
+  end
+
   # Walks `task`'s strict-ancestor chain from the parent up, returning the id of
   # the first ancestor the viewer is the direct assignee of — or nil. One query
   # loads the chain; the walk happens in memory (chains are shallow).

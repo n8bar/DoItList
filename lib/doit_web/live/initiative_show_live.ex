@@ -318,6 +318,36 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Why a drop was rejected (item 12.6), so the toast names the real reason: a
+  # viewer+ on a staffable descendant who picked someone outside the pool gets
+  # the offender named and pointed at the source (the led ancestor whose
+  # co-assignees ARE the pool); a task they can't staff at all (their own led
+  # task's co-list is owner-seeded, or no led ancestor) gets the plainer line.
+  defp assign_denied_message(socket, task, uid) do
+    user = socket.assigns.current_user
+
+    cond do
+      not (socket.assigns.role == "viewer" and socket.assigns.initiative.viewer_plus) ->
+        "You don't have permission to assign people here."
+
+      is_nil(Tasks.viewer_staff_pool(user.id, task)) ->
+        "You can't assign people to that task."
+
+      true ->
+        source = Tasks.viewer_led_ancestor(user.id, task)
+
+        "#{member_username(socket, uid)} isn't a co-assignee on '#{source.title}' - " <>
+          "you can only assign its co-assignees here."
+    end
+  end
+
+  defp member_username(socket, uid) do
+    case Enum.find(socket.assigns.members, &(&1.user_id == uid)) do
+      nil -> "that person"
+      member -> "@#{member.user.username}"
+    end
+  end
+
   # The params a viewer+ may actually apply to the selected task: manual_progress
   # (progress grant, item 12.6.2) plus a pool-valid assignee_id when the task is
   # staffable (item 12.6.3). Everything else the form posted is dropped.
@@ -731,7 +761,7 @@ defmodule DoItWeb.InitiativeShowLive do
         {:reply, %{ok: false}, socket}
 
       not assign_allowed?(socket, task, uid) ->
-        {:reply, %{ok: false}, put_flash(socket, :error, "You can't assign someone there.")}
+        {:reply, %{ok: false}, put_flash(socket, :error, assign_denied_message(socket, task, uid))}
 
       # Already the primary, or already a co — nothing to stack.
       task.assignee_id == uid or co_assignee?(task.id, uid) ->
@@ -2602,7 +2632,7 @@ defmodule DoItWeb.InitiativeShowLive do
           data-parent-id={@task.parent_id}
           data-depth={@depth}
           data-initiative-id={@initiative_id}
-          class="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-500 dark:text-zinc-600 hover:text-zinc-700 dark:hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none"
+          class="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-600 dark:text-zinc-600 hover:text-zinc-800 dark:hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none"
         >
           <.icon name="hero-ellipsis-vertical" class="w-3 h-3" />
           <span class={botanical_color(@task, @depth)}>
@@ -3215,7 +3245,7 @@ defmodule DoItWeb.InitiativeShowLive do
               data-user-id={m.user_id}
               title={"Drag #{m.user.name} onto a task to assign"}
               aria-hidden="true"
-              class="flex-none -ml-1 cursor-grab touch-none text-zinc-300 hover:text-zinc-500 dark:text-zinc-600 dark:hover:text-zinc-400"
+              class="flex-none -ml-1 cursor-grab touch-none text-zinc-600 hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-400"
             >
               <.icon name="hero-ellipsis-vertical" class="w-4 h-4" />
             </span>

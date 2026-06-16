@@ -384,12 +384,12 @@ defmodule DoItWeb.InitiativeIndexLive do
                 >
                   <.icon
                     name="hero-ellipsis-vertical"
-                    class="w-3 h-3 text-zinc-300 dark:text-zinc-600"
+                    class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
                   />
                   <.botanical_icon kind={:grove} class="w-5 h-5" />
                   <.icon
                     name="hero-ellipsis-vertical"
-                    class="w-3 h-3 text-zinc-300 dark:text-zinc-600"
+                    class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
                   />
                 </span>
                 <span class="truncate">{initiative.name}</span>
