@@ -314,7 +314,7 @@ defmodule DoItWeb.AccountLive do
               <.input
                 type="checkbox"
                 field={@prefs_form[:initiative_viewer_plus]}
-                label="Viewer+ (a viewer assigned a task can update it and everything under it)"
+                label="Viewer+ (a viewer assigned a task can update progress and comment on it and the tasks under it)"
               />
             </fieldset>
 
