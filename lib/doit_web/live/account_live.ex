@@ -263,6 +263,7 @@ defmodule DoItWeb.AccountLive do
 
         <section
           id="account-preferences"
+          phx-hook="ScrollOnHash"
           class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
         >
           <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">

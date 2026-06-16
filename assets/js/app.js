@@ -2410,6 +2410,27 @@ Hooks.CoAssignees = {
   },
 }
 
+// Scroll the element into view when it's the URL's hash target — e.g. the
+// "User Preferences" menu item links to /account#account-preferences. LiveView
+// `navigate` doesn't reliably scroll to a fragment on its own (it's a JS
+// navigation, not a page load), so we do it on mount (arriving from another
+// page) and on hashchange (same-page).
+Hooks.ScrollOnHash = {
+  mounted() {
+    this.maybeScroll()
+    this.onHash = () => this.maybeScroll()
+    window.addEventListener("hashchange", this.onHash)
+  },
+  destroyed() {
+    window.removeEventListener("hashchange", this.onHash)
+  },
+  maybeScroll() {
+    if (window.location.hash === "#" + this.el.id) {
+      this.el.scrollIntoView({behavior: "smooth", block: "start"})
+    }
+  },
+}
+
 // The keyboard-shortcuts help overlay. Toggled by a "doit:shortcuts-toggle"
 // event (dispatched by the `?` key or the ⌨ affordance); closed by Escape, the
 // backdrop, or the X (anything with [data-close]).
