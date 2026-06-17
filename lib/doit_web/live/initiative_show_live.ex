@@ -390,11 +390,14 @@ defmodule DoItWeb.InitiativeShowLive do
           |> assign(:tree, patched_tree(socket, task, lineage))
           |> maybe_refresh_root_sort(task, root_id)
 
-        # An assignment may have changed in the patched rows — re-derive the
-        # viewer+ label set (item 12.6.5) from the in-memory tree.
+        # An assignment may have changed in the patched rows — re-derive both
+        # the viewer+ label set (item 12.6.5, from the in-memory tree) and the
+        # viewer+ GRANT set (item 14.1: led tasks drive the editable affordances,
+        # so a live assignment must grant the subtree without a refresh).
         socket =
           socket
           |> assign(:direct_assignee_ids, tree_assignee_ids(socket.assigns.tree))
+          |> assign(:led_task_ids, viewer_led_ids(socket))
           |> assign_undo_state()
 
         # Any in-tree lineage tops out at the system root — its fresh roll-up
