@@ -176,6 +176,32 @@ defmodule DoIt.UndoTest do
     assert Tasks.undo_candidate(v, init.id) == nil
   end
 
+  test "undo of a value edit broadcasts {:task_updated}, not a full reload (item 14.4)" do
+    %{owner: owner, init: init} = setup_init()
+    t = task(owner, init, nil, "v0")
+    {:ok, _} = Tasks.update_task(get(t.id), owner, %{"title" => "v1"})
+
+    Tasks.subscribe(init.id)
+    {:ok, _} = Tasks.undo(owner, init.id)
+
+    assert_receive {:task_updated, tid}
+    assert tid == t.id
+    refute_received {:task_created, _}
+  end
+
+  test "undo of a delete broadcasts a structural restore (item 14.4)" do
+    %{owner: owner, init: init} = setup_init()
+    parent = task(owner, init, nil, "P")
+    child = task(owner, init, parent, "C")
+    {:ok, _} = Tasks.delete_task(get(child.id), owner)
+
+    Tasks.subscribe(init.id)
+    {:ok, _} = Tasks.undo(owner, init.id)
+
+    # Restoring a subtree changes tree shape — others reload, not patch.
+    assert_receive {:task_created, _}
+  end
+
   test "any member's fresh action invalidates the shared redo (item 11.3)" do
     %{owner: owner, init: init} = setup_init()
     other = user("Other")

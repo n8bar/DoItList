@@ -1037,7 +1037,7 @@ defmodule DoIt.Tasks do
       {:ok, :ok} ->
         set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
         record_undo_meta(event, user, direction)
-        broadcast_change(event.initiative_id, {:task_created, event.task_id})
+        broadcast_change(event.initiative_id, {reversal_broadcast(event.kind, direction), event.task_id})
         {:ok, describe_event(event)}
 
       {:error, _reason} ->
@@ -1047,6 +1047,24 @@ defmodule DoIt.Tasks do
         {:error, {:conflict, describe_event(event)}}
     end
   end
+
+  # The PubSub message an undo/redo fans out (m02.06 item 14.4) — mirrors the
+  # forward mutation for that kind so other viewers update incrementally
+  # ({:task_updated} patches, {:task_moved} re-slots) instead of a blanket
+  # {:task_created} that forced a full reload everywhere. Create / delete flip
+  # by direction since the tree shape changes.
+  defp reversal_broadcast(kind, _direction)
+       when kind in ~w(title_changed progress_changed priority_changed assignee_changed),
+       do: :task_updated
+
+  defp reversal_broadcast(kind, _direction) when kind in ~w(parent_changed reordered),
+    do: :task_moved
+
+  defp reversal_broadcast("created", :undo), do: :task_deleted
+  defp reversal_broadcast("created", :redo), do: :task_created
+  defp reversal_broadcast("child_deleted", :undo), do: :task_created
+  defp reversal_broadcast("child_deleted", :redo), do: :task_deleted
+  defp reversal_broadcast(_kind, _direction), do: :task_created
 
   # reverse/2 applies the state change. :undo runs the inverse; :redo re-runs the
   # forward action. Low-level (no new undoable events) — only the undid/redid

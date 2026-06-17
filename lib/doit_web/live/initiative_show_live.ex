@@ -193,21 +193,31 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:redo_label, redo && Tasks.describe_event(redo))
   end
 
+  # Reversed kinds that change only a task's own fields — the performer patches
+  # just that row (item 14.4); everything else changes tree shape and reloads.
+  @incremental_undo_kinds ~w(title_changed progress_changed priority_changed assignee_changed)
+
   defp do_undo_redo(socket, dir) do
     user = socket.assigns.current_user
     iid = socket.assigns.initiative.id
 
-    # Capture the target before applying, so a successful reversal can select +
-    # scroll the affected task into view (item 13).
+    # Capture the target before applying, so a successful reversal can update the
+    # performer incrementally (item 14.4) and select + scroll it (item 13).
     candidate =
       if dir == :undo, do: Tasks.undo_candidate(user, iid), else: Tasks.redo_candidate(user, iid)
 
     result = if dir == :undo, do: Tasks.undo(user, iid), else: Tasks.redo(user, iid)
-    socket = load_tree(socket)
     verb = if dir == :undo, do: "Undid", else: "Redid"
 
     case result do
       {:ok, desc} ->
+        # Match the broadcast: a value edit patches its row, structural changes
+        # reload — so the performer pays the same incremental cost as everyone.
+        socket =
+          if candidate && candidate.kind in @incremental_undo_kinds,
+            do: patch_task(socket, candidate.task_id),
+            else: load_tree(socket)
+
         socket = put_flash(socket, :info, "#{verb} #{desc}.")
         if candidate, do: push_event(socket, "select-task", %{id: candidate.task_id}), else: socket
 
@@ -218,7 +228,9 @@ defmodule DoItWeb.InitiativeShowLive do
         put_flash(socket, :error, "Nothing to redo.")
 
       {:error, {:conflict, desc}} ->
-        put_flash(socket, :error, "Couldn't #{dir} #{desc} — it may have changed since.")
+        socket
+        |> load_tree()
+        |> put_flash(:error, "Couldn't #{dir} #{desc} — it may have changed since.")
     end
   end
 
