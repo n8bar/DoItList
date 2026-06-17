@@ -91,22 +91,12 @@ defmodule DoItWeb.AccountLive do
   end
 
   def handle_event("delete_account", _params, socket) do
-    case Accounts.delete_account(socket.assigns.current_user) do
-      :ok ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Account deleted.")
-         |> redirect(to: ~p"/")}
+    :ok = Accounts.delete_account(socket.assigns.current_user)
 
-      {:error, {:shared_initiatives, names}} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "You own Initiatives that other members belong to: #{Enum.join(names, ", ")}. " <>
-             "Transfer or delete those first."
-         )}
-    end
+    {:noreply,
+     socket
+     |> put_flash(:info, "Account deleted.")
+     |> redirect(to: ~p"/")}
   end
 
   def handle_event("validate_username", %{"user" => params}, socket) do
@@ -434,12 +424,12 @@ defmodule DoItWeb.AccountLive do
             Danger zone
           </h2>
           <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-3">
-            Deleting your account also deletes Initiatives only you belong to. While you own
-            Initiatives with other members, deletion is blocked — transfer or delete those first.
+            Deleting your account also deletes Initiatives only you belong to. Initiatives you own
+            with other members are handed to another member, so their work isn't lost.
           </p>
 
           <%!-- Two-step confirm, client-side (no round trip to open); KeepOpen
-               holds it open across patches, e.g. the blocked-deletion flash. --%>
+               holds it open across any patch while the user decides. --%>
           <details id="delete-account-confirm" phx-hook="KeepOpen">
             <summary class="w-fit cursor-pointer list-none [&::-webkit-details-marker]:hidden px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
               Delete account…

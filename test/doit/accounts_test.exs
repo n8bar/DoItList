@@ -16,6 +16,17 @@ defmodule DoIt.AccountsTest do
     user
   end
 
+  # Force a membership's join time so the "oldest member" tiebreak is unambiguous
+  # (timestamps are second-resolution, so same-test adds would otherwise tie).
+  defp backdate_membership(initiative_id, user_id, dt) do
+    DoIt.Repo.update_all(
+      from(m in DoIt.Initiatives.InitiativeMember,
+        where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
+      ),
+      set: [inserted_at: dt]
+    )
+  end
+
   describe "registration (§1.4)" do
     test "requires a username" do
       {:error, changeset} =
@@ -109,15 +120,80 @@ defmodule DoIt.AccountsTest do
       assert Initiatives.get_initiative(initiative.id) == nil
     end
 
-    test "is blocked while the user owns initiatives with other members" do
+    test "transfers owned multi-member initiatives to the highest-ranked member, then deletes (10.3)" do
       owner = register!()
-      member = register!()
+      viewer = register!()
+      editor = register!()
       {:ok, initiative} = Initiatives.create_initiative(owner, %{"name" => "Shared work"})
-      {:ok, _} = Initiatives.add_member(initiative.id, member.id, "editor")
+      {:ok, _} = Initiatives.add_member(initiative.id, viewer.id, "viewer")
+      {:ok, _} = Initiatives.add_member(initiative.id, editor.id, "editor")
 
-      assert {:error, {:shared_initiatives, ["Shared work"]}} = Accounts.delete_account(owner)
-      assert Accounts.get_user(owner.id)
-      assert Initiatives.get_initiative(initiative.id)
+      assert :ok = Accounts.delete_account(owner)
+      assert Accounts.get_user(owner.id) == nil
+      # The initiative survives, now owned by the editor (outranks the viewer).
+      reloaded = Initiatives.get_initiative(initiative.id)
+      assert reloaded.owner_id == editor.id
+      assert Initiatives.get_role(initiative.id, editor.id) == "owner"
+    end
+
+    test "viewer+ inherits over a plain viewer when no editor remains (10.3)" do
+      owner = register!()
+      plain = register!()
+      lead = register!()
+      {:ok, initiative} = Initiatives.create_initiative(owner, %{"name" => "Led"})
+      {:ok, _} = Initiatives.add_member(initiative.id, plain.id, "viewer")
+      {:ok, _} = Initiatives.add_member(initiative.id, lead.id, "viewer")
+      # `lead` is a viewer+ — the direct assignee of a task (viewer_plus on by default).
+      {:ok, task} =
+        DoIt.Tasks.create_task(owner, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "Task"
+        })
+
+      {:ok, _} = DoIt.Tasks.update_task(task, owner, %{"assignee_id" => to_string(lead.id)})
+
+      assert :ok = Accounts.delete_account(owner)
+      assert Initiatives.get_initiative(initiative.id).owner_id == lead.id
+    end
+
+    test "within the same rank, the earliest-joined member inherits (10.3)" do
+      owner = register!()
+      newer = register!()
+      older = register!()
+      {:ok, initiative} = Initiatives.create_initiative(owner, %{"name" => "Tie"})
+      {:ok, _} = Initiatives.add_member(initiative.id, older.id, "editor")
+      {:ok, _} = Initiatives.add_member(initiative.id, newer.id, "editor")
+      backdate_membership(initiative.id, older.id, ~U[2020-01-01 00:00:00Z])
+
+      assert :ok = Accounts.delete_account(owner)
+      assert Initiatives.get_initiative(initiative.id).owner_id == older.id
+    end
+
+    test "viewer+ rank is ignored when the initiative's viewer_plus is off (10.3)" do
+      owner = register!()
+      older_plain = register!()
+      newer_lead = register!()
+
+      {:ok, initiative} =
+        Initiatives.create_initiative(owner, %{"name" => "No VP", "viewer_plus" => false})
+
+      {:ok, _} = Initiatives.add_member(initiative.id, older_plain.id, "viewer")
+      {:ok, _} = Initiatives.add_member(initiative.id, newer_lead.id, "viewer")
+      backdate_membership(initiative.id, older_plain.id, ~U[2020-01-01 00:00:00Z])
+      # newer_lead is a direct assignee, but viewer_plus is off so it doesn't elevate them.
+      {:ok, task} =
+        DoIt.Tasks.create_task(owner, %{
+          "initiative_id" => initiative.id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "Task"
+        })
+
+      {:ok, _} = DoIt.Tasks.update_task(task, owner, %{"assignee_id" => to_string(newer_lead.id)})
+
+      assert :ok = Accounts.delete_account(owner)
+      # Both rank as plain viewers → oldest wins.
+      assert Initiatives.get_initiative(initiative.id).owner_id == older_plain.id
     end
 
     test "membership in someone else's initiative doesn't block deletion" do

@@ -119,25 +119,22 @@ defmodule DoItWeb.AccountLiveTest do
   end
 
   describe "delete account (§1.10)" do
-    test "deletes and redirects home; blocked case flashes the names", %{conn: conn} do
-      {blocked_conn, owner} = register_and_log_in(conn)
-      {member_conn, member} = register_and_log_in(conn)
-      _ = member_conn
+    test "deletes the account, redirects home, and hands off owned shared initiatives", %{
+      conn: conn
+    } do
+      {owner_conn, owner} = register_and_log_in(conn)
+      {_member_conn, member} = register_and_log_in(conn)
       {:ok, initiative} = DoIt.Initiatives.create_initiative(owner, %{"name" => "Shared work"})
       {:ok, _} = DoIt.Initiatives.add_member(initiative.id, member.id, "editor")
 
-      {:ok, blocked_view, _} = live(blocked_conn, ~p"/account")
-      blocked = blocked_view |> element("#delete-account-button") |> render_click()
-      assert blocked =~ "Shared work"
-      assert Accounts.get_user(owner.id)
-
-      {free_conn, free_user} = register_and_log_in(conn)
-      {:ok, view, _} = live(free_conn, ~p"/account")
-
+      {:ok, view, _} = live(owner_conn, ~p"/account")
       view |> element("#delete-account-button") |> render_click()
+
       flash = assert_redirect(view, "/")
       assert flash["info"] == "Account deleted."
-      assert Accounts.get_user(free_user.id) == nil
+      assert Accounts.get_user(owner.id) == nil
+      # The shared initiative survives, handed to the remaining member.
+      assert DoIt.Initiatives.get_initiative(initiative.id).owner_id == member.id
     end
   end
 
