@@ -1225,7 +1225,12 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       render_click(view, "undo", %{})
 
       assert_push_event(view, "select-task", %{id: id})
-      assert id == t.id
+      # The client re-emits "select_task" with this id, whose handler runs
+      # String.to_integer/1 — so it must be a string, and the round-trip must
+      # not crash the LiveView (regression: an integer id crashed every undo).
+      assert id == to_string(t.id)
+      render_click(view, "select_task", %{"id" => id})
+      assert Process.alive?(view.pid)
     end
 
     test "a comment shows live for a second viewer of the task (item 14.3)", %{conn: conn} do

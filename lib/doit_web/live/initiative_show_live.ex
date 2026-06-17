@@ -223,7 +223,12 @@ defmodule DoItWeb.InitiativeShowLive do
           end
 
         socket = put_flash(socket, :info, "#{verb} #{desc}.")
-        if candidate, do: push_event(socket, "select-task", %{id: candidate.task_id}), else: socket
+        # Push the id as a string: the client re-emits "select_task" with it, and
+        # that handler does String.to_integer/1 — an integer here crashed the
+        # LiveView on every undo (item 13 regression).
+        if candidate,
+          do: push_event(socket, "select-task", %{id: to_string(candidate.task_id)}),
+          else: socket
 
       {:error, :nothing_to_undo} ->
         put_flash(socket, :error, "Nothing to undo.")
