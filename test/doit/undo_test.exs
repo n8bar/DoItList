@@ -167,6 +167,19 @@ defmodule DoIt.UndoTest do
     assert Tasks.undo_candidate(owner, init.id).kind == "title_changed"
   end
 
+  test "a comment is undoable — undo removes it, redo restores it (item 14.5)" do
+    %{owner: owner, init: init} = setup_init()
+    t = task(owner, init, nil, "t")
+    {:ok, _comment} = Tasks.add_comment(get(t.id), owner, "hi there")
+    assert length(Tasks.list_comments(t.id)) == 1
+
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert Tasks.list_comments(t.id) == []
+
+    assert {:ok, _} = Tasks.redo(owner, init.id)
+    assert [%{body: "hi there"}] = Tasks.list_comments(t.id)
+  end
+
   test "a plain viewer has nothing to undo" do
     %{owner: owner, init: init} = setup_init()
     v = user("V")

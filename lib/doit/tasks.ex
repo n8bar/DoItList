@@ -886,7 +886,7 @@ defmodule DoIt.Tasks do
 
   # The mutations a v1 undo reverses. Status changes (not recorded as events)
   # and the co-assignee set events are out of scope for now.
-  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed)
+  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed commented)
 
   # Bounded depth (m02.06 items 6 + 11.4): only the most recent N undoable events
   # on an Initiative are reversible; older history drops off the shared stack.
@@ -990,7 +990,8 @@ defmodule DoIt.Tasks do
 
   defp can_undo_event?(_user, _role, _initiative_id, _event), do: false
 
-  defp viewer_plus_can_undo?(user_id, %{kind: "progress_changed", task_id: task_id}, initiative_id) do
+  defp viewer_plus_can_undo?(user_id, %{kind: kind, task_id: task_id}, initiative_id)
+       when kind in ~w(progress_changed commented) do
     MapSet.member?(viewer_plus_led_ids(initiative_id, user_id), task_id)
   end
 
@@ -1064,6 +1065,8 @@ defmodule DoIt.Tasks do
   defp reversal_broadcast("created", :redo), do: :task_created
   defp reversal_broadcast("child_deleted", :undo), do: :task_created
   defp reversal_broadcast("child_deleted", :redo), do: :task_deleted
+  # A comment change refreshes the task's comment list, not the tree.
+  defp reversal_broadcast("commented", _direction), do: :comment_added
   defp reversal_broadcast(_kind, _direction), do: :task_created
 
   # reverse/2 applies the state change. :undo runs the inverse; :redo re-runs the
@@ -1153,6 +1156,19 @@ defmodule DoIt.Tasks do
     end
   end
 
+  # Comment add/remove (m02.06 item 14.5): undo soft-deletes the comment, redo
+  # restores it — the comment id rides the event's data.
+  defp reverse(%{kind: "commented"} = event, direction) do
+    case event.data["comment_id"] do
+      nil ->
+        {:error, :comment_gone}
+
+      comment_id ->
+        if direction == :undo, do: soft_delete_comment(comment_id), else: restore_comment(comment_id)
+        :ok
+    end
+  end
+
   defp undo_field("title_changed"), do: :title
   defp undo_field("progress_changed"), do: :manual_progress
   defp undo_field("priority_changed"), do: :priority
@@ -1208,6 +1224,7 @@ defmodule DoIt.Tasks do
   def describe_event(%{kind: "progress_changed"}), do: "progress change"
   def describe_event(%{kind: "priority_changed"}), do: "priority change"
   def describe_event(%{kind: "assignee_changed"}), do: "assignee change"
+  def describe_event(%{kind: "commented"}), do: "comment"
   def describe_event(_), do: "change"
 
   defp maybe_set_done_progress(%Task{} = task), do: task
@@ -1697,11 +1714,22 @@ defmodule DoIt.Tasks do
 
   def list_comments(task_id) do
     from(c in Comment,
-      where: c.task_id == ^task_id,
+      where: c.task_id == ^task_id and is_nil(c.deleted_at),
       order_by: [asc: c.inserted_at],
       preload: [:user]
     )
     |> Repo.all()
+  end
+
+  # Soft-delete / restore a comment for the undo engine (m02.06 item 14.5).
+  defp soft_delete_comment(comment_id) do
+    from(c in Comment, where: c.id == ^comment_id)
+    |> Repo.update_all(set: [deleted_at: now_seconds()])
+  end
+
+  defp restore_comment(comment_id) do
+    from(c in Comment, where: c.id == ^comment_id)
+    |> Repo.update_all(set: [deleted_at: nil])
   end
 
   def add_comment(%Task{} = task, %User{} = actor, body) do

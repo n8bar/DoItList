@@ -1227,5 +1227,21 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert_push_event(view, "select-task", %{id: id})
       assert id == t.id
     end
+
+    test "a comment shows live for a second viewer of the task (item 14.3)", %{conn: conn} do
+      {_conn_a, owner} = register_and_log_in(conn)
+      {conn_b, member} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, member.id, "editor")
+      t = create_task(owner, initiative, nil, "task")
+
+      {:ok, view_b, _} = live(conn_b, open_path(initiative))
+      select_task(view_b, t.id)
+
+      # Owner posts a comment server-side → broadcast → B's open pane refreshes.
+      {:ok, _} = Tasks.add_comment(Tasks.get_task!(t.id), owner, "live hello")
+
+      assert render(view_b) =~ "live hello"
+    end
   end
 end

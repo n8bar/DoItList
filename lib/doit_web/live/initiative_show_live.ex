@@ -211,12 +211,16 @@ defmodule DoItWeb.InitiativeShowLive do
 
     case result do
       {:ok, desc} ->
-        # Match the broadcast: a value edit patches its row, structural changes
-        # reload — so the performer pays the same incremental cost as everyone.
+        # Match the broadcast: a value edit patches its row, a comment change
+        # refreshes the pane's comment list, structural changes reload — so the
+        # performer pays the same incremental cost as everyone (item 14.4/14.5).
         socket =
-          if candidate && candidate.kind in @incremental_undo_kinds,
-            do: patch_task(socket, candidate.task_id),
-            else: load_tree(socket)
+          cond do
+            is_nil(candidate) -> load_tree(socket)
+            candidate.kind == "commented" -> refresh_selected(socket)
+            candidate.kind in @incremental_undo_kinds -> patch_task(socket, candidate.task_id)
+            true -> load_tree(socket)
+          end
 
         socket = put_flash(socket, :info, "#{verb} #{desc}.")
         if candidate, do: push_event(socket, "select-task", %{id: candidate.task_id}), else: socket
