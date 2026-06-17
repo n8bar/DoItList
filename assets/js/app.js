@@ -2221,6 +2221,10 @@ Hooks.CollaboratorDrag = {
     this.el.style.opacity = "0.5"
     document.body.style.userSelect = "none"
     document.body.style.cursor = "grabbing"
+    // Mark the whole Initiatives box as the drop zone for the drag's lifetime
+    // (item 15.7) — orientation alongside the per-entry rail-drop-target.
+    this.zone = document.getElementById("rail-initiatives")
+    if (this.zone) this.zone.classList.add("collab-drop-zone")
   },
   move(e) {
     if (!this.armed) return
@@ -2274,6 +2278,8 @@ Hooks.CollaboratorDrag = {
     this.onMove = this.onUp = this.onCancel = null
     if (this.target) this.target.classList.remove("rail-drop-target")
     this.target = null
+    if (this.zone) this.zone.classList.remove("collab-drop-zone")
+    this.zone = null
     this.el.style.opacity = ""
     document.body.style.userSelect = ""
     document.body.style.cursor = ""

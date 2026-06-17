@@ -306,7 +306,7 @@ defmodule DoItWeb.Layouts do
       <h2 class="px-2 mb-1 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
         Initiatives
       </h2>
-      <nav class="space-y-0.5">
+      <nav id="rail-initiatives" class="space-y-0.5">
         <.link
           :for={init <- @initiatives}
           navigate={
@@ -386,6 +386,13 @@ defmodule DoItWeb.Layouts do
                   collab.shared_count == 0 && "opacity-60"
                 ]}
               >
+                <span
+                  aria-hidden="true"
+                  title="Drag onto an Initiative to add as viewer"
+                  class="flex-none text-zinc-600 dark:text-zinc-500 cursor-grab active:cursor-grabbing"
+                >
+                  <.icon name="hero-ellipsis-vertical" class="w-3 h-3" />
+                </span>
                 <.avatar
                   user={collab.user}
                   online={MapSet.member?(@online_ids, collab.user.id)}
@@ -481,6 +488,13 @@ defmodule DoItWeb.Layouts do
             <% else %>
               <%!-- A current collaborator with no Initiative open: display-only. --%>
               <div class="flex items-center gap-2 rounded px-2 py-1.5 min-w-0">
+                <span
+                  aria-hidden="true"
+                  title="Drag onto an Initiative to add as viewer"
+                  class="flex-none text-zinc-600 dark:text-zinc-500 cursor-grab active:cursor-grabbing"
+                >
+                  <.icon name="hero-ellipsis-vertical" class="w-3 h-3" />
+                </span>
                 <.avatar
                   user={collab.user}
                   online={MapSet.member?(@online_ids, collab.user.id)}
