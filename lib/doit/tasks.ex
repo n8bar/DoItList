@@ -1061,12 +1061,7 @@ defmodule DoIt.Tasks do
       {:ok, :ok} ->
         set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
         record_undo_meta(event, user, direction)
-
-        broadcast_change(
-          event.initiative_id,
-          {reversal_broadcast(event.kind, direction), event.task_id}
-        )
-
+        broadcast_reversal(event, direction)
         {:ok, describe_event(event)}
 
       {:error, _reason} ->
@@ -1095,10 +1090,27 @@ defmodule DoIt.Tasks do
   defp reversal_broadcast("child_deleted", :redo), do: :task_deleted
   # A comment change refreshes the task's comment list, not the tree.
   defp reversal_broadcast("commented", _direction), do: :comment_added
-  # Completion ripples roll-ups up the ancestor chain (item 14) — patching one
-  # row would leave ancestor progress bars stale, so reload structurally.
-  defp reversal_broadcast("status_changed", _direction), do: :task_created
   defp reversal_broadcast(_kind, _direction), do: :task_created
+
+  # Fan the reversal out like the forward mutation did. Completion (item 14)
+  # mirrors the forward path's per-task broadcasts: one {:task_updated} for every
+  # task the flip touched, so the up-cascade (ancestors, in the acted task's
+  # lineage) and the down-cascade (descendants, which aren't) both patch
+  # incrementally for everyone — cost proportional to the change, no full reload.
+  defp broadcast_reversal(%{kind: "status_changed"} = event, _direction) do
+    for %{"task_id" => id} <- event.inverse_payload["affected"] || [] do
+      broadcast_change(event.initiative_id, {:task_updated, id})
+    end
+
+    :ok
+  end
+
+  defp broadcast_reversal(event, direction) do
+    broadcast_change(
+      event.initiative_id,
+      {reversal_broadcast(event.kind, direction), event.task_id}
+    )
+  end
 
   # reverse/2 applies the state change. :undo runs the inverse; :redo re-runs the
   # forward action. Low-level (no new undoable events) — only the undid/redid

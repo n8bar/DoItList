@@ -219,6 +219,10 @@ defmodule DoItWeb.InitiativeShowLive do
             is_nil(candidate) -> load_tree(socket)
             candidate.kind == "commented" -> refresh_selected(socket)
             candidate.kind in @incremental_undo_kinds -> patch_task(socket, candidate.task_id)
+            # Completion (item 14): patch the acted task — its lineage covers the
+            # leaf flip and any up-cascade. A branch down-cascade's descendants
+            # arrive via the per-affected {:task_updated} broadcasts we also receive.
+            candidate.kind == "status_changed" -> patch_task(socket, candidate.task_id)
             true -> load_tree(socket)
           end
 
@@ -292,11 +296,14 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp selected_staff_pool(socket, %{} = task) do
     cond do
-      socket.assigns.can_edit -> :all
+      socket.assigns.can_edit ->
+        :all
+
       socket.assigns.role == "viewer" and socket.assigns.initiative.viewer_plus ->
         Tasks.viewer_staff_pool(socket.assigns.current_user.id, task)
 
-      true -> nil
+      true ->
+        nil
     end
   end
 
@@ -792,14 +799,19 @@ defmodule DoItWeb.InitiativeShowLive do
         {:reply, %{ok: false}, socket}
 
       not assign_allowed?(socket, task, uid) ->
-        {:reply, %{ok: false}, put_flash(socket, :error, assign_denied_message(socket, task, uid))}
+        {:reply, %{ok: false},
+         put_flash(socket, :error, assign_denied_message(socket, task, uid))}
 
       # Already the primary, or already a co — nothing to stack.
       task.assignee_id == uid or co_assignee?(task.id, uid) ->
         {:reply, %{ok: false}, socket}
 
       is_nil(task.assignee_id) ->
-        assign_result(socket, task, Tasks.update_task(task, user, %{"assignee_id" => to_string(uid)}))
+        assign_result(
+          socket,
+          task,
+          Tasks.update_task(task, user, %{"assignee_id" => to_string(uid)})
+        )
 
       true ->
         assign_result(socket, task, Tasks.add_co_assignee(task, user, uid))
@@ -832,8 +844,11 @@ defmodule DoItWeb.InitiativeShowLive do
 
           true ->
             case Tasks.update_task(task, user, allowed) do
-              {:ok, _} -> {:noreply, patch_task(socket, task.id)}
-              {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't save: #{summarize_errors(cs)}.")}
+              {:ok, _} ->
+                {:noreply, patch_task(socket, task.id)}
+
+              {:error, cs} ->
+                {:noreply, put_flash(socket, :error, "Couldn't save: #{summarize_errors(cs)}.")}
             end
         end
 
@@ -2641,7 +2656,11 @@ defmodule DoItWeb.InitiativeShowLive do
     # Viewer+ (item 12.6): a viewer who leads this task may flip its progress,
     # even without can_edit. Other affordances stay can_edit only.
     assigns =
-      assign(assigns, :can_progress, assigns.can_edit or MapSet.member?(assigns.led_ids, assigns.task.id))
+      assign(
+        assigns,
+        :can_progress,
+        assigns.can_edit or MapSet.member?(assigns.led_ids, assigns.task.id)
+      )
 
     ~H"""
     <%!-- Selection is client-owned (UX_GUARDRAILS 6.5): the data-selected attr
@@ -3219,7 +3238,10 @@ defmodule DoItWeb.InitiativeShowLive do
   """
   def members_panel(assigns) do
     ~H"""
-    <div id={@id} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+    <div
+      id={@id}
+      class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+    >
       <div class="flex items-center justify-between mb-2">
         <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
         <button
@@ -3910,7 +3932,8 @@ defmodule DoItWeb.InitiativeShowLive do
   # A member reads "viewer+" when the Initiative setting is on, their role is
   # viewer, and they're the direct assignee of at least one task (item 12.6.5).
   defp viewer_plus?(member, assignee_ids, viewer_plus_on),
-    do: viewer_plus_on and member.role == "viewer" and MapSet.member?(assignee_ids, member.user_id)
+    do:
+      viewer_plus_on and member.role == "viewer" and MapSet.member?(assignee_ids, member.user_id)
 
   defp role_label(member, assignee_ids, viewer_plus_on) do
     if viewer_plus?(member, assignee_ids, viewer_plus_on), do: "viewer+", else: member.role

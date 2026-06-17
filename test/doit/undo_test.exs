@@ -368,7 +368,7 @@ defmodule DoIt.UndoTest do
     assert get(init.root_task_id).status == "open"
   end
 
-  test "undo of a completion broadcasts a structural reload — roll-ups ripple to ancestors (item 14)" do
+  test "undo of a leaf completion patches each affected task, no structural reload (item 14)" do
     %{owner: owner, init: init} = setup_init()
     branch = task(owner, init, nil, "branch")
     leaf = task(owner, init, branch, "leaf")
@@ -377,6 +377,35 @@ defmodule DoIt.UndoTest do
     Tasks.subscribe(init.id)
     {:ok, _} = Tasks.undo(owner, init.id)
 
-    assert_receive {:task_created, _}
+    # One {:task_updated} per task the completion touched — leaf + the cascaded
+    # ancestors — mirroring the forward path; never a blanket structural reload.
+    leaf_id = leaf.id
+    branch_id = branch.id
+    root_id = init.root_task_id
+    assert_receive {:task_updated, ^leaf_id}
+    assert_receive {:task_updated, ^branch_id}
+    assert_receive {:task_updated, ^root_id}
+    refute_received {:task_created, _}
+  end
+
+  test "undo of a branch completion patches each cascaded descendant, no structural reload (item 14)" do
+    %{owner: owner, init: init} = setup_init()
+    branch = task(owner, init, nil, "branch")
+    l1 = task(owner, init, branch, "l1")
+    l2 = task(owner, init, branch, "l2")
+    {:ok, _} = Tasks.cascade_complete(get(branch.id), owner)
+
+    Tasks.subscribe(init.id)
+    {:ok, _} = Tasks.undo(owner, init.id)
+
+    # The down-cascade's descendants aren't in the branch's lineage, so each must
+    # get its own {:task_updated} — the union covers them incrementally.
+    branch_id = branch.id
+    l1_id = l1.id
+    l2_id = l2.id
+    assert_receive {:task_updated, ^branch_id}
+    assert_receive {:task_updated, ^l1_id}
+    assert_receive {:task_updated, ^l2_id}
+    refute_received {:task_created, _}
   end
 end
