@@ -1,8 +1,10 @@
 defmodule DoIt.UndoTest do
   @moduledoc """
-  m02.06 items 2/3 — the inverse-action engine + per-(user, Initiative) stack.
-  Each undoable kind round-trips (do → undo restores; redo re-applies); a
-  user's undo only touches their own events; a dead target is skipped, not stuck.
+  m02.06 items 2/3 + 11 — the inverse-action engine on one shared per-Initiative
+  timeline. Each undoable kind round-trips (do → undo restores; redo re-applies);
+  the next undo is the Initiative's newest action for anyone with rights; a
+  viewer+ is walled at the first op outside their privileges; a dead target is
+  skipped, not stuck.
   """
   use DoIt.DataCase, async: true
 
@@ -129,7 +131,7 @@ defmodule DoIt.UndoTest do
     assert child_ids(parent) == [z.id, x.id, y.id]
   end
 
-  test "a user's undo only pops their own events" do
+  test "undo targets the Initiative's newest action, for anyone with rights (shared timeline)" do
     %{owner: owner, init: init} = setup_init()
     other = user("Other")
     {:ok, _} = Initiatives.add_member(init.id, other.id, "editor")
@@ -138,10 +140,54 @@ defmodule DoIt.UndoTest do
     {:ok, _} = Tasks.update_task(get(t.id), owner, %{"title" => "owner-edit"})
     {:ok, _} = Tasks.update_task(get(t.id), other, %{"title" => "other-edit"})
 
-    # Owner undo skips the other user's edit and finds their own (the create /
-    # title). The other user's most recent edit is theirs to undo.
-    assert Tasks.undo_candidate(owner.id, init.id).user_id == owner.id
-    assert Tasks.undo_candidate(other.id, init.id).user_id == other.id
+    # The newest action (other's edit) is the next undo for BOTH members — not
+    # each their own. Owner can reverse another member's most-recent edit.
+    assert Tasks.undo_candidate(owner, init.id).user_id == other.id
+    assert Tasks.undo_candidate(other, init.id).user_id == other.id
+
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert get(t.id).title == "owner-edit"
+  end
+
+  test "a viewer+ can undo within their privileges, then hits a wall (item 11.2)" do
+    %{owner: owner, init: init} = setup_init()
+    b = user("B")
+    {:ok, _} = Initiatives.add_member(init.id, b.id, "viewer")
+    led = task(owner, init, nil, "led")
+    # B becomes a viewer+ — the direct assignee of `led` (viewer_plus on by default).
+    {:ok, _} = Tasks.update_task(get(led.id), owner, %{"assignee_id" => to_string(b.id)})
+
+    # B changes progress on the led task — within their rights, so undoable by B.
+    {:ok, _} = Tasks.update_task(get(led.id), b, %{"manual_progress" => 50})
+    assert Tasks.undo_candidate(b, init.id).kind == "progress_changed"
+
+    # Owner renames the led task — a structural op B can't perform; now the top.
+    {:ok, _} = Tasks.update_task(get(led.id), owner, %{"title" => "renamed"})
+    assert Tasks.undo_candidate(b, init.id) == nil
+    assert Tasks.undo_candidate(owner, init.id).kind == "title_changed"
+  end
+
+  test "a plain viewer has nothing to undo" do
+    %{owner: owner, init: init} = setup_init()
+    v = user("V")
+    {:ok, _} = Initiatives.add_member(init.id, v.id, "viewer")
+    _t = task(owner, init, nil, "t")
+
+    assert Tasks.undo_candidate(v, init.id) == nil
+  end
+
+  test "any member's fresh action invalidates the shared redo (item 11.3)" do
+    %{owner: owner, init: init} = setup_init()
+    other = user("Other")
+    {:ok, _} = Initiatives.add_member(init.id, other.id, "editor")
+    t = task(owner, init, nil, "v0")
+    {:ok, _} = Tasks.update_task(get(t.id), owner, %{"title" => "v1"})
+    {:ok, _} = Tasks.undo(owner, init.id)
+    assert Tasks.redo_candidate(owner, init.id)
+
+    # A different member's fresh edit clears the redo for everyone.
+    {:ok, _} = Tasks.update_task(get(t.id), other, %{"title" => "v2"})
+    assert Tasks.redo_candidate(owner, init.id) == nil
   end
 
   test "undoing into a vanished target is a skipped conflict, not a stall" do
@@ -159,8 +205,8 @@ defmodule DoIt.UndoTest do
     # Undo would move M back under A — but A is gone. Surface a conflict and
     # step past the dead entry instead of stalling.
     assert {:error, {:conflict, "move"}} = Tasks.undo(owner, init.id)
-    refute Tasks.undo_candidate(owner.id, init.id) &&
-             Tasks.undo_candidate(owner.id, init.id).kind == "parent_changed"
+    refute Tasks.undo_candidate(owner, init.id) &&
+             Tasks.undo_candidate(owner, init.id).kind == "parent_changed"
   end
 
   test "a fresh action invalidates the redo stack" do
@@ -172,7 +218,7 @@ defmodule DoIt.UndoTest do
 
     # A new edit after the undo — redo should now be gone.
     {:ok, _} = Tasks.update_task(get(t.id), owner, %{"title" => "v2"})
-    assert Tasks.redo_candidate(owner.id, init.id) == nil
+    assert Tasks.redo_candidate(owner, init.id) == nil
     assert {:error, :nothing_to_redo} = Tasks.redo(owner, init.id)
   end
 end

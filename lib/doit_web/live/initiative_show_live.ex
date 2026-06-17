@@ -183,10 +183,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # the next undoable / redoable action, or nil when the stack is empty that
   # way. Refreshed wherever the tree is (load_tree / patch_task / after undo).
   defp assign_undo_state(socket) do
-    uid = socket.assigns.current_user.id
+    user = socket.assigns.current_user
     iid = socket.assigns.initiative.id
-    undo = Tasks.undo_candidate(uid, iid)
-    redo = Tasks.redo_candidate(uid, iid)
+    undo = Tasks.undo_candidate(user, iid)
+    redo = Tasks.redo_candidate(user, iid)
 
     socket
     |> assign(:undo_label, undo && Tasks.describe_event(undo))

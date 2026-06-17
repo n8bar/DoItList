@@ -888,21 +888,59 @@ defmodule DoIt.Tasks do
   # and the co-assignee set events are out of scope for now.
   @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed)
 
-  # Bounded depth (m02.06 item 6): only the most recent N undoable events per
-  # (user, Initiative) are reversible; older history drops off the stack.
-  @undo_depth 50
+  # Bounded depth (m02.06 items 6 + 11.4): only the most recent N undoable events
+  # on an Initiative are reversible; older history drops off the shared stack.
+  @undo_depth 500
 
   @doc """
-  The next event `user_id` could undo on `initiative_id` (their newest applied
-  undoable event within the last #{@undo_depth}), or nil. Only the user's own
-  events — another member's edits in between are stepped over (m02.06 item 3).
+  The next event `user` could undo on `initiative_id` — the Initiative's newest
+  applied undoable event, by any member (m02.06 item 11), or nil. Gated on
+  whether `user` may undo that op: owner/editor may undo any task op; a viewer+
+  only ops within their privileges, so the first op they lack rights for walls
+  them off (item 11.2); a plain viewer has nothing to undo.
   """
-  def undo_candidate(user_id, initiative_id) do
-    window =
+  def undo_candidate(%User{} = user, initiative_id) do
+    role = DoIt.Initiatives.get_role(initiative_id, user.id)
+
+    case newest_applied_event(initiative_id) do
+      nil -> nil
+      event -> if can_undo_event?(user, role, initiative_id, event), do: event, else: nil
+    end
+  end
+
+  @doc """
+  The next event `user` could redo on `initiative_id`, or nil. The Initiative's
+  most-recently-undone event — but only while it's still the top: any newer
+  *applied* action by *any* member invalidates the redo (item 11.3), and `user`
+  must have rights to it.
+  """
+  def redo_candidate(%User{} = user, initiative_id) do
+    candidate =
       from(e in ActivityEvent,
         where:
-          e.user_id == ^user_id and e.initiative_id == ^initiative_id and
-            e.kind in @undoable_kinds,
+          e.initiative_id == ^initiative_id and e.kind in @undoable_kinds and
+            not is_nil(e.undone_at),
+        order_by: [desc: e.undone_at, desc: e.id],
+        limit: 1
+      )
+      |> Repo.one()
+
+    with %ActivityEvent{} = ev <- candidate,
+         true <- still_top?(ev, initiative_id),
+         role = DoIt.Initiatives.get_role(initiative_id, user.id),
+         true <- can_undo_event?(user, role, initiative_id, ev) do
+      ev
+    else
+      _ -> nil
+    end
+  end
+
+  # The newest un-undone undoable event on the Initiative, within the depth
+  # window — the shared top-of-stack (m02.06 item 11).
+  defp newest_applied_event(initiative_id) do
+    window =
+      from(e in ActivityEvent,
+        where: e.initiative_id == ^initiative_id and e.kind in @undoable_kinds,
         order_by: [desc: e.id],
         limit: @undo_depth,
         select: e.id
@@ -923,56 +961,64 @@ defmodule DoIt.Tasks do
     end
   end
 
-  @doc """
-  The next event `user_id` could redo, or nil. The most-recently-undone event —
-  but only while it's still the top of the stack: any newer *applied* action
-  (a fresh edit after the undo) invalidates the redo, as in any editor.
-  """
-  def redo_candidate(user_id, initiative_id) do
-    candidate =
+  # A redo candidate is valid only while nothing applied is newer than it — a
+  # fresh action branches the timeline and discards the redo for everyone.
+  defp still_top?(%{id: id}, initiative_id) do
+    max_done_id =
       from(e in ActivityEvent,
         where:
-          e.user_id == ^user_id and e.initiative_id == ^initiative_id and
-            e.kind in @undoable_kinds and not is_nil(e.undone_at),
-        order_by: [desc: e.undone_at, desc: e.id],
-        limit: 1
+          e.initiative_id == ^initiative_id and e.kind in @undoable_kinds and
+            is_nil(e.undone_at),
+        select: max(e.id)
       )
       |> Repo.one()
 
-    case candidate do
-      nil ->
-        nil
+    is_nil(max_done_id) or id > max_done_id
+  end
 
-      ev ->
-        max_done_id =
-          from(e in ActivityEvent,
-            where:
-              e.user_id == ^user_id and e.initiative_id == ^initiative_id and
-                e.kind in @undoable_kinds and is_nil(e.undone_at),
-            select: max(e.id)
-          )
-          |> Repo.one()
+  # Rights gate (m02.06 items 11.1/11.2): owner/editor may undo any task op; a
+  # viewer+ only progress on a led task or an assignee change on a descendant
+  # they may staff; a plain viewer (or non-member) nothing.
+  defp can_undo_event?(_user, role, _initiative_id, _event) when role in ~w(owner editor),
+    do: true
 
-        if is_nil(max_done_id) or ev.id > max_done_id, do: ev, else: nil
+  defp can_undo_event?(%User{} = user, "viewer", initiative_id, event) do
+    initiative = DoIt.Initiatives.get_initiative(initiative_id)
+    initiative != nil and initiative.viewer_plus and
+      viewer_plus_can_undo?(user.id, event, initiative_id)
+  end
+
+  defp can_undo_event?(_user, _role, _initiative_id, _event), do: false
+
+  defp viewer_plus_can_undo?(user_id, %{kind: "progress_changed", task_id: task_id}, initiative_id) do
+    MapSet.member?(viewer_plus_led_ids(initiative_id, user_id), task_id)
+  end
+
+  defp viewer_plus_can_undo?(user_id, %{kind: "assignee_changed", task_id: task_id}, _initiative_id) do
+    case get_task(task_id) do
+      nil -> false
+      %Task{} = task -> viewer_staff_pool(user_id, task) != nil
     end
   end
 
+  defp viewer_plus_can_undo?(_user_id, _event, _initiative_id), do: false
+
   @doc """
-  Undo `user`'s newest undoable event on `initiative_id`. Returns
+  Undo the Initiative's newest action `user` is entitled to reverse. Returns
   `{:ok, description}`, `{:error, :nothing_to_undo}`, or `{:error, {:conflict,
   description}}` when the target is gone (the dead entry is skipped so the user
   is never stuck). Broadcasts a reload like any mutation.
   """
   def undo(%User{} = user, initiative_id) do
-    case undo_candidate(user.id, initiative_id) do
+    case undo_candidate(user, initiative_id) do
       nil -> {:error, :nothing_to_undo}
       event -> apply_reversal(event, user, :undo)
     end
   end
 
-  @doc "Redo `user`'s most-recently-undone event on `initiative_id`. See `undo/2`."
+  @doc "Redo the Initiative's most-recently-undone event `user` is entitled to. See `undo/2`."
   def redo(%User{} = user, initiative_id) do
-    case redo_candidate(user.id, initiative_id) do
+    case redo_candidate(user, initiative_id) do
       nil -> {:error, :nothing_to_redo}
       event -> apply_reversal(event, user, :redo)
     end
