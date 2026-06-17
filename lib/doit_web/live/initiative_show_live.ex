@@ -196,13 +196,20 @@ defmodule DoItWeb.InitiativeShowLive do
   defp do_undo_redo(socket, dir) do
     user = socket.assigns.current_user
     iid = socket.assigns.initiative.id
+
+    # Capture the target before applying, so a successful reversal can select +
+    # scroll the affected task into view (item 13).
+    candidate =
+      if dir == :undo, do: Tasks.undo_candidate(user, iid), else: Tasks.redo_candidate(user, iid)
+
     result = if dir == :undo, do: Tasks.undo(user, iid), else: Tasks.redo(user, iid)
     socket = load_tree(socket)
     verb = if dir == :undo, do: "Undid", else: "Redid"
 
     case result do
       {:ok, desc} ->
-        put_flash(socket, :info, "#{verb} #{desc}.")
+        socket = put_flash(socket, :info, "#{verb} #{desc}.")
+        if candidate, do: push_event(socket, "select-task", %{id: candidate.task_id}), else: socket
 
       {:error, :nothing_to_undo} ->
         put_flash(socket, :error, "Nothing to undo.")
@@ -1578,6 +1585,14 @@ defmodule DoItWeb.InitiativeShowLive do
               // Row clicks are handled by a delegated listener in app.js (no
               // hook of its own) — give it a push channel into this LiveView.
               window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              // After an undo/redo, select + scroll the affected task into view
+              // (m02.06 item 13). Guarded: an undone create removes the task, so
+              // there's nothing to show — skip rather than stall the pane.
+              this.handleEvent("select-task", ({id}) => {
+                if (!document.getElementById("task-" + id)) return;
+                if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                if (window.DoitPush) window.DoitPush("select_task", {id});
+              });
             },
             destroyed() {
               window.removeEventListener("keydown", this._h);
@@ -3461,7 +3476,7 @@ defmodule DoItWeb.InitiativeShowLive do
             value={@task.title}
             class="w-full input input-bordered input-sm"
             disabled={not @can_edit}
-            phx-debounce="600"
+            phx-debounce="blur"
           />
         </div>
 
@@ -3475,7 +3490,7 @@ defmodule DoItWeb.InitiativeShowLive do
             class="w-full textarea textarea-bordered textarea-sm"
             rows="3"
             disabled={not @can_edit}
-            phx-debounce="600"
+            phx-debounce="blur"
           >{@task.description}</textarea>
         </div>
 

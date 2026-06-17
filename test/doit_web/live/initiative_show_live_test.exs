@@ -1211,4 +1211,21 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       end)
     end
   end
+
+  describe "undo/redo (m02.06)" do
+    test "undo selects + scrolls the affected task (item 13)", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      t = create_task(user, initiative, nil, "task")
+      {:ok, view, _} = live(conn, open_path(initiative))
+
+      # An undoable change to the selected task, then undo.
+      select_task(view, t.id)
+      render_change(view, "update_task", %{"task" => %{"title" => "renamed"}})
+      render_click(view, "undo", %{})
+
+      assert_push_event(view, "select-task", %{id: id})
+      assert id == t.id
+    end
+  end
 end
