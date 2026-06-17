@@ -22,7 +22,7 @@ This is the milestone that earns the first public release.
 | 3 — Task Tree: Reorganization & Layout | [`m02.03-task-tree.md`](m02.03-task-tree.md) | 11 worklists | complete |
 | 4 — Account Details | [`m02.04-account-details.md`](m02.04-account-details.md) | 3 worklists | complete |
 | 5 — Wide-Width Layout | [`m02.05-wide-width-layout.md`](m02.05-wide-width-layout.md) | 12 + O&C | complete |
-| 6 — Undo & Trash | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 13 | in progress (undo model rework + 10.3 pending) |
+| 6 — Undo & Trash | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 15 | in progress (O&C 14 + testing 15 pending) |
 | 7 — Personal Workspace | [`m02.07-personal-workspace.md`](m02.07-personal-workspace.md) | 8 | draft |
 
 ## Non-Goals
