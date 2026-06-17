@@ -3261,6 +3261,10 @@ defmodule DoItWeb.InitiativeShowLive do
               id={"member-drag-#{@id}-#{m.user_id}"}
               phx-hook="MemberDrag"
               data-user-id={m.user_id}
+              data-username={m.user.username}
+              data-initials={initials(m.user)}
+              data-avatar-bg={avatar_bg(m.user)}
+              data-avatar-fg={avatar_fg(m.user)}
               title={"Drag #{m.user.name} onto a task to assign"}
               aria-hidden="true"
               class="flex-none -ml-1 cursor-grab touch-none text-zinc-600 hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-400"

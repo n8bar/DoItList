@@ -2348,18 +2348,59 @@ Hooks.MemberDrag = {
     if (this.dragging && this.target) {
       const row = this.target
       const taskId = row.dataset.taskId
+      // Optimistic assign (item 14.2): fill the primary pill now when the task
+      // has none; the server patch reconciles on success, and a rejected or
+      // timed-out reply reverts — optimism must never lie (UX_GUARDRAILS §6).
+      const revert = this.optimisticPrimary(row)
       row.classList.add("is-saving")
       let settled = false
-      const done = () => {
+      const settle = (ok) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         row.classList.remove("is-saving")
+        if (!ok && revert) revert()
       }
-      const timer = setTimeout(done, CO_REPLY_TIMEOUT_MS)
-      this.pushEvent("assign_member", { "user-id": this.userId, "task-id": taskId }, () => done())
+      const timer = setTimeout(() => settle(false), CO_REPLY_TIMEOUT_MS)
+      this.pushEvent("assign_member", { "user-id": this.userId, "task-id": taskId }, (reply) =>
+        settle(!!(reply && reply.ok)),
+      )
     }
     this.cleanup()
+  },
+  // Fill the assignee pill's PRIMARY slot from the dragged member's data, but
+  // only when the task has no primary yet — an already-assigned task gets a
+  // co-assignee, whose avatar stack the server patch renders (not predicted
+  // here). Returns a revert fn (restore the empty slot) or null.
+  optimisticPrimary(row) {
+    const pill = row.querySelector("[data-pill='assignee']")
+    if (!pill || pill.hasAttribute("data-pill-set")) return null
+    const d = this.el.dataset
+    if (!d.username) return null
+    const span = pill.querySelector("[data-pill-text]")
+    const avatar = pill.querySelector("[data-pill-avatar]")
+    pill.setAttribute("data-pill-set", "")
+    pill.title = "Assignee: @" + d.username
+    if (span) {
+      span.textContent = "@" + d.username
+      span.classList.remove("line-through")
+    }
+    if (avatar) {
+      avatar.hidden = false
+      avatar.textContent = d.initials || ""
+      avatar.style.backgroundImage = d.avatarBg || ""
+      avatar.style.color = d.avatarFg || ""
+      avatar.dataset.assigneeId = this.userId
+    }
+    return () => {
+      pill.removeAttribute("data-pill-set")
+      pill.title = "Unassigned"
+      if (span) span.textContent = ""
+      if (avatar) {
+        avatar.hidden = true
+        avatar.dataset.assigneeId = ""
+      }
+    }
   },
   cleanup() {
     if (this.onMove) document.removeEventListener("pointermove", this.onMove)
