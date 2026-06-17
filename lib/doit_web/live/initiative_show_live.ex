@@ -1558,7 +1558,14 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_info({:task_deleted, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
 
-  def handle_info({:comment_added, _id}, socket), do: {:noreply, refresh_selected(socket)}
+  # A comment landed in the Initiative (item 14.3): refresh the pane only for a
+  # viewer who has that task open, so the comment appears live for them without
+  # every other viewer needlessly reloading their own selected pane.
+  def handle_info({:comment_added, task_id}, socket) do
+    if socket.assigns.selected_task_id == task_id,
+      do: {:noreply, refresh_selected(socket)},
+      else: {:noreply, socket}
+  end
 
   def handle_info({:task_moved, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
