@@ -325,7 +325,7 @@ defmodule DoIt.Tasks do
   meaningful field changes (title, status, progress, assignee, parent).
   Triggers ancestor progress recalculation when needed.
   """
-  def update_task(%Task{} = task, %User{} = actor, attrs) do
+  def update_task(%Task{} = task, %User{} = actor, attrs, opts \\ []) do
     attrs =
       attrs
       |> stringify_keys()
@@ -338,7 +338,10 @@ defmodule DoIt.Tasks do
         case Repo.update(changeset) do
           {:ok, updated} ->
             updated = maybe_set_done_progress(updated, task)
-            record_diff_events(task, updated, actor)
+            # Completion (item 14) suppresses the per-task diff events and records
+            # one atomic status_changed for the whole flip instead.
+            if Keyword.get(opts, :record_events?, true),
+              do: record_diff_events(task, updated, actor)
 
             # Exclusivity (m02.05 item 12.1): a user is either primary or
             # co-assignee, never both — promoting/assigning someone who's on
@@ -491,7 +494,13 @@ defmodule DoIt.Tasks do
           inverse
         )
       else
-        record_event(moved, actor, "reordered", %{parent_id: new_parent_id, position: position}, inverse)
+        record_event(
+          moved,
+          actor,
+          "reordered",
+          %{parent_id: new_parent_id, position: position},
+          inverse
+        )
       end
 
       if old_parent_id && old_parent_id != new_parent_id,
@@ -685,7 +694,8 @@ defmodule DoIt.Tasks do
     # task in at `position` (or at the end when nil).
     siblings =
       from(t in Task,
-        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
+        where:
+          t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
         order_by: [asc: t.sort_order, asc: t.inserted_at]
       )
       |> with_parent(new_parent_id)
@@ -722,7 +732,8 @@ defmodule DoIt.Tasks do
     if task.parent_id != new_parent_id do
       source_siblings =
         from(t in Task,
-          where: t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
+          where:
+            t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
           order_by: [asc: t.sort_order, asc: t.inserted_at]
         )
         |> with_parent(task.parent_id)
@@ -745,7 +756,8 @@ defmodule DoIt.Tasks do
   defp insert_at_position(%Task{} = task, parent_id, index) do
     siblings =
       from(t in Task,
-        where: t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
+        where:
+          t.initiative_id == ^task.initiative_id and t.id != ^task.id and is_nil(t.deleted_at),
         order_by: [asc: t.sort_order, asc: t.inserted_at]
       )
       |> with_parent(parent_id)
@@ -849,7 +861,12 @@ defmodule DoIt.Tasks do
         # of the tree). Every real task has a parent in the single-root model;
         # only the system root is parentless and it isn't user-deletable.
         if parent_id do
-          case record_event_for(parent_id, initiative_id, actor, "child_deleted", %{title: title},
+          case record_event_for(
+                 parent_id,
+                 initiative_id,
+                 actor,
+                 "child_deleted",
+                 %{title: title},
                  %{"deleted_ids" => ids, "task_id" => task.id}
                ) do
             {:ok, _} -> :ok
@@ -884,9 +901,10 @@ defmodule DoIt.Tasks do
 
   # --- Undo / redo engine (m02.06 items 2/3) ---------------------------------
 
-  # The mutations a v1 undo reverses. Status changes (not recorded as events)
-  # and the co-assignee set events are out of scope for now.
-  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed commented)
+  # The mutations a v1 undo reverses. Completion is `status_changed` — one atomic
+  # event per flip covering the whole cascade (item 14). The co-assignee set
+  # events are still out of scope.
+  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed commented status_changed)
 
   # Bounded depth (m02.06 items 6 + 11.4): only the most recent N undoable events
   # on an Initiative are reversible; older history drops off the shared stack.
@@ -984,6 +1002,7 @@ defmodule DoIt.Tasks do
 
   defp can_undo_event?(%User{} = user, "viewer", initiative_id, event) do
     initiative = DoIt.Initiatives.get_initiative(initiative_id)
+
     initiative != nil and initiative.viewer_plus and
       viewer_plus_can_undo?(user.id, event, initiative_id)
   end
@@ -991,11 +1010,15 @@ defmodule DoIt.Tasks do
   defp can_undo_event?(_user, _role, _initiative_id, _event), do: false
 
   defp viewer_plus_can_undo?(user_id, %{kind: kind, task_id: task_id}, initiative_id)
-       when kind in ~w(progress_changed commented) do
+       when kind in ~w(progress_changed commented status_changed) do
     MapSet.member?(viewer_plus_led_ids(initiative_id, user_id), task_id)
   end
 
-  defp viewer_plus_can_undo?(user_id, %{kind: "assignee_changed", task_id: task_id}, _initiative_id) do
+  defp viewer_plus_can_undo?(
+         user_id,
+         %{kind: "assignee_changed", task_id: task_id},
+         _initiative_id
+       ) do
     case get_task(task_id) do
       nil -> false
       %Task{} = task -> viewer_staff_pool(user_id, task) != nil
@@ -1038,7 +1061,12 @@ defmodule DoIt.Tasks do
       {:ok, :ok} ->
         set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
         record_undo_meta(event, user, direction)
-        broadcast_change(event.initiative_id, {reversal_broadcast(event.kind, direction), event.task_id})
+
+        broadcast_change(
+          event.initiative_id,
+          {reversal_broadcast(event.kind, direction), event.task_id}
+        )
+
         {:ok, describe_event(event)}
 
       {:error, _reason} ->
@@ -1067,6 +1095,9 @@ defmodule DoIt.Tasks do
   defp reversal_broadcast("child_deleted", :redo), do: :task_deleted
   # A comment change refreshes the task's comment list, not the tree.
   defp reversal_broadcast("commented", _direction), do: :comment_added
+  # Completion ripples roll-ups up the ancestor chain (item 14) — patching one
+  # row would leave ancestor progress bars stale, so reload structurally.
+  defp reversal_broadcast("status_changed", _direction), do: :task_created
   defp reversal_broadcast(_kind, _direction), do: :task_created
 
   # reverse/2 applies the state change. :undo runs the inverse; :redo re-runs the
@@ -1164,9 +1195,40 @@ defmodule DoIt.Tasks do
         {:error, :comment_gone}
 
       comment_id ->
-        if direction == :undo, do: soft_delete_comment(comment_id), else: restore_comment(comment_id)
+        if direction == :undo,
+          do: soft_delete_comment(comment_id),
+          else: restore_comment(comment_id)
+
         :ok
     end
+  end
+
+  # Completion (item 14): restore every task the flip touched to its prior (undo)
+  # or next (redo) status + manual_progress in one atom — the acted task plus the
+  # cascaded ancestors/descendants — then reconcile roll-ups. Tasks that vanished
+  # since are skipped, never stalling the rest.
+  defp reverse(%{kind: "status_changed"} = event, direction) do
+    affected = event.inverse_payload["affected"] || []
+
+    Enum.each(affected, fn a ->
+      case get_task(a["task_id"]) do
+        nil ->
+          :ok
+
+        %Task{} = task ->
+          {status, progress} =
+            if direction == :undo,
+              do: {a["from_status"], a["from_progress"]},
+              else: {a["to_status"], a["to_progress"]}
+
+          task
+          |> Ecto.Changeset.change(%{status: status, manual_progress: progress})
+          |> Repo.update!()
+      end
+    end)
+
+    reconcile_progress(event.initiative_id)
+    :ok
   end
 
   defp undo_field("title_changed"), do: :title
@@ -1209,7 +1271,15 @@ defmodule DoIt.Tasks do
   # The undid / redid feed entry (item 8) — labeled, never hiding the round-trip.
   defp record_undo_meta(event, user, direction) do
     kind = if direction == :undo, do: "undid", else: "redid"
-    record_event_for(event.task_id, event.initiative_id, user, kind, %{"of" => describe_event(event)}, nil)
+
+    record_event_for(
+      event.task_id,
+      event.initiative_id,
+      user,
+      kind,
+      %{"of" => describe_event(event)},
+      nil
+    )
   end
 
   @doc """
@@ -1225,6 +1295,8 @@ defmodule DoIt.Tasks do
   def describe_event(%{kind: "priority_changed"}), do: "priority change"
   def describe_event(%{kind: "assignee_changed"}), do: "assignee change"
   def describe_event(%{kind: "commented"}), do: "comment"
+  def describe_event(%{kind: "status_changed", data: %{"to" => "done"}}), do: "completion"
+  def describe_event(%{kind: "status_changed"}), do: "reopen"
   def describe_event(_), do: "change"
 
   defp maybe_set_done_progress(%Task{} = task), do: task
@@ -1262,14 +1334,10 @@ defmodule DoIt.Tasks do
   def toggle_complete(%Task{status: "done"} = task, %User{} = actor) do
     with_resort_batching(fn ->
       Repo.transaction(fn ->
-        case update_task(task, actor, %{"status" => "open", "manual_progress" => 0}) do
-          {:ok, updated} ->
-            uncheck_done_ancestors(updated.parent_id, actor)
-            updated
-
-          {:error, cs} ->
-            Repo.rollback(cs)
-        end
+        {updated, entry} = flip_status(task, actor, "open")
+        ancestors = uncheck_done_ancestors(updated.parent_id, actor)
+        record_status_event(task, actor, [entry | ancestors])
+        updated
       end)
     end)
   end
@@ -1277,52 +1345,90 @@ defmodule DoIt.Tasks do
   def toggle_complete(%Task{} = task, %User{} = actor) do
     with_resort_batching(fn ->
       Repo.transaction(fn ->
-        case update_task(task, actor, %{"status" => "done"}) do
-          {:ok, updated} ->
-            check_completed_ancestors(updated.parent_id, actor)
-            updated
-
-          {:error, cs} ->
-            Repo.rollback(cs)
-        end
+        {updated, entry} = flip_status(task, actor, "done")
+        ancestors = check_completed_ancestors(updated.parent_id, actor)
+        record_status_event(task, actor, [entry | ancestors])
+        updated
       end)
     end)
   end
 
-  defp check_completed_ancestors(nil, _actor), do: :ok
+  # One status flip with **no** per-task event (item 14) — the atomic
+  # status_changed the caller records subsumes it. Returns the updated task and
+  # a {from,to}×{status,progress} entry for the undo payload.
+  defp flip_status(%Task{} = task, %User{} = actor, status) do
+    attrs =
+      case status do
+        "open" -> %{"status" => "open", "manual_progress" => 0}
+        s -> %{"status" => s}
+      end
+
+    case update_task(task, actor, attrs, record_events?: false) do
+      {:ok, updated} -> {updated, affected_entry(task, updated)}
+      {:error, cs} -> Repo.rollback(cs)
+    end
+  end
+
+  defp affected_entry(%Task{} = before, %Task{} = updated) do
+    %{
+      "task_id" => before.id,
+      "from_status" => before.status,
+      "from_progress" => before.manual_progress,
+      "to_status" => updated.status,
+      "to_progress" => updated.manual_progress
+    }
+  end
+
+  # Record the whole completion as a single undoable status_changed event on the
+  # task the user toggled (item 14). The inverse payload carries every task the
+  # flip touched — the acted task, descendants flipped by a down-cascade, and
+  # ancestors flipped by the up-cascade — each with its prior/next status +
+  # manual_progress, so undo/redo reverses the whole cascade atomically. This is
+  # what keeps one logical completion from fragmenting into per-ancestor
+  # progress_changed events, one of which (on an out-of-domain root) would
+  # otherwise wall a viewer+ off from undoing their own completion.
+  defp record_status_event(%Task{} = acted, %User{} = actor, [acted_entry | _] = affected) do
+    record_event(
+      acted,
+      actor,
+      "status_changed",
+      %{from: acted_entry["from_status"], to: acted_entry["to_status"]},
+      %{"affected" => affected}
+    )
+  end
+
+  defp check_completed_ancestors(nil, _actor), do: []
 
   defp check_completed_ancestors(parent_id, actor) do
     case Repo.get(Task, parent_id) do
       nil ->
-        :ok
+        []
 
       parent ->
-        siblings = Repo.all(from t in Task, where: t.parent_id == ^parent.id and is_nil(t.deleted_at))
+        siblings =
+          Repo.all(from t in Task, where: t.parent_id == ^parent.id and is_nil(t.deleted_at))
+
         all_done? = siblings != [] and Enum.all?(siblings, &(&1.status == "done"))
 
         if all_done? and parent.status != "done" do
-          case update_task(parent, actor, %{"status" => "done"}) do
-            {:ok, updated} -> check_completed_ancestors(updated.parent_id, actor)
-            {:error, cs} -> Repo.rollback(cs)
-          end
+          {updated, entry} = flip_status(parent, actor, "done")
+          [entry | check_completed_ancestors(updated.parent_id, actor)]
         else
-          :ok
+          []
         end
     end
   end
 
-  defp uncheck_done_ancestors(nil, _actor), do: :ok
+  defp uncheck_done_ancestors(nil, _actor), do: []
 
   defp uncheck_done_ancestors(parent_id, actor) do
     case Repo.get(Task, parent_id) do
       nil ->
-        :ok
+        []
 
       %Task{status: "done"} = parent ->
-        case update_task(parent, actor, %{"status" => "open"}) do
-          {:ok, updated} -> uncheck_done_ancestors(updated.parent_id, actor)
-          {:error, cs} -> Repo.rollback(cs)
-        end
+        {updated, entry} = flip_status(parent, actor, "open")
+        [entry | uncheck_done_ancestors(updated.parent_id, actor)]
 
       parent ->
         uncheck_done_ancestors(parent.parent_id, actor)
@@ -1347,31 +1453,29 @@ defmodule DoIt.Tasks do
   defp cascade_status(%Task{} = task, %User{} = actor, status) do
     with_resort_batching(fn ->
       Repo.transaction(fn ->
-        task.id
-        |> list_descendants()
-        |> Enum.each(fn descendant ->
-          case update_task(descendant, actor, %{"status" => status}) do
-            {:ok, _} -> :ok
-            {:error, cs} -> Repo.rollback(cs)
+        descendant_entries =
+          task.id
+          |> list_descendants()
+          |> Enum.map(fn descendant ->
+            {_updated, entry} = flip_status(descendant, actor, status)
+            entry
+          end)
+
+        {updated, acted_entry} = flip_status(task, actor, status)
+
+        # Reconcile the ancestor chain both ways, mirroring the leaf toggle:
+        # marking a branch done may complete its now-fully-done parent; reopening
+        # it may invalidate a done ancestor.
+        ancestor_entries =
+          if status == "open" do
+            uncheck_done_ancestors(updated.parent_id, actor)
+          else
+            check_completed_ancestors(updated.parent_id, actor)
           end
-        end)
 
-        case update_task(task, actor, %{"status" => status}) do
-          {:ok, updated} ->
-            # Reconcile the ancestor chain both ways, mirroring the leaf toggle:
-            # marking a branch done may complete its now-fully-done parent;
-            # reopening it may invalidate a done ancestor.
-            if status == "open" do
-              uncheck_done_ancestors(updated.parent_id, actor)
-            else
-              check_completed_ancestors(updated.parent_id, actor)
-            end
-
-            updated
-
-          {:error, cs} ->
-            Repo.rollback(cs)
-        end
+        # One atomic status_changed for the branch flip (item 14), acted task first.
+        record_status_event(task, actor, [acted_entry | descendant_entries ++ ancestor_entries])
+        updated
       end)
     end)
   end

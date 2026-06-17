@@ -30,7 +30,10 @@ defmodule DoIt.UndoTest do
     {:ok, t} =
       Tasks.create_task(
         owner,
-        Map.merge(%{"initiative_id" => init.id, "parent_id" => parent_id, "title" => title}, attrs)
+        Map.merge(
+          %{"initiative_id" => init.id, "parent_id" => parent_id, "title" => title},
+          attrs
+        )
       )
 
     t
@@ -239,11 +242,16 @@ defmodule DoIt.UndoTest do
     # Move M out of A so deleting A won't touch M, then soft-delete A directly
     # (no event), leaving the move as the newest undoable.
     {:ok, _} = Tasks.move_task(get(moved.id), owner, %{"parent_id" => b.id})
-    {1, _} = DoIt.Repo.update_all(from(t in DoIt.Tasks.Task, where: t.id == ^a.id), set: [deleted_at: DateTime.utc_now() |> DateTime.truncate(:second)])
+
+    {1, _} =
+      DoIt.Repo.update_all(from(t in DoIt.Tasks.Task, where: t.id == ^a.id),
+        set: [deleted_at: DateTime.utc_now() |> DateTime.truncate(:second)]
+      )
 
     # Undo would move M back under A — but A is gone. Surface a conflict and
     # step past the dead entry instead of stalling.
     assert {:error, {:conflict, "move"}} = Tasks.undo(owner, init.id)
+
     refute Tasks.undo_candidate(owner, init.id) &&
              Tasks.undo_candidate(owner, init.id).kind == "parent_changed"
   end
@@ -259,5 +267,116 @@ defmodule DoIt.UndoTest do
     {:ok, _} = Tasks.update_task(get(t.id), owner, %{"title" => "v2"})
     assert Tasks.redo_candidate(owner, init.id) == nil
     assert {:error, :nothing_to_redo} = Tasks.redo(owner, init.id)
+  end
+
+  # --- Completion is undoable (item 14) -------------------------------------
+
+  test "completing a leaf records one atomic status event; undo reopens the whole up-cascade (item 14)" do
+    %{owner: owner, init: init} = setup_init()
+    branch = task(owner, init, nil, "branch")
+    leaf = task(owner, init, branch, "leaf")
+
+    {:ok, _} = Tasks.toggle_complete(get(leaf.id), owner)
+    assert get(leaf.id).status == "done"
+    # The completion cascaded up: the branch (its only child done) and the root.
+    assert get(branch.id).status == "done"
+    assert get(init.root_task_id).status == "done"
+
+    # ONE undoable event for the whole completion, attributed to the task the
+    # user actually toggled — not per-ancestor progress_changed spam.
+    cand = Tasks.undo_candidate(owner, init.id)
+    assert cand.kind == "status_changed"
+    assert cand.task_id == leaf.id
+
+    # Undo reopens the leaf AND every cascaded ancestor in one step, and clears
+    # the done-snap so progress isn't stuck at 100.
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert get(leaf.id).status == "open"
+    assert get(leaf.id).manual_progress == 0
+    assert get(branch.id).status == "open"
+    assert get(init.root_task_id).status == "open"
+    # Atomic: the next undo is the leaf's creation, not a leftover completion event.
+    assert Tasks.undo_candidate(owner, init.id).kind == "created"
+
+    # Redo re-completes the whole cascade.
+    assert {:ok, _} = Tasks.redo(owner, init.id)
+    assert get(leaf.id).status == "done"
+    assert get(branch.id).status == "done"
+    assert get(init.root_task_id).status == "done"
+  end
+
+  test "completing a branch cascades down as one atomic status event (item 14)" do
+    %{owner: owner, init: init} = setup_init()
+    branch = task(owner, init, nil, "branch")
+    l1 = task(owner, init, branch, "l1")
+    l2 = task(owner, init, branch, "l2")
+
+    {:ok, _} = Tasks.cascade_complete(get(branch.id), owner)
+    assert get(branch.id).status == "done"
+    assert get(l1.id).status == "done"
+    assert get(l2.id).status == "done"
+
+    cand = Tasks.undo_candidate(owner, init.id)
+    assert cand.kind == "status_changed"
+    assert cand.task_id == branch.id
+
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert get(branch.id).status == "open"
+    assert get(l1.id).status == "open"
+    assert get(l2.id).status == "open"
+
+    assert {:ok, _} = Tasks.redo(owner, init.id)
+    assert get(l1.id).status == "done"
+    assert get(l2.id).status == "done"
+  end
+
+  test "another member can undo a completion on the shared timeline (item 14)" do
+    %{owner: owner, init: init} = setup_init()
+    editor = user("Editor")
+    {:ok, _} = Initiatives.add_member(init.id, editor.id, "editor")
+    leaf = task(owner, init, nil, "leaf")
+
+    {:ok, _} = Tasks.toggle_complete(get(leaf.id), owner)
+    assert get(leaf.id).status == "done"
+
+    assert {:ok, _} = Tasks.undo(editor, init.id)
+    assert get(leaf.id).status == "open"
+  end
+
+  test "a viewer+ can undo a completion in their led subtree though it cascaded to the root (item 14, Cheese repro)" do
+    %{owner: owner, init: init} = setup_init()
+    b = user("B")
+    {:ok, _} = Initiatives.add_member(init.id, b.id, "viewer")
+    italy = task(owner, init, nil, "Italy")
+    mozz = task(owner, init, italy, "Mozzarella")
+    # B leads Italy and its subtree (incl. Mozzarella) — viewer+ on by default.
+    {:ok, _} = Tasks.update_task(get(italy.id), owner, %{"assignee_id" => to_string(b.id)})
+
+    # Owner completes Mozzarella — cascades Italy + root done.
+    {:ok, _} = Tasks.toggle_complete(get(mozz.id), owner)
+    assert get(init.root_task_id).status == "done"
+
+    # The completion is one event on Mozzarella, which is in B's led subtree, so
+    # B can undo it — NOT walled off by an out-of-domain root event (the bug).
+    cand = Tasks.undo_candidate(b, init.id)
+    assert cand.kind == "status_changed"
+    assert cand.task_id == mozz.id
+
+    assert {:ok, _} = Tasks.undo(b, init.id)
+    assert get(mozz.id).status == "open"
+    assert get(italy.id).status == "open"
+    assert get(init.root_task_id).status == "open"
+  end
+
+  test "undo of a completion broadcasts a structural reload — roll-ups ripple to ancestors (item 14)" do
+    %{owner: owner, init: init} = setup_init()
+    branch = task(owner, init, nil, "branch")
+    leaf = task(owner, init, branch, "leaf")
+    {:ok, _} = Tasks.toggle_complete(get(leaf.id), owner)
+
+    Tasks.subscribe(init.id)
+    {:ok, _} = Tasks.undo(owner, init.id)
+
+    assert_receive {:task_created, _}
   end
 end
