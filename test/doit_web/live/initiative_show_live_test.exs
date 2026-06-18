@@ -1248,6 +1248,34 @@ defmodule DoItWeb.InitiativeShowLiveTest do
 
       assert render(view_b) =~ "live hello"
     end
+
+    test "a viewer+ grant on an ancestor live-enables a selected descendant's pane (item 15.1)",
+         %{conn: conn} do
+      {_conn_a, owner} = register_and_log_in(conn)
+      {conn_b, member} = register_and_log_in(conn)
+      initiative = create_initiative(owner)
+      {:ok, _} = Initiatives.add_member(initiative.id, member.id, "viewer")
+      branch = create_task(owner, initiative, nil, "branch")
+      leaf = create_task(owner, initiative, branch, "leaf")
+
+      {:ok, view_b, _} = live(conn_b, open_path(initiative))
+      # B (a plain viewer) selects the leaf — no progress or staffing rights yet.
+      select_task(view_b, leaf.id)
+      assert has_element?(view_b, "#task-field-progress[disabled]")
+      refute has_element?(view_b, "#add-co-assignee-form")
+
+      # Owner assigns B to the BRANCH → viewer+ over the whole subtree. The
+      # broadcast targets the branch, but B's open pane shows the descendant
+      # leaf — which must gain BOTH progress and staffing rights live, with no
+      # refresh (item 15.1).
+      {:ok, _} =
+        Tasks.update_task(Tasks.get_task!(branch.id), owner, %{
+          "assignee_id" => to_string(member.id)
+        })
+
+      refute has_element?(view_b, "#task-field-progress[disabled]")
+      assert has_element?(view_b, "#add-co-assignee-form")
+    end
   end
 
   describe "Details pane pre-mount (item 15.8)" do

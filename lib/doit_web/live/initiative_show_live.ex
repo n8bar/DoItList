@@ -412,6 +412,7 @@ defmodule DoItWeb.InitiativeShowLive do
       lineage ->
         task = Enum.find(lineage, &(&1.id == task_id))
         root_id = socket.assigns.initiative.root_task_id
+        prev_led = socket.assigns.led_task_ids
 
         socket =
           socket
@@ -441,7 +442,19 @@ defmodule DoItWeb.InitiativeShowLive do
               |> assign(:root_task, Map.put(root, :children, socket.assigns.tree))
           end
 
-        if socket.assigns.selected_task_id in Enum.map(lineage, & &1.id),
+        # Refresh the open pane when it shows a task in the patched lineage, OR
+        # when a viewer+ grant/revoke just flipped the selected task's
+        # led-membership (item 15.1). The assignment broadcasts for the granted
+        # task, but staffing rights (@selected_staff_pool) are recomputed only on
+        # refresh — and the affected task may be a selected DESCENDANT that isn't
+        # in that task's lineage. (Progress already updates live: can_progress is
+        # re-derived from @led_task_ids in the pane wrapper.)
+        sel = socket.assigns.selected_task_id
+
+        led_flipped? =
+          sel && MapSet.member?(prev_led, sel) != MapSet.member?(socket.assigns.led_task_ids, sel)
+
+        if (sel && sel in Enum.map(lineage, & &1.id)) || led_flipped?,
           do: refresh_selected(socket),
           else: socket
     end
