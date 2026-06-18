@@ -750,8 +750,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # Undo / redo (m02.06 items 4/5). The engine reverses the user's own newest
   # undoable event; we reload the tree for immediate feedback (the broadcast
   # reloads other members) and flash the outcome.
-  def handle_event("undo", _params, socket), do: {:noreply, do_undo_redo(socket, :undo)}
-  def handle_event("redo", _params, socket), do: {:noreply, do_undo_redo(socket, :redo)}
+  # Reply (not noreply) so the client's pushEvent callback fires when the server
+  # settles — that's what clears the in-flight latch + working state (item 15.9).
+  def handle_event("undo", _params, socket), do: {:reply, %{}, do_undo_redo(socket, :undo)}
+  def handle_event("redo", _params, socket), do: {:reply, %{}, do_undo_redo(socket, :redo)}
 
   # --- Co-assignees (m02.05 item 13) ---------------------------------------
 
@@ -1639,9 +1641,20 @@ defmodule DoItWeb.InitiativeShowLive do
                 if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
                 if (window.DoitPush) window.DoitPush("select_task", {id});
               });
+              // Toolbar Undo/Redo clicks route through the same latch + feedback
+              // as the keyboard (item 15.9), so a repeat while one's in flight is
+              // dropped (with a bonk), never queued.
+              this._undoBtn = (e) => {
+                const b = e.target.closest("#undo-button, #redo-button");
+                if (!b || b.disabled) return;
+                e.preventDefault();
+                this.triggerUndoRedo(b.id === "redo-button" ? "redo" : "undo");
+              };
+              window.addEventListener("click", this._undoBtn);
             },
             destroyed() {
               window.removeEventListener("keydown", this._h);
+              window.removeEventListener("click", this._undoBtn);
               if (window.DoitPush) delete window.DoitPush;
               clearTimeout(this._paneT);
             },
@@ -1670,7 +1683,7 @@ defmodule DoItWeb.InitiativeShowLive do
               if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
                 e.preventDefault();
                 const redo = /^y$/i.test(e.key) || e.shiftKey;
-                this.pushEvent(redo ? "redo" : "undo", {});
+                this.triggerUndoRedo(redo ? "redo" : "undo");
                 return;
               }
               const k = e.key;
@@ -1844,8 +1857,47 @@ defmodule DoItWeb.InitiativeShowLive do
                 osc.stop(ctx.currentTime + 0.3);
               } catch (_e) { /* no audio, no problem */ }
             },
+            // In-flight undo/redo feedback (item 15.9): the first trigger latches
+            // and shows a working state instantly (no round trip); a repeat while
+            // it's in flight is DROPPED with a bonk, not queued. The server reply
+            // (handlers return {:reply,…}) clears the latch + working state.
+            triggerUndoRedo(dir) {
+              if (this._undoInFlight) { this.bonk(); return; }
+              this._undoInFlight = dir;
+              this.setUndoBusy(dir, true);
+              this.pushEvent(dir, {}, () => {
+                this._undoInFlight = null;
+                this.setUndoBusy(dir, false);
+              });
+            },
+            setUndoBusy(dir, on) {
+              const btn = document.getElementById(dir === "redo" ? "redo-button" : "undo-button");
+              if (btn) {
+                btn.classList.toggle("animate-pulse", on);
+                btn.classList.toggle("pointer-events-none", on);
+              }
+              const toast = document.getElementById("undo-toast");
+              if (toast) {
+                if (on) {
+                  toast.textContent = dir === "redo" ? "Redoing…" : "Undoing…";
+                  toast.hidden = false;
+                } else {
+                  toast.hidden = true;
+                }
+              }
+            },
           }
         </script>
+        <%!-- Instant "we heard you" toast for undo/redo (item 15.9), shown
+             client-side before the round trip and hidden when the server reply
+             settles the latch; the result then shows as the normal flash. --%>
+        <div
+          id="undo-toast"
+          hidden
+          aria-live="polite"
+          class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
+        >
+        </div>
         <div class="relative mb-6 pb-6">
           <%!-- Close (back to the index) + role on the same row. The little red
                X (item 12.7) reads as "close this Initiative" rather than a plain
@@ -1869,7 +1921,6 @@ defmodule DoItWeb.InitiativeShowLive do
                 <button
                   type="button"
                   id="undo-button"
-                  phx-click="undo"
                   disabled={is_nil(@undo_label)}
                   title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
                   aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
@@ -1880,7 +1931,6 @@ defmodule DoItWeb.InitiativeShowLive do
                 <button
                   type="button"
                   id="redo-button"
-                  phx-click="redo"
                   disabled={is_nil(@redo_label)}
                   title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
                   aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
