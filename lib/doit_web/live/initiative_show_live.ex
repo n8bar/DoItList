@@ -2111,29 +2111,30 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
-            <%!-- ONE pane, never swapped (.03.07.06): once a task has been
-                 selected the pane stays mounted; deselecting hides it
-                 (selected_task keeps the last pane data, only selected_task_id
-                 nils). On a selection switch the client writes the row-known
-                 values (title / priority / assignee) into these real
-                 fields immediately and swaps the async lists to "Loading…";
-                 the server patch then reconciles the same elements in place —
-                 LiveView never clobbers the focused field, so in-progress
-                 typing survives the patch. --%>
+            <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
+                 the shell renders from the start — a blank task when nothing is
+                 selected — so the FIRST selection fills client-side with no
+                 round trip, exactly like every later switch. Deselecting hides
+                 it (selected_task keeps the last pane data, only selected_task_id
+                 nils). On a selection the client writes the row-known values
+                 (title / priority / assignee) into these real fields immediately
+                 and swaps the async lists to "Loading…"; the server patch then
+                 reconciles the same elements in place (and fills the editable
+                 co-assignee list, comments, activity) — LiveView never clobbers
+                 the focused field, so in-progress typing survives the patch. --%>
             <div
-              :if={@selected_task}
               id="task-editor-pane"
-              data-task-id={@selected_task.id}
+              data-task-id={@selected_task_id}
               hidden={is_nil(@selected_task_id) or @editing_initiative?}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.task_editor
-                task={@selected_task}
+                task={@selected_task || blank_task()}
                 comments={@comments}
                 activity={@activity}
                 members={@members}
                 can_edit={@can_edit}
-                can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task.id)}
+                can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
                 can_staff={@selected_staff_pool != nil}
                 staff_pool={@selected_staff_pool}
                 show_activity={@show_task_activity}
@@ -3601,7 +3602,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
-      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" />
+      <.sort_menu :if={@task.id} task={@task} can_edit={@can_edit} label="Sort children by" />
 
       <form phx-change="update_task" phx-submit="update_task" class="grid grid-cols-2 gap-3">
         <div>
@@ -3659,7 +3660,7 @@ defmodule DoItWeb.InitiativeShowLive do
            MUST live OUTSIDE the update_task form — its own add-form can't be
            nested in another form (the browser drops nested forms). --%>
       <div
-        :if={@can_edit or @can_staff or @task.co_assignee_links != []}
+        :if={@task.id && (@can_edit or @can_staff or @task.co_assignee_links != [])}
         id="co-assignees"
         phx-hook="CoAssignees"
       >
@@ -3753,7 +3754,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <div
+        :if={@task.id}
+        class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3"
+      >
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
             Last updated by
@@ -4037,6 +4041,13 @@ defmodule DoItWeb.InitiativeShowLive do
     do: "w-3 h-3 flex-none text-amber-700 dark:text-amber-600"
 
   defp badge_icon_class(_calc), do: "w-3 h-3 flex-none"
+
+  # An empty placeholder so the Details pane shell can pre-mount before any task
+  # is selected (item 15.8) — the client fills the editable fields from the row
+  # on the first selection. children: [] keeps leaf?/sort safe; the task-keyed
+  # sections (sort, co-assignees, "last updated") gate on @task.id and stay out
+  # until the real task arrives on the reply.
+  defp blank_task, do: %Task{children: [], co_assignee_links: []}
 
   defp leaf?(%Task{} = task) do
     case Map.get(task, :children) do

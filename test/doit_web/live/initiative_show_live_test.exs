@@ -1249,4 +1249,20 @@ defmodule DoItWeb.InitiativeShowLiveTest do
       assert render(view_b) =~ "live hello"
     end
   end
+
+  describe "Details pane pre-mount (item 15.8)" do
+    test "the pane shell is in the DOM before any task is selected", %{conn: conn} do
+      {conn, user} = register_and_log_in(conn)
+      initiative = create_initiative(user)
+      _t = create_task(user, initiative, nil, "Alpha")
+
+      {:ok, view, _html} = live(conn, open_path(initiative))
+
+      # The editable shell exists without selecting a task, so the client can
+      # fill it on the FIRST selection with no server round trip (item 15.8).
+      assert has_element?(view, "#task-field-title")
+      # ...and the pane stays hidden until something is actually selected.
+      assert has_element?(view, "#task-editor-pane[hidden]")
+    end
+  end
 end
