@@ -904,7 +904,7 @@ defmodule DoIt.Tasks do
   # The mutations a v1 undo reverses. Completion is `status_changed` — one atomic
   # event per flip covering the whole cascade (item 14). The co-assignee set
   # events are still out of scope.
-  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed progress_changed priority_changed assignee_changed commented status_changed)
+  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed description_changed progress_changed priority_changed assignee_changed commented status_changed)
 
   # Bounded depth (m02.06 items 6 + 11.4): only the most recent N undoable events
   # on an Initiative are reversible; older history drops off the shared stack.
@@ -1078,7 +1078,7 @@ defmodule DoIt.Tasks do
   # {:task_created} that forced a full reload everywhere. Create / delete flip
   # by direction since the tree shape changes.
   defp reversal_broadcast(kind, _direction)
-       when kind in ~w(title_changed progress_changed priority_changed assignee_changed),
+       when kind in ~w(title_changed description_changed progress_changed priority_changed assignee_changed),
        do: :task_updated
 
   defp reversal_broadcast(kind, _direction) when kind in ~w(parent_changed reordered),
@@ -1176,7 +1176,7 @@ defmodule DoIt.Tasks do
   # Attribute diffs (m02.06): the events already store from/to, so the inverse
   # is "set the field back". Progress feeds the roll-up; the rest are local.
   defp reverse(%{kind: kind} = event, direction)
-       when kind in ~w(title_changed progress_changed priority_changed assignee_changed) do
+       when kind in ~w(title_changed description_changed progress_changed priority_changed assignee_changed) do
     field = undo_field(kind)
     value = if direction == :undo, do: event.data["from"], else: event.data["to"]
 
@@ -1244,6 +1244,7 @@ defmodule DoIt.Tasks do
   end
 
   defp undo_field("title_changed"), do: :title
+  defp undo_field("description_changed"), do: :description
   defp undo_field("progress_changed"), do: :manual_progress
   defp undo_field("priority_changed"), do: :priority
   defp undo_field("assignee_changed"), do: :assignee_id
@@ -1303,6 +1304,7 @@ defmodule DoIt.Tasks do
   def describe_event(%{kind: "child_deleted", data: data}), do: "delete \"#{data["title"]}\""
   def describe_event(%{kind: "created", data: data}), do: "create \"#{data["title"]}\""
   def describe_event(%{kind: "title_changed"}), do: "rename"
+  def describe_event(%{kind: "description_changed"}), do: "description change"
   def describe_event(%{kind: "progress_changed"}), do: "progress change"
   def describe_event(%{kind: "priority_changed"}), do: "priority change"
   def describe_event(%{kind: "assignee_changed"}), do: "assignee change"
@@ -2155,6 +2157,7 @@ defmodule DoIt.Tasks do
   defp record_diff_events(%Task{} = old, %Task{} = new, %User{} = actor) do
     [
       {:title, "title_changed"},
+      {:description, "description_changed"},
       {:manual_progress, "progress_changed"},
       {:assignee_id, "assignee_changed"},
       {:parent_id, "parent_changed"},

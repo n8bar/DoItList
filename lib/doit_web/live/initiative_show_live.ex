@@ -195,7 +195,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # Reversed kinds that change only a task's own fields — the performer patches
   # just that row (item 14.4); everything else changes tree shape and reloads.
-  @incremental_undo_kinds ~w(title_changed progress_changed priority_changed assignee_changed)
+  @incremental_undo_kinds ~w(title_changed description_changed progress_changed priority_changed assignee_changed)
 
   defp do_undo_redo(socket, dir) do
     user = socket.assigns.current_user

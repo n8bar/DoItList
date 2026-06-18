@@ -60,6 +60,21 @@ defmodule DoIt.UndoTest do
     assert get(t.id).title == "after"
   end
 
+  test "description change round-trips (item 12 — was silently dropped)" do
+    %{owner: owner, init: init} = setup_init()
+    t = task(owner, init, nil, "t")
+    {:ok, _} = Tasks.update_task(get(t.id), owner, %{"description" => "first draft"})
+
+    assert get(t.id).description == "first draft"
+    # The edit must be its own undoable event, like a title edit.
+    assert Tasks.undo_candidate(owner, init.id).kind == "description_changed"
+
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert get(t.id).description == nil
+    assert {:ok, _} = Tasks.redo(owner, init.id)
+    assert get(t.id).description == "first draft"
+  end
+
   test "progress change round-trips and rolls up" do
     %{owner: owner, init: init} = setup_init()
     leaf = task(owner, init, nil, "leaf")
