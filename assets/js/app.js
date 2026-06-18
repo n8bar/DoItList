@@ -232,6 +232,9 @@ const DoitSelection = {
     }
 
     set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
+    // Description rides a hidden-when-empty row span (item 15.11) — fill the
+    // textarea from it so the pane shows it instantly on selection, no round trip.
+    set(pane.querySelector("#task-field-description"), text("[data-task-description]"))
 
     // The title attr always carries the priority ("Priority: high"). Either
     // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,

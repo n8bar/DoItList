@@ -3621,7 +3621,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="space-y-1">
           <div class="flex items-center gap-1">
             <label for="task-field-progress" class="text-xs text-zinc-500 dark:text-zinc-400">
-              Manual progress: <span data-progress-readout>{@task.manual_progress}</span>%
+              Manual progress: <span data-progress-readout>{if leaf?(@task), do: @task.manual_progress, else: @task.computed_progress}</span>%
             </label>
             <.info_hint
               :if={not leaf?(@task)}
@@ -3640,7 +3640,7 @@ defmodule DoItWeb.InitiativeShowLive do
             min="0"
             max="100"
             step="5"
-            value={@task.manual_progress}
+            value={if leaf?(@task), do: @task.manual_progress, else: @task.computed_progress}
             class="w-full"
             disabled={not @can_progress or not leaf?(@task)}
             phx-debounce="200"
