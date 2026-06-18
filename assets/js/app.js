@@ -236,6 +236,20 @@ const DoitSelection = {
     // textarea from it so the pane shows it instantly on selection, no round trip.
     set(pane.querySelector("#task-field-description"), text("[data-task-description]"))
 
+    // Progress slider (item 15.11): value + enabled state from the row, so it
+    // reflects reality instantly. Value is the row's displayed % (branch =
+    // computed); disabled when not a leaf, or the row says no progress rights.
+    const prog = pane.querySelector("#task-field-progress")
+    if (prog && prog !== document.activeElement) {
+      const pv = row.getAttribute("data-task-progress")
+      if (pv !== null) prog.value = pv
+      const hasKids = !!li.querySelector(":scope > ul[id^='children-']")
+      const canProgress = row.getAttribute("data-can-progress") === "true"
+      prog.disabled = !canProgress || hasKids
+      const readout = pane.querySelector("[data-progress-readout]")
+      if (readout && pv !== null) readout.textContent = pv
+    }
+
     // The title attr always carries the priority ("Priority: high"). Either
     // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,
     // the server render carries the truth.

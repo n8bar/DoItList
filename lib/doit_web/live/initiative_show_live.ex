@@ -2745,6 +2745,8 @@ defmodule DoItWeb.InitiativeShowLive do
       <div
         data-task-row
         data-done={@task.status == "done"}
+        data-task-progress={progress_value(@task)}
+        data-can-progress={to_string(@can_progress)}
         class={[
           "group/row relative flex flex-wrap items-center gap-x-2 xl:gap-x-3 gap-y-1 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px] cursor-pointer",
           MapSet.member?(@saving_ids, @task.id) && "is-saving",
@@ -3728,13 +3730,19 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-hook="CoAssignees"
       >
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
+        <%!-- Don't show the previous task's co-assignees during a selection
+             switch (item 15.11): dim to "Loading…" via the same async mechanism
+             as comments / activity, then the server fills the real list. --%>
+        <p data-async-loading hidden class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic">
+          Loading…
+        </p>
         <%!-- Item 12.5: the list is hook-owned (phx-update="ignore") so optimistic
              add/remove/reorder apply at the gesture without morphdom fighting
              them; the hook reverts from the server's reply (or a timeout) when a
              write doesn't land — never sticking a change the server refused.
              Keyed by task id so selecting another task re-renders from the
              server. The chip + dropdown stay server-driven (truthful). --%>
-        <ul id={"co-list-#{@task.id}"} phx-update="ignore" class="mt-1 space-y-1">
+        <ul id={"co-list-#{@task.id}"} data-async-list phx-update="ignore" class="mt-1 space-y-1">
           <li
             :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
             id={"co-row-#{link.user_id}"}
