@@ -2903,6 +2903,23 @@ defmodule DoItWeb.InitiativeShowLive do
             aria-hidden="true"
           >
           </span>
+
+          <%!-- Co-assignee seed (item 15.11): hidden, machine-readable copy of
+               the chip above, so selecting this task fills the pane's optimistic
+               co-list instantly — before the server reply. Capped like the chip
+               (co_assignee_users); the full interactive list reconciles on the
+               reply. --%>
+          <span
+            :for={u <- @task.co_assignee_users}
+            hidden
+            data-co-seed
+            data-user-id={u.id}
+            data-name={u.username}
+            data-initials={initials(u)}
+            data-avatar-bg={avatar_bg(u)}
+            data-avatar-fg={avatar_fg(u)}
+          >
+          </span>
         </div>
 
         <%!-- Row 1, pinned right: the new-task button. --%>
@@ -3726,6 +3743,18 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
+      <%!-- Optimistic co-assignees (item 15.11): a read-only mirror of the
+           selected row's co-chip, shown the instant a selection switch is in
+           flight so co's appear pronto — before the server reply fills the
+           real interactive list below. fillPaneFields builds it from the row's
+           hidden [data-co-seed] spans; syncPaneSkeleton shows it only while the
+           switch is in flight and hides it once the real list arrives. Always
+           present (not gated on @task.id) so a first selection has it too. --%>
+      <div id="co-optimistic" hidden>
+        <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
+        <ul data-co-opt-list class="mt-1 space-y-1"></ul>
+      </div>
+
       <%!-- Co-assignees (m02.05 item 13): ordered, manual — position is
            promotion order. The primary stays the assignee select above.
            MUST live OUTSIDE the update_task form — its own add-form can't be
@@ -3733,22 +3762,19 @@ defmodule DoItWeb.InitiativeShowLive do
       <div
         :if={@task.id && (@can_edit or @can_staff or @task.co_assignee_links != [])}
         id="co-assignees"
+        data-async-list
         phx-hook="CoAssignees"
       >
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
-        <%!-- Don't show the previous task's co-assignees during a selection
-             switch (item 15.11): dim to "Loading…" via the same async mechanism
-             as comments / activity, then the server fills the real list. --%>
-        <p data-async-loading hidden class="mt-1 text-xs text-zinc-400 dark:text-zinc-500 italic">
-          Loading…
-        </p>
         <%!-- Item 12.5: the list is hook-owned (phx-update="ignore") so optimistic
              add/remove/reorder apply at the gesture without morphdom fighting
              them; the hook reverts from the server's reply (or a timeout) when a
              write doesn't land — never sticking a change the server refused.
              Keyed by task id so selecting another task re-renders from the
-             server. The chip + dropdown stay server-driven (truthful). --%>
-        <ul id={"co-list-#{@task.id}"} data-async-list phx-update="ignore" class="mt-1 space-y-1">
+             server. The chip + dropdown stay server-driven (truthful). During a
+             selection switch the whole block hides (data-async-list above) and
+             the optimistic mirror stands in. --%>
+        <ul id={"co-list-#{@task.id}"} phx-update="ignore" class="mt-1 space-y-1">
           <li
             :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
             id={"co-row-#{link.user_id}"}

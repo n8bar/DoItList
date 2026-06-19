@@ -205,6 +205,11 @@ const DoitSelection = {
       pane.querySelectorAll("[data-async-loading]").forEach((el) => {
         if (el.hidden !== !inFlight) el.hidden = !inFlight
       })
+      // The optimistic co-list stands in only while a switch is in flight;
+      // once the real list arrives (or nothing is selected) hide it. While in
+      // flight, fillPaneFields fills it and sets its own hidden by seed count.
+      const coOpt = pane.querySelector("#co-optimistic")
+      if (coOpt && !inFlight) coOpt.hidden = true
       if (inFlight) this.fillPaneFields(pane)
       // A pill tap on a first-ever selection parked its field focus until the
       // pane existed (.03.07.17) — land it now.
@@ -287,6 +292,34 @@ const DoitSelection = {
         const dis = mode === "" || mode === "manual"
         if (rev.disabled !== dis) rev.disabled = dis
       }
+    }
+
+    // Optimistic co-assignees (item 15.11): mirror the row's hidden co-seed
+    // spans into a read-only list so co's show the instant the pane switches,
+    // ahead of the server reply that fills the real interactive list below.
+    // Read-only by design — the truthful, reorderable list is the hook's.
+    const coOpt = pane.querySelector("#co-optimistic")
+    const optList = coOpt && coOpt.querySelector("[data-co-opt-list]")
+    if (optList) {
+      const seeds = [...row.querySelectorAll("[data-co-seed]")]
+      optList.innerHTML = ""
+      seeds.forEach((s) => {
+        const liEl = document.createElement("li")
+        liEl.className = "flex items-center gap-2 text-sm"
+        const av = document.createElement("span")
+        av.className =
+          "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+        av.textContent = s.dataset.initials || ""
+        av.style.backgroundImage = s.dataset.avatarBg || ""
+        av.style.color = s.dataset.avatarFg || ""
+        const nm = document.createElement("span")
+        nm.className = "flex-1 min-w-0 truncate text-zinc-700 dark:text-zinc-200"
+        nm.textContent = "@" + (s.dataset.name || "")
+        liEl.appendChild(av)
+        liEl.appendChild(nm)
+        optList.appendChild(liEl)
+      })
+      coOpt.hidden = seeds.length === 0
     }
   },
 }
