@@ -1142,7 +1142,10 @@ defmodule DoItWeb.InitiativeShowLive do
          {:ok, updated} <- Initiatives.transfer_ownership(initiative, user_id) do
       role = Initiatives.get_role(updated.id, socket.assigns.current_user.id)
 
-      {:noreply,
+      # Reply ok so the client clears the Proceed working state + closes the
+      # modal (item 15.16); the swap can't be optimistic, so the modal holds a
+      # working state until this lands.
+      {:reply, %{ok: true},
        socket
        |> assign(:initiative, updated)
        |> assign(:role, role)
@@ -1152,11 +1155,12 @@ defmodule DoItWeb.InitiativeShowLive do
        |> put_flash(:info, "Ownership transferred to #{member.user.name}. You're now an editor.")}
     else
       _ ->
-        {:noreply, put_flash(socket, :error, "Couldn't transfer ownership.")}
+        {:reply, %{ok: false}, put_flash(socket, :error, "Couldn't transfer ownership.")}
     end
   end
 
-  def handle_event("confirm_transfer", _params, socket), do: {:noreply, socket}
+  def handle_event("confirm_transfer", _params, socket),
+    do: {:reply, %{ok: false}, socket}
 
   # Leave (m02.04-era pull-forward of BACKLOG's "Leave an initiative"):
   # remove your own membership. Always confirmed — only the owner can add
@@ -1630,6 +1634,9 @@ defmodule DoItWeb.InitiativeShowLive do
               // Row clicks are handled by a delegated listener in app.js (no
               // hook of its own) — give it a push channel into this LiveView.
               window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              // Expose the bonk so delegated listeners in app.js (e.g. the
+              // transfer-confirm in-flight latch, item 15.16) can sound it too.
+              window.DoitBonk = () => this.bonk();
               // A selection can land before we connect (DoitSelection is
               // client-only; slow longpoll connect). Replay it now so the server
               // loads the pane's comments / activity / co-assignees for it.
@@ -2321,7 +2328,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
             Transfer ownership
           </h3>
-          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+          <p data-transfer-body class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
             Make <span class="font-semibold" data-transfer-name></span>
             the owner of <span class="font-semibold">{@initiative.name}</span>?
             This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>

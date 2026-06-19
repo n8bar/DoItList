@@ -794,38 +794,114 @@ document.addEventListener("keydown", (e) => {
 // can decide. The button carries the target's name + id; we fill the copy and
 // stash the id. Cancel / backdrop / Esc close with no consequence; only
 // Proceed touches the server (confirm_transfer with the stashed id).
+// The actual swap can't be optimistic — we can't honestly fake the role
+// demotion client-side — so it's a true round trip (item 15.16). Rather than
+// close the modal as if it succeeded, hold it open with Proceed in a working
+// state until the reply settles: a repeat Proceed bonks (no second transfer),
+// a timeout offers a retry, an explicit failure shows a message + a single
+// Close. Only success closes the modal.
+const TRANSFER_TIMEOUT_MS = 8000
+let transferInFlight = false
+let transferBodyHTML = null
 const transferModal = () => {
   const m = document.getElementById("transfer-confirm")
   return m && !m.hidden ? m : null
 }
+const transferEls = () => {
+  const modal = document.getElementById("transfer-confirm")
+  if (!modal) return null
+  return {
+    modal,
+    body: modal.querySelector("[data-transfer-body]"),
+    proceed: modal.querySelector("[data-transfer-proceed]"),
+    cancel: modal.querySelector("[data-transfer-cancel]"),
+  }
+}
+const resetTransferModal = () => {
+  const els = transferEls()
+  if (!els) return
+  if (transferBodyHTML !== null) els.body.innerHTML = transferBodyHTML
+  els.proceed.hidden = false
+  els.proceed.classList.remove("animate-pulse", "opacity-60")
+  els.proceed.textContent = "Transfer ownership"
+  els.cancel.classList.remove("pointer-events-none", "opacity-50")
+  els.cancel.textContent = "Cancel"
+  transferInFlight = false
+}
+const closeTransferModal = () => {
+  const els = transferEls()
+  if (els) els.modal.hidden = true
+  transferInFlight = false
+}
 document.addEventListener("click", (e) => {
   const open = e.target.closest("[data-transfer-open]")
   if (open) {
-    const modal = document.getElementById("transfer-confirm")
-    if (!modal) return
-    modal.dataset.userId = open.dataset.userId
-    const nameEl = modal.querySelector("[data-transfer-name]")
+    const els = transferEls()
+    if (!els) return
+    if (transferBodyHTML === null) transferBodyHTML = els.body.innerHTML // pristine
+    resetTransferModal()
+    els.modal.dataset.userId = open.dataset.userId
+    const nameEl = els.modal.querySelector("[data-transfer-name]")
     if (nameEl) nameEl.textContent = open.dataset.userName || ""
-    modal.hidden = false
-    const cancel = modal.querySelector("[data-transfer-cancel]")
-    if (cancel) cancel.focus()
+    els.modal.hidden = false
+    els.cancel.focus()
     return
   }
   const modal = transferModal()
   if (!modal) return
-  if (e.target === modal || e.target.closest("[data-transfer-cancel]")) {
-    modal.hidden = true
+  // Proceed: latch + working state, then push with a reply callback + timeout.
+  if (e.target.closest("[data-transfer-proceed]")) {
+    if (transferInFlight) {
+      if (window.DoitBonk) window.DoitBonk() // dropped repeat — not ignored
+      return
+    }
+    const els = transferEls()
+    if (!els) return
+    transferInFlight = true
+    els.proceed.classList.add("animate-pulse", "opacity-60") // stays clickable so a repeat can bonk
+    els.proceed.textContent = "Transferring…"
+    els.cancel.classList.add("pointer-events-none", "opacity-50")
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      els.body.textContent = "Sorry, the transfer timed out — try again?"
+      els.proceed.classList.remove("animate-pulse", "opacity-60")
+      els.proceed.textContent = "Transfer ownership"
+      els.cancel.classList.remove("pointer-events-none", "opacity-50")
+      transferInFlight = false
+    }, TRANSFER_TIMEOUT_MS)
+    const finish = (reply) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      transferInFlight = false
+      if (reply && reply.ok) {
+        closeTransferModal()
+      } else {
+        els.body.textContent =
+          "Couldn't transfer ownership — the membership may have changed. Close and try again from the current roster."
+        els.proceed.hidden = true
+        els.cancel.classList.remove("pointer-events-none", "opacity-50")
+        els.cancel.textContent = "Close"
+      }
+    }
+    if (window.DoitPush) {
+      window.DoitPush("confirm_transfer", {"user-id": els.modal.dataset.userId}, finish)
+    } else {
+      finish({ok: false})
+    }
     return
   }
-  if (e.target.closest("[data-transfer-proceed]")) {
-    modal.hidden = true
-    if (window.DoitPush) window.DoitPush("confirm_transfer", {"user-id": modal.dataset.userId})
+  // Cancel / backdrop — only when not mid-flight (Cancel is disabled then).
+  if (!transferInFlight && (e.target === modal || e.target.closest("[data-transfer-cancel]"))) {
+    closeTransferModal()
   }
 })
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const modal = transferModal()
-  if (modal) modal.hidden = true
+  if (modal && !transferInFlight) closeTransferModal()
 })
 
 // Fully-optimistic operated row (.03.07.22): a completion toggle flips the
