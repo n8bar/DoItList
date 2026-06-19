@@ -80,7 +80,6 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
-         |> assign(:pending_transfer, nil)
          |> assign(:pending_handoff, nil)
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
@@ -1131,29 +1130,16 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
 
   # Ownership transfer (the "transfer first" path of §1.10's delete block).
-  # Opening sets the pending target; the modal's confirm commits it. Not
-  # suppressible — transferring ownership always asks.
-  def handle_event("transfer_ownership", %{"user-id" => user_id}, socket) do
+  # The confirm opens + cancels entirely client-side (app.js, like the delete
+  # confirms); only this commit touches the server, carrying the target id the
+  # dialog stashed. Not suppressible — transferring ownership always asks.
+  def handle_event("confirm_transfer", %{"user-id" => user_id}, socket) do
+    initiative = socket.assigns.initiative
     user_id = String.to_integer(user_id)
     member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
 
-    if socket.assigns.can_admin and member do
-      {:noreply, assign(socket, :pending_transfer, %{user_id: user_id, name: member.user.name})}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_transfer", _params, socket) do
-    {:noreply, assign(socket, :pending_transfer, nil)}
-  end
-
-  def handle_event("confirm_transfer", _params, socket) do
-    initiative = socket.assigns.initiative
-    pending = socket.assigns.pending_transfer
-
-    with true <- socket.assigns.can_admin and not is_nil(pending),
-         {:ok, updated} <- Initiatives.transfer_ownership(initiative, pending.user_id) do
+    with true <- socket.assigns.can_admin and not is_nil(member),
+         {:ok, updated} <- Initiatives.transfer_ownership(initiative, user_id) do
       role = Initiatives.get_role(updated.id, socket.assigns.current_user.id)
 
       {:noreply,
@@ -1163,16 +1149,14 @@ defmodule DoItWeb.InitiativeShowLive do
        |> assign(:can_edit, Initiatives.can_edit?(role))
        |> assign(:can_admin, Initiatives.can_admin?(role))
        |> assign(:members, Initiatives.list_members(updated.id))
-       |> assign(:pending_transfer, nil)
-       |> put_flash(:info, "Ownership transferred to #{pending.name}. You're now an editor.")}
+       |> put_flash(:info, "Ownership transferred to #{member.user.name}. You're now an editor.")}
     else
       _ ->
-        {:noreply,
-         socket
-         |> assign(:pending_transfer, nil)
-         |> put_flash(:error, "Couldn't transfer ownership.")}
+        {:noreply, put_flash(socket, :error, "Couldn't transfer ownership.")}
     end
   end
+
+  def handle_event("confirm_transfer", _params, socket), do: {:noreply, socket}
 
   # Leave (m02.04-era pull-forward of BACKLOG's "Leave an initiative"):
   # remove your own membership. Always confirmed — only the owner can add
@@ -2320,20 +2304,25 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
         </form>
       </div>
+      <%!-- Transfer-ownership confirm is client-side (UX_GUARDRAILS 6.5, like
+           the delete confirms): everything it shows — the target's name, the
+           demotion copy — is client-known, so it opens at the click with no
+           round trip. app.js fills [data-transfer-name] + stashes the user-id;
+           only Proceed touches the server (confirm_transfer). phx-update="ignore"
+           keeps the server out of it (a rename mid-session leaves the initiative
+           name stale — display-only and rare). --%>
       <div
-        :if={@pending_transfer}
         id="transfer-confirm"
+        hidden
+        phx-update="ignore"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
       >
-        <div
-          phx-click-away="cancel_transfer"
-          class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
-        >
+        <div class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl">
           <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
             Transfer ownership
           </h3>
           <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Make <span class="font-semibold">{@pending_transfer.name}</span>
+            Make <span class="font-semibold" data-transfer-name></span>
             the owner of <span class="font-semibold">{@initiative.name}</span>?
             This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
             and lose owner controls.
@@ -2341,7 +2330,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div class="mt-5 flex justify-end gap-2">
             <button
               type="button"
-              phx-click="cancel_transfer"
+              data-transfer-cancel
               class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
             >
               Cancel
@@ -2349,7 +2338,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               type="button"
               id="transfer-confirm-proceed"
-              phx-click="confirm_transfer"
+              data-transfer-proceed
               class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
             >
               Transfer ownership
@@ -3465,12 +3454,16 @@ defmodule DoItWeb.InitiativeShowLive do
               <.icon name="hero-arrow-right-start-on-rectangle" class="w-3.5 h-3.5" />
             </button>
             <%!-- Transfer ownership: always confirmed (the modal spells out
-                 the demotion-to-editor consequence). --%>
+                 the demotion-to-editor consequence). The confirm opens
+                 client-side (app.js) so it pops at the click with no round
+                 trip — the member's name + id ride on the button. Only Proceed
+                 touches the server. --%>
             <button
               :if={@can_admin && m.user_id != @owner_id}
               type="button"
-              phx-click="transfer_ownership"
-              phx-value-user-id={m.user_id}
+              data-transfer-open
+              data-user-id={m.user_id}
+              data-user-name={m.user.name}
               title={"Transfer ownership to #{m.user.name}"}
               aria-label={"Transfer ownership to #{m.user.name}"}
               class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-amber-600 hover:bg-amber-50 dark:text-zinc-500 dark:hover:text-amber-400 dark:hover:bg-amber-950/40"

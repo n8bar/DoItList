@@ -695,6 +695,46 @@ document.addEventListener("keydown", (e) => {
   }
 })
 
+// Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
+// delete confirms): the dialog's content is client-known, so it opens at the
+// click of a member's transfer (key) button — no round trip before the owner
+// can decide. The button carries the target's name + id; we fill the copy and
+// stash the id. Cancel / backdrop / Esc close with no consequence; only
+// Proceed touches the server (confirm_transfer with the stashed id).
+const transferModal = () => {
+  const m = document.getElementById("transfer-confirm")
+  return m && !m.hidden ? m : null
+}
+document.addEventListener("click", (e) => {
+  const open = e.target.closest("[data-transfer-open]")
+  if (open) {
+    const modal = document.getElementById("transfer-confirm")
+    if (!modal) return
+    modal.dataset.userId = open.dataset.userId
+    const nameEl = modal.querySelector("[data-transfer-name]")
+    if (nameEl) nameEl.textContent = open.dataset.userName || ""
+    modal.hidden = false
+    const cancel = modal.querySelector("[data-transfer-cancel]")
+    if (cancel) cancel.focus()
+    return
+  }
+  const modal = transferModal()
+  if (!modal) return
+  if (e.target === modal || e.target.closest("[data-transfer-cancel]")) {
+    modal.hidden = true
+    return
+  }
+  if (e.target.closest("[data-transfer-proceed]")) {
+    modal.hidden = true
+    if (window.DoitPush) window.DoitPush("confirm_transfer", {"user-id": modal.dataset.userId})
+  }
+})
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = transferModal()
+  if (modal) modal.hidden = true
+})
+
 // Fully-optimistic operated row (.03.07.22): a completion toggle flips the
 // row's checkbox (aria-pressed), done styling (data-done), and progress bar
 // at the click. The hold handle survives patches via the guard observer (the
