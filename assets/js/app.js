@@ -255,6 +255,23 @@ const DoitSelection = {
       if (readout && pv !== null) readout.textContent = pv
     }
 
+    // Branch-progress copy: the "Ignored — this task has subtasks." note and
+    // the "Computed from children: N%" readout are server-gated on leaf-ness
+    // (the `invisible` class on @task), so on a first selection of a branch
+    // they stay hidden until the reply. Toggle them from the row's children
+    // presence + computed % (data-task-progress = computed for a branch) so
+    // they show instantly like the rest of the shell.
+    const isBranch = !!li.querySelector(":scope > ul[id^='children-']")
+    const cp = row.getAttribute("data-task-progress")
+    const branchNote = pane.querySelector("[data-branch-note]")
+    if (branchNote) branchNote.classList.toggle("invisible", !isBranch)
+    const computedNote = pane.querySelector("[data-computed-note]")
+    if (computedNote) {
+      computedNote.classList.toggle("invisible", !isBranch)
+      const cr = computedNote.querySelector("[data-computed-readout]")
+      if (cr && cp !== null) cr.textContent = cp
+    }
+
     // The title attr always carries the priority ("Priority: high"). Either
     // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,
     // the server render carries the truth.

@@ -3668,17 +3668,23 @@ defmodule DoItWeb.InitiativeShowLive do
                 else: "Manual progress (disabled — computed from subtasks)"
             }
           />
-          <p class={[
-            "text-xs text-zinc-400 dark:text-zinc-500 italic",
-            leaf?(@task) && "invisible"
-          ]}>
+          <p
+            data-branch-note
+            class={[
+              "text-xs text-zinc-400 dark:text-zinc-500 italic",
+              leaf?(@task) && "invisible"
+            ]}
+          >
             Ignored — this task has subtasks.
           </p>
-          <div class={[
-            "text-xs text-zinc-500 dark:text-zinc-400 italic",
-            leaf?(@task) && "invisible"
-          ]}>
-            Computed from children: {@task.computed_progress}%
+          <div
+            data-computed-note
+            class={[
+              "text-xs text-zinc-500 dark:text-zinc-400 italic",
+              leaf?(@task) && "invisible"
+            ]}
+          >
+            Computed from children: <span data-computed-readout>{@task.computed_progress}</span>%
           </div>
         </div>
       </form>
