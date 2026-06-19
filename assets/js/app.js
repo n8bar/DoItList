@@ -424,11 +424,87 @@ document.addEventListener("click", (e) => {
   }
 })
 
+// Optimistic task creation (item 15.15, UX_GUARDRAILS §6): pop a placeholder
+// row in at submit, before the server trip — no reason to wait on the round
+// trip to show the new task. It lands in a morphdom-managed container, so the
+// create reply reconciles it away on its own: success renders the real row, a
+// completion-flip swaps in the server's preview row, a cancel/reload drops it.
+// Roll-up % up the tree is the server's job and arrives on that reply; only the
+// bare row is instant. The flip-confirm decision stays server-side (no
+// duplicated completion logic). An 8s timeout self-heals the rare case where no
+// patch lands (dropped reply / a no-op error render) so a ghost never sticks.
+let pendingRowSeq = 0
+function buildPendingRow(title) {
+  const li = document.createElement("li")
+  li.id = "task-pending-" + ++pendingRowSeq
+  li.setAttribute("data-pending-row", "")
+  // No data-task-id / data-task-row: the row-click, drag, and key handlers all
+  // skip it, so the transient placeholder is inert until the real row lands.
+  li.className =
+    "rounded border border-emerald-500/50 dark:border-emerald-500/40 bg-white dark:bg-zinc-900 is-saving"
+  const row = document.createElement("div")
+  row.className = "flex items-center gap-2 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px]"
+  const name = document.createElement("span")
+  name.className = "flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200"
+  name.textContent = title
+  const note = document.createElement("span")
+  note.className = "flex-none text-xs text-zinc-400 dark:text-zinc-500 italic"
+  note.textContent = "Adding…"
+  row.appendChild(name)
+  row.appendChild(note)
+  li.appendChild(row)
+  setTimeout(() => li.remove(), 8000)
+  return li
+}
+function placePendingRow(container, afterId, li) {
+  if (afterId) {
+    const slot = document.getElementById("add-after-" + afterId)
+    const anchor = document.getElementById("task-" + afterId)
+    const ref =
+      slot && slot.parentElement === container ? slot.nextSibling :
+      anchor && anchor.parentElement === container ? anchor.nextSibling : null
+    container.insertBefore(li, ref) // null ref => append
+  } else {
+    container.insertBefore(li, container.firstChild) // top level / first child
+  }
+}
+function insertPendingRow(parentId, afterId, title) {
+  const li = buildPendingRow(title)
+  if (parentId) {
+    let ul = document.getElementById("children-" + parentId)
+    if (!ul) {
+      // First child of a leaf: no children list yet. Build a temp one to nest
+      // in; morphdom swaps it for the real children-<id> ul on the reply.
+      ul = document.createElement("ul")
+      ul.id = "children-pending-" + parentId
+      ul.className = "pl-1.5 sm:pl-6 space-y-1"
+      const parentLi = document.getElementById("task-" + parentId)
+      const slot = document.getElementById("add-slot-" + parentId)
+      if (slot && slot.parentElement === parentLi) parentLi.insertBefore(ul, slot.nextSibling)
+      else if (parentLi) parentLi.appendChild(ul)
+      else return
+    }
+    placePendingRow(ul, afterId, li)
+  } else {
+    const tree = document.getElementById("task-tree")
+    if (tree) placePendingRow(tree, afterId, li)
+  }
+}
+
 // Rapid entry: clear the title after LiveView serializes the submit and stay
 // focused, so consecutive adds need no clicks at all.
 document.addEventListener("submit", (e) => {
   if (e.target.id !== "add-task-form") return
-  const input = e.target.querySelector("[name='title']")
+  const form = e.target
+  const input = form.querySelector("[name='title']")
+  const title = input.value.trim()
+  if (title) {
+    insertPendingRow(
+      form.querySelector("[name='parent_id']").value,
+      form.querySelector("[name='after_id']").value,
+      title
+    )
+  }
   setTimeout(() => {
     input.value = ""
     input.focus()
