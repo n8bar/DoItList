@@ -27,7 +27,10 @@ defmodule DoIt.ViewerPlusTest do
     {:ok, t} =
       Tasks.create_task(
         owner,
-        Map.merge(%{"initiative_id" => initiative.id, "parent_id" => parent_id, "title" => title}, attrs)
+        Map.merge(
+          %{"initiative_id" => initiative.id, "parent_id" => parent_id, "title" => title},
+          attrs
+        )
       )
 
     t
@@ -72,8 +75,9 @@ defmodule DoIt.ViewerPlusTest do
     {:ok, _} = Tasks.add_co_assignee(b, owner, x.id)
     {:ok, _} = Tasks.add_co_assignee(b, owner, y.id)
 
-    # A descendant of B draws from B's co-assignees.
-    assert Tasks.viewer_staff_pool(viewer.id, c) == MapSet.new([x.id, y.id])
+    # A descendant of B draws from B's co-assignees PLUS the viewer themselves —
+    # a viewer+ belongs on their own subtree's team and may self-assign there.
+    assert Tasks.viewer_staff_pool(viewer.id, c) == MapSet.new([x.id, y.id, viewer.id])
 
     # The led task itself is off-limits (its co-list is owner-seeded).
     assert Tasks.viewer_staff_pool(viewer.id, b) == nil
@@ -100,10 +104,10 @@ defmodule DoIt.ViewerPlusTest do
     {:ok, _} = Tasks.add_co_assignee(b, owner, y.id)
     {:ok, _} = Tasks.add_co_assignee(e, owner, x.id)
 
-    # Between B and E, the pool is B's {X, Y}.
-    assert Tasks.viewer_staff_pool(viewer.id, c) == MapSet.new([x.id, y.id])
+    # Between B and E, the pool is B's {X, Y} + the viewer themselves.
+    assert Tasks.viewer_staff_pool(viewer.id, c) == MapSet.new([x.id, y.id, viewer.id])
 
-    # Under E, the nearest led ancestor is E, so the pool narrows to {X}.
-    assert Tasks.viewer_staff_pool(viewer.id, f) == MapSet.new([x.id])
+    # Under E, the nearest led ancestor is E, so the pool narrows to {X} + the viewer.
+    assert Tasks.viewer_staff_pool(viewer.id, f) == MapSet.new([x.id, viewer.id])
   end
 end

@@ -100,8 +100,15 @@ defmodule DoIt.Tasks do
       nil
     else
       case nearest_led_ancestor_id(viewer_id, task) do
-        nil -> nil
-        ancestor_id -> co_assignee_ids(ancestor_id)
+        nil ->
+          nil
+
+        # The handed pool plus the viewer themselves — a viewer+ leads their
+        # subtree, so they belong on its team and may add themselves as a
+        # co-assignee (or primary) on a descendant, even though they aren't in
+        # their own led ancestor's co-list.
+        ancestor_id ->
+          MapSet.put(co_assignee_ids(ancestor_id), viewer_id)
       end
     end
   end
