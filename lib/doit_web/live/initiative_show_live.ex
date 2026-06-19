@@ -1646,6 +1646,12 @@ defmodule DoItWeb.InitiativeShowLive do
               // Row clicks are handled by a delegated listener in app.js (no
               // hook of its own) — give it a push channel into this LiveView.
               window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              // A selection can land before we connect (DoitSelection is
+              // client-only; slow longpoll connect). Replay it now so the server
+              // loads the pane's comments / activity / co-assignees for it.
+              if (window.DoitSelection && window.DoitSelection.id) {
+                this.pushEvent("select_task", {id: window.DoitSelection.id});
+              }
               // After an undo/redo, select + scroll the affected task into view
               // (m02.06 item 13). Guarded: an undone create removes the task, so
               // there's nothing to show — skip rather than stall the pane.

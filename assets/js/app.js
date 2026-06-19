@@ -418,7 +418,11 @@ document.addEventListener("click", (e) => {
 // syncPaneSkeleton lands it when the pane arrives.
 document.addEventListener("click", (e) => {
   const row = e.target.closest("[data-task-row]")
-  if (!row || !window.DoitPush) return
+  // Selection + the optimistic pane fill are client-only (DoitSelection) and
+  // must work even before the LiveView connects (slow on longpoll) — so DON'T
+  // gate on window.DoitPush. Only the server pushes below need it, and the
+  // TaskKeys hook replays select_task for the live selection once it mounts.
+  if (!row) return
   // Interactive children (toggle, collapse, pills, drag handle) own their
   // clicks; pills additionally select without toggling. The check must stay
   // inside the row — ancestors (children <ul>s, the page root) carry hooks.
@@ -443,10 +447,10 @@ document.addEventListener("click", (e) => {
   const id = li.dataset.taskId
   if (DoitSelection.id === id) {
     DoitSelection.clear()
-    window.DoitPush("close_task", {})
+    if (window.DoitPush) window.DoitPush("close_task", {})
   } else {
     DoitSelection.set(id)
-    window.DoitPush("select_task", {id: id})
+    if (window.DoitPush) window.DoitPush("select_task", {id: id})
   }
 })
 
