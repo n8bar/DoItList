@@ -297,6 +297,14 @@ const DoitSelection = {
     if (sortBlock) {
       const hasKids = !!li.querySelector(":scope > ul[id^='children-']")
       sortBlock.classList.toggle("invisible", !hasKids)
+      // Point the (stable-id) form at the selected task so set_sort + SortRecall
+      // target it during the in-flight window; the reply reconciles in place.
+      const sortForm = sortBlock.querySelector("form")
+      if (sortForm) {
+        sortForm.dataset.taskId = this.id || ""
+        const tid = sortForm.querySelector("[name='task_id']")
+        if (tid) tid.value = this.id || ""
+      }
       const mode = li.dataset.sort || ""
       const modeSel = sortBlock.querySelector("select[name='mode']")
       if (modeSel && modeSel !== document.activeElement && modeSel.value !== mode) {
@@ -2901,6 +2909,11 @@ Hooks.SortRecall = {
     if (select && checkbox && !this.isInheritOrManual(select.value)) {
       this.save(select.value, checkbox.checked)
     }
+  },
+  updated() {
+    // Stable element ids (item 15.17) mean this hook no longer re-mounts per
+    // task — refresh the task it keys localStorage on from the patched node.
+    this.taskId = this.el.dataset.taskId
   },
   destroyed() {
     if (this.onChange) {

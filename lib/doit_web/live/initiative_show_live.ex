@@ -3186,7 +3186,7 @@ defmodule DoItWeb.InitiativeShowLive do
         Computed from children: {@root_task.computed_progress}%
       </div>
 
-      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
+      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" scope="init" />
 
       <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
            behavior that isn't day-to-day editing. KeepOpen preserves the
@@ -3501,6 +3501,13 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :task, :map, required: true
   attr :can_edit, :boolean, required: true
   attr :label, :string, default: "Sort children by"
+  # Stable element ids (item 15.17): the form / select / checkbox are keyed by
+  # this pane scope, not the task id, so morphdom updates them in place across
+  # selections (the optimistic value survives + reconciles) instead of tearing
+  # the node down. The component is shared by two panes, so each passes its own
+  # scope to keep the ids unique. The task id rides on `data-task-id` + the
+  # hidden `task_id` (what SortRecall + set_sort actually key on).
+  attr :scope, :string, required: true
 
   @doc """
   The "sort by" control for a branch task: criterion dropdown + Reverse +
@@ -3513,11 +3520,11 @@ defmodule DoItWeb.InitiativeShowLive do
     <%!-- invisible (not removed) on leaves so leaf↔branch selection switches
          don't shift the layout below (UX_GUARDRAILS 1.1). --%>
     <div data-sort-block class={["space-y-1", leaf?(@task) && "invisible"]}>
-      <label for={"sort-mode-#{@task.id}"} class="text-xs text-zinc-500 dark:text-zinc-400">
+      <label for={"sort-mode-#{@scope}"} class="text-xs text-zinc-500 dark:text-zinc-400">
         {@label}
       </label>
       <form
-        id={"sort-form-#{@task.id}"}
+        id={"sort-form-#{@scope}"}
         phx-hook="SortRecall"
         data-task-id={@task.id}
         data-saving-children
@@ -3526,7 +3533,7 @@ defmodule DoItWeb.InitiativeShowLive do
       >
         <input type="hidden" name="task_id" value={@task.id} />
         <select
-          id={"sort-mode-#{@task.id}"}
+          id={"sort-mode-#{@scope}"}
           name="mode"
           class="flex-1 select select-bordered select-sm"
           disabled={not @can_edit}
@@ -3539,7 +3546,7 @@ defmodule DoItWeb.InitiativeShowLive do
           </option>
         </select>
         <label
-          for={"sort-reverse-#{@task.id}"}
+          for={"sort-reverse-#{@scope}"}
           class={[
             "flex items-center gap-1 text-xs select-none",
             reverse_disabled?(@task) && "text-zinc-400 dark:text-zinc-500",
@@ -3548,7 +3555,7 @@ defmodule DoItWeb.InitiativeShowLive do
           title="Reverse the sort direction"
         >
           <input
-            id={"sort-reverse-#{@task.id}"}
+            id={"sort-reverse-#{@scope}"}
             type="checkbox"
             name="reverse"
             value="true"
@@ -3696,7 +3703,9 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
-      <.sort_menu :if={@task.id} task={@task} can_edit={@can_edit} label="Sort children by" />
+      <%!-- Always rendered (item 15.17): blank task renders it invisible (leaf),
+           so it's present on a first selection and fillPaneFields fills it. --%>
+      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" scope="task" />
 
       <form phx-change="update_task" phx-submit="update_task" class="grid grid-cols-2 gap-3">
         <div>
