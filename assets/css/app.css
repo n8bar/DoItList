@@ -121,6 +121,16 @@
   background-color: color-mix(in oklab, var(--color-emerald-500) 12%, transparent);
 }
 
+/* The Initiatives box reads as the drop zone while a Collaborator is being
+   dragged (m02.06 item 15.7) — a bold dashed border around the whole list, so
+   it contrasts with the solid per-entry .rail-drop-target marking the exact
+   target. Toggled by the CollaboratorDrag hook for the drag's lifetime. */
+.collab-drop-zone {
+  outline: 2px dashed var(--color-emerald-500);
+  outline-offset: 4px;
+  border-radius: 0.5rem;
+}
+
 /* Progress underbar text — high-contrast outline so the percentage stays
    readable regardless of the fill color behind it. Light-mode text is dark
    with a white outline; dark-mode flips both. */

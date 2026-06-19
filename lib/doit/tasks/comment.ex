@@ -7,6 +7,9 @@ defmodule DoIt.Tasks.Comment do
 
   schema "comments" do
     field :body, :string
+    # Soft-delete (m02.06 item 14.5): set when an undo removes the comment,
+    # cleared on redo. Reads filter `deleted_at IS NULL`.
+    field :deleted_at, :utc_datetime
 
     belongs_to :task, Task
     belongs_to :user, User

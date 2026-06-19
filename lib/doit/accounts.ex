@@ -109,26 +109,20 @@ defmodule DoIt.Accounts do
   end
 
   @doc """
-  Delete the user's account (m02.04 §1.10). Owned Initiatives with no other
-  members are deleted with it; memberships cascade and task/comment
-  references nilify at the DB. Fails with `{:error, {:shared_initiatives,
-  names}}` while the user owns Initiatives that other members belong to —
-  m02.06's Trash flow supersedes that block when it lands.
+  Delete the user's account (m02.04 §1.10, m02.06 item 10.3). Owned Initiatives
+  with other members are handed off to a successor member (highest-ranked, oldest
+  joiner); owned Initiatives with no other members are deleted with the account.
+  Memberships cascade and task/comment references nilify at the DB.
   """
   def delete_account(%User{} = user) do
-    case DoIt.Initiatives.owned_shared_initiatives(user) do
-      [] ->
-        {:ok, _} =
-          Repo.transaction(fn ->
-            DoIt.Initiatives.delete_sole_owned_initiatives(user)
-            Repo.delete!(user)
-          end)
+    {:ok, _} =
+      Repo.transaction(fn ->
+        DoIt.Initiatives.transfer_owned_shared_initiatives(user)
+        DoIt.Initiatives.delete_sole_owned_initiatives(user)
+        Repo.delete!(user)
+      end)
 
-        :ok
-
-      shared ->
-        {:error, {:shared_initiatives, Enum.map(shared, & &1.name)}}
-    end
+    :ok
   end
 
   @doc """

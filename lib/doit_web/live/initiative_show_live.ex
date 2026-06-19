@@ -80,7 +80,6 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
-         |> assign(:pending_transfer, nil)
          |> assign(:pending_handoff, nil)
          |> assign(:confirm_skips, MapSet.new())
          |> load_tree()}
@@ -183,26 +182,56 @@ defmodule DoItWeb.InitiativeShowLive do
   # the next undoable / redoable action, or nil when the stack is empty that
   # way. Refreshed wherever the tree is (load_tree / patch_task / after undo).
   defp assign_undo_state(socket) do
-    uid = socket.assigns.current_user.id
+    user = socket.assigns.current_user
     iid = socket.assigns.initiative.id
-    undo = Tasks.undo_candidate(uid, iid)
-    redo = Tasks.redo_candidate(uid, iid)
+    undo = Tasks.undo_candidate(user, iid)
+    redo = Tasks.redo_candidate(user, iid)
 
     socket
     |> assign(:undo_label, undo && Tasks.describe_event(undo))
     |> assign(:redo_label, redo && Tasks.describe_event(redo))
   end
 
+  # Reversed kinds that change only a task's own fields — the performer patches
+  # just that row (item 14.4); everything else changes tree shape and reloads.
+  @incremental_undo_kinds ~w(title_changed description_changed progress_changed priority_changed assignee_changed)
+
   defp do_undo_redo(socket, dir) do
     user = socket.assigns.current_user
     iid = socket.assigns.initiative.id
+
+    # Capture the target before applying, so a successful reversal can update the
+    # performer incrementally (item 14.4) and select + scroll it (item 13).
+    candidate =
+      if dir == :undo, do: Tasks.undo_candidate(user, iid), else: Tasks.redo_candidate(user, iid)
+
     result = if dir == :undo, do: Tasks.undo(user, iid), else: Tasks.redo(user, iid)
-    socket = load_tree(socket)
     verb = if dir == :undo, do: "Undid", else: "Redid"
 
     case result do
       {:ok, desc} ->
-        put_flash(socket, :info, "#{verb} #{desc}.")
+        # Match the broadcast: a value edit patches its row, a comment change
+        # refreshes the pane's comment list, structural changes reload — so the
+        # performer pays the same incremental cost as everyone (item 14.4/14.5).
+        socket =
+          cond do
+            is_nil(candidate) -> load_tree(socket)
+            candidate.kind == "commented" -> refresh_selected(socket)
+            candidate.kind in @incremental_undo_kinds -> patch_task(socket, candidate.task_id)
+            # Completion (item 14): patch the acted task — its lineage covers the
+            # leaf flip and any up-cascade. A branch down-cascade's descendants
+            # arrive via the per-affected {:task_updated} broadcasts we also receive.
+            candidate.kind == "status_changed" -> patch_task(socket, candidate.task_id)
+            true -> load_tree(socket)
+          end
+
+        socket = put_flash(socket, :info, "#{verb} #{desc}.")
+        # Push the id as a string: the client re-emits "select_task" with it, and
+        # that handler does String.to_integer/1 — an integer here crashed the
+        # LiveView on every undo (item 13 regression).
+        if candidate,
+          do: push_event(socket, "select-task", %{id: to_string(candidate.task_id)}),
+          else: socket
 
       {:error, :nothing_to_undo} ->
         put_flash(socket, :error, "Nothing to undo.")
@@ -211,7 +240,9 @@ defmodule DoItWeb.InitiativeShowLive do
         put_flash(socket, :error, "Nothing to redo.")
 
       {:error, {:conflict, desc}} ->
-        put_flash(socket, :error, "Couldn't #{dir} #{desc} — it may have changed since.")
+        socket
+        |> load_tree()
+        |> put_flash(:error, "Couldn't #{dir} #{desc} — it may have changed since.")
     end
   end
 
@@ -264,11 +295,14 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp selected_staff_pool(socket, %{} = task) do
     cond do
-      socket.assigns.can_edit -> :all
+      socket.assigns.can_edit ->
+        :all
+
       socket.assigns.role == "viewer" and socket.assigns.initiative.viewer_plus ->
         Tasks.viewer_staff_pool(socket.assigns.current_user.id, task)
 
-      true -> nil
+      true ->
+        nil
     end
   end
 
@@ -377,17 +411,21 @@ defmodule DoItWeb.InitiativeShowLive do
       lineage ->
         task = Enum.find(lineage, &(&1.id == task_id))
         root_id = socket.assigns.initiative.root_task_id
+        prev_led = socket.assigns.led_task_ids
 
         socket =
           socket
           |> assign(:tree, patched_tree(socket, task, lineage))
           |> maybe_refresh_root_sort(task, root_id)
 
-        # An assignment may have changed in the patched rows — re-derive the
-        # viewer+ label set (item 12.6.5) from the in-memory tree.
+        # An assignment may have changed in the patched rows — re-derive both
+        # the viewer+ label set (item 12.6.5, from the in-memory tree) and the
+        # viewer+ GRANT set (item 14.1: led tasks drive the editable affordances,
+        # so a live assignment must grant the subtree without a refresh).
         socket =
           socket
           |> assign(:direct_assignee_ids, tree_assignee_ids(socket.assigns.tree))
+          |> assign(:led_task_ids, viewer_led_ids(socket))
           |> assign_undo_state()
 
         # Any in-tree lineage tops out at the system root — its fresh roll-up
@@ -403,7 +441,19 @@ defmodule DoItWeb.InitiativeShowLive do
               |> assign(:root_task, Map.put(root, :children, socket.assigns.tree))
           end
 
-        if socket.assigns.selected_task_id in Enum.map(lineage, & &1.id),
+        # Refresh the open pane when it shows a task in the patched lineage, OR
+        # when a viewer+ grant/revoke just flipped the selected task's
+        # led-membership (item 15.1). The assignment broadcasts for the granted
+        # task, but staffing rights (@selected_staff_pool) are recomputed only on
+        # refresh — and the affected task may be a selected DESCENDANT that isn't
+        # in that task's lineage. (Progress already updates live: can_progress is
+        # re-derived from @led_task_ids in the pane wrapper.)
+        sel = socket.assigns.selected_task_id
+
+        led_flipped? =
+          sel && MapSet.member?(prev_led, sel) != MapSet.member?(socket.assigns.led_task_ids, sel)
+
+        if (sel && sel in Enum.map(lineage, & &1.id)) || led_flipped?,
           do: refresh_selected(socket),
           else: socket
     end
@@ -712,8 +762,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # Undo / redo (m02.06 items 4/5). The engine reverses the user's own newest
   # undoable event; we reload the tree for immediate feedback (the broadcast
   # reloads other members) and flash the outcome.
-  def handle_event("undo", _params, socket), do: {:noreply, do_undo_redo(socket, :undo)}
-  def handle_event("redo", _params, socket), do: {:noreply, do_undo_redo(socket, :redo)}
+  # Reply (not noreply) so the client's pushEvent callback fires when the server
+  # settles — that's what clears the in-flight latch + working state (item 15.9).
+  def handle_event("undo", _params, socket), do: {:reply, %{}, do_undo_redo(socket, :undo)}
+  def handle_event("redo", _params, socket), do: {:reply, %{}, do_undo_redo(socket, :redo)}
 
   # --- Co-assignees (m02.05 item 13) ---------------------------------------
 
@@ -761,14 +813,19 @@ defmodule DoItWeb.InitiativeShowLive do
         {:reply, %{ok: false}, socket}
 
       not assign_allowed?(socket, task, uid) ->
-        {:reply, %{ok: false}, put_flash(socket, :error, assign_denied_message(socket, task, uid))}
+        {:reply, %{ok: false},
+         put_flash(socket, :error, assign_denied_message(socket, task, uid))}
 
       # Already the primary, or already a co — nothing to stack.
       task.assignee_id == uid or co_assignee?(task.id, uid) ->
         {:reply, %{ok: false}, socket}
 
       is_nil(task.assignee_id) ->
-        assign_result(socket, task, Tasks.update_task(task, user, %{"assignee_id" => to_string(uid)}))
+        assign_result(
+          socket,
+          task,
+          Tasks.update_task(task, user, %{"assignee_id" => to_string(uid)})
+        )
 
       true ->
         assign_result(socket, task, Tasks.add_co_assignee(task, user, uid))
@@ -801,8 +858,11 @@ defmodule DoItWeb.InitiativeShowLive do
 
           true ->
             case Tasks.update_task(task, user, allowed) do
-              {:ok, _} -> {:noreply, patch_task(socket, task.id)}
-              {:error, cs} -> {:noreply, put_flash(socket, :error, "Couldn't save: #{summarize_errors(cs)}.")}
+              {:ok, _} ->
+                {:noreply, patch_task(socket, task.id)}
+
+              {:error, cs} ->
+                {:noreply, put_flash(socket, :error, "Couldn't save: #{summarize_errors(cs)}.")}
             end
         end
 
@@ -1070,48 +1130,37 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("kbd_move", _params, socket), do: {:noreply, socket}
 
   # Ownership transfer (the "transfer first" path of §1.10's delete block).
-  # Opening sets the pending target; the modal's confirm commits it. Not
-  # suppressible — transferring ownership always asks.
-  def handle_event("transfer_ownership", %{"user-id" => user_id}, socket) do
+  # The confirm opens + cancels entirely client-side (app.js, like the delete
+  # confirms); only this commit touches the server, carrying the target id the
+  # dialog stashed. Not suppressible — transferring ownership always asks.
+  def handle_event("confirm_transfer", %{"user-id" => user_id}, socket) do
+    initiative = socket.assigns.initiative
     user_id = String.to_integer(user_id)
     member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
 
-    if socket.assigns.can_admin and member do
-      {:noreply, assign(socket, :pending_transfer, %{user_id: user_id, name: member.user.name})}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_event("cancel_transfer", _params, socket) do
-    {:noreply, assign(socket, :pending_transfer, nil)}
-  end
-
-  def handle_event("confirm_transfer", _params, socket) do
-    initiative = socket.assigns.initiative
-    pending = socket.assigns.pending_transfer
-
-    with true <- socket.assigns.can_admin and not is_nil(pending),
-         {:ok, updated} <- Initiatives.transfer_ownership(initiative, pending.user_id) do
+    with true <- socket.assigns.can_admin and not is_nil(member),
+         {:ok, updated} <- Initiatives.transfer_ownership(initiative, user_id) do
       role = Initiatives.get_role(updated.id, socket.assigns.current_user.id)
 
-      {:noreply,
+      # Reply ok so the client clears the Proceed working state + closes the
+      # modal (item 15.16); the swap can't be optimistic, so the modal holds a
+      # working state until this lands.
+      {:reply, %{ok: true},
        socket
        |> assign(:initiative, updated)
        |> assign(:role, role)
        |> assign(:can_edit, Initiatives.can_edit?(role))
        |> assign(:can_admin, Initiatives.can_admin?(role))
        |> assign(:members, Initiatives.list_members(updated.id))
-       |> assign(:pending_transfer, nil)
-       |> put_flash(:info, "Ownership transferred to #{pending.name}. You're now an editor.")}
+       |> put_flash(:info, "Ownership transferred to #{member.user.name}. You're now an editor.")}
     else
       _ ->
-        {:noreply,
-         socket
-         |> assign(:pending_transfer, nil)
-         |> put_flash(:error, "Couldn't transfer ownership.")}
+        {:reply, %{ok: false}, put_flash(socket, :error, "Couldn't transfer ownership.")}
     end
   end
+
+  def handle_event("confirm_transfer", _params, socket),
+    do: {:reply, %{ok: false}, socket}
 
   # Leave (m02.04-era pull-forward of BACKLOG's "Leave an initiative"):
   # remove your own membership. Always confirmed — only the owner can add
@@ -1548,7 +1597,14 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_info({:task_deleted, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
 
-  def handle_info({:comment_added, _id}, socket), do: {:noreply, refresh_selected(socket)}
+  # A comment landed in the Initiative (item 14.3): refresh the pane only for a
+  # viewer who has that task open, so the comment appears live for them without
+  # every other viewer needlessly reloading their own selected pane.
+  def handle_info({:comment_added, task_id}, socket) do
+    if socket.assigns.selected_task_id == task_id,
+      do: {:noreply, refresh_selected(socket)},
+      else: {:noreply, socket}
+  end
 
   def handle_info({:task_moved, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
@@ -1578,9 +1634,37 @@ defmodule DoItWeb.InitiativeShowLive do
               // Row clicks are handled by a delegated listener in app.js (no
               // hook of its own) — give it a push channel into this LiveView.
               window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              // Expose the bonk so delegated listeners in app.js (e.g. the
+              // transfer-confirm in-flight latch, item 15.16) can sound it too.
+              window.DoitBonk = () => this.bonk();
+              // A selection can land before we connect (DoitSelection is
+              // client-only; slow longpoll connect). Replay it now so the server
+              // loads the pane's comments / activity / co-assignees for it.
+              if (window.DoitSelection && window.DoitSelection.id) {
+                this.pushEvent("select_task", {id: window.DoitSelection.id});
+              }
+              // After an undo/redo, select + scroll the affected task into view
+              // (m02.06 item 13). Guarded: an undone create removes the task, so
+              // there's nothing to show — skip rather than stall the pane.
+              this.handleEvent("select-task", ({id}) => {
+                if (!document.getElementById("task-" + id)) return;
+                if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                if (window.DoitPush) window.DoitPush("select_task", {id});
+              });
+              // Toolbar Undo/Redo clicks route through the same latch + feedback
+              // as the keyboard (item 15.9), so a repeat while one's in flight is
+              // dropped (with a bonk), never queued.
+              this._undoBtn = (e) => {
+                const b = e.target.closest("#undo-button, #redo-button");
+                if (!b || b.disabled) return;
+                e.preventDefault();
+                this.triggerUndoRedo(b.id === "redo-button" ? "redo" : "undo");
+              };
+              window.addEventListener("click", this._undoBtn);
             },
             destroyed() {
               window.removeEventListener("keydown", this._h);
+              window.removeEventListener("click", this._undoBtn);
               if (window.DoitPush) delete window.DoitPush;
               clearTimeout(this._paneT);
             },
@@ -1609,7 +1693,7 @@ defmodule DoItWeb.InitiativeShowLive do
               if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
                 e.preventDefault();
                 const redo = /^y$/i.test(e.key) || e.shiftKey;
-                this.pushEvent(redo ? "redo" : "undo", {});
+                this.triggerUndoRedo(redo ? "redo" : "undo");
                 return;
               }
               const k = e.key;
@@ -1783,8 +1867,47 @@ defmodule DoItWeb.InitiativeShowLive do
                 osc.stop(ctx.currentTime + 0.3);
               } catch (_e) { /* no audio, no problem */ }
             },
+            // In-flight undo/redo feedback (item 15.9): the first trigger latches
+            // and shows a working state instantly (no round trip); a repeat while
+            // it's in flight is DROPPED with a bonk, not queued. The server reply
+            // (handlers return {:reply,…}) clears the latch + working state.
+            triggerUndoRedo(dir) {
+              if (this._undoInFlight) { this.bonk(); return; }
+              this._undoInFlight = dir;
+              this.setUndoBusy(dir, true);
+              this.pushEvent(dir, {}, () => {
+                this._undoInFlight = null;
+                this.setUndoBusy(dir, false);
+              });
+            },
+            setUndoBusy(dir, on) {
+              const btn = document.getElementById(dir === "redo" ? "redo-button" : "undo-button");
+              if (btn) {
+                btn.classList.toggle("animate-pulse", on);
+                btn.classList.toggle("pointer-events-none", on);
+              }
+              const toast = document.getElementById("undo-toast");
+              if (toast) {
+                if (on) {
+                  toast.textContent = dir === "redo" ? "Redoing…" : "Undoing…";
+                  toast.hidden = false;
+                } else {
+                  toast.hidden = true;
+                }
+              }
+            },
           }
         </script>
+        <%!-- Instant "we heard you" toast for undo/redo (item 15.9), shown
+             client-side before the round trip and hidden when the server reply
+             settles the latch; the result then shows as the normal flash. --%>
+        <div
+          id="undo-toast"
+          hidden
+          aria-live="polite"
+          class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
+        >
+        </div>
         <div class="relative mb-6 pb-6">
           <%!-- Close (back to the index) + role on the same row. The little red
                X (item 12.7) reads as "close this Initiative" rather than a plain
@@ -1808,7 +1931,6 @@ defmodule DoItWeb.InitiativeShowLive do
                 <button
                   type="button"
                   id="undo-button"
-                  phx-click="undo"
                   disabled={is_nil(@undo_label)}
                   title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
                   aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
@@ -1819,7 +1941,6 @@ defmodule DoItWeb.InitiativeShowLive do
                 <button
                   type="button"
                   id="redo-button"
-                  phx-click="redo"
                   disabled={is_nil(@redo_label)}
                   title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
                   aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
@@ -2050,29 +2171,30 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
-            <%!-- ONE pane, never swapped (.03.07.06): once a task has been
-                 selected the pane stays mounted; deselecting hides it
-                 (selected_task keeps the last pane data, only selected_task_id
-                 nils). On a selection switch the client writes the row-known
-                 values (title / priority / assignee) into these real
-                 fields immediately and swaps the async lists to "Loading…";
-                 the server patch then reconciles the same elements in place —
-                 LiveView never clobbers the focused field, so in-progress
-                 typing survives the patch. --%>
+            <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
+                 the shell renders from the start — a blank task when nothing is
+                 selected — so the FIRST selection fills client-side with no
+                 round trip, exactly like every later switch. Deselecting hides
+                 it (selected_task keeps the last pane data, only selected_task_id
+                 nils). On a selection the client writes the row-known values
+                 (title / priority / assignee) into these real fields immediately
+                 and swaps the async lists to "Loading…"; the server patch then
+                 reconciles the same elements in place (and fills the editable
+                 co-assignee list, comments, activity) — LiveView never clobbers
+                 the focused field, so in-progress typing survives the patch. --%>
             <div
-              :if={@selected_task}
               id="task-editor-pane"
-              data-task-id={@selected_task.id}
+              data-task-id={@selected_task_id}
               hidden={is_nil(@selected_task_id) or @editing_initiative?}
               class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
             >
               <.task_editor
-                task={@selected_task}
+                task={@selected_task || blank_task()}
                 comments={@comments}
                 activity={@activity}
                 members={@members}
                 can_edit={@can_edit}
-                can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task.id)}
+                can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
                 can_staff={@selected_staff_pool != nil}
                 staff_pool={@selected_staff_pool}
                 show_activity={@show_task_activity}
@@ -2189,20 +2311,25 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
         </form>
       </div>
+      <%!-- Transfer-ownership confirm is client-side (UX_GUARDRAILS 6.5, like
+           the delete confirms): everything it shows — the target's name, the
+           demotion copy — is client-known, so it opens at the click with no
+           round trip. app.js fills [data-transfer-name] + stashes the user-id;
+           only Proceed touches the server (confirm_transfer). phx-update="ignore"
+           keeps the server out of it (a rename mid-session leaves the initiative
+           name stale — display-only and rare). --%>
       <div
-        :if={@pending_transfer}
         id="transfer-confirm"
+        hidden
+        phx-update="ignore"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
       >
-        <div
-          phx-click-away="cancel_transfer"
-          class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
-        >
+        <div class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl">
           <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
             Transfer ownership
           </h3>
-          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Make <span class="font-semibold">{@pending_transfer.name}</span>
+          <p data-transfer-body class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+            Make <span class="font-semibold" data-transfer-name></span>
             the owner of <span class="font-semibold">{@initiative.name}</span>?
             This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
             and lose owner controls.
@@ -2210,7 +2337,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div class="mt-5 flex justify-end gap-2">
             <button
               type="button"
-              phx-click="cancel_transfer"
+              data-transfer-cancel
               class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
             >
               Cancel
@@ -2218,7 +2345,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <button
               type="button"
               id="transfer-confirm-proceed"
-              phx-click="confirm_transfer"
+              data-transfer-proceed
               class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
             >
               Transfer ownership
@@ -2595,7 +2722,11 @@ defmodule DoItWeb.InitiativeShowLive do
     # Viewer+ (item 12.6): a viewer who leads this task may flip its progress,
     # even without can_edit. Other affordances stay can_edit only.
     assigns =
-      assign(assigns, :can_progress, assigns.can_edit or MapSet.member?(assigns.led_ids, assigns.task.id))
+      assign(
+        assigns,
+        :can_progress,
+        assigns.can_edit or MapSet.member?(assigns.led_ids, assigns.task.id)
+      )
 
     ~H"""
     <%!-- Selection is client-owned (UX_GUARDRAILS 6.5): the data-selected attr
@@ -2616,6 +2747,8 @@ defmodule DoItWeb.InitiativeShowLive do
       <div
         data-task-row
         data-done={@task.status == "done"}
+        data-task-progress={progress_value(@task)}
+        data-can-progress={to_string(@can_progress)}
         class={[
           "group/row relative flex flex-wrap items-center gap-x-2 xl:gap-x-3 gap-y-1 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px] cursor-pointer",
           MapSet.member?(@saving_ids, @task.id) && "is-saving",
@@ -2764,6 +2897,23 @@ defmodule DoItWeb.InitiativeShowLive do
             data-presence-slot={@task.id}
             class="inline-flex items-center gap-0.5 flex-none"
             aria-hidden="true"
+          >
+          </span>
+
+          <%!-- Co-assignee seed (item 15.11): hidden, machine-readable copy of
+               the chip above, so selecting this task fills the pane's optimistic
+               co-list instantly — before the server reply. Capped like the chip
+               (co_assignee_users); the full interactive list reconciles on the
+               reply. --%>
+          <span
+            :for={u <- @task.co_assignee_users}
+            hidden
+            data-co-seed
+            data-user-id={u.id}
+            data-name={u.username}
+            data-initials={initials(u)}
+            data-avatar-bg={avatar_bg(u)}
+            data-avatar-fg={avatar_fg(u)}
           >
           </span>
         </div>
@@ -3036,7 +3186,7 @@ defmodule DoItWeb.InitiativeShowLive do
         Computed from children: {@root_task.computed_progress}%
       </div>
 
-      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" />
+      <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" scope="init" />
 
       <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
            behavior that isn't day-to-day editing. KeepOpen preserves the
@@ -3173,7 +3323,10 @@ defmodule DoItWeb.InitiativeShowLive do
   """
   def members_panel(assigns) do
     ~H"""
-    <div id={@id} class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4">
+    <div
+      id={@id}
+      class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+    >
       <div class="flex items-center justify-between mb-2">
         <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Members</h3>
         <button
@@ -3243,6 +3396,10 @@ defmodule DoItWeb.InitiativeShowLive do
               id={"member-drag-#{@id}-#{m.user_id}"}
               phx-hook="MemberDrag"
               data-user-id={m.user_id}
+              data-username={m.user.username}
+              data-initials={initials(m.user)}
+              data-avatar-bg={avatar_bg(m.user)}
+              data-avatar-fg={avatar_fg(m.user)}
               title={"Drag #{m.user.name} onto a task to assign"}
               aria-hidden="true"
               class="flex-none -ml-1 cursor-grab touch-none text-zinc-600 hover:text-zinc-700 dark:text-zinc-600 dark:hover:text-zinc-400"
@@ -3304,12 +3461,16 @@ defmodule DoItWeb.InitiativeShowLive do
               <.icon name="hero-arrow-right-start-on-rectangle" class="w-3.5 h-3.5" />
             </button>
             <%!-- Transfer ownership: always confirmed (the modal spells out
-                 the demotion-to-editor consequence). --%>
+                 the demotion-to-editor consequence). The confirm opens
+                 client-side (app.js) so it pops at the click with no round
+                 trip — the member's name + id ride on the button. Only Proceed
+                 touches the server. --%>
             <button
               :if={@can_admin && m.user_id != @owner_id}
               type="button"
-              phx-click="transfer_ownership"
-              phx-value-user-id={m.user_id}
+              data-transfer-open
+              data-user-id={m.user_id}
+              data-user-name={m.user.name}
               title={"Transfer ownership to #{m.user.name}"}
               aria-label={"Transfer ownership to #{m.user.name}"}
               class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-amber-600 hover:bg-amber-50 dark:text-zinc-500 dark:hover:text-amber-400 dark:hover:bg-amber-950/40"
@@ -3340,6 +3501,13 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :task, :map, required: true
   attr :can_edit, :boolean, required: true
   attr :label, :string, default: "Sort children by"
+  # Stable element ids (item 15.17): the form / select / checkbox are keyed by
+  # this pane scope, not the task id, so morphdom updates them in place across
+  # selections (the optimistic value survives + reconciles) instead of tearing
+  # the node down. The component is shared by two panes, so each passes its own
+  # scope to keep the ids unique. The task id rides on `data-task-id` + the
+  # hidden `task_id` (what SortRecall + set_sort actually key on).
+  attr :scope, :string, required: true
 
   @doc """
   The "sort by" control for a branch task: criterion dropdown + Reverse +
@@ -3352,11 +3520,11 @@ defmodule DoItWeb.InitiativeShowLive do
     <%!-- invisible (not removed) on leaves so leaf↔branch selection switches
          don't shift the layout below (UX_GUARDRAILS 1.1). --%>
     <div data-sort-block class={["space-y-1", leaf?(@task) && "invisible"]}>
-      <label for={"sort-mode-#{@task.id}"} class="text-xs text-zinc-500 dark:text-zinc-400">
+      <label for={"sort-mode-#{@scope}"} class="text-xs text-zinc-500 dark:text-zinc-400">
         {@label}
       </label>
       <form
-        id={"sort-form-#{@task.id}"}
+        id={"sort-form-#{@scope}"}
         phx-hook="SortRecall"
         data-task-id={@task.id}
         data-saving-children
@@ -3365,7 +3533,7 @@ defmodule DoItWeb.InitiativeShowLive do
       >
         <input type="hidden" name="task_id" value={@task.id} />
         <select
-          id={"sort-mode-#{@task.id}"}
+          id={"sort-mode-#{@scope}"}
           name="mode"
           class="flex-1 select select-bordered select-sm"
           disabled={not @can_edit}
@@ -3378,7 +3546,7 @@ defmodule DoItWeb.InitiativeShowLive do
           </option>
         </select>
         <label
-          for={"sort-reverse-#{@task.id}"}
+          for={"sort-reverse-#{@scope}"}
           class={[
             "flex items-center gap-1 text-xs select-none",
             reverse_disabled?(@task) && "text-zinc-400 dark:text-zinc-500",
@@ -3387,7 +3555,7 @@ defmodule DoItWeb.InitiativeShowLive do
           title="Reverse the sort direction"
         >
           <input
-            id={"sort-reverse-#{@task.id}"}
+            id={"sort-reverse-#{@scope}"}
             type="checkbox"
             name="reverse"
             value="true"
@@ -3461,7 +3629,7 @@ defmodule DoItWeb.InitiativeShowLive do
             value={@task.title}
             class="w-full input input-bordered input-sm"
             disabled={not @can_edit}
-            phx-debounce="600"
+            phx-debounce="blur"
           />
         </div>
 
@@ -3475,7 +3643,7 @@ defmodule DoItWeb.InitiativeShowLive do
             class="w-full textarea textarea-bordered textarea-sm"
             rows="3"
             disabled={not @can_edit}
-            phx-debounce="600"
+            phx-debounce="blur"
           >{@task.description}</textarea>
         </div>
 
@@ -3485,7 +3653,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <div class="space-y-1">
           <div class="flex items-center gap-1">
             <label for="task-field-progress" class="text-xs text-zinc-500 dark:text-zinc-400">
-              Manual progress: <span data-progress-readout>{@task.manual_progress}</span>%
+              Manual progress: <span data-progress-readout>{if leaf?(@task), do: @task.manual_progress, else: @task.computed_progress}</span>%
             </label>
             <.info_hint
               :if={not leaf?(@task)}
@@ -3504,7 +3672,7 @@ defmodule DoItWeb.InitiativeShowLive do
             min="0"
             max="100"
             step="5"
-            value={@task.manual_progress}
+            value={if leaf?(@task), do: @task.manual_progress, else: @task.computed_progress}
             class="w-full"
             disabled={not @can_progress or not leaf?(@task)}
             phx-debounce="200"
@@ -3514,22 +3682,30 @@ defmodule DoItWeb.InitiativeShowLive do
                 else: "Manual progress (disabled — computed from subtasks)"
             }
           />
-          <p class={[
-            "text-xs text-zinc-400 dark:text-zinc-500 italic",
-            leaf?(@task) && "invisible"
-          ]}>
+          <p
+            data-branch-note
+            class={[
+              "text-xs text-zinc-400 dark:text-zinc-500 italic",
+              leaf?(@task) && "invisible"
+            ]}
+          >
             Ignored — this task has subtasks.
           </p>
-          <div class={[
-            "text-xs text-zinc-500 dark:text-zinc-400 italic",
-            leaf?(@task) && "invisible"
-          ]}>
-            Computed from children: {@task.computed_progress}%
+          <div
+            data-computed-note
+            class={[
+              "text-xs text-zinc-500 dark:text-zinc-400 italic",
+              leaf?(@task) && "invisible"
+            ]}
+          >
+            Computed from children: <span data-computed-readout>{@task.computed_progress}</span>%
           </div>
         </div>
       </form>
 
-      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" />
+      <%!-- Always rendered (item 15.17): blank task renders it invisible (leaf),
+           so it's present on a first selection and fillPaneFields fills it. --%>
+      <.sort_menu task={@task} can_edit={@can_edit} label="Sort children by" scope="task" />
 
       <form phx-change="update_task" phx-submit="update_task" class="grid grid-cols-2 gap-3">
         <div>
@@ -3582,13 +3758,26 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </form>
 
+      <%!-- Optimistic co-assignees (item 15.11): a read-only mirror of the
+           selected row's co-chip, shown the instant a selection switch is in
+           flight so co's appear pronto — before the server reply fills the
+           real interactive list below. fillPaneFields builds it from the row's
+           hidden [data-co-seed] spans; syncPaneSkeleton shows it only while the
+           switch is in flight and hides it once the real list arrives. Always
+           present (not gated on @task.id) so a first selection has it too. --%>
+      <div id="co-optimistic" hidden>
+        <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
+        <ul data-co-opt-list class="mt-1 space-y-1"></ul>
+      </div>
+
       <%!-- Co-assignees (m02.05 item 13): ordered, manual — position is
            promotion order. The primary stays the assignee select above.
            MUST live OUTSIDE the update_task form — its own add-form can't be
            nested in another form (the browser drops nested forms). --%>
       <div
-        :if={@can_edit or @can_staff or @task.co_assignee_links != []}
+        :if={@task.id && (@can_edit or @can_staff or @task.co_assignee_links != [])}
         id="co-assignees"
+        data-async-list
         phx-hook="CoAssignees"
       >
         <span class="text-xs text-zinc-500 dark:text-zinc-400">Co-assignees</span>
@@ -3597,7 +3786,9 @@ defmodule DoItWeb.InitiativeShowLive do
              them; the hook reverts from the server's reply (or a timeout) when a
              write doesn't land — never sticking a change the server refused.
              Keyed by task id so selecting another task re-renders from the
-             server. The chip + dropdown stay server-driven (truthful). --%>
+             server. The chip + dropdown stay server-driven (truthful). During a
+             selection switch the whole block hides (data-async-list above) and
+             the optimistic mirror stands in. --%>
         <ul id={"co-list-#{@task.id}"} phx-update="ignore" class="mt-1 space-y-1">
           <li
             :for={{link, idx} <- Enum.with_index(@task.co_assignee_links)}
@@ -3681,7 +3872,10 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
 
-      <div class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <div
+        :if={@task.id}
+        class="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3"
+      >
         <div class="text-xs text-zinc-500 dark:text-zinc-400">
           <%= if @task.updated_by do %>
             Last updated by
@@ -3860,7 +4054,8 @@ defmodule DoItWeb.InitiativeShowLive do
   # A member reads "viewer+" when the Initiative setting is on, their role is
   # viewer, and they're the direct assignee of at least one task (item 12.6.5).
   defp viewer_plus?(member, assignee_ids, viewer_plus_on),
-    do: viewer_plus_on and member.role == "viewer" and MapSet.member?(assignee_ids, member.user_id)
+    do:
+      viewer_plus_on and member.role == "viewer" and MapSet.member?(assignee_ids, member.user_id)
 
   defp role_label(member, assignee_ids, viewer_plus_on) do
     if viewer_plus?(member, assignee_ids, viewer_plus_on), do: "viewer+", else: member.role
@@ -3964,6 +4159,13 @@ defmodule DoItWeb.InitiativeShowLive do
     do: "w-3 h-3 flex-none text-amber-700 dark:text-amber-600"
 
   defp badge_icon_class(_calc), do: "w-3 h-3 flex-none"
+
+  # An empty placeholder so the Details pane shell can pre-mount before any task
+  # is selected (item 15.8) — the client fills the editable fields from the row
+  # on the first selection. children: [] keeps leaf?/sort safe; the task-keyed
+  # sections (sort, co-assignees, "last updated") gate on @task.id and stay out
+  # until the real task arrives on the reply.
+  defp blank_task, do: %Task{children: [], co_assignee_links: []}
 
   defp leaf?(%Task{} = task) do
     case Map.get(task, :children) do

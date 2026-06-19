@@ -205,6 +205,11 @@ const DoitSelection = {
       pane.querySelectorAll("[data-async-loading]").forEach((el) => {
         if (el.hidden !== !inFlight) el.hidden = !inFlight
       })
+      // The optimistic co-list stands in only while a switch is in flight;
+      // once the real list arrives (or nothing is selected) hide it. While in
+      // flight, fillPaneFields fills it and sets its own hidden by seed count.
+      const coOpt = pane.querySelector("#co-optimistic")
+      if (coOpt && !inFlight) coOpt.hidden = true
       if (inFlight) this.fillPaneFields(pane)
       // A pill tap on a first-ever selection parked its field focus until the
       // pane existed (.03.07.17) — land it now.
@@ -232,6 +237,40 @@ const DoitSelection = {
     }
 
     set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
+    // Description rides a hidden-when-empty row span (item 15.11) — fill the
+    // textarea from it so the pane shows it instantly on selection, no round trip.
+    set(pane.querySelector("#task-field-description"), text("[data-task-description]"))
+
+    // Progress slider (item 15.11): value + enabled state from the row, so it
+    // reflects reality instantly. Value is the row's displayed % (branch =
+    // computed); disabled when not a leaf, or the row says no progress rights.
+    const prog = pane.querySelector("#task-field-progress")
+    if (prog && prog !== document.activeElement) {
+      const pv = row.getAttribute("data-task-progress")
+      if (pv !== null) prog.value = pv
+      const hasKids = !!li.querySelector(":scope > ul[id^='children-']")
+      const canProgress = row.getAttribute("data-can-progress") === "true"
+      prog.disabled = !canProgress || hasKids
+      const readout = pane.querySelector("[data-progress-readout]")
+      if (readout && pv !== null) readout.textContent = pv
+    }
+
+    // Branch-progress copy: the "Ignored — this task has subtasks." note and
+    // the "Computed from children: N%" readout are server-gated on leaf-ness
+    // (the `invisible` class on @task), so on a first selection of a branch
+    // they stay hidden until the reply. Toggle them from the row's children
+    // presence + computed % (data-task-progress = computed for a branch) so
+    // they show instantly like the rest of the shell.
+    const isBranch = !!li.querySelector(":scope > ul[id^='children-']")
+    const cp = row.getAttribute("data-task-progress")
+    const branchNote = pane.querySelector("[data-branch-note]")
+    if (branchNote) branchNote.classList.toggle("invisible", !isBranch)
+    const computedNote = pane.querySelector("[data-computed-note]")
+    if (computedNote) {
+      computedNote.classList.toggle("invisible", !isBranch)
+      const cr = computedNote.querySelector("[data-computed-readout]")
+      if (cr && cp !== null) cr.textContent = cp
+    }
 
     // The title attr always carries the priority ("Priority: high"). Either
     // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,
@@ -258,6 +297,14 @@ const DoitSelection = {
     if (sortBlock) {
       const hasKids = !!li.querySelector(":scope > ul[id^='children-']")
       sortBlock.classList.toggle("invisible", !hasKids)
+      // Point the (stable-id) form at the selected task so set_sort + SortRecall
+      // target it during the in-flight window; the reply reconciles in place.
+      const sortForm = sortBlock.querySelector("form")
+      if (sortForm) {
+        sortForm.dataset.taskId = this.id || ""
+        const tid = sortForm.querySelector("[name='task_id']")
+        if (tid) tid.value = this.id || ""
+      }
       const mode = li.dataset.sort || ""
       const modeSel = sortBlock.querySelector("select[name='mode']")
       if (modeSel && modeSel !== document.activeElement && modeSel.value !== mode) {
@@ -270,6 +317,34 @@ const DoitSelection = {
         const dis = mode === "" || mode === "manual"
         if (rev.disabled !== dis) rev.disabled = dis
       }
+    }
+
+    // Optimistic co-assignees (item 15.11): mirror the row's hidden co-seed
+    // spans into a read-only list so co's show the instant the pane switches,
+    // ahead of the server reply that fills the real interactive list below.
+    // Read-only by design — the truthful, reorderable list is the hook's.
+    const coOpt = pane.querySelector("#co-optimistic")
+    const optList = coOpt && coOpt.querySelector("[data-co-opt-list]")
+    if (optList) {
+      const seeds = [...row.querySelectorAll("[data-co-seed]")]
+      optList.innerHTML = ""
+      seeds.forEach((s) => {
+        const liEl = document.createElement("li")
+        liEl.className = "flex items-center gap-2 text-sm"
+        const av = document.createElement("span")
+        av.className =
+          "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+        av.textContent = s.dataset.initials || ""
+        av.style.backgroundImage = s.dataset.avatarBg || ""
+        av.style.color = s.dataset.avatarFg || ""
+        const nm = document.createElement("span")
+        nm.className = "flex-1 min-w-0 truncate text-zinc-700 dark:text-zinc-200"
+        nm.textContent = "@" + (s.dataset.name || "")
+        liEl.appendChild(av)
+        liEl.appendChild(nm)
+        optList.appendChild(liEl)
+      })
+      coOpt.hidden = seeds.length === 0
     }
   },
 }
@@ -357,11 +432,87 @@ document.addEventListener("click", (e) => {
   }
 })
 
+// Optimistic task creation (item 15.15, UX_GUARDRAILS §6): pop a placeholder
+// row in at submit, before the server trip — no reason to wait on the round
+// trip to show the new task. It lands in a morphdom-managed container, so the
+// create reply reconciles it away on its own: success renders the real row, a
+// completion-flip swaps in the server's preview row, a cancel/reload drops it.
+// Roll-up % up the tree is the server's job and arrives on that reply; only the
+// bare row is instant. The flip-confirm decision stays server-side (no
+// duplicated completion logic). An 8s timeout self-heals the rare case where no
+// patch lands (dropped reply / a no-op error render) so a ghost never sticks.
+let pendingRowSeq = 0
+function buildPendingRow(title) {
+  const li = document.createElement("li")
+  li.id = "task-pending-" + ++pendingRowSeq
+  li.setAttribute("data-pending-row", "")
+  // No data-task-id / data-task-row: the row-click, drag, and key handlers all
+  // skip it, so the transient placeholder is inert until the real row lands.
+  li.className =
+    "rounded border border-emerald-500/50 dark:border-emerald-500/40 bg-white dark:bg-zinc-900 is-saving"
+  const row = document.createElement("div")
+  row.className = "flex items-center gap-2 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px]"
+  const name = document.createElement("span")
+  name.className = "flex-1 min-w-0 truncate text-sm text-zinc-700 dark:text-zinc-200"
+  name.textContent = title
+  const note = document.createElement("span")
+  note.className = "flex-none text-xs text-zinc-400 dark:text-zinc-500 italic"
+  note.textContent = "Adding…"
+  row.appendChild(name)
+  row.appendChild(note)
+  li.appendChild(row)
+  setTimeout(() => li.remove(), 8000)
+  return li
+}
+function placePendingRow(container, afterId, li) {
+  if (afterId) {
+    const slot = document.getElementById("add-after-" + afterId)
+    const anchor = document.getElementById("task-" + afterId)
+    const ref =
+      slot && slot.parentElement === container ? slot.nextSibling :
+      anchor && anchor.parentElement === container ? anchor.nextSibling : null
+    container.insertBefore(li, ref) // null ref => append
+  } else {
+    container.insertBefore(li, container.firstChild) // top level / first child
+  }
+}
+function insertPendingRow(parentId, afterId, title) {
+  const li = buildPendingRow(title)
+  if (parentId) {
+    let ul = document.getElementById("children-" + parentId)
+    if (!ul) {
+      // First child of a leaf: no children list yet. Build a temp one to nest
+      // in; morphdom swaps it for the real children-<id> ul on the reply.
+      ul = document.createElement("ul")
+      ul.id = "children-pending-" + parentId
+      ul.className = "pl-1.5 sm:pl-6 space-y-1"
+      const parentLi = document.getElementById("task-" + parentId)
+      const slot = document.getElementById("add-slot-" + parentId)
+      if (slot && slot.parentElement === parentLi) parentLi.insertBefore(ul, slot.nextSibling)
+      else if (parentLi) parentLi.appendChild(ul)
+      else return
+    }
+    placePendingRow(ul, afterId, li)
+  } else {
+    const tree = document.getElementById("task-tree")
+    if (tree) placePendingRow(tree, afterId, li)
+  }
+}
+
 // Rapid entry: clear the title after LiveView serializes the submit and stay
 // focused, so consecutive adds need no clicks at all.
 document.addEventListener("submit", (e) => {
   if (e.target.id !== "add-task-form") return
-  const input = e.target.querySelector("[name='title']")
+  const form = e.target
+  const input = form.querySelector("[name='title']")
+  const title = input.value.trim()
+  if (title) {
+    insertPendingRow(
+      form.querySelector("[name='parent_id']").value,
+      form.querySelector("[name='after_id']").value,
+      title
+    )
+  }
   setTimeout(() => {
     input.value = ""
     input.focus()
@@ -401,7 +552,11 @@ document.addEventListener("click", (e) => {
 // syncPaneSkeleton lands it when the pane arrives.
 document.addEventListener("click", (e) => {
   const row = e.target.closest("[data-task-row]")
-  if (!row || !window.DoitPush) return
+  // Selection + the optimistic pane fill are client-only (DoitSelection) and
+  // must work even before the LiveView connects (slow on longpoll) — so DON'T
+  // gate on window.DoitPush. Only the server pushes below need it, and the
+  // TaskKeys hook replays select_task for the live selection once it mounts.
+  if (!row) return
   // Interactive children (toggle, collapse, pills, drag handle) own their
   // clicks; pills additionally select without toggling. The check must stay
   // inside the row — ancestors (children <ul>s, the page root) carry hooks.
@@ -426,10 +581,10 @@ document.addEventListener("click", (e) => {
   const id = li.dataset.taskId
   if (DoitSelection.id === id) {
     DoitSelection.clear()
-    window.DoitPush("close_task", {})
+    if (window.DoitPush) window.DoitPush("close_task", {})
   } else {
     DoitSelection.set(id)
-    window.DoitPush("select_task", {id: id})
+    if (window.DoitPush) window.DoitPush("select_task", {id: id})
   }
 })
 
@@ -639,6 +794,122 @@ document.addEventListener("keydown", (e) => {
     modal.hidden = true
     clearSavingHue()
   }
+})
+
+// Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
+// delete confirms): the dialog's content is client-known, so it opens at the
+// click of a member's transfer (key) button — no round trip before the owner
+// can decide. The button carries the target's name + id; we fill the copy and
+// stash the id. Cancel / backdrop / Esc close with no consequence; only
+// Proceed touches the server (confirm_transfer with the stashed id).
+// The actual swap can't be optimistic — we can't honestly fake the role
+// demotion client-side — so it's a true round trip (item 15.16). Rather than
+// close the modal as if it succeeded, hold it open with Proceed in a working
+// state until the reply settles: a repeat Proceed bonks (no second transfer),
+// a timeout offers a retry, an explicit failure shows a message + a single
+// Close. Only success closes the modal.
+const TRANSFER_TIMEOUT_MS = 8000
+let transferInFlight = false
+let transferBodyHTML = null
+const transferModal = () => {
+  const m = document.getElementById("transfer-confirm")
+  return m && !m.hidden ? m : null
+}
+const transferEls = () => {
+  const modal = document.getElementById("transfer-confirm")
+  if (!modal) return null
+  return {
+    modal,
+    body: modal.querySelector("[data-transfer-body]"),
+    proceed: modal.querySelector("[data-transfer-proceed]"),
+    cancel: modal.querySelector("[data-transfer-cancel]"),
+  }
+}
+const resetTransferModal = () => {
+  const els = transferEls()
+  if (!els) return
+  if (transferBodyHTML !== null) els.body.innerHTML = transferBodyHTML
+  els.proceed.hidden = false
+  els.proceed.classList.remove("animate-pulse", "opacity-60")
+  els.proceed.textContent = "Transfer ownership"
+  els.cancel.classList.remove("pointer-events-none", "opacity-50")
+  els.cancel.textContent = "Cancel"
+  transferInFlight = false
+}
+const closeTransferModal = () => {
+  const els = transferEls()
+  if (els) els.modal.hidden = true
+  transferInFlight = false
+}
+document.addEventListener("click", (e) => {
+  const open = e.target.closest("[data-transfer-open]")
+  if (open) {
+    const els = transferEls()
+    if (!els) return
+    if (transferBodyHTML === null) transferBodyHTML = els.body.innerHTML // pristine
+    resetTransferModal()
+    els.modal.dataset.userId = open.dataset.userId
+    const nameEl = els.modal.querySelector("[data-transfer-name]")
+    if (nameEl) nameEl.textContent = open.dataset.userName || ""
+    els.modal.hidden = false
+    els.cancel.focus()
+    return
+  }
+  const modal = transferModal()
+  if (!modal) return
+  // Proceed: latch + working state, then push with a reply callback + timeout.
+  if (e.target.closest("[data-transfer-proceed]")) {
+    if (transferInFlight) {
+      if (window.DoitBonk) window.DoitBonk() // dropped repeat — not ignored
+      return
+    }
+    const els = transferEls()
+    if (!els) return
+    transferInFlight = true
+    els.proceed.classList.add("animate-pulse", "opacity-60") // stays clickable so a repeat can bonk
+    els.proceed.textContent = "Transferring…"
+    els.cancel.classList.add("pointer-events-none", "opacity-50")
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      els.body.textContent = "Sorry, the transfer timed out — try again?"
+      els.proceed.classList.remove("animate-pulse", "opacity-60")
+      els.proceed.textContent = "Transfer ownership"
+      els.cancel.classList.remove("pointer-events-none", "opacity-50")
+      transferInFlight = false
+    }, TRANSFER_TIMEOUT_MS)
+    const finish = (reply) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      transferInFlight = false
+      if (reply && reply.ok) {
+        closeTransferModal()
+      } else {
+        els.body.textContent =
+          "Couldn't transfer ownership — the membership may have changed. Close and try again from the current roster."
+        els.proceed.hidden = true
+        els.cancel.classList.remove("pointer-events-none", "opacity-50")
+        els.cancel.textContent = "Close"
+      }
+    }
+    if (window.DoitPush) {
+      window.DoitPush("confirm_transfer", {"user-id": els.modal.dataset.userId}, finish)
+    } else {
+      finish({ok: false})
+    }
+    return
+  }
+  // Cancel / backdrop — only when not mid-flight (Cancel is disabled then).
+  if (!transferInFlight && (e.target === modal || e.target.closest("[data-transfer-cancel]"))) {
+    closeTransferModal()
+  }
+})
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = transferModal()
+  if (modal && !transferInFlight) closeTransferModal()
 })
 
 // Fully-optimistic operated row (.03.07.22): a completion toggle flips the
@@ -2221,6 +2492,10 @@ Hooks.CollaboratorDrag = {
     this.el.style.opacity = "0.5"
     document.body.style.userSelect = "none"
     document.body.style.cursor = "grabbing"
+    // Mark the whole Initiatives box as the drop zone for the drag's lifetime
+    // (item 15.7) — orientation alongside the per-entry rail-drop-target.
+    this.zone = document.getElementById("rail-initiatives")
+    if (this.zone) this.zone.classList.add("collab-drop-zone")
   },
   move(e) {
     if (!this.armed) return
@@ -2274,6 +2549,8 @@ Hooks.CollaboratorDrag = {
     this.onMove = this.onUp = this.onCancel = null
     if (this.target) this.target.classList.remove("rail-drop-target")
     this.target = null
+    if (this.zone) this.zone.classList.remove("collab-drop-zone")
+    this.zone = null
     this.el.style.opacity = ""
     document.body.style.userSelect = ""
     document.body.style.cursor = ""
@@ -2348,18 +2625,59 @@ Hooks.MemberDrag = {
     if (this.dragging && this.target) {
       const row = this.target
       const taskId = row.dataset.taskId
+      // Optimistic assign (item 14.2): fill the primary pill now when the task
+      // has none; the server patch reconciles on success, and a rejected or
+      // timed-out reply reverts — optimism must never lie (UX_GUARDRAILS §6).
+      const revert = this.optimisticPrimary(row)
       row.classList.add("is-saving")
       let settled = false
-      const done = () => {
+      const settle = (ok) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
         row.classList.remove("is-saving")
+        if (!ok && revert) revert()
       }
-      const timer = setTimeout(done, CO_REPLY_TIMEOUT_MS)
-      this.pushEvent("assign_member", { "user-id": this.userId, "task-id": taskId }, () => done())
+      const timer = setTimeout(() => settle(false), CO_REPLY_TIMEOUT_MS)
+      this.pushEvent("assign_member", { "user-id": this.userId, "task-id": taskId }, (reply) =>
+        settle(!!(reply && reply.ok)),
+      )
     }
     this.cleanup()
+  },
+  // Fill the assignee pill's PRIMARY slot from the dragged member's data, but
+  // only when the task has no primary yet — an already-assigned task gets a
+  // co-assignee, whose avatar stack the server patch renders (not predicted
+  // here). Returns a revert fn (restore the empty slot) or null.
+  optimisticPrimary(row) {
+    const pill = row.querySelector("[data-pill='assignee']")
+    if (!pill || pill.hasAttribute("data-pill-set")) return null
+    const d = this.el.dataset
+    if (!d.username) return null
+    const span = pill.querySelector("[data-pill-text]")
+    const avatar = pill.querySelector("[data-pill-avatar]")
+    pill.setAttribute("data-pill-set", "")
+    pill.title = "Assignee: @" + d.username
+    if (span) {
+      span.textContent = "@" + d.username
+      span.classList.remove("line-through")
+    }
+    if (avatar) {
+      avatar.hidden = false
+      avatar.textContent = d.initials || ""
+      avatar.style.backgroundImage = d.avatarBg || ""
+      avatar.style.color = d.avatarFg || ""
+      avatar.dataset.assigneeId = this.userId
+    }
+    return () => {
+      pill.removeAttribute("data-pill-set")
+      pill.title = "Unassigned"
+      if (span) span.textContent = ""
+      if (avatar) {
+        avatar.hidden = true
+        avatar.dataset.assigneeId = ""
+      }
+    }
   },
   cleanup() {
     if (this.onMove) document.removeEventListener("pointermove", this.onMove)
@@ -2591,6 +2909,11 @@ Hooks.SortRecall = {
     if (select && checkbox && !this.isInheritOrManual(select.value)) {
       this.save(select.value, checkbox.checked)
     }
+  },
+  updated() {
+    // Stable element ids (item 15.17) mean this hook no longer re-mounts per
+    // task — refresh the task it keys localStorage on from the patched node.
+    this.taskId = this.el.dataset.taskId
   },
   destroyed() {
     if (this.onChange) {

@@ -315,8 +315,8 @@ defmodule DoIt.Initiatives do
 
   @doc """
   Initiatives this user owns (by `owner_id`) that other members belong to.
-  Account deletion (m02.04 §1.10) is blocked while any exist — they need a
-  transfer or delete first. m02.06's Trash flow supersedes the block.
+  On account deletion these are handed off to a successor member (m02.06 item
+  10.3) rather than blocking the deletion.
   """
   def owned_shared_initiatives(%User{id: user_id}) do
     from(i in Initiative,
@@ -346,6 +346,75 @@ defmodule DoIt.Initiatives do
 
     Repo.delete_all(from(i in Initiative, where: i.id in ^sole_ids))
   end
+
+  @doc """
+  Hand off every multi-member Initiative `user` owns to its `successor_member/1`
+  (m02.06 item 10.3), so deleting the account doesn't strand them. Solo-owned
+  Initiatives are left for `delete_sole_owned_initiatives/1`.
+  """
+  def transfer_owned_shared_initiatives(%User{} = user) do
+    user
+    |> owned_shared_initiatives()
+    |> Enum.each(fn initiative ->
+      case successor_member(initiative) do
+        nil -> :ok
+        successor_id -> transfer_ownership(initiative, successor_id)
+      end
+    end)
+  end
+
+  @doc """
+  The member who should inherit ownership when the current owner departs (m02.06
+  item 10.3): the highest-ranked surviving member, ranked **editor > viewer+ >
+  viewer**, ties broken by who joined the Initiative earliest. viewer+ (a viewer
+  who is the primary assignee of a live task here) only outranks a plain viewer
+  when the Initiative's `viewer_plus` is on. Returns a user_id, or nil when the
+  owner is the only member.
+  """
+  def successor_member(%Initiative{} = initiative) do
+    members =
+      from(m in InitiativeMember,
+        where: m.initiative_id == ^initiative.id and m.user_id != ^initiative.owner_id,
+        select: %{user_id: m.user_id, role: m.role, joined: m.inserted_at}
+      )
+      |> Repo.all()
+
+    case members do
+      [] ->
+        nil
+
+      _ ->
+        assignees = direct_assignee_ids(initiative)
+
+        members
+        |> Enum.min_by(fn m ->
+          {-successor_rank(m, assignees), DateTime.to_unix(m.joined), m.user_id}
+        end)
+        |> Map.fetch!(:user_id)
+    end
+  end
+
+  # editor > viewer+ > viewer. viewer+ = a viewer who directly leads a task here;
+  # it only elevates them when `direct_assignee_ids` is non-empty (viewer_plus on).
+  defp successor_rank(%{role: "editor"}, _assignees), do: 3
+
+  defp successor_rank(%{role: "viewer", user_id: uid}, assignees),
+    do: if(MapSet.member?(assignees, uid), do: 2, else: 1)
+
+  defp successor_rank(_member, _assignees), do: 1
+
+  defp direct_assignee_ids(%Initiative{viewer_plus: true} = initiative) do
+    from(t in Task,
+      where:
+        t.initiative_id == ^initiative.id and not is_nil(t.assignee_id) and is_nil(t.deleted_at),
+      select: t.assignee_id,
+      distinct: true
+    )
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  defp direct_assignee_ids(_initiative), do: MapSet.new()
 
   def list_members(initiative_id) do
     from(m in InitiativeMember,
