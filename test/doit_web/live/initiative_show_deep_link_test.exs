@@ -58,7 +58,12 @@ defmodule DoItWeb.InitiativeShowDeepLinkTest do
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}?task=#{target.id}")
 
     assert_push_event(view, "deep-link-task", %{id: id, ancestors: ancestors})
-    assert id == target.id
+    # The id must cross to the client as a STRING: the client echoes it straight
+    # back through the "select_task" hook event, whose handler runs
+    # String.to_integer/1. Pushing an integer here crashed that handler, which
+    # killed the LiveView and reload-looped the page.
+    assert is_binary(id)
+    assert id == to_string(target.id)
     # The ancestor chain includes the branch (and the system root); never the
     # target itself.
     assert branch.id in ancestors

@@ -117,7 +117,10 @@ defmodule DoItWeb.InitiativeShowLive do
            {id, ""} <- Integer.parse(task_id),
            %Task{initiative_id: ^initiative_id, deleted_at: nil} <-
              Tasks.get_task(id) do
-        push_event(socket, "deep-link-task", %{id: id, ancestors: Tasks.ancestor_ids(id)})
+        # id crosses as a string: the client echoes it back through the
+        # "select_task" hook event, whose handler runs String.to_integer/1
+        # (matches the to_string convention the undo/redo "select-task" push uses).
+        push_event(socket, "deep-link-task", %{id: to_string(id), ancestors: Tasks.ancestor_ids(id)})
       else
         _ -> socket
       end
