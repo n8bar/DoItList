@@ -2906,6 +2906,14 @@ defmodule DoItWeb.InitiativeShowLive do
               if (this.log) this.log.scrollTop = this.log.scrollHeight;
             },
             updated() {
+              // A server re-render (e.g. your own sent message broadcasting
+              // back) re-applies the template's `hidden` on the panel via
+              // morphdom, which would snap an open chat shut. Re-assert the open
+              // state from localStorage (the source of truth) before anything
+              // else, so sending never closes the window.
+              const reopen = localStorage.getItem(this.KEY) === "1";
+              this.panel.hidden = !reopen;
+              if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
               // A new message bumps the server's monotonic chat-log id.
               const id = parseInt(this.el.dataset.chatLogId || "0", 10);
               if (id > this._lastLogId) {
