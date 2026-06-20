@@ -1,4 +1,4 @@
-# M06-Final-Prep-Launch
+# M06-Prep-Launch
 _Status: stub · Planned start: after M05 (Final Features) · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M06 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
@@ -49,4 +49,4 @@ _(TBD once scoped.)_
 
 ## Branch
 
-`M06-final-prep-launch` (created at scoping time).
+`M06-prep-launch` (created at scoping time).

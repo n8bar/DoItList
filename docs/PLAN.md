@@ -17,7 +17,7 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 | Data-layer optimization beyond hot-path fixes (index strategy, `load_tree` scaling, pagination / bulk reads) | M03 (API) scoping — real client load patterns exist | Hot N+1s fixed in M02 Arc 3; the rest has no trigger at current single-user scale, and an API is what will create one. |
 
 ## Release Target
-No public release yet. The app won't open to the public before **M06 (Final Prep and Launch)** — the milestone that owns going public. M02 (UX Buildout) remains the floor for the app feeling presentable.
+No public release yet. The app won't open to the public before **M06 (Prep and Launch)** — the milestone that owns going public. M02 (UX Buildout) remains the floor for the app feeling presentable.
 
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
@@ -26,7 +26,7 @@ No public release yet. The app won't open to the public before **M06 (Final Prep
 | [ ] | M03 | API & MCP | Programmatic API for Initiatives / Tasks / membership, designed MCP-first, plus an MCP server over it so agents can drive task trees. Stub. | TBD | [`milestones/m03-api-mcp/m03-api-mcp.md`](milestones/m03-api-mcp/m03-api-mcp.md) |
 | [ ] | M04 | Templates & Reuse | Reusable task trees — Initiative templates, duplicate a non-owned Initiative, trash↔duplicate interplay. Stub. | TBD | [`milestones/m04-templates-reuse/m04-templates-reuse.md`](milestones/m04-templates-reuse/m04-templates-reuse.md) |
 | [ ] | M05 | Final Features | Last product features before public — email infra & invites, recovery codes, TOTP, avatar upload, admin role, taskmaster, donation. Stub. | TBD | [`milestones/m05-final-features/m05-final-features.md`](milestones/m05-final-features/m05-final-features.md) |
-| [ ] | M06 | Final Prep and Launch | Launch readiness (legal, onboarding, security) + go-live (hosting, deploy, observability, backups). Opens the app to the public. Stub. | TBD | [`milestones/m06-final-prep-launch/m06-final-prep-launch.md`](milestones/m06-final-prep-launch/m06-final-prep-launch.md) |
+| [ ] | M06 | Prep and Launch | Launch readiness (legal, onboarding, security) + go-live (hosting, deploy, observability, backups). Opens the app to the public. Stub. | TBD | [`milestones/m06-prep-launch/m06-prep-launch.md`](milestones/m06-prep-launch/m06-prep-launch.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |
