@@ -687,8 +687,10 @@ document.addEventListener("input", (e) => {
       const pill = row.querySelector("[data-pill='priority']")
       if (!pill) return
       // Priority always has a value — the pill stays "set" and shows
-      // "normal" too.
+      // "normal" too. data-priority drives the chip color (app.css), so the
+      // optimistic echo recolors by flipping one attribute (m02.07 item 1.6).
       pill.toggleAttribute("data-pill-set", true)
+      pill.setAttribute("data-priority", t.value)
       pill.textContent = t.value
       pill.title = "Priority: " + t.value
       return
@@ -2205,6 +2207,48 @@ Hooks.TreeWidth = {
     })
     const next = Math.ceil(maxLeft + TREE_WIDTH_FLOOR_PX) + "px"
     if (this.el.style.minWidth !== next) this.el.style.minWidth = next
+  },
+}
+
+// Tree scroll-fade signifier (m02.07 item 1.3). Lives on the tree's scroll box
+// (#tree-scroll) but flips data-scrolled / data-at-end on its parent FRAME, so
+// the sibling fade overlays can read them as group-data-* variants (CSS owns
+// show/hide — no animation-timeline, for cross-browser safety). The overlays
+// are pointer-events-none, so this is purely decorative state.
+//
+// - data-scrolled: present once scrolled down from the very top (top fade on).
+// - data-at-end:   present while the box is at (or can't) scroll to the bottom
+//                  (bottom fade off). A 1px slack absorbs sub-pixel rounding.
+Hooks.TreeScrollFade = {
+  mounted() {
+    this.frame = this.el.parentElement
+    this.schedule = () => {
+      if (this.raf) return
+      this.raf = requestAnimationFrame(() => { this.raf = null; this.recompute() })
+    }
+    this.el.addEventListener("scroll", this.schedule, { passive: true })
+    this.onResize = () => this.schedule()
+    window.addEventListener("resize", this.onResize)
+    // Tree edits / collapse change the content height; recompute the at-end
+    // edge so the bottom fade tracks it (mirrors TreeWidth's observer).
+    this.observer = new MutationObserver(() => this.schedule())
+    this.observer.observe(this.el, { subtree: true, childList: true, attributes: true, attributeFilter: ["class"] })
+    this.recompute()
+  },
+  updated() { this.schedule() },
+  destroyed() {
+    this.el.removeEventListener("scroll", this.schedule)
+    window.removeEventListener("resize", this.onResize)
+    if (this.observer) this.observer.disconnect()
+    if (this.raf) cancelAnimationFrame(this.raf)
+  },
+  recompute() {
+    if (!this.frame) return
+    const el = this.el
+    const scrolled = el.scrollTop > 0
+    const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 1
+    this.frame.toggleAttribute("data-scrolled", scrolled)
+    this.frame.toggleAttribute("data-at-end", atEnd)
   },
 }
 

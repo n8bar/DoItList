@@ -705,6 +705,29 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # m02.07 item 1.7.2: the per-Initiative task-index style. Display-only and
+  # derived at render from sibling position, so persisting the style + assigning
+  # the updated initiative re-labels the tree — no tree reload needed.
+  def handle_event("set_index_style", %{"index_style" => style}, socket) do
+    cond do
+      not socket.assigns.can_edit ->
+        {:noreply, put_flash(socket, :error, "You don't have permission.")}
+
+      not DoIt.Tasks.Index.valid_style?(style) ->
+        {:noreply, put_flash(socket, :error, "Unknown numbering style.")}
+
+      true ->
+        case Initiatives.update_initiative(socket.assigns.initiative, %{"index_style" => style}) do
+          {:ok, updated} ->
+            {:noreply, assign(socket, :initiative, updated)}
+
+          {:error, cs} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+        end
+    end
+  end
+
   # m02.05 item 12.6: owner-only — it's a permission policy. Re-notify the tree
   # so any viewer+ lead's edit-ability re-evaluates live for open views.
   def handle_event("set_viewer_plus", params, socket) do
@@ -1908,7 +1931,10 @@ defmodule DoItWeb.InitiativeShowLive do
           class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
         >
         </div>
-        <div class="relative mb-6 pb-6">
+        <%!-- Page-level chrome: the close/role row stays full-width above the
+             shell. The initiative header (title + roll-up bar + New List) moved
+             into the center column (m02.07 item 1.2). --%>
+        <div class="mb-4">
           <%!-- Close (back to the index) + role on the same row. The little red
                X (item 12.7) reads as "close this Initiative" rather than a plain
                back arrow — matching the task pane's close affordance. --%>
@@ -1953,67 +1979,6 @@ defmodule DoItWeb.InitiativeShowLive do
                 Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
               </div>
             </div>
-          </div>
-
-          <%!-- Title row (dedicated): grove icon + name. New List inline on desktop only. --%>
-          <div class="flex items-start gap-2 mt-2">
-            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
-              <.botanical_icon kind={:grove} class="w-6 h-6" />
-            </span>
-            <h1
-              phx-click="edit_initiative"
-              title="Click to edit"
-              class={[
-                "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
-                !@editing_initiative? &&
-                  "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
-              ]}
-            >
-              {@initiative.name}
-            </h1>
-            <button
-              :if={@can_edit}
-              type="button"
-              data-add-root
-              class="mt-1 ml-auto hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-              aria-label="New list"
-              title="New list"
-            >
-              <.icon name="hero-plus" class="w-4 h-4" />
-              <span>New List</span>
-            </button>
-          </div>
-
-          <p
-            :if={@subtitle != ""}
-            phx-click="edit_initiative"
-            title="Click to edit"
-            class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-200"
-          >
-            {@subtitle}
-          </p>
-
-          <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-            {@initiative.description}
-          </p>
-
-          <div
-            class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
-            role="progressbar"
-            aria-valuenow={@initiative_progress}
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-label={"Initiative progress: #{@initiative_progress}%"}
-            style={"--progress: #{@initiative_progress}%"}
-          >
-            <div
-              class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
-              style="width: var(--progress)"
-            >
-            </div>
-            <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
-              {@initiative_progress}%
-            </span>
           </div>
         </div>
 
@@ -2063,38 +2028,98 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6">
-          <%!-- min-w-0 keeps this grid column from expanding to fit deep rows;
-               overflow-x-auto lets the tree scroll horizontally inside it when
-               indentation + the row's min width exceed the column. --%>
-          <div class="min-w-0 overflow-x-auto">
-            <%!-- The one add-task form (parked in #add-task-home below) gets
-                 client-teleported into these phx-update="ignore" slots —
-                 opening a form never phones home (UX_GUARDRAILS 6.5). --%>
-            <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
+        <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
+             shell — the page stops scrolling and each column owns its own
+             vertical scroll. Below lg: it's a plain grid and the page scrolls,
+             unchanged. The calc trims the top header, the close/role row, and
+             the container padding so the shell fits without a page scrollbar. --%>
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-10.5rem)] lg:items-stretch lg:overflow-hidden">
+          <%!-- Center column. At lg:+ it's a flex column: the header is a
+               flex-none sibling above the tree's own scroll box (item 1.2),
+               so the tree scrolls beneath a header that never moves. Below lg:
+               it's a normal block and the page scrolls. min-w-0 keeps the
+               column from expanding to fit deep rows. --%>
+          <div class="min-w-0 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden">
+            <.initiative_header
+              initiative={@initiative}
+              subtitle={@subtitle}
+              initiative_progress={@initiative_progress}
+              editing_initiative?={@editing_initiative?}
+              can_edit={@can_edit}
+            />
 
-            <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
-              No lists yet. Create one to start tracking work.
+            <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
+                 tree's own scroll box plus two theme-matched gradient overlays
+                 at its top/bottom edges. The TreeScrollFade hook flips
+                 data-scrolled / data-at-end on the scroll box; the overlays
+                 show/hide off those. lg:+ only — below it the page scrolls so
+                 there's nothing to fade. --%>
+            <div class="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
+              <%!-- min-w-0 + overflow-x-auto: deep indentation scrolls
+                   horizontally inside the column. At lg:+ overflow-y-auto adds
+                   the column's own vertical scroll; below lg: the page scrolls.
+                   The hook lives on this scroll box but flips data-scrolled /
+                   data-at-end on its parent frame, so the sibling fade overlays
+                   can read them as group-data-* variants. --%>
+              <div
+                id="tree-scroll"
+                phx-hook="TreeScrollFade"
+                class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
+              >
+                <%!-- The one add-task form (parked in #add-task-home below) gets
+                     client-teleported into these phx-update="ignore" slots —
+                     opening a form never phones home (UX_GUARDRAILS 6.5). --%>
+                <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
+
+                <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
+                  No lists yet. Create one to start tracking work.
+                </div>
+
+                <ul
+                  id="task-tree"
+                  phx-hook="TreeWidth"
+                  data-sort-mode={@root_sort_mode}
+                  class="space-y-2"
+                >
+                  <%= for {t, i} <- Enum.with_index(@tree) do %>
+                    <.task_node
+                      task={t}
+                      depth={0}
+                      index_positions={[i]}
+                      index_style={@initiative.index_style}
+                      can_edit={@can_edit}
+                      initiative_id={@initiative.id}
+                      saving_ids={@pending_saving_ids}
+                      recompute_ids={@pending_recompute_ids}
+                      inherited_sort={@root_sort_mode}
+                      progress_calc={@initiative.progress_calc}
+                      display={@display}
+                      member_ids={MapSet.new(@members, & &1.user_id)}
+                      led_ids={@led_task_ids}
+                    />
+                    <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
+                  <% end %>
+                </ul>
+              </div>
+
+              <%!-- Top fade: visible only while scrolled down (data-scrolled).
+                   pointer-events-none so it never intercepts a click/drag on
+                   the rows beneath (item 1.3 hard requirement); aria-hidden as
+                   it's purely decorative. The gradient stop is the column's
+                   exact bg token (white / zinc-950), with a dark-mode variant. --%>
+              <div
+                aria-hidden="true"
+                class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-6 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
+              >
+              </div>
+              <%!-- Bottom fade: visible while more content sits below (i.e. NOT
+                   at the end). Same click-through + theme-match rules. --%>
+              <div
+                aria-hidden="true"
+                class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-6 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
+              >
+              </div>
             </div>
-
-            <ul id="task-tree" phx-hook="TreeWidth" data-sort-mode={@root_sort_mode} class="space-y-2">
-              <%= for t <- @tree do %>
-                <.task_node
-                  task={t}
-                  depth={0}
-                  can_edit={@can_edit}
-                  initiative_id={@initiative.id}
-                  saving_ids={@pending_saving_ids}
-                  recompute_ids={@pending_recompute_ids}
-                  inherited_sort={@root_sort_mode}
-                  progress_calc={@initiative.progress_calc}
-                  display={@display}
-                  member_ids={MapSet.new(@members, & &1.user_id)}
-                  led_ids={@led_task_ids}
-                />
-                <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
-              <% end %>
-            </ul>
           </div>
 
           <%!-- Backdrop on mobile when right-rail flyout is open. Always
@@ -2108,22 +2133,29 @@ defmodule DoItWeb.InitiativeShowLive do
           >
           </div>
 
-          <%!-- The open/closed state rides ONE data-open attribute (flipped
-               client-side at the tap, .03.07.20); all class differences hang
-               off it as Tailwind data-variants. Mobile open: flyout overlay.
-               Desktop open: sticky to the top of <main>, scrolls its own
-               contents (.03.07.01) — self-start + max-h give sticky room. --%>
+          <%!-- Right pane (m02.07 item 1.4). At lg:+ it's a persistent column —
+               always shown, full grid-cell height, a flex column whose Members
+               panel is pinned at the top (flex-none, own capped overflow) while
+               the Details / initiative-editor content scrolls independently
+               beneath it, so Members stays reachable to drag onto a task no
+               matter how far Details has scrolled. The pane scrolls
+               independently of the center tree.
+
+               Below lg:, the data-open flyout mechanism is unchanged
+               (.03.07.20): client flips data-open at the tap and the variants
+               make it a fixed overlay over the backdrop. The shell layout
+               (flex column, pinned Members) is lg:+ only. --%>
           <aside
             id="details-rail"
             data-open={(@selected_task_id || @editing_initiative?) && "true"}
             class={[
-              "space-y-4",
               "not-data-open:hidden lg:not-data-open:block",
-              "data-open:block data-open:fixed lg:data-open:sticky data-open:top-0 data-open:bottom-0 lg:data-open:bottom-auto data-open:right-0 data-open:z-30",
-              "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto lg:data-open:self-start lg:data-open:max-h-[calc(100dvh-4rem)]",
+              "data-open:block data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
+              "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
               "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
               "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
-              "data-open:overflow-y-auto data-open:[scrollbar-gutter:stable]"
+              "data-open:overflow-y-auto lg:data-open:overflow-visible data-open:[scrollbar-gutter:stable]",
+              "space-y-4 lg:space-y-0 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:overflow-hidden"
             ]}
           >
             <div class="lg:hidden flex justify-end">
@@ -2137,9 +2169,12 @@ defmodule DoItWeb.InitiativeShowLive do
                 <.icon name="hero-x-mark" class="w-5 h-5" />
               </button>
             </div>
-            <%!-- Desktop/tablet: standalone Members panel. On phone it's hidden
-                 in favor of the header's collapsible toggle (.05.04.1). --%>
-            <div class="hidden sm:block">
+            <%!-- Members — pinned at the top of the pane (lg:flex-none) with its
+                 own capped height + overflow when the list is long (item 1.4),
+                 so it never scrolls away beneath the Details content. On phone
+                 it's hidden in favor of the header's collapsible toggle
+                 (.05.04.1). --%>
+            <div class="hidden sm:block lg:flex-none lg:max-h-[45%] lg:overflow-y-auto lg:[scrollbar-gutter:stable] lg:mb-4">
               <.members_panel
                 id="members-desktop"
                 members={@members}
@@ -2153,53 +2188,60 @@ defmodule DoItWeb.InitiativeShowLive do
               />
             </div>
 
-            <%!-- Persistent like the task pane (.03.07.08): always rendered,
-                 hidden toggled — the client flips it instantly on the
-                 initiative title click and the server patch confirms. --%>
-            <div
-              id="initiative-editor-pane"
-              hidden={not @editing_initiative?}
-              class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-            >
-              <.initiative_editor
-                form={@initiative_form}
-                can_edit={@can_edit}
-                can_admin={@can_admin}
-                initiative={@initiative}
-                root_task={@root_task}
-                subtitle={@subtitle}
-              />
-            </div>
+            <%!-- Content region: Details / initiative-editor, scrolling
+                 independently beneath the pinned Members (item 1.4). At lg:+
+                 it's flex-1 with its own overflow; below lg: a normal block
+                 (the whole flyout scrolls). space-y restores the gap the
+                 aside-level one drops at lg. --%>
+            <div class="space-y-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
+              <%!-- Persistent like the task pane (.03.07.08): always rendered,
+                   hidden toggled — the client flips it instantly on the
+                   initiative title click and the server patch confirms. --%>
+              <div
+                id="initiative-editor-pane"
+                hidden={not @editing_initiative?}
+                class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+              >
+                <.initiative_editor
+                  form={@initiative_form}
+                  can_edit={@can_edit}
+                  can_admin={@can_admin}
+                  initiative={@initiative}
+                  root_task={@root_task}
+                  subtitle={@subtitle}
+                />
+              </div>
 
-            <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
-                 the shell renders from the start — a blank task when nothing is
-                 selected — so the FIRST selection fills client-side with no
-                 round trip, exactly like every later switch. Deselecting hides
-                 it (selected_task keeps the last pane data, only selected_task_id
-                 nils). On a selection the client writes the row-known values
-                 (title / priority / assignee) into these real fields immediately
-                 and swaps the async lists to "Loading…"; the server patch then
-                 reconciles the same elements in place (and fills the editable
-                 co-assignee list, comments, activity) — LiveView never clobbers
-                 the focused field, so in-progress typing survives the patch. --%>
-            <div
-              id="task-editor-pane"
-              data-task-id={@selected_task_id}
-              hidden={is_nil(@selected_task_id) or @editing_initiative?}
-              class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-            >
-              <.task_editor
-                task={@selected_task || blank_task()}
-                comments={@comments}
-                activity={@activity}
-                members={@members}
-                can_edit={@can_edit}
-                can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
-                can_staff={@selected_staff_pool != nil}
-                staff_pool={@selected_staff_pool}
-                show_activity={@show_task_activity}
-                online_ids={@online_ids}
-              />
+              <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
+                   the shell renders from the start — a blank task when nothing is
+                   selected — so the FIRST selection fills client-side with no
+                   round trip, exactly like every later switch. Deselecting hides
+                   it (selected_task keeps the last pane data, only selected_task_id
+                   nils). On a selection the client writes the row-known values
+                   (title / priority / assignee) into these real fields immediately
+                   and swaps the async lists to "Loading…"; the server patch then
+                   reconciles the same elements in place (and fills the editable
+                   co-assignee list, comments, activity) — LiveView never clobbers
+                   the focused field, so in-progress typing survives the patch. --%>
+              <div
+                id="task-editor-pane"
+                data-task-id={@selected_task_id}
+                hidden={is_nil(@selected_task_id) or @editing_initiative?}
+                class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+              >
+                <.task_editor
+                  task={@selected_task || blank_task()}
+                  comments={@comments}
+                  activity={@activity}
+                  members={@members}
+                  can_edit={@can_edit}
+                  can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
+                  can_staff={@selected_staff_pool != nil}
+                  staff_pool={@selected_staff_pool}
+                  show_activity={@show_task_activity}
+                  online_ids={@online_ids}
+                />
+              </div>
             </div>
           </aside>
         </div>
@@ -2704,8 +2746,93 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # --- Components -----------------------------------------------------------
 
+  attr :initiative, :map, required: true
+  attr :subtitle, :string, required: true
+  attr :initiative_progress, :integer, required: true
+  attr :editing_initiative?, :boolean, required: true
+  attr :can_edit, :boolean, required: true
+
+  @doc """
+  The initiative header — grove icon + name, subtitle/description, roll-up
+  progress bar, and the desktop "New List" button (m02.07 item 1.2). On the
+  shell it's the center column's flex-none top: a fixed sibling above the
+  tree's scroll box (never sticky inside it), so the tree scrolls beneath while
+  the header stays put.
+  """
+  def initiative_header(assigns) do
+    ~H"""
+    <div class="relative pb-6">
+      <%!-- Title row (dedicated): grove icon + name. New List inline on desktop only. --%>
+      <div class="flex items-start gap-2">
+        <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+          <.botanical_icon kind={:grove} class="w-6 h-6" />
+        </span>
+        <h1
+          phx-click="edit_initiative"
+          title="Click to edit"
+          class={[
+            "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
+            !@editing_initiative? &&
+              "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
+          ]}
+        >
+          {@initiative.name}
+        </h1>
+        <button
+          :if={@can_edit}
+          type="button"
+          data-add-root
+          class="mt-1 ml-auto hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+          aria-label="New list"
+          title="New list"
+        >
+          <.icon name="hero-plus" class="w-4 h-4" />
+          <span>New List</span>
+        </button>
+      </div>
+
+      <p
+        :if={@subtitle != ""}
+        phx-click="edit_initiative"
+        title="Click to edit"
+        class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-200"
+      >
+        {@subtitle}
+      </p>
+
+      <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+        {@initiative.description}
+      </p>
+
+      <div
+        class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+        role="progressbar"
+        aria-valuenow={@initiative_progress}
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-label={"Initiative progress: #{@initiative_progress}%"}
+        style={"--progress: #{@initiative_progress}%"}
+      >
+        <div
+          class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+          style="width: var(--progress)"
+        >
+        </div>
+        <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+          {@initiative_progress}%
+        </span>
+      </div>
+    </div>
+    """
+  end
+
   attr :task, :map, required: true
   attr :depth, :integer, required: true
+  # Positional index chain (item 1.7): this node's zero-based sibling positions
+  # from the root down, e.g. [0, 2] = first list → its third child. Threaded so
+  # the label is derived from sort order at render — correct on reorder/move.
+  attr :index_positions, :list, required: true
+  attr :index_style, :string, required: true
   attr :can_edit, :boolean, required: true
   attr :initiative_id, :integer, required: true
   attr :saving_ids, :any, required: true
@@ -2718,6 +2845,13 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def task_node(assigns) do
     assigns = assign(assigns, :resolved_sort, assigns.task.sort_mode || assigns.inherited_sort)
+
+    assigns =
+      assign(
+        assigns,
+        :index_label,
+        DoIt.Tasks.Index.label(assigns.index_positions, assigns.index_style)
+      )
 
     # Viewer+ (item 12.6): a viewer who leads this task may flip its progress,
     # even without can_edit. Other affordances stay can_edit only.
@@ -2781,6 +2915,17 @@ defmodule DoItWeb.InitiativeShowLive do
         >
           <.botanical_icon kind={botanical_kind(@task, @depth)} />
         </span>
+        <%!-- Positional task index (item 1.7): a display-only label between the
+             botanical icon and the pills, derived from sibling position at every
+             level. Rendered only when the Initiative's index style isn't "none"
+             (empty label = no element). --%>
+        <span
+          :if={@index_label != ""}
+          data-task-index
+          class="flex-none font-mono text-xs font-medium text-zinc-500 dark:text-zinc-400 tabular-nums select-none"
+        >
+          {@index_label}
+        </span>
         <%!-- Row 1: attribute chips. Priority + assignee always occupy
              a slot; defaults render as an empty dashed placeholder of the same
              size so customized values stand out and stay column-aligned. Each
@@ -2803,8 +2948,12 @@ defmodule DoItWeb.InitiativeShowLive do
                A pill tap selects + focuses its Details field client-side
                (data-pill names the field); the phx-click only loads pane
                data when the task wasn't selected yet (.03.07.17). --%>
-          <%!-- Priority always has a value, so the pill is always "set"
-               (solid border) and shows "normal" too. --%>
+          <%!-- Priority always has a value, so the pill is always "set". Its
+               color is a chip accent (item 1.6): a colored border + text over a
+               soft tint, keyed off data-priority via app.css rules (light/dark).
+               Driving the color off one attribute lets the optimistic echo
+               recolor by flipping data-priority — and the label always stays,
+               so it reads without relying on hue alone (colorblind-safe). --%>
           <button
             :if={@display.priority}
             type="button"
@@ -2812,11 +2961,8 @@ defmodule DoItWeb.InitiativeShowLive do
             phx-value-id={@task.id}
             data-pill="priority"
             data-pill-set
-            class={[
-              "inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer",
-              "border border-dashed border-zinc-300 dark:border-zinc-600",
-              "data-pill-set:border-solid data-pill-set:border-zinc-400 dark:data-pill-set:border-zinc-500 data-pill-set:bg-zinc-100 dark:data-pill-set:bg-zinc-800 data-pill-set:text-zinc-600 dark:data-pill-set:text-zinc-300"
-            ]}
+            data-priority={@task.priority}
+            class="priority-pill inline-flex items-center justify-center h-5 min-w-9 px-1.5 rounded-full text-xs flex-none cursor-pointer border"
             title={"Priority: #{@task.priority}"}
           >
             {@task.priority}
@@ -3087,10 +3233,12 @@ defmodule DoItWeb.InitiativeShowLive do
         data-sort-mode={@resolved_sort}
         class="pl-1.5 sm:pl-6 space-y-1"
       >
-        <%= for c <- @task.children do %>
+        <%= for {c, i} <- Enum.with_index(@task.children) do %>
           <.task_node
             task={c}
             depth={@depth + 1}
+            index_positions={@index_positions ++ [i]}
+            index_style={@index_style}
             can_edit={@can_edit}
             initiative_id={@initiative_id}
             saving_ids={@saving_ids}
@@ -3260,6 +3408,39 @@ defmodule DoItWeb.InitiativeShowLive do
                   selected={@initiative.progress_calc == "single_level"}
                 >
                   Single-level average — each child one unit
+                </option>
+              </select>
+            </form>
+          </div>
+
+          <%!-- m02.07 item 1.7.2: positional task-index style. A property of the
+               tree (per-Initiative), so it lives with the Initiative settings,
+               not the account. None is the default. --%>
+          <div>
+            <label for="index-style" class="text-xs text-zinc-500 dark:text-zinc-400">
+              Task numbering
+            </label>
+            <form phx-change="set_index_style">
+              <select
+                id="index-style"
+                name="index_style"
+                class="w-full select select-bordered select-sm"
+                disabled={not @can_edit}
+              >
+                <option value="none" selected={@initiative.index_style == "none"}>
+                  None — no index shown
+                </option>
+                <option value="outline" selected={@initiative.index_style == "outline"}>
+                  Outline — I.A.1.a.i
+                </option>
+                <option value="numerical" selected={@initiative.index_style == "numerical"}>
+                  Numerical — 1.1.2
+                </option>
+                <option value="roman" selected={@initiative.index_style == "roman"}>
+                  Roman — I.II.III
+                </option>
+                <option value="alphabetical" selected={@initiative.index_style == "alphabetical"}>
+                  Alphabetical — A.B.C
                 </option>
               </select>
             </form>

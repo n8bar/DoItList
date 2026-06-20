@@ -365,4 +365,57 @@ div.init-drop-placeholder {
   display: inline-flex;
 }
 
+/* Color-coded priority pills (m02.07 item 1.6). A chip accent — colored border
+   + text over a soft tint, NOT a solid fill — keyed off the row pill's
+   data-priority so the optimistic echo recolors by flipping one attribute. The
+   text label always stays (in the markup), so the pills are distinguishable
+   without relying on hue alone (colorblind-safe). Recommended hues: normal =
+   the progress green (emerald-400), high = rose, low = sky.
+
+   A neutral fallback covers any unexpected value so a pill never goes
+   unstyled. */
+.priority-pill {
+  border-color: var(--color-zinc-400);
+  background-color: var(--color-zinc-100);
+  color: var(--color-zinc-600);
+}
+[data-theme="dark"] .priority-pill {
+  border-color: var(--color-zinc-500);
+  background-color: var(--color-zinc-800);
+  color: var(--color-zinc-300);
+}
+
+.priority-pill[data-priority="normal"] {
+  border-color: var(--color-emerald-500);
+  background-color: color-mix(in oklab, var(--color-emerald-400) 16%, transparent);
+  color: var(--color-emerald-700);
+}
+[data-theme="dark"] .priority-pill[data-priority="normal"] {
+  border-color: var(--color-emerald-400);
+  background-color: color-mix(in oklab, var(--color-emerald-400) 22%, transparent);
+  color: var(--color-emerald-200);
+}
+
+.priority-pill[data-priority="high"] {
+  border-color: var(--color-rose-500);
+  background-color: color-mix(in oklab, var(--color-rose-400) 16%, transparent);
+  color: var(--color-rose-700);
+}
+[data-theme="dark"] .priority-pill[data-priority="high"] {
+  border-color: var(--color-rose-400);
+  background-color: color-mix(in oklab, var(--color-rose-400) 22%, transparent);
+  color: var(--color-rose-200);
+}
+
+.priority-pill[data-priority="low"] {
+  border-color: var(--color-sky-500);
+  background-color: color-mix(in oklab, var(--color-sky-400) 16%, transparent);
+  color: var(--color-sky-700);
+}
+[data-theme="dark"] .priority-pill[data-priority="low"] {
+  border-color: var(--color-sky-400);
+  background-color: color-mix(in oklab, var(--color-sky-400) 22%, transparent);
+  color: var(--color-sky-200);
+}
+
 /* This file is for your main application CSS */

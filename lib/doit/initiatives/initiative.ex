@@ -17,6 +17,9 @@ defmodule DoIt.Initiatives.Initiative do
     # assignee leads its subtree — edits progress/comments and staffs
     # descendants from the led task's co-assignee pool.
     field :viewer_plus, :boolean, default: true
+    # m02.07 item 1.7: positional task-index style for this tree (per-Initiative,
+    # not per-account). "none" = no index shown (default). See DoIt.Tasks.Index.
+    field :index_style, :string, default: "none"
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
     field :trashed_at, :utc_datetime
     field :my_role, :string, virtual: true
@@ -46,10 +49,12 @@ defmodule DoIt.Initiatives.Initiative do
       :progress_calc,
       :auto_promote_co_assignees,
       :viewer_plus,
+      :index_style,
       :owner_id
     ])
     |> validate_required([:name, :owner_id])
     |> validate_inclusion(:progress_calc, ~w(leaf_average single_level))
+    |> validate_inclusion(:index_style, DoIt.Tasks.Index.styles())
     |> validate_length(:name, min: 1, max: 120)
     |> validate_length(:description, max: 4000)
   end
