@@ -15,12 +15,12 @@ An AI agent — **Claude Code first** — manages an Initiative as its working w
 
 ## Approach
 
-Two phases, sequenced:
+Two arcs, sequenced:
 
 1. **The HTTP API.** A clean, general programmatic surface for the core operations. Get it working smoothly and exercise it against a real consumer before layering MCP on top.
 2. **The MCP server over it.** A thin adapter that consumes the public API — *not* a shortcut into the Elixir contexts. Routing the MCP through the real API is what enforces "design it like an MCP consumes it"; if MCP bypasses the API, the API stops getting validated.
 
-Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API while it's still cheap to change, rather than building the API blind and discovering ergonomics problems only at MCP time.
+Pull one tiny MCP smoke-client forward into Arc 1 to pressure-test the API while it's still cheap to change, rather than building the API blind and discovering ergonomics problems only at MCP time.
 
 **Guardrail:** the MCP is the *first* consumer, not the API's author. Keep the API a general surface; the MCP stays a thin translation layer on top.
 
@@ -55,9 +55,9 @@ Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API whi
 
 ## Arcs
 
-_Draft — pending operator approval._ **Two arcs, one per phase** of the Approach above — Arc 1 is the HTTP API, Arc 2 is the MCP server over it. Each arc's worklists are summarized below; the worklists' items and any per-arc detail file (`m03.NN-<slug>.md`) come at build time. Sequenced — earlier worklists are the plumbing later ones sit on. Each worklist carries its own tests; testing isn't a separate worklist.
+_Draft — pending operator approval._ **Two arcs** matching the Approach above — Arc 1 is the HTTP API, Arc 2 is the MCP server over it. Each arc's worklists are summarized below; the worklists' items and any per-arc detail file (`m03.NN-<slug>.md`) come at build time. Sequenced — earlier worklists are the plumbing later ones sit on. Each worklist carries its own tests; testing isn't a separate worklist.
 
-### 1 — HTTP API (phase 1)
+### 1 — HTTP API
 
 The clean, general programmatic surface for the core operations.
 
@@ -66,15 +66,15 @@ The clean, general programmatic surface for the core operations.
 3. **Atomic mutation surface** — the write side: the **general atomic-operations endpoint** (Q7) — ordered op list (create / update / move / reorder / soft-delete), `lid` local-ids, per-op errors, all-or-nothing via `Ecto.Multi` — covering the **reversible** operation set (Q6): task CRUD / progress / reorg, comment lifecycle, membership changes, archive / hide, create Initiative, move-to-Trash. Irreversible ops stay LiveView-only.
 4. **Cross-references** — the worklist-parity capability: an **ID-anchored task→task link** (new link data model + API create / remove), rendered with the task's live index label so the reference never rots on reorder. Read via worklist 2's surface, mutated via worklist 3's.
 
-### 2 — MCP server (phase 2)
+### 2 — MCP server
 
 The thin adapter that consumes the public API — never a shortcut into the contexts.
 
-1. **MCP server** — the thin **stdio** adapter consuming the public API over HTTP, the **tools-vs-resources** mapping (mutations → tools; tree read + activity rollup → resources), and the `claude mcp add` local setup with the per-user token. The phase-2 runtime/library decision (Open Questions) is settled here.
+1. **MCP server** — the thin **stdio** adapter consuming the public API over HTTP, the **tools-vs-resources** mapping (mutations → tools; tree read + activity rollup → resources), and the `claude mcp add` local setup with the per-user token. The Arc 2 runtime/library decision (Open Questions) is settled here.
 
 ## Status
 
-Scoping in progress. Design decisions are operator-approved; the arc / worklist breakdown above is drafted pending approval; the two phase-2 MCP questions are deferred (non-blocking). Worklist items + any per-arc detail files come at build time.
+Scoping in progress. Design decisions are operator-approved; the arc / worklist breakdown above is drafted pending approval; the two Arc 2 (MCP) questions are deferred (non-blocking). Worklist items + any per-arc detail files come at build time.
 
 ## Preconditions
 
@@ -82,7 +82,7 @@ Scoping in progress. Design decisions are operator-approved; the arc / worklist 
 
 ## Open Questions
 
-MCP (**phase-2 decisions — do not block the API build; settle when we build the MCP server**):
+MCP — **Arc 2 decisions; don't block the Arc 1 (API) build; settle when we build the MCP server**:
 - Server runtime/library: an endpoint in the same Phoenix app vs. a separate process; an Elixir MCP library (e.g. Hermes) vs. another runtime — gated by the stdio/local-smoothness requirement above. Leaning: a separate thin stdio process so the MCP can only reach the API over HTTP, never the contexts.
 - Tools-vs-resources mapping: which operations are MCP *tools* (actions/mutations) and which are *resources* (read-only context — e.g. the activity rollup). Informed by the already-decided read/mutate split, so largely mechanical at build time.
 
