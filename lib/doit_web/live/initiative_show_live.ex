@@ -3805,6 +3805,32 @@ defmodule DoItWeb.InitiativeShowLive do
         />
       </.form>
 
+      <%!-- Per-user Archive + Hide (m02.08 worklist 4): part of the Initiative
+           details, available to ANY member (per-user, never affects others).
+           Archive → the restorable Archived list; Hide → the lighter "off my
+           dashboard" move. Archive may confirm first (item 4.2, server-decided
+           on unfinished work), so it's a plain phx-click, not a client dialog. --%>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          id="archive-initiative-btn"
+          phx-click="archive_initiative"
+          title="Archive for yourself — restorable from your Archived list"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
+        >
+          <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
+        </button>
+        <button
+          type="button"
+          id="hide-initiative-btn"
+          phx-click="hide_initiative"
+          title="Hide from your dashboard — unhide from your Archived list"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
+        >
+          <.icon name="hero-eye-slash" class="w-3.5 h-3.5" /> Hide
+        </button>
+      </div>
+
       <div class={[
         "text-xs text-zinc-500 dark:text-zinc-400 italic",
         leaf?(@root_task) && "invisible"
@@ -3945,33 +3971,15 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </details>
 
-      <%!-- Per-user Archive + Hide (m02.08 worklist 4): available to ANY member
-           (per-user, never affects others). Archive → the restorable Archived
-           list; Hide → the lighter "off my dashboard" move. Archive may confirm
-           first (item 4.2, server-decided on unfinished work), so it's a plain
-           phx-click, not a client-side dialog like delete. --%>
-      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3 flex flex-wrap items-center gap-2">
+      <%!-- Delete (owner-only): irreversible, so it stays in the destructive
+           cluster below Settings — apart from the per-user Archive/Hide that now
+           live up in the details. No phx-click: the confirm opens client-side
+           (.03.07.18). --%>
+      <div
+        :if={@can_admin}
+        class="border-t border-zinc-100 dark:border-zinc-700 pt-3 flex flex-wrap items-center gap-2"
+      >
         <button
-          type="button"
-          id="archive-initiative-btn"
-          phx-click="archive_initiative"
-          title="Archive for yourself — restorable from your Archived list"
-          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
-        >
-          <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
-        </button>
-        <button
-          type="button"
-          id="hide-initiative-btn"
-          phx-click="hide_initiative"
-          title="Hide from your dashboard — unhide from your Archived list"
-          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
-        >
-          <.icon name="hero-eye-slash" class="w-3.5 h-3.5" /> Hide
-        </button>
-        <%!-- No phx-click: the delete confirm opens client-side (.03.07.18). --%>
-        <button
-          :if={@can_admin}
           type="button"
           id="delete-initiative-btn"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 active:scale-95 transition"
