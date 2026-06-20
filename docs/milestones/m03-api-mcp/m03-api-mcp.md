@@ -43,6 +43,8 @@ Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API whi
 
 **Q2 — Authentication: per-user API tokens.** A user mints a token in account settings; clients send it as `Authorization: Bearer <token>` and thereby act as that user, inheriting their `owner` / `editor` / `viewer` roles unchanged — the token adds *identification*, not a new authorization system. Revocable. Whether to upgrade to **scoped / fine-grained tokens** (per-Initiative or read-only) is a refinement to settle at implementation time — start broad-and-revocable, tighten only if wanted. OAuth (third-party-acting-on-your-behalf) is deferred and can later layer onto the same token-checking core.
 
+**Q4 — Rate limiting: a simple per-token limit, built in M03.** A fixed-window / token-bucket cap (N requests per window, per token), enforced at the token layer — cheap insurance against a runaway agent loop or retry-storm. Exact limits are tunable at implementation. Tiered / per-plan quotas stay out (no plans yet).
+
 **MCP transport: stdio-first (smooth local path).** DoItList ships a thin **stdio** MCP adapter — a small local process Claude Code launches directly (`claude mcp add …`), authenticated by the per-user token passed via an env var. No hosting, no OAuth: the local Claude Code experience "just works." Remote **streamable-HTTP** (for hosted clients like Claude Desktop / third parties) is deferred to hosting (M06) and is *additive*, not a precondition. Whatever MCP runtime/library we choose **must** support this stdio/local path without forcing a remote/OAuth setup.
 
 ## Status
@@ -56,7 +58,6 @@ Scoping in progress. Design decisions above are drafted pending operator approva
 ## Open Questions
 
 API:
-- Rate limiting / quotas.
 - Webhook / push API for real-time updates (PubSub-equivalent for external clients)?
 - Public vs. private surface — the exact operation list exposed (vs. LiveView-only).
 - Bulk operations *within* an Initiative (batch create / move / update) to match "edit many doc lines, save once."
