@@ -1332,20 +1332,6 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :archive} ->
           commit_archive(socket)
 
-        %{kind: :leave_initiative} ->
-          # The broadcast this triggers ejects our own view via
-          # {:members_changed} — no navigation needed here.
-          if socket.assigns.current_user.id != socket.assigns.initiative.owner_id do
-            {_count, _} =
-              Initiatives.remove_member(
-                socket.assigns.initiative.id,
-                socket.assigns.current_user.id,
-                socket.assigns.current_user
-              )
-          end
-
-          assign_pending(socket, nil)
-
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           # Failure pushed "confirm-cancelled" inside — the held flip reverts.
           case commit_cascade(socket, id, kind) do
@@ -1426,13 +1412,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # Leave (m02.04-era pull-forward of BACKLOG's "Leave an initiative"):
   # remove your own membership. Always confirmed — only the owner can add
   # you back. The commit's members_changed broadcast ejects this view.
+  # The confirm opens + closes entirely client-side (app.js, like the delete
+  # confirms); only this commit touches the server. The members_changed
+  # broadcast ejects this view, so there's nothing to render after.
   def handle_event("leave_initiative", _params, socket) do
     me = socket.assigns.current_user.id
 
     if me == socket.assigns.initiative.owner_id do
-      {:noreply, put_flash(socket, :error, "Owners transfer ownership before leaving.")}
+      {:noreply, socket |> put_flash(:error, "Owners transfer ownership before leaving.") |> bonk()}
     else
-      {:noreply, assign_pending(socket, %{kind: :leave_initiative})}
+      {_count, _} = Initiatives.remove_member(socket.assigns.initiative.id, me, socket.assigns.current_user)
+      {:noreply, socket}
     end
   end
 
@@ -2637,6 +2627,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <.move_flip_confirm :if={@can_edit} />
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
+      <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
       <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
       <div
         :if={@pending_handoff}
@@ -3153,6 +3144,43 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  # Leave-Initiative confirm — client-opened (app.js), so the dialog never waits
+  # on the server (UX_GUARDRAILS 6.5). Its own title (the generic completion
+  # modal read "Confirm completion change", the wrong heading for a leave).
+  defp leave_confirm(assigns) do
+    ~H"""
+    <div
+      id="leave-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Leave Initiative</h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          Leave this Initiative? Only the owner can add you back.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-leave-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-leave-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
+          >
+            Leave
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   attr :pending, :map, default: nil
   attr :verb, :string, default: "change"
 
@@ -3261,9 +3289,6 @@ defmodule DoItWeb.InitiativeShowLive do
     do:
       "You still have incomplete assignments here. Archive it anyway? " <>
         "It moves to your Archived list, where you can restore it anytime."
-
-  defp confirm_body(%{kind: :leave_initiative}, _verb),
-    do: "Leave this Initiative? Only the owner can add you back."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -4213,12 +4238,13 @@ defmodule DoItWeb.InitiativeShowLive do
               {role_label(m, @assignee_ids, @viewer_plus_on)}
             </span>
             <%!-- Leave (own row, non-owners): always confirmed — only the
-                 owner can add you back. The members_changed broadcast ejects
-                 this very view on commit. --%>
+                 owner can add you back. The confirm opens client-side
+                 (#leave-confirm); only Proceed pushes leave_initiative, whose
+                 members_changed broadcast ejects this very view. --%>
             <button
               :if={m.user_id == @me && @me != @owner_id}
               type="button"
-              phx-click="leave_initiative"
+              data-leave-initiative
               title="Leave this Initiative"
               aria-label="Leave this Initiative"
               class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-950/40"

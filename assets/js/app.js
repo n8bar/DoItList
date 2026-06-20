@@ -932,6 +932,36 @@ document.addEventListener("keydown", (e) => {
   }
 })
 
+// Leave-Initiative confirm — opens client-side so the dialog never waits on the
+// server (UX_GUARDRAILS 6.5, like the delete confirms). Proceed pushes
+// leave_initiative (the only server touch); Cancel / backdrop / Esc just close.
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("leave-confirm")
+  if (!modal) return
+  if (e.target.closest("[data-leave-initiative]")) {
+    e.preventDefault()
+    modal.hidden = false
+    const cancel = modal.querySelector("[data-leave-cancel]")
+    if (cancel) cancel.focus()
+    return
+  }
+  if (modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-leave-cancel]")) {
+    modal.hidden = true
+    return
+  }
+  if (e.target.closest("[data-leave-proceed]")) {
+    modal.hidden = true
+    if (window.DoitPush) window.DoitPush("leave_initiative", {})
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("leave-confirm")
+  if (modal && !modal.hidden) modal.hidden = true
+})
+
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
 // delete confirms): the dialog's content is client-known, so it opens at the
 // click of a member's transfer (key) button — no round trip before the owner
