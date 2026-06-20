@@ -1204,6 +1204,230 @@ window.addEventListener("phx:confirm-resolved", () => {
   window.DoitPendingToggle = null
 })
 
+// ---- Client-side completion-flip prediction for drags (UX_GUARDRAILS 6.5) --
+//
+// A reorganizing drag is optimistic. But when a move would silently flip an
+// ancestor's completion, the confirm (sanctioned by §6.3) used to render only
+// AFTER a server round trip — popping late and interrupting the user's next
+// action. We now PREDICT the flip from the DOM at drop time and open the
+// confirm instantly (no network wait), then re-send the move with
+// confirmed: true on Proceed. The server's committed:false path (see
+// handle_event "move_task") stays as the AUTHORITATIVE BACKSTOP: any flip the
+// client mispredicts (false negative) still gets the old late confirm; a false
+// positive is at worst an unnecessary instant confirm. Either way the DATA is
+// never wrong — the server decides what actually commits.
+//
+// This mirrors DoIt.Tasks.classify_flips' 100-boundary intent. A leaf counts as
+// "at 100" by its data-task-progress (matching computed_progress), NOT data-done
+// (status, which can lag the progress recompute by a beat).
+//
+// Returns null (no predicted flip) or {scenario, titles}:
+//   scenario 1 = only "would uncomplete", 2 = only "would complete", 3 = both.
+
+// True when `li` is a leaf: no non-empty descendant task <li>. (A fabricated
+// empty <ul> shell carries no <li>, so it doesn't make a parent a branch.)
+function moveLiIsLeaf(li) {
+  return !li.querySelector("li[data-task-id]")
+}
+
+// Every descendant leaf <li> of `li` — or `li` itself if it's already a leaf.
+function moveLeavesOf(li) {
+  if (moveLiIsLeaf(li)) return [li]
+  return [...li.querySelectorAll("li[data-task-id]")].filter(moveLiIsLeaf)
+}
+
+// A leaf is "at 100" by its row's data-task-progress (mirrors computed_progress).
+function moveLeafAt100(leafLi) {
+  const row = leafLi.querySelector(":scope > [data-task-row]")
+  return !!row && row.getAttribute("data-task-progress") === "100"
+}
+
+// The chain of visible ancestor <li>s from `li`'s parent up to (not incl.) the
+// root <ul> — the system root (the initiative) is not a visible <li>, so it's
+// never in this list and never flipped.
+function moveAncestorChain(li) {
+  const chain = []
+  let cur = li.parentElement && li.parentElement.closest("li[data-task-id]")
+  while (cur) {
+    chain.push(cur)
+    cur = cur.parentElement && cur.parentElement.closest("li[data-task-id]")
+  }
+  return chain
+}
+
+// Open leaves currently under ancestor `li` (progress !== 100).
+function moveOpenLeavesUnder(li) {
+  return moveLeavesOf(li).filter((leaf) => !moveLeafAt100(leaf))
+}
+
+function moveTitleOf(li) {
+  const t = li.querySelector(":scope > [data-task-row] [data-task-title]")
+  return t ? t.textContent.trim() : ""
+}
+
+// Predict whether moving `draggedLi` out of `sourceParentLi` and into
+// `destParentLi` would flip any visible ancestor's completion. Read from the
+// ORIGINAL tree (call before the optimistic DOM move).
+function predictMoveFlip(draggedLi, sourceParentLi, destParentLi) {
+  // Same parent → a sibling reorder. ProductSpec: reordering doesn't change the
+  // math, so no ancestor's completion can flip. (Covers the null===null case of
+  // two top-level siblings too.)
+  if (sourceParentLi === destParentLi) return null
+
+  // Leaves carried by the move, and whether any of them is open.
+  const movedLeaves = new Set(moveLeavesOf(draggedLi))
+  const movedHasOpen = [...movedLeaves].some((leaf) => !moveLeafAt100(leaf))
+
+  // Ancestors at/above the lowest common ancestor (LCA) are unaffected: the
+  // subtree stays within them, so their leaf set is unchanged. Only ancestors
+  // STRICTLY BELOW the LCA on each chain can flip.
+  const sourceChain = sourceParentLi ? moveAncestorChain(draggedLi) : []
+  const destChain = destParentLi ? [destParentLi, ...moveAncestorChain(destParentLi)] : []
+  const destSet = new Set(destChain)
+  // The LCA is the first source-chain ancestor that's also on the dest chain.
+  const lca = sourceChain.find((a) => destSet.has(a)) || null
+  const belowLca = (chain) => {
+    const i = lca ? chain.indexOf(lca) : -1
+    return i === -1 ? chain : chain.slice(0, i)
+  }
+  const sourceBelow = belowLca(sourceChain)
+  const destBelow = belowLca(destChain)
+
+  let complete = false // some open ancestor becomes all-done (source side)
+  let uncomplete = false // some all-done ancestor gains an open leaf (dest side)
+  const titles = []
+
+  // Source-chain ancestor A flips COMPLETE iff A currently has ≥1 open leaf AND
+  // every one of A's open leaves is within movedLeaves (removing the subtree
+  // leaves A all-done).
+  for (const a of sourceBelow) {
+    const open = moveOpenLeavesUnder(a)
+    if (open.length > 0 && open.every((leaf) => movedLeaves.has(leaf))) {
+      complete = true
+      titles.push(moveTitleOf(a))
+    }
+  }
+
+  // Dest-chain ancestor A flips UNCOMPLETE iff A is currently all-done (no open
+  // leaves) AND the moved subtree brings an open leaf.
+  if (movedHasOpen) {
+    for (const a of destBelow) {
+      if (moveOpenLeavesUnder(a).length === 0) {
+        uncomplete = true
+        titles.push(moveTitleOf(a))
+      }
+    }
+  }
+
+  if (!complete && !uncomplete) return null
+  const scenario = complete && uncomplete ? 3 : uncomplete ? 1 : 2
+  return {scenario, titles: titles.filter((t) => t)}
+}
+
+// The instant move-flip confirm. Mirrors the client-opened delete confirm: the
+// #move-flip-confirm modal is always rendered (hidden, phx-update="ignore") so
+// the server never clobbers it; app.js fills its scenario message + flipping
+// titles and shows it. Cancel/backdrop/Esc revert the held optimistic
+// placement (§6.6 — optimism holds until the user decides); Proceed pushes
+// move_task with confirmed:true. This NEVER touches the server-rendered
+// #completion-confirm backstop.
+//
+// Wording matches the server confirm copy so both read consistently:
+//   title  = "Confirm completion change"   (confirm_title fallback)
+//   body   = completion_confirm_message(scenario, "move")
+const MOVE_FLIP_MESSAGES = {
+  1: "This move will mark previously completed task(s) as incomplete.",
+  2: "This move will mark previously incomplete task(s) as complete.",
+  3: "This move will mark some tasks complete and others incomplete.",
+}
+
+function moveFlipModal() {
+  const m = document.getElementById("move-flip-confirm")
+  return m && !m.hidden ? m : null
+}
+
+// Open the modal with the predicted scenario + flipping titles. The optimistic
+// placement has already happened and DoitPendingMove holds the revert handle;
+// the saving hue stays (sticky) while the modal decides.
+function openMoveFlipConfirm(prediction) {
+  const modal = document.getElementById("move-flip-confirm")
+  if (!modal) return false
+  const msg = modal.querySelector("[data-flip-message]")
+  if (msg) msg.textContent = MOVE_FLIP_MESSAGES[prediction.scenario] || ""
+  const list = modal.querySelector("[data-flip-titles]")
+  if (list) {
+    list.innerHTML = ""
+    if (prediction.titles.length === 0) {
+      list.hidden = true
+    } else {
+      list.hidden = false
+      prediction.titles.forEach((title) => {
+        const li = document.createElement("li")
+        li.className = "truncate"
+        li.textContent = title
+        list.appendChild(li)
+      })
+    }
+  }
+  modal.hidden = false
+  const cancel = modal.querySelector("[data-flip-cancel]")
+  if (cancel) cancel.focus()
+  return true
+}
+
+// Cancel / backdrop / Esc: revert the held placement and strip the saving hue.
+function closeMoveFlipConfirmCancel() {
+  const modal = document.getElementById("move-flip-confirm")
+  if (modal) modal.hidden = true
+  revertPendingMove()
+  document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
+    el.classList.remove("is-saving", "is-recomputing")
+  })
+}
+
+document.addEventListener("click", (e) => {
+  // Open is triggered by the drag handler, not a click — only Cancel/Proceed/
+  // backdrop are handled here.
+  const modal = moveFlipModal()
+  if (!modal) return
+  if (e.target === modal || e.target.closest("[data-flip-cancel]")) {
+    closeMoveFlipConfirmCancel()
+    return
+  }
+  if (e.target.closest("[data-flip-proceed]")) {
+    modal.hidden = true
+    const handle = window.DoitPendingMove
+    const stripHue = () =>
+      document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
+        el.classList.remove("is-saving", "is-recomputing")
+      })
+    // Re-send the move, now confirmed — the server commits straight through.
+    if (window.DoitPush && handle && handle.moveParams) {
+      const params = {...handle.moveParams, confirmed: true}
+      window.DoitPush("move_task", params, (reply) => {
+        const failed = !reply || reply.ok === false
+        if (failed) {
+          // The server refused after all — snap back.
+          revertPendingMove()
+        } else {
+          // Committed: the placement is truth; release the hold.
+          window.DoitPendingMove = null
+        }
+        stripHue()
+      })
+    } else {
+      // No push channel — fall back to a snap-back rather than a lying success.
+      revertPendingMove()
+      stripHue()
+    }
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  if (moveFlipModal()) closeMoveFlipConfirmCancel()
+})
+
 // Confirmation suppression (.03.01.11): read the per-class skip flags from
 // localStorage on mount and push them to the LiveView; persist a flag when the
 // server reports a "Don't show this again" box was checked on Proceed.
@@ -1707,6 +1931,14 @@ Hooks.DragReorder = {
     const origNext = this.sourceLi.nextSibling
     const sourceParentLi = origParent && origParent.closest("li[data-task-id]")
     const dest = this.optimisticDest(plan)
+    // Predict the completion flip from the ORIGINAL tree, before we move the row
+    // (UX_GUARDRAILS 6.5). null = no predicted flip → push as usual; otherwise
+    // hold the optimistic placement and open the instant confirm below.
+    let prediction = null
+    if (dest && dest.container) {
+      const destParentLiPred = dest.container.closest("li[data-task-id]")
+      prediction = predictMoveFlip(this.sourceLi, sourceParentLi, destParentLiPred)
+    }
     if (dest && dest.container) {
       const destParentLi = dest.container.closest("li[data-task-id]")
       dest.container.insertBefore(this.sourceLi, dest.before)
@@ -1734,33 +1966,48 @@ Hooks.DragReorder = {
     const fabricatedUl = this._fabricatedUl
     this._fabricatedUl = null
     const movedLi = this.sourceLi
-    this.pushEvent("move_task", params, (reply) => {
-      const failed = !reply || reply.ok === false
-      if (failed) {
-        // A failed write snaps the row back — the server re-renders the
-        // unchanged tree.
-        revertPendingMove()
-        this.clearSaving()
-      } else if (reply.committed !== false) {
-        // Committed: the placement is truth now; release the hold. Clear the
-        // hue explicitly — don't rely on morphdom stripping it, which is
-        // unreliable once we've moved the DOM ourselves.
-        window.DoitPendingMove = null
-        this.clearSaving()
-      } else {
-        // A completion-flip confirm is deciding — the hold stays (§8.20)
-        // until "confirm-cancelled" / "confirm-resolved", and the rows now
-        // carry the SERVER's maybe-write hue: stop tracking without
-        // stripping, or the gesture timer unpinks the open modal.
-        this.releaseSaving()
-      }
-    })
+    if (!prediction) {
+      // No predicted flip: push exactly as before. The server commits; if it
+      // disagrees and detects a flip the client missed, its committed:false
+      // path renders #completion-confirm (the backstop) — handled below.
+      this.pushEvent("move_task", params, (reply) => {
+        const failed = !reply || reply.ok === false
+        if (failed) {
+          // A failed write snaps the row back — the server re-renders the
+          // unchanged tree.
+          revertPendingMove()
+          this.clearSaving()
+        } else if (reply.committed !== false) {
+          // Committed: the placement is truth now; release the hold. Clear the
+          // hue explicitly — don't rely on morphdom stripping it, which is
+          // unreliable once we've moved the DOM ourselves.
+          window.DoitPendingMove = null
+          this.clearSaving()
+        } else {
+          // The server caught a flip we didn't predict — its #completion-confirm
+          // backstop is now up. The hold stays (§8.20) until
+          // "confirm-cancelled" / "confirm-resolved", and the rows carry the
+          // SERVER's maybe-write hue: stop tracking without stripping, or the
+          // gesture timer unpinks the open modal.
+          this.releaseSaving()
+        }
+      })
+    } else {
+      // Predicted flip: keep the optimistic placement and open the instant
+      // client confirm NOW (no round trip). Don't push yet — Proceed re-sends
+      // with confirmed:true; Cancel reverts. The saving hue stays up while the
+      // modal decides, so release the gesture timer (don't let it unpink the
+      // open modal) without stripping the classes.
+      this.releaseSaving()
+    }
     this.cleanup()
     // The hold is registered BEFORE the reply can race it: any patch landing
     // first (the confirm's pending-hue render) re-creates the row under its
     // server-side parent, and the guard observer needs the handle to fix that
     // (incl. removing the re-created clone — see applyPendingMove). Captured
     // after cleanup so the drop placeholder doesn't pollute the held position.
+    // moveParams rides along so a predicted-flip Proceed can re-send the same
+    // move with confirmed:true.
     window.DoitPendingMove = {
       li: movedLi,
       parent: origParent,
@@ -1768,6 +2015,25 @@ Hooks.DragReorder = {
       fabricatedUl,
       destContainer: movedLi.parentElement,
       destNext: movedLi.nextElementSibling,
+      moveParams: params,
+    }
+    if (prediction) {
+      // Fill + show the modal after DoitPendingMove is set (the Proceed handler
+      // reads moveParams off it). If the modal is missing, fall back to the
+      // server path so the move still happens (just with the old late confirm).
+      if (!openMoveFlipConfirm(prediction)) {
+        this.pushEvent("move_task", params, (reply) => {
+          const failed = !reply || reply.ok === false
+          if (failed) {
+            revertPendingMove()
+          } else if (reply.committed !== false) {
+            window.DoitPendingMove = null
+          }
+          document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
+            el.classList.remove("is-saving", "is-recomputing")
+          })
+        })
+      }
     }
   },
 

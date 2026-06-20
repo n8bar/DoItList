@@ -120,7 +120,10 @@ defmodule DoItWeb.InitiativeShowLive do
         # id crosses as a string: the client echoes it back through the
         # "select_task" hook event, whose handler runs String.to_integer/1
         # (matches the to_string convention the undo/redo "select-task" push uses).
-        push_event(socket, "deep-link-task", %{id: to_string(id), ancestors: Tasks.ancestor_ids(id)})
+        push_event(socket, "deep-link-task", %{
+          id: to_string(id),
+          ancestors: Tasks.ancestor_ids(id)
+        })
       else
         _ -> socket
       end
@@ -2621,6 +2624,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </form>
       </div>
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
+      <.move_flip_confirm :if={@can_edit} />
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
@@ -3005,6 +3009,58 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp pending_recompute_ids(%{task_id: id}, saving), do: MapSet.delete(saving, id)
   defp pending_recompute_ids(_, saving), do: saving
+
+  # The instant completion-flip confirm for drags (UX_GUARDRAILS 6.5/6.6). The
+  # client predicts (from the DOM, at drop time) when a reorganizing drag would
+  # silently flip an ancestor's completion (§6.3 sanctions this confirm) and
+  # opens THIS dialog immediately — no round trip — keeping the optimistic
+  # placement up while the user decides. app.js fills the scenario message +
+  # flipping titles, then Proceed re-sends move_task with confirmed:true and
+  # Cancel reverts the placement. phx-update="ignore": the server never patches
+  # it. The server's #completion-confirm stays the authoritative backstop for
+  # any flip the client doesn't predict; this dialog never touches it.
+  #
+  # Copy matches the server confirm (confirm_title fallback +
+  # completion_confirm_message) so the instant and backstop paths read the same.
+  defp move_flip_confirm(assigns) do
+    ~H"""
+    <div
+      id="move-flip-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Confirm completion change
+        </h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300" data-flip-message></p>
+        <ul
+          data-flip-titles
+          hidden
+          class="mt-3 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+        >
+        </ul>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-flip-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-flip-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
 
   # Task deletion's confirm is fully client-side (.03.07.15, UX_GUARDRAILS
   # 6.5): everything the dialog shows — the task title, the irreversibility
