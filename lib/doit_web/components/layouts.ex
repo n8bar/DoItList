@@ -52,10 +52,12 @@ defmodule DoItWeb.Layouts do
   defp notif_line(%{kind: kind} = notif) do
     who = get_in(notif.data, ["actor_name"]) || "Someone"
     title = get_in(notif.data, ["task_title"])
+    role = get_in(notif.data, ["role"])
 
     case kind do
       "member_added" -> "#{who} added you to an Initiative"
       "member_removed" -> "#{who} removed you from an Initiative"
+      "role_changed" -> "#{who} changed your role to #{role || "a new role"} in an Initiative"
       "assigned" -> "#{who} assigned you " <> task_phrase(title)
       "unassigned" -> "#{who} unassigned you from " <> task_phrase(title)
       "co_assigned" -> "#{who} added you as a co-assignee on " <> task_phrase(title)

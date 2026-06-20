@@ -653,6 +653,22 @@ defmodule DoIt.Initiatives do
     })
   end
 
+  # Drop a role_changed notification on the affected member, excluding
+  # self-actions (notify/4 enforces actor == recipient → skip). A nil actor
+  # (system/transfer callers route through do_update_member_role, not here)
+  # skips quietly. `role` is the new role, surfaced in the flyout line.
+  defp notify_role_changed(nil, _user_id, _initiative_id, _role), do: :ok
+
+  defp notify_role_changed(actor, user_id, initiative_id, role) do
+    actor_id = actor_id(actor)
+
+    Notifications.notify(actor_id, user_id, "role_changed", %{
+      initiative_id: initiative_id,
+      role: role,
+      actor_name: actor_name(actor)
+    })
+  end
+
   defp actor_id(%User{id: id}), do: id
   defp actor_id(id) when is_integer(id), do: id
 
@@ -701,11 +717,24 @@ defmodule DoIt.Initiatives do
     end
   end
 
-  def update_member_role(initiative_id, user_id, role) when role in ~w(owner editor viewer) do
+  @doc """
+  Change a member's role. `actor` (a `%User{}` or user id) is who performed the
+  change — when given and not the affected user, they get a `role_changed`
+  notification carrying the new role. Defaults to `nil` for system callers.
+
+  Notifications fire only here, never in `do_update_member_role/3`, so the
+  transfer-ownership flow (which calls the private path) stays silent.
+  """
+  def update_member_role(initiative_id, user_id, role, actor \\ nil)
+      when role in ~w(owner editor viewer) do
     do_update_member_role(initiative_id, user_id, role)
     |> tap(fn
-      {:ok, _} -> broadcast_members_changed(initiative_id)
-      _ -> :ok
+      {:ok, _} ->
+        broadcast_members_changed(initiative_id)
+        notify_role_changed(actor, user_id, initiative_id, role)
+
+      _ ->
+        :ok
     end)
   end
 

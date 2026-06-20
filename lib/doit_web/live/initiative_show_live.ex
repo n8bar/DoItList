@@ -1499,7 +1499,8 @@ defmodule DoItWeb.InitiativeShowLive do
     uid = String.to_integer(uid)
 
     if socket.assigns.can_admin and uid != initiative.owner_id and role in ~w(editor viewer) do
-      {:ok, _} = Initiatives.update_member_role(initiative.id, uid, role)
+      {:ok, _} =
+        Initiatives.update_member_role(initiative.id, uid, role, socket.assigns.current_user)
 
       {:noreply,
        socket

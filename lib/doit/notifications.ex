@@ -12,13 +12,15 @@ defmodule DoIt.Notifications do
 
     * `member_added`   — added to an Initiative as a member
     * `member_removed` — removed from an Initiative
+    * `role_changed`   — your role on an Initiative was changed by an admin
     * `assigned`       — made the primary assignee of a task
     * `unassigned`     — cleared as the primary assignee of a task
     * `co_assigned`    — added as a co-assignee on a task
     * `co_unassigned`  — removed as a co-assignee on a task
 
   `data` carries the subject ids the flyout links to: `initiative_id` always,
-  plus `task_id` for the task-scoped kinds, and `actor_name` for display.
+  plus `task_id` for the task-scoped kinds, `role` for `role_changed`, and
+  `actor_name` for display.
   """
 
   import Ecto.Query, warn: false
@@ -27,7 +29,7 @@ defmodule DoIt.Notifications do
   alias DoIt.Accounts.User
   alias DoIt.Notifications.Notification
 
-  @kinds ~w(member_added member_removed assigned unassigned co_assigned co_unassigned)
+  @kinds ~w(member_added member_removed role_changed assigned unassigned co_assigned co_unassigned)
 
   @recent_limit 10
 

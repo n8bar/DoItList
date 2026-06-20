@@ -137,6 +137,60 @@ defmodule DoIt.NotificationsTest do
     end
   end
 
+  describe "generation: role change" do
+    test "role_changed when an admin changes your role", %{owner: owner, ini: ini} do
+      me = user("me")
+      {:ok, _} = Initiatives.add_member(ini.id, me.id, "editor", owner)
+
+      {:ok, _} = Initiatives.update_member_role(ini.id, me.id, "viewer", owner)
+
+      assert "role_changed" in kinds_for(me)
+      # The actor (owner) is not notified about a role change they made.
+      assert kinds_for(owner) == []
+    end
+
+    test "role_changed carries the new role for the flyout", %{owner: owner, ini: ini} do
+      me = user("me")
+      {:ok, _} = Initiatives.add_member(ini.id, me.id, "editor", owner)
+
+      {:ok, _} = Initiatives.update_member_role(ini.id, me.id, "viewer", owner)
+
+      [n] =
+        from(n in Notification, where: n.user_id == ^me.id and n.kind == "role_changed")
+        |> Repo.all()
+
+      assert n.data["role"] == "viewer"
+      assert n.data["initiative_id"] == ini.id
+    end
+
+    test "changing your own role creates nothing (self-exclusion)", %{owner: owner, ini: ini} do
+      # Owner acting on themselves: actor == recipient → notify/4 skips.
+      {:ok, _} = Initiatives.update_member_role(ini.id, owner.id, "editor", owner)
+      refute "role_changed" in kinds_for(owner)
+    end
+
+    test "system role change (no actor) creates nothing", %{owner: owner, ini: ini} do
+      me = user("me")
+      {:ok, _} = Initiatives.add_member(ini.id, me.id, "editor", owner)
+
+      {:ok, _} = Initiatives.update_member_role(ini.id, me.id, "viewer")
+
+      refute "role_changed" in kinds_for(me)
+    end
+
+    test "transfer_ownership does NOT emit role_changed", %{owner: owner, ini: ini} do
+      me = user("me")
+      {:ok, _} = Initiatives.add_member(ini.id, me.id, "editor", owner)
+
+      {:ok, _} = Initiatives.transfer_ownership(ini, me.id)
+
+      # The private do_update_member_role path the transfer uses must stay
+      # silent: neither the new owner nor the demoted old owner is notified.
+      refute "role_changed" in kinds_for(me)
+      refute "role_changed" in kinds_for(owner)
+    end
+  end
+
   describe "generation: primary assignee" do
     test "assigned when set on you by someone else", %{owner: owner, ini: ini} do
       me = user("me")
