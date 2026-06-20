@@ -50,6 +50,12 @@ defmodule DoItWeb.InitiativeShowLive do
           # subscribe to follow others. Distinct from the per-initiative topic
           # above — the presence_diff handler tells them apart by topic.
           Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
+
+          # Live chat (m02.08 worklist 3 item 3.1): a per-Initiative topic for
+          # everyone currently viewing. Fully ephemeral — nothing persisted;
+          # messages live only in each viewer's socket (capped), so the chat
+          # clears for a fresh viewer and disappears once the last one leaves.
+          Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
         end
 
         {:ok,
@@ -67,7 +73,12 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:selected_task, nil)
          |> assign(:selected_staff_pool, nil)
          |> assign(:comments, [])
+         |> assign(:editing_comment_id, nil)
+         |> assign(:versions_comment_id, nil)
+         |> assign(:comment_versions, [])
          |> assign(:activity, [])
+         |> assign(:chat_messages, [])
+         |> assign(:chat_log_id, 0)
          |> assign_display_prefs(Accounts.get_preferences(user))
          |> assign(
            :online_ids,
@@ -126,6 +137,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # --- Selection presence (.04.01.12) --------------------------------------
 
   defp presence_topic(initiative_id), do: "initiative_presence:#{initiative_id}"
+
+  # --- Live chat (m02.08 worklist 3 item 3.1) ------------------------------
+
+  # Per-Initiative chat topic — separate from the task-change topic
+  # (Tasks.subscribe) and the presence topics. Ephemeral by construction:
+  # broadcast-only, no DB, no GenServer history.
+  defp chat_topic(initiative_id), do: "initiative_chat:#{initiative_id}"
+
+  # Recent-messages cap kept in each viewer's socket. Bounds memory and matches
+  # the "lightweight, current viewers only" intent — no scrollback history.
+  @chat_cap 50
 
   # Everyone with this initiative open right now — presence keys are the
   # tracked user ids. Feeds the avatar online dots (members panel + pane).
@@ -635,6 +657,9 @@ defmodule DoItWeb.InitiativeShowLive do
              |> assign(:selected_task_id, id)
              |> assign_selected(task)
              |> assign(:comments, Tasks.list_comments(id))
+             |> assign(:editing_comment_id, nil)
+             |> assign(:versions_comment_id, nil)
+             |> assign(:comment_versions, [])
              |> assign(:activity, Tasks.list_task_activity(id))
              |> update_presence(id)}
         end
@@ -1025,6 +1050,102 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # Comment lifecycle (m02.08 worklist 3 item 2). Authorization is enforced in
+  # the context (Tasks.edit_comment / delete_comment) — these handlers map the
+  # result to a flash; the view guards (author-only controls) are convenience.
+
+  # Open the inline editor for one's own comment. Pure pane state (the edited
+  # comment is already loaded); flipping the assign re-renders the row's form.
+  def handle_event("edit_comment", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :editing_comment_id, String.to_integer(id))}
+  end
+
+  def handle_event("cancel_edit_comment", _params, socket) do
+    {:noreply, assign(socket, :editing_comment_id, nil)}
+  end
+
+  def handle_event("save_comment", %{"id" => id, "comment" => %{"body" => body}}, socket) do
+    user = socket.assigns.current_user
+
+    case Tasks.edit_comment(String.to_integer(id), user, body) do
+      {:ok, _comment} ->
+        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+
+      {:error, _cs} ->
+        {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+    end
+  end
+
+  def handle_event("delete_comment", %{"id" => id}, socket) do
+    user = socket.assigns.current_user
+
+    case Tasks.delete_comment(String.to_integer(id), user) do
+      {:ok, _comment} ->
+        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
+
+      {:error, :not_found} ->
+        {:noreply, refresh_selected(socket)}
+    end
+  end
+
+  # Show / hide the prior-versions popup for a comment (item 2.2). Loads the
+  # history on open; a missing/closed state clears it.
+  def handle_event("show_comment_versions", %{"id" => id}, socket) do
+    id = String.to_integer(id)
+
+    {:noreply,
+     socket
+     |> assign(:versions_comment_id, id)
+     |> assign(:comment_versions, Tasks.list_comment_versions(id))}
+  end
+
+  def handle_event("hide_comment_versions", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:versions_comment_id, nil)
+     |> assign(:comment_versions, [])}
+  end
+
+  # Live chat (m02.08 worklist 3 item 3.1): broadcast a message to everyone
+  # currently viewing this Initiative. Nothing is persisted — the broadcast
+  # fans out to each viewer's socket (including ours, via the subscription), so
+  # there's a single append path in handle_info. Blank messages are dropped.
+  def handle_event("send_chat", %{"body" => body}, socket) do
+    body = String.trim(body || "")
+    user = socket.assigns.current_user
+
+    if body == "" do
+      {:noreply, socket}
+    else
+      msg = %{
+        user_id: user.id,
+        name: user.name,
+        initials: initials(user),
+        bg: avatar_bg(user),
+        fg: avatar_fg(user),
+        body: String.slice(body, 0, 2000),
+        at: System.system_time(:second)
+      }
+
+      Phoenix.PubSub.broadcast(
+        DoIt.PubSub,
+        chat_topic(socket.assigns.initiative.id),
+        {:chat_message, msg}
+      )
+
+      {:noreply, socket}
+    end
+  end
+
   # Delete (.03.01.11, .03.07.15): the styled confirm is client-rendered and
   # client-decided — opening a dialog whose content is already in the DOM is
   # view state (UX_GUARDRAILS 6.5). This event arrives only after the user
@@ -1283,7 +1404,8 @@ defmodule DoItWeb.InitiativeShowLive do
           promote_co: promote_co
         )
 
-      {_n, _} = Initiatives.remove_member(initiative.id, pending.user_id, socket.assigns.current_user)
+      {_n, _} =
+        Initiatives.remove_member(initiative.id, pending.user_id, socket.assigns.current_user)
 
       {:noreply,
        socket
@@ -1652,6 +1774,33 @@ defmodule DoItWeb.InitiativeShowLive do
     if socket.assigns.selected_task_id == task_id,
       do: {:noreply, refresh_selected(socket)},
       else: {:noreply, socket}
+  end
+
+  # An author edited or deleted a comment (m02.08 worklist 3 item 2.2/2.3):
+  # refresh the pane live for any viewer who has that task open, like a new
+  # comment landing.
+  def handle_info({:comment_changed, task_id}, socket) do
+    if socket.assigns.selected_task_id == task_id,
+      do: {:noreply, refresh_selected(socket)},
+      else: {:noreply, socket}
+  end
+
+  # Live chat (item 3.1): a message arrived for this Initiative. Append to the
+  # capped in-socket list (oldest dropped past @chat_cap) and bump a monotonic
+  # id the template uses as a stable key + autoscroll trigger. Ephemeral — only
+  # ever held here, never written.
+  def handle_info({:chat_message, msg}, socket) do
+    next_id = socket.assigns.chat_log_id + 1
+    entry = Map.put(msg, :id, next_id)
+
+    messages =
+      [entry | socket.assigns.chat_messages]
+      |> Enum.take(@chat_cap)
+
+    {:noreply,
+     socket
+     |> assign(:chat_messages, messages)
+     |> assign(:chat_log_id, next_id)}
   end
 
   def handle_info({:task_moved, _id}, socket),
@@ -2283,6 +2432,10 @@ defmodule DoItWeb.InitiativeShowLive do
                 <.task_editor
                   task={@selected_task || blank_task()}
                   comments={@comments}
+                  current_user={@current_user}
+                  editing_comment_id={@editing_comment_id}
+                  versions_comment_id={@versions_comment_id}
+                  comment_versions={@comment_versions}
                   activity={@activity}
                   members={@members}
                   can_edit={@can_edit}
@@ -2450,6 +2603,131 @@ defmodule DoItWeb.InitiativeShowLive do
       <%!-- Anchor for the selection-presence channel (.04.01.12): receives
            presence-selections pushes and paints row badges client-side. --%>
       <div id="presence-badges" phx-hook="PresenceBadges" phx-update="ignore" hidden></div>
+
+      <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
+           for everyone currently viewing this Initiative. Fully ephemeral —
+           the message log lives only in socket assigns (broadcast, never
+           persisted), so a fresh viewer sees no history and it clears once the
+           last viewer leaves. Open/closed is client view state (the .Chat hook,
+           localStorage), so toggling never round-trips. The input sits in a
+           phx-update="ignore" wrapper so typing survives a message arriving. --%>
+      <div
+        id="initiative-chat"
+        phx-hook=".Chat"
+        class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
+      >
+        <button
+          type="button"
+          data-chat-toggle
+          class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
+        >
+          <span class="flex items-center gap-1.5">
+            <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
+          </span>
+          <span data-chat-chevron class="inline-flex transition-transform">
+            <.icon name="hero-chevron-up" class="w-4 h-4" />
+          </span>
+        </button>
+
+        <div
+          data-chat-panel
+          hidden
+          class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
+        >
+          <div
+            id="chat-log"
+            data-chat-log
+            class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
+          >
+            <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
+              No messages yet — say hello to anyone else viewing this Initiative.
+            </p>
+            <div :for={m <- Enum.reverse(@chat_messages)} id={"chat-msg-#{m.id}"} class="flex gap-2">
+              <span
+                class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+                style={"background-image: #{m.bg}; color: #{m.fg};"}
+              >
+                {m.initials}
+              </span>
+              <div class="min-w-0">
+                <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                <div class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100">
+                  {m.body}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div
+            id="chat-input-wrap"
+            phx-update="ignore"
+            class="border-t border-zinc-200 dark:border-zinc-700 p-2"
+          >
+            <form data-chat-form class="flex gap-2">
+              <input
+                type="text"
+                data-chat-input
+                maxlength="2000"
+                placeholder="Message viewers…"
+                aria-label="Chat message"
+                autocomplete="off"
+                class="flex-1 input input-bordered input-sm"
+              />
+              <button
+                type="submit"
+                class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+              >
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
+          export default {
+            mounted() {
+              this.toggle = this.el.querySelector("[data-chat-toggle]");
+              this.panel = this.el.querySelector("[data-chat-panel]");
+              this.chevron = this.el.querySelector("[data-chat-chevron]");
+              this.log = this.el.querySelector("[data-chat-log]");
+              this.form = this.el.querySelector("[data-chat-form]");
+              this.input = this.el.querySelector("[data-chat-input]");
+
+              // Open/closed is pure view state, remembered locally — no round trip.
+              this.KEY = "doit:chat-open";
+              const open = localStorage.getItem(this.KEY) === "1";
+              this.setOpen(open);
+
+              this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
+
+              this.form.addEventListener("submit", (e) => {
+                e.preventDefault();
+                const body = this.input.value.trim();
+                if (!body) return;
+                this.pushEvent("send_chat", { body });
+                this.input.value = "";
+                this.input.focus();
+              });
+            },
+            setOpen(open) {
+              this.panel.hidden = !open;
+              if (this.chevron) this.chevron.classList.toggle("rotate-180", !open);
+              localStorage.setItem(this.KEY, open ? "1" : "0");
+              if (open) {
+                this.scrollToBottom();
+                this.input.focus();
+              }
+            },
+            scrollToBottom() {
+              if (this.log) this.log.scrollTop = this.log.scrollHeight;
+            },
+            // A new message re-renders the log — keep it pinned to the latest.
+            updated() {
+              if (this.panel && !this.panel.hidden) this.scrollToBottom();
+            },
+          }
+        </script>
+      </div>
     </Layouts.app>
     """
   end
@@ -3829,8 +4107,19 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  # Author-only edit/delete controls (m02.08 worklist 3 item 2.4). The view
+  # guard is convenience; Tasks.edit_comment / delete_comment re-check.
+  defp comment_author?(comment, %{id: user_id}), do: comment.user_id == user_id
+  defp comment_author?(_comment, _user), do: false
+
   attr :task, :map, required: true
   attr :comments, :list, required: true
+  attr :current_user, :map, required: true
+  # Comment lifecycle (m02.08 worklist 3 item 2): which comment is in inline-edit
+  # mode, which has its prior-versions popup open, and that popup's contents.
+  attr :editing_comment_id, :any, default: nil
+  attr :versions_comment_id, :any, default: nil
+  attr :comment_versions, :list, default: []
   attr :activity, :list, required: true
   attr :show_activity, :boolean, default: true
   attr :online_ids, :any, required: true
@@ -4162,7 +4451,7 @@ defmodule DoItWeb.InitiativeShowLive do
           Loading…
         </p>
         <ul data-async-list class="space-y-2 mb-2">
-          <li :for={c <- @comments} class="text-sm">
+          <li :for={c <- @comments} id={"comment-#{c.id}"} class="group/comment text-sm">
             <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
               <.avatar
                 :if={c.user}
@@ -4172,7 +4461,115 @@ defmodule DoItWeb.InitiativeShowLive do
               />
               {c.user && c.user.name} · {Calendar.strftime(c.inserted_at, "%b %-d %H:%M")}
             </div>
-            <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
+
+            <%= cond do %>
+              <% Tasks.comment_deleted?(c) -> %>
+                <%!-- Tombstone (item 2.3): the row survives so thread shape +
+                     references hold, shown as deleted. --%>
+                <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
+              <% @editing_comment_id == c.id -> %>
+                <%!-- Inline editor (item 2.2): author-only; the context
+                     re-checks authorship on save. --%>
+                <form
+                  id={"edit-comment-form-#{c.id}"}
+                  phx-submit="save_comment"
+                  phx-value-id={c.id}
+                  class="mt-1 flex flex-col gap-1"
+                >
+                  <textarea
+                    name="comment[body]"
+                    aria-label="Edit comment"
+                    rows="2"
+                    class="w-full textarea textarea-bordered textarea-sm"
+                  ><%= c.body %></textarea>
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      phx-disable-with="Saving..."
+                      class="text-xs px-2.5 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+                    >
+                      Save
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="cancel_edit_comment"
+                      class="text-xs px-2.5 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              <% true -> %>
+                <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
+                <div class="mt-0.5 flex items-center gap-2 text-xs">
+                  <button
+                    :if={c.versions != []}
+                    type="button"
+                    phx-click="show_comment_versions"
+                    phx-value-id={c.id}
+                    class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
+                  >
+                    edited · history
+                  </button>
+                  <%= if comment_author?(c, @current_user) do %>
+                    <button
+                      type="button"
+                      id={"edit-comment-btn-#{c.id}"}
+                      phx-click="edit_comment"
+                      phx-value-id={c.id}
+                      class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      id={"delete-comment-btn-#{c.id}"}
+                      phx-click="delete_comment"
+                      phx-value-id={c.id}
+                      data-confirm="Delete this comment? It will be marked as deleted."
+                      class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
+                    >
+                      Delete
+                    </button>
+                  <% end %>
+                </div>
+            <% end %>
+
+            <%!-- Prior-versions popup (item 2.2): a minimal inline panel listing
+                 earlier bodies, newest first. Opens via show_comment_versions. --%>
+            <div
+              :if={@versions_comment_id == c.id}
+              id={"comment-versions-#{c.id}"}
+              class="mt-1 rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 p-2"
+            >
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                  Edit history
+                </span>
+                <button
+                  type="button"
+                  phx-click="hide_comment_versions"
+                  aria-label="Close history"
+                  class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+                >
+                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+                </button>
+              </div>
+              <ul class="space-y-1">
+                <li class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
+                  No earlier versions.
+                </li>
+                <li
+                  :for={v <- @comment_versions}
+                  class="text-xs text-zinc-600 dark:text-zinc-300"
+                >
+                  <span class="text-zinc-400 dark:text-zinc-500">
+                    {Calendar.strftime(v.inserted_at, "%b %-d %H:%M")}
+                  </span>
+                  <div class="whitespace-pre-wrap">{v.body}</div>
+                </li>
+              </ul>
+            </div>
           </li>
         </ul>
         <form :if={@can_progress} phx-submit="add_comment" class="flex gap-2">

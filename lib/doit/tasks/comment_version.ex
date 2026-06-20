@@ -4,8 +4,7 @@ defmodule DoIt.Tasks.CommentVersion do
   before an edit overwrites the live `body`, so the edit popup can surface
   earlier text. Write-once history: only an `inserted_at`.
 
-  Schema only at this stage — the edit/delete lifecycle lands with a later
-  agent.
+  Written by `DoIt.Tasks.edit_comment/3`; surfaced via `list_comment_versions/1`.
   """
   use Ecto.Schema
   import Ecto.Changeset

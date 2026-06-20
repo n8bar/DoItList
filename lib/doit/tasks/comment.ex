@@ -13,8 +13,9 @@ defmodule DoIt.Tasks.Comment do
 
     belongs_to :task, Task
     belongs_to :user, User
-    # Soft-delete "who" (m02.08 worklist 3 item 2). Set programmatically by the
-    # delete lifecycle (a later agent) — never cast from user params.
+    # Soft-delete "who" (m02.08 worklist 3 item 2). Set programmatically by
+    # Tasks.delete_comment/2 — never cast from user params. Its presence (vs. a
+    # bare deleted_at) marks a lifecycle tombstone, distinct from an undo-removal.
     belongs_to :deleted_by, User
 
     has_many :versions, DoIt.Tasks.CommentVersion

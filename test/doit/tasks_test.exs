@@ -857,7 +857,9 @@ defmodule DoIt.TasksTest do
       assert Tasks.get_task(parent.id)
       event = parent.id |> Tasks.list_task_activity() |> Enum.find(&(&1.kind == "child_deleted"))
       assert event
-      assert event.inverse_payload["deleted_ids"] |> Enum.sort() == Enum.sort([child.id, grandchild.id])
+
+      assert event.inverse_payload["deleted_ids"] |> Enum.sort() ==
+               Enum.sort([child.id, grandchild.id])
     end
 
     test "restore_tasks brings the soft-deleted subtree back into the live tree", %{
@@ -1045,7 +1047,8 @@ defmodule DoIt.TasksTest do
       assert Enum.map(links, & &1.sort_order) == [0, 1]
     end
 
-    test "exclusivity: can't co-assign the primary; promoting a co drops them from the list", ctx do
+    test "exclusivity: can't co-assign the primary; promoting a co drops them from the list",
+         ctx do
       %{user: owner, initiative: initiative} = ctx
       a = member(initiative, "amy")
       task = new_task(owner, initiative, %{"title" => "T", "assignee_id" => owner.id})
@@ -1078,7 +1081,9 @@ defmodule DoIt.TasksTest do
 
     test "auto-promote backfills the primary from the co-list, skipping non-members", ctx do
       %{user: owner, initiative: initiative} = ctx
-      {:ok, initiative} = Initiatives.update_initiative(initiative, %{"auto_promote_co_assignees" => true})
+
+      {:ok, initiative} =
+        Initiatives.update_initiative(initiative, %{"auto_promote_co_assignees" => true})
 
       gone = member(initiative, "gone")
       keep = member(initiative, "keep")
@@ -1096,7 +1101,8 @@ defmodule DoIt.TasksTest do
       assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [gone.id]
     end
 
-    test "auto-promote off: clearing the primary leaves the task unassigned, co-list intact", ctx do
+    test "auto-promote off: clearing the primary leaves the task unassigned, co-list intact",
+         ctx do
       %{user: owner, initiative: initiative} = ctx
       a = member(initiative, "amy")
       task = new_task(owner, initiative, %{"title" => "T", "assignee_id" => owner.id})
@@ -1125,7 +1131,8 @@ defmodule DoIt.TasksTest do
       assert Tasks.member_assignment_count(initiative.id, a.id) == 2
     end
 
-    test "handoff: promote_co wins where a co exists, else takeover, else clear; co-assignments dropped", ctx do
+    test "handoff: promote_co wins where a co exists, else takeover, else clear; co-assignments dropped",
+         ctx do
       %{user: owner, initiative: initiative} = ctx
       leaving = member(initiative, "leaving")
       co = member(initiative, "co")
@@ -1137,7 +1144,9 @@ defmodule DoIt.TasksTest do
       # primary-without-co → takeover
       no_co = new_task(owner, initiative, %{"title" => "no-co", "assignee_id" => leaving.id})
       # leaving is a co elsewhere → dropped
-      elsewhere = new_task(owner, initiative, %{"title" => "elsewhere", "assignee_id" => owner.id})
+      elsewhere =
+        new_task(owner, initiative, %{"title" => "elsewhere", "assignee_id" => owner.id})
+
       {:ok, _} = Tasks.add_co_assignee(elsewhere, owner, leaving.id)
 
       {:ok, _} =
@@ -1183,6 +1192,94 @@ defmodule DoIt.TasksTest do
       # brings back the full state.
       assert Tasks.get_task(task.id).deleted_at
       assert Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id) == [a.id]
+    end
+  end
+
+  describe "comment lifecycle (m02.08 worklist 3 item 2)" do
+    test "edit records a prior version and prior text is restorable", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+
+      {:ok, comment} = Tasks.add_comment(task, owner, "first text")
+      {:ok, edited} = Tasks.edit_comment(comment.id, owner, "second text")
+
+      # Live body is the new text...
+      assert edited.body == "second text"
+
+      # ...and the prior text was captured to comment_versions, restorable.
+      versions = Tasks.list_comment_versions(comment.id)
+      assert Enum.map(versions, & &1.body) == ["first text"]
+
+      # A second edit stacks another version (newest first).
+      {:ok, _} = Tasks.edit_comment(comment.id, owner, "third text")
+
+      assert Enum.map(Tasks.list_comment_versions(comment.id), & &1.body) ==
+               ["second text", "first text"]
+    end
+
+    test "delete leaves a tombstone — the row remains with markers set", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+
+      {:ok, comment} = Tasks.add_comment(task, owner, "to be deleted")
+      {:ok, _} = Tasks.delete_comment(comment.id, owner)
+
+      # The row survives (soft delete), with both markers set.
+      stored = DoIt.Repo.get(DoIt.Tasks.Comment, comment.id)
+      assert stored
+      assert stored.deleted_at
+      assert stored.deleted_by_id == owner.id
+      assert Tasks.comment_deleted?(stored)
+
+      # list_comments keeps the tombstone (thread shape survives) but the body
+      # is still on the row — the view renders "comment deleted" off the marker.
+      listed = Tasks.list_comments(task.id)
+      assert [tombstone] = listed
+      assert tombstone.id == comment.id
+      assert Tasks.comment_deleted?(tombstone)
+    end
+
+    test "a non-author cannot edit or delete (rejected in the context)", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+      stranger = member(initiative, "mallory")
+
+      {:ok, comment} = Tasks.add_comment(task, owner, "owner's words")
+
+      assert {:error, :unauthorized} = Tasks.edit_comment(comment.id, stranger, "tampered")
+      assert {:error, :unauthorized} = Tasks.delete_comment(comment.id, stranger)
+
+      # Nothing changed: body intact, no versions, not deleted.
+      stored = DoIt.Repo.get(DoIt.Tasks.Comment, comment.id)
+      assert stored.body == "owner's words"
+      refute Tasks.comment_deleted?(stored)
+      assert Tasks.list_comment_versions(comment.id) == []
+    end
+
+    test "editing a tombstoned comment is rejected as not_found", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+
+      {:ok, comment} = Tasks.add_comment(task, owner, "gone soon")
+      {:ok, _} = Tasks.delete_comment(comment.id, owner)
+
+      assert {:error, :not_found} = Tasks.edit_comment(comment.id, owner, "resurrect")
+      assert {:error, :not_found} = Tasks.delete_comment(comment.id, owner)
+    end
+
+    test "edit/delete broadcast to the initiative's task-change topic", ctx do
+      %{user: owner, initiative: initiative} = ctx
+      task = new_task(owner, initiative, %{"title" => "T"})
+      {:ok, comment} = Tasks.add_comment(task, owner, "watch me")
+
+      Tasks.subscribe(initiative.id)
+      task_id = task.id
+
+      {:ok, _} = Tasks.edit_comment(comment.id, owner, "watched")
+      assert_receive {:comment_changed, ^task_id}
+
+      {:ok, _} = Tasks.delete_comment(comment.id, owner)
+      assert_receive {:comment_changed, ^task_id}
     end
   end
 end

@@ -19,7 +19,7 @@ defmodule DoIt.Tasks do
   alias DoIt.Repo
   alias DoIt.Accounts.User
   alias DoIt.Notifications
-  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Sort, Task, TaskCoAssignee}
+  alias DoIt.Tasks.{ActivityEvent, Comment, CommentVersion, Progress, Sort, Task, TaskCoAssignee}
 
   # --- Queries ---------------------------------------------------------------
 
@@ -1844,14 +1844,42 @@ defmodule DoIt.Tasks do
 
   # --- Comments --------------------------------------------------------------
 
+  @doc """
+  Comments to render for a task — live comments plus author-deleted tombstones
+  (m02.08 worklist 3 item 2.3): a lifecycle delete keeps the row so the thread
+  shape + references survive, surfaced as "comment deleted". Two soft-delete
+  shapes share `deleted_at`, told apart by `deleted_by_id`:
+
+  * undo-removal (m02.06 item 14.5) sets `deleted_at` only — fully hidden;
+  * lifecycle delete sets `deleted_at` **and** `deleted_by_id` — a tombstone.
+
+  So we keep rows that are live (`deleted_at IS NULL`) or tombstoned
+  (`deleted_by_id IS NOT NULL`); undo-removed rows drop out.
+  """
   def list_comments(task_id) do
     from(c in Comment,
-      where: c.task_id == ^task_id and is_nil(c.deleted_at),
+      where:
+        c.task_id == ^task_id and
+          (is_nil(c.deleted_at) or not is_nil(c.deleted_by_id)),
       order_by: [asc: c.inserted_at],
-      preload: [:user]
+      preload: [:user, :deleted_by, :versions]
     )
     |> Repo.all()
   end
+
+  @doc "Prior versions of a comment, newest first — feeds the edit history popup."
+  def list_comment_versions(comment_id) do
+    from(v in CommentVersion,
+      where: v.comment_id == ^comment_id,
+      order_by: [desc: v.inserted_at, desc: v.id]
+    )
+    |> Repo.all()
+  end
+
+  defp get_comment(comment_id), do: Repo.get(Comment, comment_id)
+
+  # A tombstoned comment is presented as deleted (item 2.3) — both markers set.
+  def comment_deleted?(%Comment{deleted_by_id: id}), do: not is_nil(id)
 
   # Soft-delete / restore a comment for the undo engine (m02.06 item 14.5).
   defp soft_delete_comment(comment_id) do
@@ -1876,6 +1904,89 @@ defmodule DoIt.Tasks do
 
       err ->
         err
+    end
+  end
+
+  @doc """
+  Edit a comment's body (m02.08 worklist 3 item 2.2). Authorization lives here,
+  not in the view (item 2.4): only the comment's **author** may edit. The prior
+  body is captured to `comment_versions` first so the edit popup can surface
+  earlier text, then the live `body` is overwritten in one transaction.
+  Broadcasts `{:comment_changed, task_id}` so open viewers refresh live.
+
+  Returns `{:error, :unauthorized}` for a non-author, `{:error, :not_found}` for
+  a missing/tombstoned comment, or the changeset error for an invalid body.
+  """
+  def edit_comment(comment_id, %User{} = actor, body) do
+    with %Comment{} = comment <- get_comment(comment_id),
+         false <- comment_deleted?(comment),
+         true <- comment.user_id == actor.id do
+      result =
+        Repo.transaction(fn ->
+          {:ok, _version} =
+            %CommentVersion{}
+            |> CommentVersion.changeset(%{comment_id: comment.id, body: comment.body})
+            |> Repo.insert()
+
+          comment
+          |> Comment.changeset(%{body: body})
+          |> Repo.update()
+          |> case do
+            {:ok, updated} -> updated
+            {:error, cs} -> Repo.rollback(cs)
+          end
+        end)
+
+      case result do
+        {:ok, updated} ->
+          broadcast_comment_change(comment)
+          {:ok, updated}
+
+        {:error, cs} ->
+          {:error, cs}
+      end
+    else
+      nil -> {:error, :not_found}
+      true -> {:error, :not_found}
+      false -> {:error, :unauthorized}
+    end
+  end
+
+  @doc """
+  Delete a comment (m02.08 worklist 3 item 2.3). Authorization lives here
+  (item 2.4): only the **author** may delete. A soft delete — the row stays with
+  `deleted_at` + `deleted_by_id` set, leaving a "comment deleted" tombstone so
+  the thread shape + references survive (never a row delete). Broadcasts so open
+  viewers refresh live.
+
+  Returns `{:error, :unauthorized}` for a non-author or `{:error, :not_found}`
+  for a missing/already-tombstoned comment.
+  """
+  def delete_comment(comment_id, %User{} = actor) do
+    with %Comment{} = comment <- get_comment(comment_id),
+         false <- comment_deleted?(comment),
+         true <- comment.user_id == actor.id do
+      {:ok, deleted} =
+        comment
+        |> Ecto.Changeset.change(%{deleted_at: now_seconds(), deleted_by_id: actor.id})
+        |> Repo.update()
+
+      broadcast_comment_change(comment)
+      {:ok, deleted}
+    else
+      nil -> {:error, :not_found}
+      true -> {:error, :not_found}
+      false -> {:error, :unauthorized}
+    end
+  end
+
+  # Tell open viewers of this comment's task to refresh their pane (mirrors the
+  # add_comment broadcast). We look up the task's initiative to address the
+  # per-initiative topic.
+  defp broadcast_comment_change(%Comment{task_id: task_id}) do
+    case Repo.one(from t in Task, where: t.id == ^task_id, select: t.initiative_id) do
+      nil -> :ok
+      initiative_id -> broadcast_change(initiative_id, {:comment_changed, task_id})
     end
   end
 
