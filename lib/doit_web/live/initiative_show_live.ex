@@ -2854,10 +2854,11 @@ defmodule DoItWeb.InitiativeShowLive do
               // in updated() (vs. unrelated re-renders).
               this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
 
-              // Open/closed is pure view state, remembered locally — no round trip.
-              this.KEY = "doit:chat-open";
-              const open = localStorage.getItem(this.KEY) === "1";
-              this.setOpen(open);
+              // Open/closed is in-memory view state, default CLOSED on every
+              // mount (refresh / initiative open) — not persisted, so the chat
+              // never greets you open.
+              this._open = false;
+              this.setOpen(false);
 
               this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
 
@@ -2876,7 +2877,7 @@ defmodule DoItWeb.InitiativeShowLive do
               // ("open me"), down when open ("minimize"). Base icon is up, so
               // rotate only when open.
               if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
-              localStorage.setItem(this.KEY, open ? "1" : "0");
+              this._open = open;
               if (open) {
                 this.hidePreview(); // reading them now — clear the collapsed peek
                 this.scrollToBottom();
@@ -2906,7 +2907,7 @@ defmodule DoItWeb.InitiativeShowLive do
               // morphdom, which would snap an open chat shut. Re-assert the open
               // state from localStorage (the source of truth) before anything
               // else, so sending never closes the window.
-              const reopen = localStorage.getItem(this.KEY) === "1";
+              const reopen = this._open;
               this.panel.hidden = !reopen;
               if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
               // A new message bumps the server's monotonic chat-log id.
