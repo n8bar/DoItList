@@ -1260,8 +1260,13 @@ defmodule DoItWeb.InitiativeShowLive do
           end
 
         {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
-          if skip_confirm?(socket, "completion-flip") do
-            # Suppressed: commit straight through, no modal.
+          # The client predicts the flip from the DOM and opens the confirm
+          # itself (UX_GUARDRAILS 6.5 — a client-known confirm never waits on the
+          # network), then re-sends with confirmed: true on Proceed. Suppressed
+          # ("don't ask again") commits the same way. Either path commits straight
+          # through; the gate below is the authoritative backstop for a move the
+          # client did NOT predict as a flip.
+          if Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") do
             case commit_move(socket, task, attrs) do
               {:ok, socket} ->
                 {:reply, %{ok: true, committed: true}, socket}
