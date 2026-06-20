@@ -1412,17 +1412,21 @@ defmodule DoItWeb.InitiativeShowLive do
   # Leave (m02.04-era pull-forward of BACKLOG's "Leave an initiative"):
   # remove your own membership. Always confirmed — only the owner can add
   # you back. The commit's members_changed broadcast ejects this view.
-  # The confirm opens + closes entirely client-side (app.js, like the delete
-  # confirms); only this commit touches the server. The members_changed
-  # broadcast ejects this view, so there's nothing to render after.
+  # The confirm opens client-side (app.js, like the delete confirms); only this
+  # commit touches the server. Leaving is server-confirmed — we reply ok so the
+  # client's "Leaving…" state knows the commit landed (the members_changed
+  # broadcast then ejects this view: handle_info → role nil → push_navigate). On
+  # the rare refusal (ownership transferred to you a moment ago) ok:false lets
+  # the client restore the confirm instead of spinning "Leaving…".
   def handle_event("leave_initiative", _params, socket) do
     me = socket.assigns.current_user.id
 
     if me == socket.assigns.initiative.owner_id do
-      {:noreply, socket |> put_flash(:error, "Owners transfer ownership before leaving.") |> bonk()}
+      {:reply, %{ok: false},
+       socket |> put_flash(:error, "Owners transfer ownership before leaving.") |> bonk()}
     else
       {_count, _} = Initiatives.remove_member(socket.assigns.initiative.id, me, socket.assigns.current_user)
-      {:noreply, socket}
+      {:reply, %{ok: true}, socket}
     end
   end
 

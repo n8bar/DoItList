@@ -946,20 +946,50 @@ document.addEventListener("click", (e) => {
     return
   }
   if (modal.hidden) return
+  // Mid-commit ("Leaving…") — backdrop / Cancel can't dismiss it.
+  if (modal.dataset.leaving === "true") return
   if (e.target === modal || e.target.closest("[data-leave-cancel]")) {
     modal.hidden = true
     return
   }
   if (e.target.closest("[data-leave-proceed]")) {
-    modal.hidden = true
-    if (window.DoitPush) window.DoitPush("leave_initiative", {})
+    // Don't dismiss — leaving is server-confirmed (the members_changed
+    // broadcast navigates you away on commit). Hold a "Leaving…" state so the
+    // wait isn't dead air on a live-looking initiative; the page navigation
+    // replaces this modal on success. Restore on a refusal / dropped reply.
+    const proceed = modal.querySelector("[data-leave-proceed]")
+    const cancel = modal.querySelector("[data-leave-cancel]")
+    modal.dataset.leaving = "true"
+    proceed.textContent = "Leaving…"
+    proceed.disabled = true
+    proceed.classList.add("animate-pulse", "opacity-60")
+    if (cancel) cancel.disabled = true
+    const restore = () => {
+      delete modal.dataset.leaving
+      proceed.textContent = "Leave"
+      proceed.disabled = false
+      proceed.classList.remove("animate-pulse", "opacity-60")
+      if (cancel) cancel.disabled = false
+    }
+    const t = setTimeout(restore, 8000) // dropped reply → never hang
+    if (window.DoitPush) {
+      window.DoitPush("leave_initiative", {}, (reply) => {
+        clearTimeout(t)
+        // ok:true → committed; the eject navigation replaces this page, so stay
+        // "Leaving…". ok:false / no reply → restore so they can retry.
+        if (!reply || reply.ok === false) restore()
+      })
+    } else {
+      clearTimeout(t)
+      restore()
+    }
   }
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const modal = document.getElementById("leave-confirm")
-  if (modal && !modal.hidden) modal.hidden = true
+  if (modal && !modal.hidden && modal.dataset.leaving !== "true") modal.hidden = true
 })
 
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
