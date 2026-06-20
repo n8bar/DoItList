@@ -63,9 +63,9 @@ Scoping in progress. Design decisions above are drafted pending operator approva
 
 ## Open Questions
 
-MCP:
-- Server runtime/library: an endpoint in the same Phoenix app vs. a separate process; an Elixir MCP library (e.g. Hermes) vs. another runtime — gated by the stdio/local-smoothness requirement above.
-- Tools-vs-resources mapping: which operations are MCP *tools* (actions/mutations) and which are *resources* (read-only context — e.g. the activity rollup).
+MCP (**phase-2 decisions — do not block the API build; settle when we build the MCP server**):
+- Server runtime/library: an endpoint in the same Phoenix app vs. a separate process; an Elixir MCP library (e.g. Hermes) vs. another runtime — gated by the stdio/local-smoothness requirement above. Leaning: a separate thin stdio process so the MCP can only reach the API over HTTP, never the contexts.
+- Tools-vs-resources mapping: which operations are MCP *tools* (actions/mutations) and which are *resources* (read-only context — e.g. the activity rollup). Informed by the already-decided read/mutate split, so largely mechanical at build time.
 
 ## Non-Goals
 
