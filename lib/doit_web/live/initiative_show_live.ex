@@ -86,6 +86,30 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  @impl true
+  # Deep-link to a task (m02.08 item 1.7): the Assigned-to-Me list opens
+  # `/initiatives/:id?task=<id>`. Selection is client/DOM-owned, so on the
+  # connected mount we push the target plus its ancestor chain to the client,
+  # which expands any collapsed ancestors, selects the row, and scrolls it into
+  # view. Pure view state (UX_GUARDRAILS 6.5) — no round trip gates it. The
+  # param is honored once on entry; a missing/foreign task is ignored.
+  def handle_params(%{"task" => task_id}, _uri, socket) do
+    socket =
+      with true <- connected?(socket),
+           %{initiative: %{id: initiative_id}} <- socket.assigns,
+           {id, ""} <- Integer.parse(task_id),
+           %Task{initiative_id: ^initiative_id, deleted_at: nil} <-
+             Tasks.get_task(id) do
+        push_event(socket, "deep-link-task", %{id: id, ancestors: Tasks.ancestor_ids(id)})
+      else
+        _ -> socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_params(_params, _uri, socket), do: {:noreply, socket}
+
   # The viewing user's Display elements preferences (m02.04 §2.4): the
   # activity-log toggle plus which task attributes render on rows.
   defp assign_display_prefs(socket, prefs) do
@@ -1673,6 +1697,32 @@ defmodule DoItWeb.InitiativeShowLive do
                 if (!document.getElementById("task-" + id)) return;
                 if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
                 if (window.DoitPush) window.DoitPush("select_task", {id});
+              });
+              // Deep-link from Assigned-to-Me (m02.08 item 1.7): expand any
+              // collapsed ancestors so the target is visible, then select +
+              // scroll it into view. Expansion clears each ancestor's collapse
+              // state the same way the toggle does (localStorage + class +
+              // aria), so it sticks across the post-load collapse-guard pass.
+              this.handleEvent("deep-link-task", ({id, ancestors}) => {
+                (ancestors || []).forEach((aid) => {
+                  // The children <ul> + toggle button carry the initiative id;
+                  // mirror the toggle's localStorage key off it so the expand
+                  // survives the post-load collapse-guard re-apply.
+                  const ul = document.getElementById("children-" + aid);
+                  const btn = document.getElementById("collapse-" + aid);
+                  const init = (ul && ul.dataset.initiativeId) ||
+                               (btn && btn.dataset.initiativeId);
+                  if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0");
+                  if (ul) ul.classList.remove("collapsed-peek");
+                  if (btn) btn.setAttribute("aria-expanded", "true");
+                });
+                // Defer the select/scroll a frame so the just-expanded rows are
+                // laid out before scrollIntoView measures (no layout jank).
+                requestAnimationFrame(() => {
+                  if (!document.getElementById("task-" + id)) return;
+                  if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                  if (window.DoitPush) window.DoitPush("select_task", {id});
+                });
               });
               // Toolbar Undo/Redo clicks route through the same latch + feedback
               // as the keyboard (item 15.9), so a repeat while one's in flight is

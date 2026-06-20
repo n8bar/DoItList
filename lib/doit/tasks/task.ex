@@ -29,6 +29,18 @@ defmodule DoIt.Tasks.Task do
     # overlapping-avatar chip — so the row needs no per-row query.
     field :co_assignee_count, :integer, virtual: true, default: 0
     field :co_assignee_users, {:array, :map}, virtual: true, default: []
+    # Assigned-to-Me read (m02.08 worklist 1): how the viewing user is on this
+    # task (:primary / :co), the owning Initiative's name + badge mode, the two
+    # subtree counts, and whether it surfaced only via a reveal toggle.
+    field :assigned_as, Ecto.Enum, values: [:primary, :co], virtual: true
+    field :initiative_name, :string, virtual: true
+    field :progress_calc, :string, virtual: true
+    field :child_count, :integer, virtual: true, default: 0
+    field :assigned_leaf_count, :integer, virtual: true, default: 1
+    field :from_archived_or_hidden, :boolean, virtual: true, default: false
+    # Marks the first row of an Initiative group in the Assigned-to-Me list so a
+    # streamed row can render its header without peeking at neighbors (item 1.6).
+    field :group_start?, :boolean, virtual: true, default: false
 
     belongs_to :initiative, Initiative
     belongs_to :parent, Task

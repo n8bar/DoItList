@@ -13,6 +13,11 @@ defmodule DoIt.Tasks.Comment do
 
     belongs_to :task, Task
     belongs_to :user, User
+    # Soft-delete "who" (m02.08 worklist 3 item 2). Set programmatically by the
+    # delete lifecycle (a later agent) — never cast from user params.
+    belongs_to :deleted_by, User
+
+    has_many :versions, DoIt.Tasks.CommentVersion
 
     timestamps(type: :utc_datetime)
   end

@@ -67,6 +67,12 @@ defmodule DoItWeb.Layouts do
               >
                 Initiatives
               </.link>
+              <.link
+                navigate={~p"/assigned"}
+                class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+              >
+                Assigned to Me
+              </.link>
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
               <.theme_toggle variant={:group} current_user={@current_user} />
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
@@ -144,6 +150,14 @@ defmodule DoItWeb.Layouts do
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     Initiatives
+                  </.link>
+                </li>
+                <li>
+                  <.link
+                    navigate={~p"/assigned"}
+                    class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    Assigned to Me
                   </.link>
                 </li>
                 <li class="flex items-center justify-between px-2 py-1.5">
@@ -422,7 +436,9 @@ defmodule DoItWeb.Layouts do
                   <button
                     :if={@current_id && MapSet.member?(@member_ids, collab.user.id)}
                     type="button"
-                    phx-click={JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})}
+                    phx-click={
+                      JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})
+                    }
                     popovertarget={"collab-pop-#{collab.user.id}"}
                     popovertargetaction="hide"
                     class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
@@ -468,7 +484,11 @@ defmodule DoItWeb.Layouts do
                   <div class="flex gap-1 p-1">
                     <button
                       type="button"
-                      phx-click={JS.push("remove_collaborator", value: %{"user-id" => to_string(collab.user.id)})}
+                      phx-click={
+                        JS.push("remove_collaborator",
+                          value: %{"user-id" => to_string(collab.user.id)}
+                        )
+                      }
                       popovertarget={"collab-pop-#{collab.user.id}"}
                       popovertargetaction="hide"
                       class="flex-1 rounded px-2 py-1 text-sm font-medium text-white bg-red-600 hover:bg-red-700"

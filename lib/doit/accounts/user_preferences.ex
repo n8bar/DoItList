@@ -40,6 +40,10 @@ defmodule DoIt.Accounts.UserPreferences do
     # The chevron's leaf / child count badge.
     field :show_task_count, :boolean, default: true
 
+    # Group-by-Initiative toggle for the Assigned-to-Me page (m02.08 worklist 1
+    # item 6) — persistent, account-following. Off = a flat list.
+    field :assigned_group_by_initiative, :boolean, default: false
+
     timestamps(type: :utc_datetime)
   end
 
@@ -64,7 +68,8 @@ defmodule DoIt.Accounts.UserPreferences do
       :show_task_priority,
       :show_task_assignee,
       :show_task_progress,
-      :show_task_count
+      :show_task_count,
+      :assigned_group_by_initiative
     ])
     |> validate_inclusion(:index_sort_mode, [nil | @index_sort_modes])
     |> validate_change(:index_sort_reverse_by_mode, fn _, map ->

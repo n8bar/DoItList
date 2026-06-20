@@ -1,8 +1,11 @@
 defmodule DoItWeb.InitiativeIndexLive do
   use DoItWeb, :live_view
 
+  import DoItWeb.AssignedComponents
+
   alias DoIt.Accounts
   alias DoIt.Initiatives
+  alias DoItWeb.AssignedActions
 
   @impl true
   # Sort modes the index understands. `nil` = the server's default order
@@ -47,7 +50,10 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> assign(:reverse_by_mode, reverse_by_mode)
      |> assign(:form, build_empty_form())
      |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
-     |> stream(:initiatives, sort_initiatives(initiatives, sort_state))}
+     |> stream(:initiatives, sort_initiatives(initiatives, sort_state))
+     # Assigned-to-Me pane (m02.08 item 1.3): the ultrawide right pane reuses
+     # the A2M list. Seed its stream + toggle state here.
+     |> AssignedActions.assign_initial(user)}
   end
 
   # The saved manual order as an id list, derived from the membership rows'
@@ -167,12 +173,32 @@ defmodule DoItWeb.InitiativeIndexLive do
   # Trash (m02.06 item 10): owner-only restore / permanent delete. Both refresh
   # the live index too — a restored Initiative reappears there.
   def handle_event("restore_initiative", %{"id" => id}, socket) do
-    {:noreply, with_owned_trashed(socket, id, &Initiatives.restore_initiative/1, "Initiative restored.")}
+    {:noreply,
+     with_owned_trashed(socket, id, &Initiatives.restore_initiative/1, "Initiative restored.")}
   end
 
   def handle_event("purge_initiative", %{"id" => id}, socket) do
     {:noreply,
-     with_owned_trashed(socket, id, &Initiatives.purge_initiative/1, "Initiative permanently deleted.")}
+     with_owned_trashed(
+       socket,
+       id,
+       &Initiatives.purge_initiative/1,
+       "Initiative permanently deleted."
+     )}
+  end
+
+  # Assigned-to-Me pane toggles (m02.08 item 1.3) — same handlers as the
+  # standalone /assigned page, via the shared AssignedActions helper.
+  def handle_event("assigned_toggle_completed", _params, socket) do
+    {:noreply, AssignedActions.toggle_completed(socket, socket.assigns.current_user)}
+  end
+
+  def handle_event("assigned_toggle_archived_hidden", _params, socket) do
+    {:noreply, AssignedActions.toggle_archived_hidden(socket, socket.assigns.current_user)}
+  end
+
+  def handle_event("assigned_toggle_group_by", _params, socket) do
+    {:noreply, AssignedActions.toggle_group_by(socket, socket.assigns.current_user)}
   end
 
   @impl true
@@ -462,7 +488,11 @@ defmodule DoItWeb.InitiativeIndexLive do
       <%!-- Trash (m02.06 item 10): the owner's soft-deleted Initiatives, with
            Restore and permanent delete. Hidden when empty. Auto-purges after
            the retention window. --%>
-      <section :if={@trashed != []} id="trash" class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4">
+      <section
+        :if={@trashed != []}
+        id="trash"
+        class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4"
+      >
         <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
           <.icon name="hero-trash" class="w-4 h-4" /> Trash
           <span class="font-normal text-xs text-zinc-400 dark:text-zinc-500">
@@ -520,18 +550,25 @@ defmodule DoItWeb.InitiativeIndexLive do
       <.shortcuts_overlay />
 
       <%!-- Right (third) pane, a sibling of the left rail (item 6): the
-           reserved "Assigned to Me" home. Placeholder until Arc 7 (m02.07)
-           builds the cross-Initiative list; fills the pane height. --%>
+           "Assigned to Me" home, filled by Arc 8 (m02.08 item 1.3) with the
+           cross-Initiative list — the same reusable component as /assigned. --%>
       <:rail_right>
-        <div class="flex min-h-[calc(100dvh-9rem)] flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-300 px-6 text-center dark:border-zinc-700">
-          <.botanical_icon
-            kind={:leaf}
-            class="w-10 h-10 text-emerald-500/70 dark:text-emerald-400/70"
+        <div class="min-h-[calc(100dvh-9rem)]">
+          <h2 class="mb-3 flex items-center gap-1.5 text-lg font-semibold text-zinc-700 dark:text-zinc-200">
+            <.botanical_icon
+              kind={:leaf}
+              class="w-5 h-5 text-emerald-500/70 dark:text-emerald-400/70"
+            /> Assigned to Me
+          </h2>
+          <.assigned_list
+            id="assigned-pane"
+            rows={@streams.assigned_tasks}
+            empty?={@assigned_empty?}
+            show_completed={@show_completed}
+            show_archived_hidden={@show_archived_hidden}
+            group_by_initiative={@group_by_initiative}
+            variant={:pane}
           />
-          <h2 class="text-lg font-semibold text-zinc-700 dark:text-zinc-200">Assigned to Me</h2>
-          <p class="text-sm text-zinc-500 dark:text-zinc-400">
-            Every task on your plate, across all your Initiatives, will gather here — coming soon.
-          </p>
         </div>
       </:rail_right>
     </Layouts.app>

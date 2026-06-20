@@ -39,6 +39,7 @@ defmodule DoItWeb.Router do
 
     live_session :authenticated, on_mount: [{DoItWeb.UserAuth, :require_authenticated}] do
       live "/account", AccountLive, :show
+      live "/assigned", AssignedLive, :index
       live "/initiatives", InitiativeIndexLive, :index
       live "/initiatives/:id", InitiativeShowLive, :show
     end
