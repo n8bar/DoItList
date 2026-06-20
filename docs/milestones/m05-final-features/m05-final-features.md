@@ -21,6 +21,10 @@ Stub — to be expanded. Not yet scoped into arcs.
 - **Taskmaster — a task-scoped full-control role.** Like viewer+ ([`m02.05`](../m02-ux-buildout/m02.05-wide-width-layout.md) item 12.6) but stronger: full editor-level control over the task they're the direct assignee of *and its whole subtree* — without rights to the rest of the Initiative. The natural step up from viewer+.
 - **Donation screen.** A "support this project" page — suggested amounts + a payment-processor integration (Stripe or similar), linked from the nav / account menu. Brings a payment-processor dependency. (Only meaningful once there's a public audience, so it rides with the public-open work.)
 
+## Optional
+
+- **Task indexes — deferred extras.** Follow-ups to the fixed index styles from [`m02.07`](../m02-ux-buildout/m02.07-app-shell-layout.md) (item 1.7): **Custom Outline** (pick the glyph set per level), a **depth-flat variant** (`1.`, `2.` per level, no ancestor prefix), and a **continue-across-collapse** toggle. If deferred, it doesn't make the first release — and that's fine.
+
 ## Preconditions
 
 - M02 (UX Buildout) lands — membership, roster, and account surfaces the invite/role/avatar work extends are stable.

@@ -10,5 +10,4 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 
 ## Items
 
-### Task row polish
-- **Task indexes — deferred extras.** Beyond the fixed styles shipping in `m02.07` (item 1.7): **Custom Outline** (user picks the glyph set per level), a **depth-flat variant** (`1.`, `2.` per level, no ancestor prefix), and a **continue-across-collapse** toggle. (Color-coded priority pills + the fixed-style indexes themselves were promoted to `m02.07`.)
+_None currently — all known future work is scoped into milestones M3–M6 (see [`PLAN.md`](PLAN.md))._
