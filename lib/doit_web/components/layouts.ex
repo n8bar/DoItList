@@ -5,6 +5,7 @@ defmodule DoItWeb.Layouts do
   use DoItWeb, :html
 
   alias Phoenix.LiveView.JS
+  alias DoIt.Notifications
 
   embed_templates "layouts/*"
 
@@ -20,6 +21,51 @@ defmodule DoItWeb.Layouts do
       _ -> nil
     end
   end
+
+  # --- Notifications feed (m02.08 worklist 2) --------------------------------
+  #
+  # The dot + flyout are derived server-side from `current_user` so they render
+  # on every authenticated page without each LiveView passing extra attrs. The
+  # on_mount hook in DoItWeb.UserAuth refreshes `current_user` on a live push,
+  # which re-renders this layout and re-derives the values below — no JS hook.
+
+  defp notif_unread(%{id: id}), do: Notifications.unread_count(%DoIt.Accounts.User{id: id})
+  defp notif_unread(_), do: 0
+
+  defp notif_recent(%{id: id}), do: Notifications.list_recent(%DoIt.Accounts.User{id: id})
+  defp notif_recent(_), do: []
+
+  # Where a notification row links: the deep-linked task when one is in `data`
+  # (worklist 1 item 7's `/initiatives/:id?task=<id>`), else the Initiative.
+  defp notif_href(%{data: %{"task_id" => task_id, "initiative_id" => init_id}})
+       when not is_nil(task_id) do
+    ~p"/initiatives/#{init_id}?task=#{task_id}"
+  end
+
+  defp notif_href(%{data: %{"initiative_id" => init_id}}) when not is_nil(init_id) do
+    ~p"/initiatives/#{init_id}"
+  end
+
+  defp notif_href(_), do: ~p"/initiatives"
+
+  # One-line, human description of a notification for the flyout.
+  defp notif_line(%{kind: kind} = notif) do
+    who = get_in(notif.data, ["actor_name"]) || "Someone"
+    title = get_in(notif.data, ["task_title"])
+
+    case kind do
+      "member_added" -> "#{who} added you to an Initiative"
+      "member_removed" -> "#{who} removed you from an Initiative"
+      "assigned" -> "#{who} assigned you " <> task_phrase(title)
+      "unassigned" -> "#{who} unassigned you from " <> task_phrase(title)
+      "co_assigned" -> "#{who} added you as a co-assignee on " <> task_phrase(title)
+      "co_unassigned" -> "#{who} removed you as a co-assignee from " <> task_phrase(title)
+      _ -> "#{who} updated something"
+    end
+  end
+
+  defp task_phrase(nil), do: "a task"
+  defp task_phrase(title), do: "“#{title}”"
 
   attr :flash, :map, required: true
   attr :current_user, :map, default: nil
@@ -48,7 +94,13 @@ defmodule DoItWeb.Layouts do
         :default -> "mx-auto max-w-6xl"
       end
 
-    assigns = assign(assigns, :container, container)
+    # Notification dot/flyout (worklist 2): derived from current_user so they
+    # appear on every authenticated page. Only computed when logged in.
+    assigns =
+      assigns
+      |> assign(:container, container)
+      |> assign(:notif_unread, notif_unread(assigns[:current_user]))
+      |> assign(:notif_recent, notif_recent(assigns[:current_user]))
 
     ~H"""
     <header class="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
@@ -80,15 +132,27 @@ defmodule DoItWeb.Layouts do
                    hamburger; root.html.heex's data-menu light-dismiss covers
                    outside clicks and Escape. --%>
               <details class="relative" data-menu>
+                <%!-- Opening the menu marks notifications read (worklist 2.3) —
+                     the summary click both toggles <details> and pushes the
+                     mark-read event; harmless to re-fire on close. --%>
                 <summary
                   title="Account menu"
+                  phx-click={JS.push("mark_notifications_read")}
                   class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
                 >
-                  <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
+                  <span class="relative inline-flex">
+                    <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
+                    <.notif_dot show={@notif_unread > 0} />
+                  </span>
                   {@current_user.name}
                   <.icon name="hero-chevron-down" class="w-3 h-3" />
                 </summary>
-                <ul class="absolute right-0 mt-2 w-44 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+                <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+                  <.notifications_flyout
+                    recent={@notif_recent}
+                    unread={@notif_unread}
+                    scope="desktop"
+                  />
                   <li>
                     <.link
                       navigate={~p"/account"}
@@ -121,12 +185,16 @@ defmodule DoItWeb.Layouts do
             <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too). --%>
             <details class="relative sm:hidden" data-menu>
               <summary
+                phx-click={JS.push("mark_notifications_read")}
                 class="btn btn-sm btn-ghost cursor-pointer list-none [&::-webkit-details-marker]:hidden"
                 aria-label="Menu"
               >
-                <.icon name="hero-bars-3" class="w-6 h-6" />
+                <span class="relative inline-flex">
+                  <.icon name="hero-bars-3" class="w-6 h-6" />
+                  <.notif_dot show={@notif_unread > 0} />
+                </span>
               </summary>
-              <ul class="absolute right-0 mt-2 w-56 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+              <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
                 <li>
                   <.link
                     navigate={~p"/account"}
@@ -136,6 +204,7 @@ defmodule DoItWeb.Layouts do
                     {@current_user.name}
                   </.link>
                 </li>
+                <.notifications_flyout recent={@notif_recent} unread={@notif_unread} scope="mobile" />
                 <li>
                   <.link
                     navigate={~p"/account#account-preferences"}
@@ -267,6 +336,79 @@ defmodule DoItWeb.Layouts do
     </main>
 
     <.flash_group flash={@flash} />
+    """
+  end
+
+  @doc """
+  The unread red dot (worklist 2.4) overlaid on the nav avatar/hamburger. Pure
+  presentation, driven by the server-derived `show` flag — no JS hook.
+  """
+  attr :show, :boolean, default: false
+
+  def notif_dot(assigns) do
+    ~H"""
+    <span
+      :if={@show}
+      aria-label="Unread notifications"
+      class="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-900"
+    >
+    </span>
+    """
+  end
+
+  @doc """
+  The notifications flyout (worklist 2.3): recent notifications newest-first,
+  each linking its subject (the Initiative, or the deep-linked task), with a
+  "Mark all read" affordance. Lives inside the User menu / hamburger. Opening
+  the menu already marks read (the summary pushes `mark_notifications_read`);
+  this section just lists what's recent.
+  """
+  attr :recent, :list, default: []
+  attr :unread, :integer, default: 0
+  attr :scope, :string, default: "menu", doc: "id prefix — the flyout renders in both menus"
+
+  def notifications_flyout(assigns) do
+    ~H"""
+    <li class="border-b border-zinc-200 pb-1 dark:border-zinc-700">
+      <div class="flex items-center justify-between px-2 py-1">
+        <span class="text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
+          Notifications
+        </span>
+        <button
+          :if={@unread > 0}
+          type="button"
+          phx-click={JS.push("mark_notifications_read")}
+          class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
+        >
+          Mark all read
+        </button>
+      </div>
+      <ul id={"notifications-list-#{@scope}"} class="max-h-64 space-y-0.5 overflow-y-auto">
+        <li :if={@recent == []} class="px-2 py-1.5 text-xs text-zinc-400 dark:text-zinc-500">
+          Nothing yet
+        </li>
+        <li :for={notif <- @recent} id={"notification-#{@scope}-#{notif.id}"}>
+          <.link
+            navigate={notif_href(notif)}
+            class={[
+              "block rounded px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800",
+              if(is_nil(notif.read_at),
+                do: "font-medium text-zinc-800 dark:text-zinc-100",
+                else: "text-zinc-500 dark:text-zinc-400"
+              )
+            ]}
+          >
+            <span
+              :if={is_nil(notif.read_at)}
+              class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-red-500 align-middle"
+              aria-hidden="true"
+            >
+            </span>
+            {notif_line(notif)}
+          </.link>
+        </li>
+      </ul>
+    </li>
     """
   end
 

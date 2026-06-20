@@ -12,6 +12,7 @@ defmodule DoIt.Initiatives do
   alias DoIt.Repo
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.{Initiative, InitiativeMember, Collaborator}
+  alias DoIt.Notifications
   alias DoIt.Tasks.Task
 
   @doc """
@@ -445,7 +446,12 @@ defmodule DoIt.Initiatives do
     )
   end
 
-  def add_member(initiative_id, user_id, role) do
+  @doc """
+  Add a member. `actor` (a `%User{}` or user id) is who performed the add — when
+  given, the new member gets a `member_added` notification (self-adds excluded).
+  Defaults to `nil` for system/seed callers that don't attribute an actor.
+  """
+  def add_member(initiative_id, user_id, role, actor \\ nil) do
     %InitiativeMember{}
     |> InitiativeMember.changeset(%{initiative_id: initiative_id, user_id: user_id, role: role})
     |> Repo.insert()
@@ -453,6 +459,7 @@ defmodule DoIt.Initiatives do
       {:ok, _} ->
         record_collaborators(initiative_id, user_id)
         broadcast_members_changed(initiative_id)
+        notify_membership(actor, user_id, initiative_id, "member_added")
 
       _ ->
         :ok
@@ -475,23 +482,53 @@ defmodule DoIt.Initiatives do
         {:error, :already_member}
 
       true ->
-        case add_member(initiative_id, user_id, "viewer") do
+        case add_member(initiative_id, user_id, "viewer", actor) do
           {:ok, _} -> {:ok, Repo.get(User, user_id)}
           {:error, _} -> {:error, :failed}
         end
     end
   end
 
-  def remove_member(initiative_id, user_id) do
+  @doc """
+  Remove a member. `actor` (a `%User{}` or user id) is who performed the removal
+  — when given and not the removed user, they get a `member_removed`
+  notification. Defaults to `nil` for system callers.
+  """
+  def remove_member(initiative_id, user_id, actor \\ nil) do
     from(m in InitiativeMember,
       where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
     )
     |> Repo.delete_all()
     |> tap(fn
-      {n, _} when n > 0 -> broadcast_members_changed(initiative_id)
-      _ -> :ok
+      {n, _} when n > 0 ->
+        broadcast_members_changed(initiative_id)
+        notify_membership(actor, user_id, initiative_id, "member_removed")
+
+      _ ->
+        :ok
     end)
   end
+
+  # Drop a member_added / member_removed notification on the affected user,
+  # excluding self-actions (notify/4 enforces actor == recipient → skip). The
+  # actor arg is a %User{} or a user id; a nil actor (system/seed callers) skips
+  # quietly. We resolve the actor's display name once for the flyout line.
+  defp notify_membership(nil, _user_id, _initiative_id, _kind), do: :ok
+
+  defp notify_membership(actor, user_id, initiative_id, kind) do
+    actor_id = actor_id(actor)
+
+    Notifications.notify(actor_id, user_id, kind, %{
+      initiative_id: initiative_id,
+      actor_name: actor_name(actor)
+    })
+  end
+
+  defp actor_id(%User{id: id}), do: id
+  defp actor_id(id) when is_integer(id), do: id
+
+  defp actor_name(%User{name: name}), do: name
+  defp actor_name(id) when is_integer(id), do: (Repo.get(User, id) || %User{}).name
 
   # Membership changes fan out on the initiative's existing topic so every
   # open LiveView re-checks its own role — a removed member is ejected

@@ -18,6 +18,7 @@ defmodule DoIt.Tasks do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
+  alias DoIt.Notifications
   alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Sort, Task, TaskCoAssignee}
 
   # --- Queries ---------------------------------------------------------------
@@ -381,6 +382,12 @@ defmodule DoIt.Tasks do
             # per-level fires don't repeat work for the same parent.
             maybe_resort_children(updated.parent_id)
             if old_parent && old_parent != new_parent, do: maybe_resort_children(old_parent)
+
+            # Notifications (m02.08 worklist 2): a primary-assignee change drops
+            # an `assigned`/`unassigned` on the affected user(s), self excluded.
+            # `task.assignee_id` is the original, `updated.assignee_id` the final
+            # (after any auto-promote backfill).
+            notify_primary_change(task, updated, actor)
 
             broadcast_change(updated.initiative_id, {:task_updated, updated.id})
             updated
@@ -1919,6 +1926,7 @@ defmodule DoIt.Tasks do
             |> Repo.insert()
 
           record_event(task, actor, "co_assignee_added", %{user_id: user_id})
+          notify_assignment(actor, user_id, task, "co_assigned")
           broadcast_change(task.initiative_id, {:task_updated, task.id})
           link
         end)
@@ -1929,7 +1937,12 @@ defmodule DoIt.Tasks do
   def remove_co_assignee(%Task{} = task, %User{} = actor, user_id) do
     Repo.transaction(fn ->
       n = drop_co_assignee(task.id, user_id)
-      if n > 0, do: record_event(task, actor, "co_assignee_removed", %{user_id: user_id})
+
+      if n > 0 do
+        record_event(task, actor, "co_assignee_removed", %{user_id: user_id})
+        notify_assignment(actor, user_id, task, "co_unassigned")
+      end
+
       broadcast_change(task.initiative_id, {:task_updated, task.id})
       n
     end)
@@ -2128,6 +2141,30 @@ defmodule DoIt.Tasks do
         link |> Ecto.Changeset.change(sort_order: idx) |> Repo.update()
       end
     end)
+  end
+
+  # --- Assignment notifications (m02.08 worklist 2) -------------------------
+
+  # A primary-assignee change: notify the user cleared (`unassigned`) and/or the
+  # user newly set (`assigned`). Compares the original `assignee_id` against the
+  # final one (so an auto-promote backfill notifies the promoted user too).
+  # Self-actions are excluded inside notify_assignment/4.
+  defp notify_primary_change(%Task{assignee_id: same}, %Task{assignee_id: same}, _actor), do: :ok
+
+  defp notify_primary_change(%Task{assignee_id: old}, %Task{} = updated, actor) do
+    if old, do: notify_assignment(actor, old, updated, "unassigned")
+    if updated.assignee_id, do: notify_assignment(actor, updated.assignee_id, updated, "assigned")
+    :ok
+  end
+
+  # Drop an assignment notification on `recipient_id` for `task`, self excluded.
+  defp notify_assignment(%User{} = actor, recipient_id, %Task{} = task, kind) do
+    Notifications.notify(actor.id, recipient_id, kind, %{
+      initiative_id: task.initiative_id,
+      task_id: task.id,
+      task_title: task.title,
+      actor_name: actor.name
+    })
   end
 
   defp parse_int(n) when is_integer(n), do: n
