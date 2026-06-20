@@ -182,7 +182,10 @@ defmodule DoItWeb.Layouts do
     </header>
 
     <main class="flex-1 overflow-y-auto">
-      <div class={[@container, "px-1 sm:px-6 py-8"]}>
+      <%!-- Bottom padding drops at lg:+ so the viewport-height shell (Initiative
+           page) fits flush — the shell owns the bottom edge there; below lg: the
+           page scrolls and keeps its breathing room. --%>
+      <div class={[@container, "px-1 sm:px-6 pt-8 pb-8 lg:pb-0"]}>
         <%= if @rail_initiatives do %>
           <%!-- Narrow flyout (item 11): below 3xl the rail isn't in the layout;
                on an open Initiative (current_id) a left-edge tab slides it in as

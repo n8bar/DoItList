@@ -1980,11 +1980,12 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
              shell — the page stops scrolling and each column owns its own
              vertical scroll. Below lg: it's a plain grid and the page scrolls,
-             unchanged. The calc trims the top header and the container padding
-             so the shell fits without a page scrollbar. The close/role row now
-             lives inside the center column (it used to sit full-width above the
-             shell), so it no longer subtracts from the viewport height. --%>
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-8rem)] lg:items-stretch lg:overflow-hidden">
+             unchanged. The calc trims the top header (~2.8rem) and the
+             container's top padding (pt-8 = 2rem); bottom padding is dropped at
+             lg: (lg:pb-0), so the shell fits flush to the viewport bottom. The
+             close/role row now lives inside the center column (it used to sit
+             full-width above the shell), so it no longer subtracts here. --%>
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-5rem)] lg:items-stretch lg:overflow-hidden">
           <%!-- Center column. At lg:+ it's a flex column: the close/role row and
                header are flex-none siblings above the tree's own scroll box
                (item 1.2), so the tree scrolls beneath chrome that never moves.
@@ -2153,7 +2154,7 @@ defmodule DoItWeb.InitiativeShowLive do
               "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
               "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
               "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
-              "data-open:overflow-y-auto lg:data-open:overflow-visible data-open:[scrollbar-gutter:stable]",
+              "data-open:overflow-y-auto lg:data-open:overflow-hidden data-open:[scrollbar-gutter:stable]",
               "space-y-4 lg:space-y-0 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:overflow-hidden"
             ]}
           >
