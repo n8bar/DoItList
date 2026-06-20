@@ -47,6 +47,8 @@ Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API whi
 
 **Q5 — Pull-only (no push API in M3).** Clients read on demand; no webhooks or push stream. External real-time *watching* of an Initiative is deferred until a consumer needs it — the LiveView's internal PubSub stays internal; exposing it is its own infra. An MCP agent reads the tree when it acts.
 
+**Q6 — Public surface: reversible Initiative work; irreversible stays web-only.** Guiding rule — operations that are **reversible (including soft deletes)** are token-exposed; **irreversible** ones are LiveView-only. **Exposed:** create Initiative, Initiative update, task CRUD / progress / reorg, comments (add / edit / soft-delete-with-tombstone), membership (add / remove / role-change), notifications (read / mark-read), archive / hide, and **move-to-Trash** (soft delete). **LiveView-only:** irreversible ops — permanent delete / empty-Trash, transfer ownership — plus account self-management (register / login / password / email / delete-account, avatars; a work token isn't for managing your account). Exact per-operation list pinned at implementation.
+
 **MCP transport: stdio-first (smooth local path).** DoItList ships a thin **stdio** MCP adapter — a small local process Claude Code launches directly (`claude mcp add …`), authenticated by the per-user token passed via an env var. No hosting, no OAuth: the local Claude Code experience "just works." Remote **streamable-HTTP** (for hosted clients like Claude Desktop / third parties) is deferred to hosting (M06) and is *additive*, not a precondition. Whatever MCP runtime/library we choose **must** support this stdio/local path without forcing a remote/OAuth setup.
 
 ## Status
@@ -60,7 +62,6 @@ Scoping in progress. Design decisions above are drafted pending operator approva
 ## Open Questions
 
 API:
-- Public vs. private surface — the exact operation list exposed (vs. LiveView-only).
 - Bulk operations *within* an Initiative (batch create / move / update) to match "edit many doc lines, save once."
 
 MCP:
