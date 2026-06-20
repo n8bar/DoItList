@@ -366,6 +366,12 @@ defmodule DoItWeb.InitiativeShowLive do
   defp can_progress?(socket, task_id),
     do: socket.assigns.can_edit or leads_task?(socket, task_id)
 
+  # Sound the rejection thud on a permission denial, so a viewer / viewer+ who
+  # attempts a disallowed action gets the feedback no matter how the attempt
+  # arrived (form / click / drop, not just a key). The TaskKeys hook's "bonk"
+  # listener plays it; pairs with the put_flash error already shown.
+  defp bonk(socket), do: push_event(socket, "bonk", %{})
+
   # Set the selected task and, with it, the current user's staffing pool for it
   # (item 12.6.3/12.6.4) — recomputed only when the selection actually changes,
   # so the editor's selectors and the co/assignee gates read one ready value.
@@ -608,7 +614,7 @@ defmodule DoItWeb.InitiativeShowLive do
     initiative = socket.assigns.initiative
 
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission to add tasks.")}
+      {:noreply, socket |> put_flash(:error, "You don't have permission to add tasks.") |> bonk()}
     else
       # The form carries its own target (client-positioned, UX_GUARDRAILS
       # 6.5): empty parent_id = top level (a child of the system root);
@@ -741,7 +747,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("update_subtitle", %{"subtitle" => subtitle}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission to edit this initiative.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk())}
     else
       case Initiatives.update_subtitle(socket.assigns.initiative, subtitle) do
         {:ok, _root} ->
@@ -812,7 +818,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("set_progress_calc", %{"calc" => calc}, socket)
       when calc in ~w(leaf_average single_level) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     else
       case Initiatives.update_initiative(socket.assigns.initiative, %{"progress_calc" => calc}) do
         {:ok, updated} ->
@@ -838,7 +844,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("set_index_style", %{"index_style" => style}, socket) do
     cond do
       not socket.assigns.can_edit ->
-        {:noreply, put_flash(socket, :error, "You don't have permission.")}
+        {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
 
       not DoIt.Tasks.Index.valid_style?(style) ->
         {:noreply, put_flash(socket, :error, "Unknown numbering style.")}
@@ -882,7 +888,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("update_initiative", %{"initiative" => params}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission to edit this initiative.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk())}
     else
       initiative = socket.assigns.initiative
 
@@ -964,7 +970,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       not assign_allowed?(socket, task, uid) ->
         {:reply, %{ok: false},
-         put_flash(socket, :error, assign_denied_message(socket, task, uid))}
+         socket |> put_flash(:error, assign_denied_message(socket, task, uid)) |> bonk()}
 
       # Already the primary, or already a co — nothing to stack.
       task.assignee_id == uid or co_assignee?(task.id, uid) ->
@@ -1017,13 +1023,13 @@ defmodule DoItWeb.InitiativeShowLive do
         end
 
       true ->
-        {:noreply, put_flash(socket, :error, "You don't have permission.")}
+        {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     end
   end
 
   def handle_event("cascade_sort", params, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     else
       task = sort_target(socket, params)
       branch_count = Tasks.count_descendant_branches(task.id)
@@ -1044,7 +1050,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("set_sort", params, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     else
       task = sort_target(socket, params)
       user = socket.assigns.current_user
@@ -1089,7 +1095,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # reverts it, committed: true releases it to the patch.
   def handle_event("toggle_complete", %{"id" => id}, socket) do
     if not can_progress?(socket, String.to_integer(id)) do
-      {:reply, %{ok: false}, put_flash(socket, :error, "You don't have permission.")}
+      {:reply, %{ok: false}, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     else
       task = Tasks.get_task!(String.to_integer(id))
       user = socket.assigns.current_user
@@ -1117,7 +1123,7 @@ defmodule DoItWeb.InitiativeShowLive do
     task = socket.assigns.selected_task
 
     if not (task && can_progress?(socket, task.id)) do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     else
       user = socket.assigns.current_user
 
@@ -1230,7 +1236,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # confirmed; the row was already optimistically removed client-side.
   def handle_event("delete_task", %{"id" => id}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, put_flash(socket, :error, "You don't have permission.")}
+      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
     else
       {:noreply, commit_delete_task(socket, String.to_integer(id))}
     end
@@ -1239,7 +1245,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("move_task", %{"task_id" => task_id} = params, socket) do
     if not socket.assigns.can_edit do
       {:reply, %{ok: false, error: "forbidden"},
-       put_flash(socket, :error, "You don't have permission to move tasks.")}
+       socket |> put_flash(:error, "You don't have permission to move tasks.") |> bonk()}
     else
       task = Tasks.get_task!(task_id)
       user = socket.assigns.current_user
@@ -1682,7 +1688,7 @@ defmodule DoItWeb.InitiativeShowLive do
   defp request_cascade(socket, id, kind) do
     cond do
       not can_progress?(socket, id) ->
-        {:reply, %{ok: false}, put_flash(socket, :error, "You don't have permission.")}
+        {:reply, %{ok: false}, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
 
       skip_confirm?(socket, "cascade-complete") ->
         case commit_cascade(socket, id, kind) do
@@ -1934,6 +1940,10 @@ defmodule DoItWeb.InitiativeShowLive do
               // Expose the bonk so delegated listeners in app.js (e.g. the
               // transfer-confirm in-flight latch, item 15.16) can sound it too.
               window.DoitBonk = () => this.bonk();
+              // Server-pushed bonk: a permission denial (a viewer / viewer+
+              // attempting a disallowed action) sounds the same rejection thud,
+              // however the attempt arrived — key, form, click, or drop.
+              this.handleEvent("bonk", () => this.bonk());
               // A selection can land before we connect (DoitSelection is
               // client-only; slow longpoll connect). Replay it now so the server
               // loads the pane's comments / activity / co-assignees for it.
