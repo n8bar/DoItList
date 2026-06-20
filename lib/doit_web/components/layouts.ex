@@ -113,6 +113,32 @@ defmodule DoItWeb.Layouts do
 
         <nav class="flex items-center gap-3 text-sm">
           <%= if @current_user do %>
+            <%!-- Notifications bell — a top-level nav item at every breakpoint
+                 (NOT collapsed into the hamburger), so notifications are one tap
+                 away on mobile too. Native <details> like the other menus, so
+                 root.html.heex's data-menu light-dismiss closes it on an outside
+                 click / Escape; KeepOpen pins it open across LiveView patches
+                 (a notification arriving over PubSub must not close it). --%>
+            <details id="notif-menu" phx-hook="KeepOpen" class="relative" data-menu>
+              <%!-- Opening the bell marks notifications read (worklist 2.3) —
+                   the summary click both toggles <details> and pushes the
+                   mark-read event; harmless to re-fire on close. --%>
+              <summary
+                title="Notifications"
+                aria-label="Notifications"
+                phx-click={JS.push("mark_notifications_read")}
+                class="inline-flex items-center cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
+              >
+                <span class="relative inline-flex">
+                  <.icon name="hero-bell" class="w-5 h-5" />
+                  <.notif_dot show={@notif_unread > 0} />
+                </span>
+              </summary>
+              <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+                <.notifications_flyout recent={@notif_recent} unread={@notif_unread} scope="bell" />
+              </ul>
+            </details>
+
             <%!-- Desktop: inline nav. --%>
             <div class="hidden sm:flex items-center gap-3">
               <.link
@@ -132,29 +158,18 @@ defmodule DoItWeb.Layouts do
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
               <%!-- Account menu — same JS-free details/summary pattern as the
                    hamburger; root.html.heex's data-menu light-dismiss covers
-                   outside clicks and Escape. --%>
-              <details class="relative" data-menu>
-                <%!-- Opening the menu marks notifications read (worklist 2.3) —
-                     the summary click both toggles <details> and pushes the
-                     mark-read event; harmless to re-fire on close. --%>
+                   outside clicks and Escape. KeepOpen pins it open across
+                   LiveView patches so a PubSub re-render doesn't snap it shut. --%>
+              <details id="account-menu" phx-hook="KeepOpen" class="relative" data-menu>
                 <summary
                   title="Account menu"
-                  phx-click={JS.push("mark_notifications_read")}
                   class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
                 >
-                  <span class="relative inline-flex">
-                    <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
-                    <.notif_dot show={@notif_unread > 0} />
-                  </span>
+                  <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
                   {@current_user.name}
                   <.icon name="hero-chevron-down" class="w-3 h-3" />
                 </summary>
                 <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
-                  <.notifications_flyout
-                    recent={@notif_recent}
-                    unread={@notif_unread}
-                    scope="desktop"
-                  />
                   <li>
                     <.link
                       navigate={~p"/account"}
@@ -184,17 +199,16 @@ defmodule DoItWeb.Layouts do
               </details>
             </div>
 
-            <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too). --%>
-            <details class="relative sm:hidden" data-menu>
+            <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too).
+                 Notifications no longer live here — they own the bell, which is a
+                 top-level nav item visible on mobile. KeepOpen pins it open
+                 across patches like the other menus. --%>
+            <details id="mobile-menu" phx-hook="KeepOpen" class="relative sm:hidden" data-menu>
               <summary
-                phx-click={JS.push("mark_notifications_read")}
                 class="btn btn-sm btn-ghost cursor-pointer list-none [&::-webkit-details-marker]:hidden"
                 aria-label="Menu"
               >
-                <span class="relative inline-flex">
-                  <.icon name="hero-bars-3" class="w-6 h-6" />
-                  <.notif_dot show={@notif_unread > 0} />
-                </span>
+                <.icon name="hero-bars-3" class="w-6 h-6" />
               </summary>
               <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
                 <li>
@@ -206,7 +220,6 @@ defmodule DoItWeb.Layouts do
                     {@current_user.name}
                   </.link>
                 </li>
-                <.notifications_flyout recent={@notif_recent} unread={@notif_unread} scope="mobile" />
                 <li>
                   <.link
                     navigate={~p"/account#account-preferences"}
@@ -342,7 +355,7 @@ defmodule DoItWeb.Layouts do
   end
 
   @doc """
-  The unread red dot (worklist 2.4) overlaid on the nav avatar/hamburger. Pure
+  The unread red dot (worklist 2.4) overlaid on the nav bell. Pure
   presentation, driven by the server-derived `show` flag — no JS hook.
   """
   attr :show, :boolean, default: false
@@ -361,13 +374,13 @@ defmodule DoItWeb.Layouts do
   @doc """
   The notifications flyout (worklist 2.3): recent notifications newest-first,
   each linking its subject (the Initiative, or the deep-linked task), with a
-  "Mark all read" affordance. Lives inside the User menu / hamburger. Opening
-  the menu already marks read (the summary pushes `mark_notifications_read`);
-  this section just lists what's recent.
+  "Mark all read" affordance. Lives inside the bell dropdown. Opening the bell
+  already marks read (the summary pushes `mark_notifications_read`); this
+  section just lists what's recent.
   """
   attr :recent, :list, default: []
   attr :unread, :integer, default: 0
-  attr :scope, :string, default: "menu", doc: "id prefix — the flyout renders in both menus"
+  attr :scope, :string, default: "menu", doc: "id prefix for the flyout's elements"
 
   def notifications_flyout(assigns) do
     ~H"""

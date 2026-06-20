@@ -46,7 +46,7 @@ defmodule DoItWeb.NotificationsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/initiatives")
     assert has_element?(view, "[aria-label='Unread notifications']")
-    assert has_element?(view, "#notifications-list-desktop", "Boss")
+    assert has_element?(view, "#notifications-list-bell", "Boss")
   end
 
   test "a live push raises the dot without a reload", %{conn: conn, me: me} do
