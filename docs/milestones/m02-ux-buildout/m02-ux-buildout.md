@@ -23,7 +23,7 @@ This is the milestone that earns the first public release.
 | 4 — Account Details | [`m02.04-account-details.md`](m02.04-account-details.md) | 3 worklists | complete |
 | 5 — Wide-Width Layout | [`m02.05-wide-width-layout.md`](m02.05-wide-width-layout.md) | 12 + O&C | complete |
 | 6 — Undo & Trash | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 16 | complete |
-| 7 — App-Shell Layout | [`m02.07-app-shell-layout.md`](m02.07-app-shell-layout.md) | 6 | draft |
+| 7 — Initiative Layout & Task Tree, Revisited | [`m02.07-app-shell-layout.md`](m02.07-app-shell-layout.md) | 10 | draft |
 | 8 — Personal Workspace | [`m02.08-personal-workspace.md`](m02.08-personal-workspace.md) | 8 | draft |
 
 ## Non-Goals
