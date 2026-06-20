@@ -106,27 +106,33 @@ defmodule DoItWeb.ArchiveLiveTest do
   end
 
   describe "show page archive + hide" do
-    test "archive with no unfinished work archives immediately (no confirm)", ctx do
+    # The archive confirm opens CLIENT-SIDE now (no round trip, UX_GUARDRAILS
+    # 6.5) — the owner case predicts from the DOM, the member case via the
+    # server backstop here. So these exercise the server contract; the modal
+    # itself is [Human]/JS-verified (no e2e rig).
+    test "archive with no unfinished work commits immediately", ctx do
       {:ok, view, _html} = live(ctx.conn, ~p"/initiatives/#{ctx.active.id}")
 
-      # No incomplete tasks → archive_initiative navigates straight to the index.
-      view |> element("#archive-initiative-btn") |> render_click()
+      # Clean tree → the client pushes archive_initiative; the server commits
+      # and navigates to the index.
+      render_hook(view, "archive_initiative", %{})
       assert_redirect(view, ~p"/initiatives")
 
       assert ctx.active.id in (Initiatives.list_archived_initiatives(ctx.me) |> Enum.map(& &1.id))
     end
 
-    test "archive with unfinished work opens the confirm; Proceed archives", ctx do
+    test "archive with unfinished work needs a confirm; confirmed commits", ctx do
       _open = new_task(ctx.me, ctx.active, %{"title" => "Unfinished"})
 
       {:ok, view, _html} = live(ctx.conn, ~p"/initiatives/#{ctx.active.id}")
 
-      # Owner with an incomplete task → the confirm modal opens (no navigation).
-      view |> element("#archive-initiative-btn") |> render_click()
-      assert has_element?(view, "#completion-confirm")
+      # Without `confirmed`, the server backstop refuses to commit (it replies
+      # needs_confirm so the client opens the modal) — nothing is archived.
+      render_hook(view, "archive_initiative", %{})
+      refute ctx.active.id in (Initiatives.list_archived_initiatives(ctx.me) |> Enum.map(& &1.id))
 
-      # Proceed (the confirm form submit) archives + navigates.
-      view |> element("#confirm-form") |> render_submit()
+      # Proceed → confirmed: true commits + navigates.
+      render_hook(view, "archive_initiative", %{"confirmed" => true})
       assert_redirect(view, ~p"/initiatives")
       assert ctx.active.id in (Initiatives.list_archived_initiatives(ctx.me) |> Enum.map(& &1.id))
     end

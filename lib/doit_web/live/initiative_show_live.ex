@@ -778,20 +778,22 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   # Per-user Archive (m02.08 worklist 4). Sets `archived_at` on the caller's own
-  # membership row only — never anyone else's view. Allowed for any member
-  # regardless of completion or ownership. Item 4.2: confirm first ONLY when
-  # there's unfinished work the user would care about (a member's own incomplete
-  # assignments/co-assignments, or — as owner — any incomplete task); otherwise
-  # archive immediately. The confirm reuses the styled modal via assign_pending.
-  def handle_event("archive_initiative", _params, socket) do
+  # membership row only. Item 4.2: confirm first ONLY when there's unfinished
+  # work (a member's own incomplete assignments, or — as owner — any incomplete
+  # task). The confirm opens CLIENT-SIDE (no round trip, UX_GUARDRAILS 6.5): the
+  # owner case the client predicts from the DOM (any incomplete row); the member
+  # case is caught here as a backstop. So commit when the client already
+  # confirmed (confirmed:true) or no confirm is needed; otherwise reply
+  # needs_confirm so the client opens the modal.
+  def handle_event("archive_initiative", params, socket) do
     user = socket.assigns.current_user
     initiative = socket.assigns.initiative
 
-    if Initiatives.archive_needs_confirm?(user, initiative) do
-      {:noreply,
-       assign_pending(socket, %{kind: :archive, owner?: user.id == initiative.owner_id})}
-    else
+    if Map.get(params, "confirmed") == true or
+         not Initiatives.archive_needs_confirm?(user, initiative) do
       {:noreply, commit_archive(socket)}
+    else
+      {:reply, %{needs_confirm: true}, socket}
     end
   end
 
@@ -1328,9 +1330,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
         %{kind: :remove_member, user_id: user_id} ->
           commit_remove_member(socket, user_id)
-
-        %{kind: :archive} ->
-          commit_archive(socket)
 
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           # Failure pushed "confirm-cancelled" inside — the held flip reverts.
@@ -2368,7 +2367,8 @@ defmodule DoItWeb.InitiativeShowLive do
               <div class="flex items-center gap-2 flex-none">
                 <button
                   type="button"
-                  phx-click="archive_initiative"
+                  data-archive-btn
+                  data-am-owner={to_string(@current_user.id == @initiative.owner_id)}
                   class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition"
                 >
                   <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
@@ -2545,6 +2545,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   initiative={@initiative}
                   root_task={@root_task}
                   subtitle={@subtitle}
+                  am_owner={@current_user.id == @initiative.owner_id}
                 />
               </div>
 
@@ -2632,6 +2633,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
+      <.archive_confirm />
       <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
       <div
         :if={@pending_handoff}
@@ -3236,6 +3238,48 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  # Archive confirm — client-opened (UX_GUARDRAILS 6.5). app.js decides whether
+  # it's needed without a round trip: the owner case predicts from the DOM (any
+  # incomplete task), the member case is caught by the server backstop, which
+  # replies needs_confirm to pop this. Proceed re-sends archive with
+  # confirmed:true. One body covers both (owner / member) cases.
+  defp archive_confirm(assigns) do
+    ~H"""
+    <div
+      id="archive-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Archive this Initiative?
+        </h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          There's still unfinished work here. Archive it anyway? It moves to your Archived list,
+          where you can restore it anytime.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-archive-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-archive-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            Archive
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   # Leave-Initiative confirm — client-opened (app.js), so the dialog never waits
   # on the server (UX_GUARDRAILS 6.5). Its own title (the generic completion
   # modal read "Confirm completion change", the wrong heading for a leave).
@@ -3351,7 +3395,6 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
-  defp confirm_title(%{kind: :archive}), do: "Archive this Initiative?"
   defp confirm_title(%{kind: :cascade_sort}), do: "Large branch reorg"
   defp confirm_title(%{kind: :cascade_complete}), do: "Complete this branch?"
   defp confirm_title(%{kind: :cascade_incomplete}), do: "Reopen this branch?"
@@ -3371,16 +3414,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :remove_member, name: name}, _verb),
     do: "Remove #{name} from this Initiative? They can be re-added anytime."
-
-  defp confirm_body(%{kind: :archive, owner?: true}, _verb),
-    do:
-      "This Initiative still has incomplete tasks. Archive it anyway? " <>
-        "It moves to your Archived list, where you can restore it anytime."
-
-  defp confirm_body(%{kind: :archive}, _verb),
-    do:
-      "You still have incomplete assignments here. Archive it anyway? " <>
-        "It moves to your Archived list, where you can restore it anytime."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -3935,6 +3968,7 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :initiative, :map, required: true
   attr :root_task, :map, required: true
   attr :subtitle, :string, required: true
+  attr :am_owner, :boolean, required: true
 
   def initiative_editor(assigns) do
     ~H"""
@@ -4005,7 +4039,8 @@ defmodule DoItWeb.InitiativeShowLive do
         <button
           type="button"
           id="archive-initiative-btn"
-          phx-click="archive_initiative"
+          data-archive-btn
+          data-am-owner={to_string(@am_owner)}
           title="Archive for yourself — restorable from your Archived list"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
         >

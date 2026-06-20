@@ -992,6 +992,52 @@ document.addEventListener("keydown", (e) => {
   if (modal && !modal.hidden && modal.dataset.leaving !== "true") modal.hidden = true
 })
 
+// Archive confirm — the gate is decided WITHOUT a round trip (UX_GUARDRAILS
+// 6.5): the owner case predicts from the DOM (any incomplete task in the tree);
+// the member case defers to the server backstop, which replies needs_confirm
+// only when there's actually unfinished work. Proceed commits with confirmed.
+function pushArchive(confirmed) {
+  if (!window.DoitPush) return
+  window.DoitPush("archive_initiative", confirmed ? {confirmed: true} : {}, (reply) => {
+    if (reply && reply.needs_confirm) {
+      const m = document.getElementById("archive-confirm")
+      if (m) m.hidden = false
+    }
+  })
+}
+
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("archive-confirm")
+  const btn = e.target.closest("[data-archive-btn]")
+  if (btn) {
+    e.preventDefault()
+    const owner = btn.dataset.amOwner === "true"
+    const needsConfirm =
+      owner && !!document.querySelector('#task-tree [data-task-row][data-done="false"]')
+    if (needsConfirm && modal) {
+      modal.hidden = false
+    } else {
+      pushArchive(false)
+    }
+    return
+  }
+  if (!modal || modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-archive-cancel]")) {
+    modal.hidden = true
+    return
+  }
+  if (e.target.closest("[data-archive-proceed]")) {
+    modal.hidden = true
+    pushArchive(true)
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const m = document.getElementById("archive-confirm")
+  if (m && !m.hidden) m.hidden = true
+})
+
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
 // delete confirms): the dialog's content is client-known, so it opens at the
 // click of a member's transfer (key) button — no round trip before the owner
