@@ -1931,57 +1931,6 @@ defmodule DoItWeb.InitiativeShowLive do
           class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
         >
         </div>
-        <%!-- Page-level chrome: the close/role row stays full-width above the
-             shell. The initiative header (title + roll-up bar + New List) moved
-             into the center column (m02.07 item 1.2). --%>
-        <div class="mb-4">
-          <%!-- Close (back to the index) + role on the same row. The little red
-               X (item 12.7) reads as "close this Initiative" rather than a plain
-               back arrow — matching the task pane's close affordance. --%>
-          <div class="flex items-center justify-between gap-2">
-            <.link
-              navigate={~p"/initiatives"}
-              title="Close this Initiative — back to all Initiatives"
-              class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
-            >
-              <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
-                <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
-              </span>
-              Close Initiative
-            </.link>
-            <div class="flex items-center gap-3">
-              <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
-                   that way; the tooltip names the action. Ctrl+Z / Ctrl+Shift+Z
-                   drive the same handlers (KbdNav hook). --%>
-              <div class="flex items-center gap-1">
-                <button
-                  type="button"
-                  id="undo-button"
-                  disabled={is_nil(@undo_label)}
-                  title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
-                  aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
-                  class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
-                >
-                  <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  id="redo-button"
-                  disabled={is_nil(@redo_label)}
-                  title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
-                  aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
-                  class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
-                >
-                  <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
-                </button>
-              </div>
-              <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
-                Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <%!-- Mobile only (.05.04): New List + a Show/Hide Members toggle on one
              row under the progress bar; the members section collapses inline,
              client-side. Desktop uses the title-row New List + aside panel. --%>
@@ -2031,15 +1980,65 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
              shell — the page stops scrolling and each column owns its own
              vertical scroll. Below lg: it's a plain grid and the page scrolls,
-             unchanged. The calc trims the top header, the close/role row, and
-             the container padding so the shell fits without a page scrollbar. --%>
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-10.5rem)] lg:items-stretch lg:overflow-hidden">
-          <%!-- Center column. At lg:+ it's a flex column: the header is a
-               flex-none sibling above the tree's own scroll box (item 1.2),
-               so the tree scrolls beneath a header that never moves. Below lg:
-               it's a normal block and the page scrolls. min-w-0 keeps the
-               column from expanding to fit deep rows. --%>
+             unchanged. The calc trims the top header and the container padding
+             so the shell fits without a page scrollbar. The close/role row now
+             lives inside the center column (it used to sit full-width above the
+             shell), so it no longer subtracts from the viewport height. --%>
+        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-8rem)] lg:items-stretch lg:overflow-hidden">
+          <%!-- Center column. At lg:+ it's a flex column: the close/role row and
+               header are flex-none siblings above the tree's own scroll box
+               (item 1.2), so the tree scrolls beneath chrome that never moves.
+               Below lg: it's a normal block and the page scrolls. min-w-0 keeps
+               the column from expanding to fit deep rows. --%>
           <div class="min-w-0 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden">
+            <%!-- Close (back to the index) + role on the same row, scoped to the
+                 center column so it aligns with the header beneath it rather
+                 than spanning the right pane. The little red X (item 12.7) reads
+                 as "close this Initiative" rather than a plain back arrow —
+                 matching the task pane's close affordance. --%>
+            <div class="mb-4 flex items-center justify-between gap-2">
+              <.link
+                navigate={~p"/initiatives"}
+                title="Close this Initiative — back to all Initiatives"
+                class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
+              >
+                <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
+                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+                </span>
+                Close Initiative
+              </.link>
+              <div class="flex items-center gap-3">
+                <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
+                     that way; the tooltip names the action. Ctrl+Z / Ctrl+Shift+Z
+                     drive the same handlers (KbdNav hook). --%>
+                <div class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    id="undo-button"
+                    disabled={is_nil(@undo_label)}
+                    title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
+                    aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
+                    class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                  >
+                    <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    id="redo-button"
+                    disabled={is_nil(@redo_label)}
+                    title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
+                    aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
+                    class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                  >
+                    <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
+                  </button>
+                </div>
+                <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+                  Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+                </div>
+              </div>
+            </div>
+
             <.initiative_header
               initiative={@initiative}
               subtitle={@subtitle}
@@ -2109,14 +2108,14 @@ defmodule DoItWeb.InitiativeShowLive do
                    exact bg token (white / zinc-950), with a dark-mode variant. --%>
               <div
                 aria-hidden="true"
-                class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-6 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
+                class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
               >
               </div>
               <%!-- Bottom fade: visible while more content sits below (i.e. NOT
                    at the end). Same click-through + theme-match rules. --%>
               <div
                 aria-hidden="true"
-                class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-6 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
+                class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
               >
               </div>
             </div>
@@ -2918,13 +2917,30 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- Positional task index (item 1.7): a display-only label between the
              botanical icon and the pills, derived from sibling position at every
              level. Rendered only when the Initiative's index style isn't "none"
-             (empty label = no element). --%>
+             (empty label = no element). The copy button (delegated handler in
+             app.js, data-copy-index) writes the label to the clipboard; it's
+             revealed on row hover / keyboard focus, and always shown on touch
+             devices (no hover) so it stays tappable. --%>
         <span
           :if={@index_label != ""}
           data-task-index
-          class="flex-none font-mono text-xs font-medium text-zinc-500 dark:text-zinc-400 tabular-nums select-none"
+          class="group/idx flex-none inline-flex items-center gap-1 font-mono text-xs font-medium text-zinc-500 dark:text-zinc-400 tabular-nums select-none"
         >
           {@index_label}
+          <button
+            type="button"
+            data-copy-index={@index_label}
+            aria-label={"Copy index #{@index_label}"}
+            title="Copy index"
+            class="flex-none inline-flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
+          >
+            <span data-copy-icon class="inline-flex">
+              <.icon name="hero-clipboard-document" class="w-3 h-3" />
+            </span>
+            <span data-copied-icon class="hidden text-emerald-600 dark:text-emerald-400">
+              <.icon name="hero-check" class="w-3 h-3" />
+            </span>
+          </button>
         </span>
         <%!-- Row 1: attribute chips. Priority + assignee always occupy
              a slot; defaults render as an empty dashed placeholder of the same

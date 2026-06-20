@@ -369,6 +369,9 @@ function syncRail() {
 // it never touches the server. It teleports between phx-update="ignore"
 // slots, so no patch can disturb it mid-typing; create_task reads the two
 // hidden inputs the client sets here.
+// The placeholder gets a hint that Up/Down relocate the form (item 2.2): the
+// base intent + the reposition signifier, so the keyboard affordance is visible.
+const ADD_MOVE_HINT = "  (↑↓ to move)"
 const DoitAddForm = {
   form() { return document.getElementById("add-task-form") },
   open(slot, parentId, afterId, placeholder) {
@@ -378,7 +381,8 @@ const DoitAddForm = {
     form.querySelector("[name='parent_id']").value = parentId || ""
     form.querySelector("[name='after_id']").value = afterId || ""
     const input = form.querySelector("[name='title']")
-    input.placeholder = placeholder
+    input.dataset.basePlaceholder = placeholder
+    input.placeholder = placeholder + ADD_MOVE_HINT
     input.value = ""
     input.focus()
   },
@@ -398,6 +402,62 @@ const DoitAddForm = {
       "New task..."
     )
   },
+  isOpen() {
+    const form = this.form()
+    const home = document.getElementById("add-task-home")
+    return !!(form && home && form.parentElement !== home)
+  },
+  // The current slot is the form's parent — that's where it actually sits in
+  // the tree, so the walk reads its real position rather than tracking state
+  // that a teleport could desync.
+  currentSlot() {
+    const form = this.form()
+    return this.isOpen() ? form.parentElement : null
+  },
+  // Every spot the form can land: the root slot, each task's first-child slot,
+  // and each task's sibling-after slot — in document (visual) order. The slots
+  // are `empty:hidden` when unoccupied, so we can't gate on offsetParent (it'd
+  // hide all but the current one). Instead skip slots whose task sits in a
+  // collapsed branch — there's no visible row to nest under or follow there.
+  slots() {
+    return [...document.querySelectorAll(
+      "#add-slot-root, [id^='add-slot-'], [id^='add-after-']"
+    )].filter((s) => {
+      if (s.id === "add-slot-root") return true
+      return !s.closest("ul.collapsed-peek")
+    })
+  },
+  // Derive parent_id / after_id from a slot's id, mirroring openRoot/Child/Sibling.
+  placeFor(slot) {
+    const id = slot.id
+    if (id === "add-slot-root") return {parentId: "", afterId: ""}
+    if (id.startsWith("add-slot-")) return {parentId: id.slice("add-slot-".length), afterId: ""}
+    const taskId = id.slice("add-after-".length)
+    const li = document.getElementById("task-" + taskId)
+    const parentLi = li && li.parentElement.closest("li[data-task-id]")
+    return {parentId: parentLi ? parentLi.dataset.taskId : "", afterId: taskId}
+  },
+  // Walk the insertion point up (dir -1) or down (dir +1) one slot, carrying the
+  // typed title along. Returns false at the ends so the caller can bonk.
+  move(dir) {
+    const form = this.form()
+    const cur = this.currentSlot()
+    if (!form || !cur) return false
+    const slots = this.slots()
+    const j = slots.indexOf(cur) + dir
+    const next = slots[j]
+    if (!next) return false
+    const input = form.querySelector("[name='title']")
+    const title = input.value
+    const {parentId, afterId} = this.placeFor(next)
+    next.appendChild(form)
+    form.querySelector("[name='parent_id']").value = parentId || ""
+    form.querySelector("[name='after_id']").value = afterId || ""
+    input.value = title
+    input.focus()
+    form.scrollIntoView({block: "nearest"})
+    return true
+  },
   close() {
     const form = this.form()
     const home = document.getElementById("add-task-home")
@@ -405,6 +465,34 @@ const DoitAddForm = {
   },
 }
 window.DoitAddForm = DoitAddForm
+
+// Keyboard ergonomics for the add-task form (item 2). Scoped to its title box,
+// so these fire even while it's focused — the global TaskKeys handler suppresses
+// itself in a field, so the adder owns its own keys here. Capture phase keeps it
+// ahead of any field-level default, and the explicit target check means it never
+// touches other inputs.
+document.addEventListener("keydown", (e) => {
+  const input = e.target
+  if (!input || input.name !== "title" || !input.closest("#add-task-form")) return
+  // Esc closes the adder and discards the typed title — no confirm (Esc edits no
+  // text, so it's a safe exception to keyboard-suppression). It fires from inside
+  // the box; the form isn't a modal, so it doesn't collide with the delete /
+  // transfer Esc handlers (those only act on an open modal).
+  if (e.key === "Escape") {
+    e.preventDefault()
+    DoitAddForm.close()
+    return
+  }
+  // Up / Down walk the insertion point through the tree's child + sibling slots;
+  // the typed title rides along. Left / Right stay with the text cursor.
+  // preventDefault stops the caret from jumping to line start/end. A bonk marks
+  // the ends of the walk.
+  if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    e.preventDefault()
+    const moved = DoitAddForm.move(e.key === "ArrowUp" ? -1 : 1)
+    if (!moved && window.DoitBonk) window.DoitBonk()
+  }
+}, true)
 
 document.addEventListener("click", (e) => {
   if (e.target.closest("[data-add-root]")) return DoitAddForm.openRoot()
@@ -430,7 +518,53 @@ document.addEventListener("click", (e) => {
     const d = document.getElementById(closer.dataset.detailsClose)
     if (d) d.open = false
   }
+
+  // Copy a task's positional index to the clipboard. The button is a child of
+  // [data-task-row], so the row-click handler's interactive guard already skips
+  // selection for this click — we just do the copy. navigator.clipboard needs a
+  // secure context; fall back to a hidden textarea + execCommand otherwise.
+  const copyIndex = e.target.closest("[data-copy-index]")
+  if (copyIndex) {
+    const text = copyIndex.dataset.copyIndex || ""
+    copyToClipboard(text)
+    flashCopied(copyIndex)
+    return
+  }
 })
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).catch(() => fallbackCopy(text))
+  } else {
+    fallbackCopy(text)
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement("textarea")
+  ta.value = text
+  ta.setAttribute("readonly", "")
+  ta.style.position = "fixed"
+  ta.style.opacity = "0"
+  document.body.appendChild(ta)
+  ta.select()
+  try { document.execCommand("copy") } catch (_) {}
+  document.body.removeChild(ta)
+}
+
+// Briefly swap the clipboard icon for a check to confirm the copy, then revert.
+function flashCopied(btn) {
+  const copyIcon = btn.querySelector("[data-copy-icon]")
+  const copiedIcon = btn.querySelector("[data-copied-icon]")
+  if (!copyIcon || !copiedIcon) return
+  copyIcon.classList.add("hidden")
+  copiedIcon.classList.remove("hidden")
+  clearTimeout(btn._copyTimer)
+  btn._copyTimer = setTimeout(() => {
+    copiedIcon.classList.add("hidden")
+    copyIcon.classList.remove("hidden")
+  }, 1200)
+}
 
 // Optimistic task creation (item 15.15, UX_GUARDRAILS §6): pop a placeholder
 // row in at submit, before the server trip — no reason to wait on the round
