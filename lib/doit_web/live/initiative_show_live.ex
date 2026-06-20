@@ -2752,6 +2752,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <div
         id="initiative-chat"
         phx-hook=".Chat"
+        data-chat-log-id={@chat_log_id}
         class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
       >
         <button
@@ -2759,10 +2760,19 @@ defmodule DoItWeb.InitiativeShowLive do
           data-chat-toggle
           class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
         >
-          <span class="flex items-center gap-1.5">
+          <span class="flex flex-none items-center gap-1.5">
             <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
           </span>
-          <span data-chat-chevron class="inline-flex transition-transform">
+          <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
+               .Chat hook fills + shows this on a new message while closed, and
+               clears it on open. Dimmed italic, single-line ellipsis. --%>
+          <span
+            data-chat-preview
+            hidden
+            class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
+          >
+          </span>
+          <span data-chat-chevron class="inline-flex flex-none transition-transform">
             <.icon name="hero-chevron-up" class="w-4 h-4" />
           </span>
         </button>
@@ -2789,7 +2799,10 @@ defmodule DoItWeb.InitiativeShowLive do
               </span>
               <div class="min-w-0">
                 <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
-                <div class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100">
+                <div
+                  data-chat-body
+                  class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                >
                   {m.body}
                 </div>
               </div>
@@ -2827,9 +2840,13 @@ defmodule DoItWeb.InitiativeShowLive do
               this.toggle = this.el.querySelector("[data-chat-toggle]");
               this.panel = this.el.querySelector("[data-chat-panel]");
               this.chevron = this.el.querySelector("[data-chat-chevron]");
+              this.preview = this.el.querySelector("[data-chat-preview]");
               this.log = this.el.querySelector("[data-chat-log]");
               this.form = this.el.querySelector("[data-chat-form]");
               this.input = this.el.querySelector("[data-chat-input]");
+              // Track the server's monotonic chat counter to spot NEW messages
+              // in updated() (vs. unrelated re-renders).
+              this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
 
               // Open/closed is pure view state, remembered locally — no round trip.
               this.KEY = "doit:chat-open";
@@ -2849,18 +2866,42 @@ defmodule DoItWeb.InitiativeShowLive do
             },
             setOpen(open) {
               this.panel.hidden = !open;
-              if (this.chevron) this.chevron.classList.toggle("rotate-180", !open);
+              // Bottom-docked panel opens upward: chevron points up when closed
+              // ("open me"), down when open ("minimize"). Base icon is up, so
+              // rotate only when open.
+              if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
               localStorage.setItem(this.KEY, open ? "1" : "0");
               if (open) {
+                this.hidePreview(); // reading them now — clear the collapsed peek
                 this.scrollToBottom();
                 this.input.focus();
               }
             },
+            hidePreview() {
+              if (this.preview) {
+                this.preview.hidden = true;
+                this.preview.textContent = "";
+              }
+            },
+            showLatestPreview() {
+              if (!this.preview || !this.log) return;
+              const bodies = this.log.querySelectorAll("[data-chat-body]");
+              const last = bodies[bodies.length - 1];
+              if (!last) return;
+              this.preview.textContent = last.textContent.trim();
+              this.preview.hidden = false;
+            },
             scrollToBottom() {
               if (this.log) this.log.scrollTop = this.log.scrollHeight;
             },
-            // A new message re-renders the log — keep it pinned to the latest.
             updated() {
+              // A new message bumps the server's chat-log id. While collapsed,
+              // peek the latest in the title bar; while open, keep it scrolled.
+              const id = parseInt(this.el.dataset.chatLogId || "0", 10);
+              if (id > this._lastLogId) {
+                this._lastLogId = id;
+                if (this.panel.hidden) this.showLatestPreview();
+              }
               if (this.panel && !this.panel.hidden) this.scrollToBottom();
             },
           }
