@@ -34,8 +34,8 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 ### 6. Loading & action feedback
 6.1 Operations longer than ~100ms show progress immediately.
 6.2 Optimistic UI for fast operations: reflect the action instantly when likely to succeed; reconcile on error.
-6.3 Confirmations only for actions that are destructive, irreversible, or whose side effects reach beyond what the user is looking at (e.g., a move that silently flips an ancestor's completion). Never gate ordinary actions behind "are you sure?" — and surprise-scope confirmations must be suppressible.
-6.4 Prefer undo over confirm where feasible — let the user act, with a short window to reverse.
+6.3 Confirmations only for actions that are destructive, irreversible, or whose side effects reach beyond what the user is looking at (e.g., a move that silently flips an ancestor's completion). These cases warrant a confirm *even when the action is undoable*, and take precedence over 6.4. Never gate ordinary actions behind "are you sure?" — and surprise-scope confirmations must be suppressible.
+6.4 Otherwise — for actions 6.3 doesn't name — prefer undo over confirm where feasible: let the user act, with a short window to reverse. Undo fits when the user sees the result and can choose to reverse it; a confirm (6.3) fits when the effect can land off-screen, since you can't undo a change you never noticed.
 6.5 Interactions that only change view state — selection, expand/collapse, focus — never wait on the network. Opening a confirmation dialog counts when its content is already client-known.
 6.6 Confirmations preserve optimism. A confirm that interrupts an optimistic action must not visually undo it while the user decides — Cancel reverts it, Proceed carries it through.
 
