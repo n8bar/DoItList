@@ -23,7 +23,7 @@ Stub — to be expanded. Not yet scoped into arcs.
 
 ## Optional
 
-- **Task indexes — deferred extras.** Follow-ups to the fixed index styles from [`m02.07`](../m02-ux-buildout/m02.07-app-shell-layout.md) (item 1.7): **Custom Outline** (pick the glyph set per level), a **depth-flat variant** (`1.`, `2.` per level, no ancestor prefix), and a **continue-across-collapse** toggle. If deferred, it doesn't make the first release — and that's fine.
+- **Task indexes — deferred extras.** Follow-ups to the fixed index styles from [`m02.07`](../m02-ux-buildout/m02.07-layout+task-tree-revisited.md) (item 1.7): **Custom Outline** (pick the glyph set per level), a **depth-flat variant** (`1.`, `2.` per level, no ancestor prefix), and a **continue-across-collapse** toggle. If deferred, it doesn't make the first release — and that's fine.
 
 ## Preconditions
 
