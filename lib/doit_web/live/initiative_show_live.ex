@@ -1126,7 +1126,8 @@ defmodule DoItWeb.InitiativeShowLive do
             {_count, _} =
               Initiatives.remove_member(
                 socket.assigns.initiative.id,
-                socket.assigns.current_user.id
+                socket.assigns.current_user.id,
+                socket.assigns.current_user
               )
           end
 
@@ -1282,7 +1283,7 @@ defmodule DoItWeb.InitiativeShowLive do
           promote_co: promote_co
         )
 
-      {_n, _} = Initiatives.remove_member(initiative.id, pending.user_id)
+      {_n, _} = Initiatives.remove_member(initiative.id, pending.user_id, socket.assigns.current_user)
 
       {:noreply,
        socket
@@ -1326,7 +1327,7 @@ defmodule DoItWeb.InitiativeShowLive do
           {:noreply, put_flash(socket, :error, "No user with that email or username.")}
 
         user ->
-          case Initiatives.add_member(initiative.id, user.id, role) do
+          case Initiatives.add_member(initiative.id, user.id, role, socket.assigns.current_user) do
             {:ok, _} ->
               {:noreply,
                socket
@@ -1557,7 +1558,7 @@ defmodule DoItWeb.InitiativeShowLive do
   defp commit_remove_member(socket, user_id) do
     initiative = socket.assigns.initiative
     member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
-    {_count, _} = Initiatives.remove_member(initiative.id, user_id)
+    {_count, _} = Initiatives.remove_member(initiative.id, user_id, socket.assigns.current_user)
 
     socket
     |> assign_pending(nil)
