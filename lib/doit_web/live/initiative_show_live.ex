@@ -1328,9 +1328,6 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :cascade_sort, task_id: task_id} ->
           commit_cascade_sort(socket, Tasks.get_task!(task_id))
 
-        %{kind: :remove_member, user_id: user_id} ->
-          commit_remove_member(socket, user_id)
-
         %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
           # Failure pushed "confirm-cancelled" inside — the held flip reverts.
           case commit_cascade(socket, id, kind) do
@@ -1429,24 +1426,26 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
+  # The "Remove X?" confirm opens client-side (app.js, UX_GUARDRAILS 6.5 — the
+  # name is client-known); only Proceed pushes here. A member holding
+  # assignments still routes to the hand-off modal — its content (count + who to
+  # reassign to) is server data, so that's a legitimate round trip — otherwise
+  # commit the removal.
   def handle_event("remove_member", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
     user_id = String.to_integer(user_id)
 
-    member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
-    name = (member && member.user.name) || "this member"
-
     cond do
       not socket.assigns.can_admin ->
-        {:noreply, put_flash(socket, :error, "Only the owner can remove members.")}
+        {:noreply, socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
 
       user_id == initiative.owner_id ->
-        {:noreply, put_flash(socket, :error, "The Initiative's owner can't be removed.")}
+        {:noreply, socket |> put_flash(:error, "The Initiative's owner can't be removed.") |> bonk()}
 
-      # Holds assignments → the hand-off modal (13.5), so removal leaves no
-      # struck residue. Always asks (it needs decisions), even if the plain
-      # remove confirm was suppressed.
       Tasks.member_assignment_count(initiative.id, user_id) > 0 ->
+        member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
+        name = (member && member.user.name) || "this member"
+
         {:noreply,
          assign(socket, :pending_handoff, %{
            user_id: user_id,
@@ -1455,11 +1454,8 @@ defmodule DoItWeb.InitiativeShowLive do
            promote_default: initiative.auto_promote_co_assignees
          })}
 
-      skip_confirm?(socket, "remove-member") ->
-        {:noreply, commit_remove_member(socket, user_id)}
-
       true ->
-        {:noreply, assign_pending(socket, %{kind: :remove_member, user_id: user_id, name: name})}
+        {:noreply, commit_remove_member(socket, user_id)}
     end
   end
 
@@ -2637,6 +2633,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
       <.archive_confirm />
+      <.remove_member_confirm :if={@can_admin} />
       <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
       <div
         :if={@pending_handoff}
@@ -3053,7 +3050,6 @@ defmodule DoItWeb.InitiativeShowLive do
   # (a destructive action always confirms).
   defp confirm_class(%{kind: kind}) when kind in [:move, :create], do: "completion-flip"
   defp confirm_class(%{kind: :cascade_sort}), do: "cascade-sort"
-  defp confirm_class(%{kind: :remove_member}), do: "remove-member"
 
   defp confirm_class(%{kind: kind}) when kind in [:cascade_complete, :cascade_incomplete],
     do: "cascade-complete"
@@ -3249,6 +3245,45 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  # Remove-member confirm — client-opened (UX_GUARDRAILS 6.5; the name is
+  # client-known). app.js fills the name and opens it; only Proceed pushes
+  # remove_member, which commits or escalates to the server hand-off modal for
+  # a member holding assignments.
+  defp remove_member_confirm(assigns) do
+    ~H"""
+    <div
+      id="remove-member-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Remove member</h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          Remove <span data-remove-name class="font-medium">this member</span>
+          from this Initiative? They can be re-added anytime.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-remove-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-remove-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
+          >
+            Remove
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   # Archive confirm — client-opened (UX_GUARDRAILS 6.5). app.js decides whether
   # it's needed without a round trip: the owner case predicts from the DOM (any
   # incomplete task), the member case is caught by the server backstop, which
@@ -3422,9 +3457,6 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :cascade_incomplete, title: t}, _verb),
     do: "Reopen \"#{t}\" and all its subtasks?"
-
-  defp confirm_body(%{kind: :remove_member, name: name}, _verb),
-    do: "Remove #{name} from this Initiative? They can be re-added anytime."
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)
@@ -4406,14 +4438,16 @@ defmodule DoItWeb.InitiativeShowLive do
             >
               <.icon name="hero-key" class="w-3.5 h-3.5" />
             </button>
-            <%!-- The initiative's owner row is never removable. Removal runs
-                 through the suppressible confirm (.03.01.11, class
-                 "remove-member") — re-addable, so "don't ask again" is fine. --%>
+            <%!-- The initiative's owner row is never removable. The "Remove X?"
+                 confirm opens client-side (#remove-member-confirm, app.js); only
+                 Proceed pushes remove_member, which commits or — for a member
+                 holding assignments — escalates to the server hand-off modal. --%>
             <button
               :if={@can_admin && m.user_id != @owner_id}
               type="button"
-              phx-click="remove_member"
-              phx-value-user-id={m.user_id}
+              data-remove-member
+              data-user-id={m.user_id}
+              data-user-name={m.user.name}
               title={"Remove #{m.user.name} from this Initiative"}
               aria-label={"Remove #{m.user.name}"}
               class="inline-flex items-center justify-center w-5 h-5 rounded text-zinc-400 hover:text-red-600 hover:bg-red-50 dark:text-zinc-500 dark:hover:text-red-400 dark:hover:bg-red-950/40"

@@ -1038,6 +1038,45 @@ document.addEventListener("keydown", (e) => {
   if (m && !m.hidden) m.hidden = true
 })
 
+// Remove-member confirm — opens client-side (the name is client-known,
+// UX_GUARDRAILS 6.5). Proceed pushes remove_member; the server commits or, for
+// a member holding assignments, returns the (server-data) hand-off modal.
+function pushRemoveMember(userId) {
+  if (window.DoitPush && userId) window.DoitPush("remove_member", {"user-id": userId})
+}
+
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("remove-member-confirm")
+  const btn = e.target.closest("[data-remove-member]")
+  if (btn) {
+    e.preventDefault()
+    if (!modal) {
+      pushRemoveMember(btn.dataset.userId)
+      return
+    }
+    modal.dataset.userId = btn.dataset.userId
+    const nameEl = modal.querySelector("[data-remove-name]")
+    if (nameEl) nameEl.textContent = btn.dataset.userName || "this member"
+    modal.hidden = false
+    return
+  }
+  if (!modal || modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-remove-cancel]")) {
+    modal.hidden = true
+    return
+  }
+  if (e.target.closest("[data-remove-proceed]")) {
+    modal.hidden = true
+    pushRemoveMember(modal.dataset.userId)
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const m = document.getElementById("remove-member-confirm")
+  if (m && !m.hidden) m.hidden = true
+})
+
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
 // delete confirms): the dialog's content is client-known, so it opens at the
 // click of a member's transfer (key) button — no round trip before the owner
