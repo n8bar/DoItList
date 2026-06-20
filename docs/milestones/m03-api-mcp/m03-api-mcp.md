@@ -26,8 +26,6 @@ Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API whi
 
 ## Design Decisions
 
-_Draft — pending operator approval._
-
 **Scope: structural-first.** M03 delivers the structural surface — tree CRUD (create / read / update / move / reorder / reparent), roll-up progress, membership — plus the three supporting surfaces below. The prose/narrative layer rides existing fields; no new editor.
 
 **The four carriers** — how the markdown docs' content maps onto an Initiative:
@@ -41,7 +39,7 @@ _Draft — pending operator approval._
 
 **Q1 — API transport: REST / JSON.** Resource-and-verb endpoints over plain JSON; a whole-tree read returns the nested Initiative in one response (already assembled server-side for the LiveView); targeted `PATCH` / `POST` for surgical edits. GraphQL rejected — its field-selection flexibility isn't what an MCP/CLI needs, and it adds a schema/resolver layer for no consumer benefit.
 
-**Q2 — Authentication: per-user API tokens.** A user mints a token in account settings; clients send it as `Authorization: Bearer <token>` and thereby act as that user, inheriting their `owner` / `editor` / `viewer` roles unchanged — the token adds *identification*, not a new authorization system. Revocable. OAuth (third-party-acting-on-your-behalf) is deferred and can later layer onto the same token-checking core.
+**Q2 — Authentication: per-user API tokens.** A user mints a token in account settings; clients send it as `Authorization: Bearer <token>` and thereby act as that user, inheriting their `owner` / `editor` / `viewer` roles unchanged — the token adds *identification*, not a new authorization system. Revocable. Whether to upgrade to **scoped / fine-grained tokens** (per-Initiative or read-only) is a refinement to settle at implementation time — start broad-and-revocable, tighten only if wanted. OAuth (third-party-acting-on-your-behalf) is deferred and can later layer onto the same token-checking core.
 
 **MCP transport: stdio-first (smooth local path).** DoItList ships a thin **stdio** MCP adapter — a small local process Claude Code launches directly (`claude mcp add …`), authenticated by the per-user token passed via an env var. No hosting, no OAuth: the local Claude Code experience "just works." Remote **streamable-HTTP** (for hosted clients like Claude Desktop / third parties) is deferred to hosting (M06) and is *additive*, not a precondition. Whatever MCP runtime/library we choose **must** support this stdio/local path without forcing a remote/OAuth setup.
 
