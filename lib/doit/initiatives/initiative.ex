@@ -29,6 +29,10 @@ defmodule DoIt.Initiatives.Initiative do
     # rolled-up progress (its computed_progress).
     field :subtitle, :string, virtual: true
     field :progress, :integer, virtual: true
+    # The viewing member's per-user archive/hide state (m02.08 worklist 4),
+    # loaded for the Archived list so it can split archived from hidden rows.
+    field :archived?, :boolean, virtual: true
+    field :hidden?, :boolean, virtual: true
 
     belongs_to :owner, User
     # The system-managed root task: the Initiative IS this task (its title is the

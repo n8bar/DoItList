@@ -13,18 +13,24 @@ defmodule DoIt.Initiatives do
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.{Initiative, InitiativeMember, Collaborator}
   alias DoIt.Notifications
-  alias DoIt.Tasks.Task
+  alias DoIt.Tasks.{Task, TaskCoAssignee}
 
   @doc """
   List initiatives the given user can see, with their role on each loaded
   into the virtual `:my_role` field. Owner-held initiatives sort first; ties
   break by `updated_at` descending.
+
+  Per-user archive + hide (m02.08 worklist 4): an Initiative the caller has
+  archived or hidden drops from their **active** list — both flags live on the
+  caller's own membership row, so this never affects anyone else's view. The
+  archived ones resurface via `list_archived_initiatives/1`.
   """
   def list_visible_initiatives(%User{id: user_id}) do
     from(i in Initiative,
       where: is_nil(i.trashed_at),
       join: m in InitiativeMember,
       on: m.initiative_id == i.id and m.user_id == ^user_id,
+      where: is_nil(m.archived_at) and is_nil(m.hidden_at),
       left_join: rt in Task,
       on: rt.id == i.root_task_id,
       select: %{
@@ -269,6 +275,129 @@ defmodule DoIt.Initiatives do
     )
     |> Repo.all()
   end
+
+  # --- Per-user Archive + Hide (m02.08 worklist 4) -------------------------
+  #
+  # Both flags live on the **caller's own** membership row, so they only ever
+  # move an Initiative out of *their* active list — never anyone else's view.
+  # This is distinct from owner-level Trash (global, soft-deletes for everyone).
+  #
+  #   archived_at → the restorable Archived list (the heavier "put it away")
+  #   hidden_at   → a lighter "off my dashboard" hide; unhide from the same list
+
+  @doc """
+  Archive `initiative` for `user` — set `archived_at` on their own membership
+  row, dropping it from their active Initiatives into their Archived list.
+  Per-user; allowed on any Initiative regardless of completion or ownership.
+  Returns `{:ok, count}` (1 when a membership row was updated, 0 otherwise).
+  """
+  def archive_initiative(%User{} = user, %Initiative{} = initiative),
+    do: set_member_flag(user, initiative, :archived_at, now())
+
+  @doc "Restore an archived Initiative to `user`'s active list (clear `archived_at`)."
+  def unarchive_initiative(%User{} = user, %Initiative{} = initiative),
+    do: set_member_flag(user, initiative, :archived_at, nil)
+
+  @doc """
+  Hide `initiative` for `user` — set `hidden_at` on their own membership row.
+  The lighter "off my dashboard" move; the Initiative drops from their active
+  list and reappears (off by default) in their Archived list.
+  """
+  def hide_initiative(%User{} = user, %Initiative{} = initiative),
+    do: set_member_flag(user, initiative, :hidden_at, now())
+
+  @doc "Unhide an Initiative for `user` (clear `hidden_at`)."
+  def unhide_initiative(%User{} = user, %Initiative{} = initiative),
+    do: set_member_flag(user, initiative, :hidden_at, nil)
+
+  # Set one per-user flag on exactly the caller's own membership row. The
+  # user_id + initiative_id scoping is what guarantees per-user isolation: no
+  # other member's row is ever touched.
+  defp set_member_flag(%User{id: user_id}, %Initiative{id: initiative_id}, field, value) do
+    {count, _} =
+      from(m in InitiativeMember,
+        where: m.user_id == ^user_id and m.initiative_id == ^initiative_id
+      )
+      |> Repo.update_all(set: [{field, value}])
+
+    {:ok, count}
+  end
+
+  @doc """
+  The Initiatives `user` has archived or hidden (m02.08 worklist 4) — their
+  Archived list. Each row carries the per-user `:archived?` / `:hidden?` flags
+  so the UI can keep hidden items behind the Show-hidden toggle. Newest action
+  first (the latest archive/hide stamp). Trashed Initiatives are excluded.
+  """
+  def list_archived_initiatives(%User{id: user_id}) do
+    from(i in Initiative,
+      where: is_nil(i.trashed_at),
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id == ^user_id,
+      where: not is_nil(m.archived_at) or not is_nil(m.hidden_at),
+      select: %{
+        i
+        | my_role: m.role,
+          archived?: not is_nil(m.archived_at),
+          hidden?: not is_nil(m.hidden_at)
+      },
+      order_by: [desc: fragment("COALESCE(?, ?)", m.archived_at, m.hidden_at)]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Whether archiving `initiative` should confirm first for `user` (m02.08 item
+  4.2): only when there's unfinished work they'd care about. For the Initiative
+  **owner**, that's *any* incomplete (non-"done") task; for a regular member,
+  *their own* incomplete primary assignments or co-assignments. The system root
+  task is never counted. False → archive immediately, no confirm.
+  """
+  def archive_needs_confirm?(%User{} = user, %Initiative{} = initiative) do
+    if user.id == initiative.owner_id do
+      owner_has_incomplete_task?(initiative)
+    else
+      member_has_incomplete_assignment?(user, initiative)
+    end
+  end
+
+  # Any incomplete (non-"done"), live, non-root task in the Initiative.
+  defp owner_has_incomplete_task?(%Initiative{id: id, root_task_id: root_id}) do
+    Repo.exists?(
+      from(t in Task,
+        where:
+          t.initiative_id == ^id and t.status != "done" and is_nil(t.deleted_at) and
+            t.id != ^root_id
+      )
+    )
+  end
+
+  # The member's own incomplete primary assignments OR co-assignments in this
+  # Initiative — live, non-"done" tasks. The system root carries no assignee, so
+  # it never matches.
+  defp member_has_incomplete_assignment?(%User{id: user_id}, %Initiative{id: id}) do
+    primary? =
+      Repo.exists?(
+        from(t in Task,
+          where:
+            t.initiative_id == ^id and t.assignee_id == ^user_id and t.status != "done" and
+              is_nil(t.deleted_at)
+        )
+      )
+
+    primary? or
+      Repo.exists?(
+        from(c in TaskCoAssignee,
+          join: t in Task,
+          on: t.id == c.task_id,
+          where:
+            c.user_id == ^user_id and t.initiative_id == ^id and t.status != "done" and
+              is_nil(t.deleted_at)
+        )
+      )
+  end
+
+  defp now, do: DateTime.utc_now() |> DateTime.truncate(:second)
 
   @doc """
   Purge every Initiative trashed longer than the retention window (item 11).

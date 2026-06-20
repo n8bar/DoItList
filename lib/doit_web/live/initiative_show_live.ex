@@ -93,6 +93,12 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign_pending(nil)
          |> assign(:pending_handoff, nil)
          |> assign(:confirm_skips, MapSet.new())
+         # Archive-on-completion prompt (m02.08 item 4.1): a dismissible nudge
+         # when roll-up hits 100% — it NEVER auto-archives. We only prompt on the
+         # transition into 100, not for an Initiative already complete on entry,
+         # and only once per session (dismiss sets prompted? so it won't return).
+         |> assign(:show_archive_prompt, false)
+         |> assign(:prompted_archive?, false)
          |> load_tree()}
     end
   end
@@ -218,11 +224,41 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:tree, tree)
     |> assign(:root_task, root)
     |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
-    |> assign(:initiative_progress, (root && root.computed_progress) || 0)
+    |> set_initiative_progress((root && root.computed_progress) || 0)
     |> assign(:led_task_ids, viewer_led_ids(socket))
     |> assign(:direct_assignee_ids, tree_assignee_ids(tree))
     |> assign_undo_state()
   end
+
+  # Assign the roll-up % and, on a transition INTO 100, raise the dismissible
+  # archive prompt once per session (m02.08 item 4.1 — never auto-archives).
+  # `prompted_archive?` (set by dismissal or a prior raise) suppresses repeats;
+  # a drop back below 100 re-arms it. Guards a not-yet-assigned prior value, so
+  # an Initiative already at 100% on mount does NOT nag.
+  defp set_initiative_progress(socket, progress) do
+    prev = socket.assigns[:initiative_progress]
+    crossed_to_100? = prev not in [nil, 100] and progress == 100
+
+    socket
+    |> assign(:initiative_progress, progress)
+    |> maybe_raise_archive_prompt(crossed_to_100?, progress)
+  end
+
+  defp maybe_raise_archive_prompt(socket, true, _progress) do
+    if socket.assigns.prompted_archive? do
+      socket
+    else
+      socket
+      |> assign(:show_archive_prompt, true)
+      |> assign(:prompted_archive?, true)
+    end
+  end
+
+  # Below 100 again — re-arm so finishing it once more can prompt anew.
+  defp maybe_raise_archive_prompt(socket, false, progress) when progress < 100,
+    do: socket |> assign(:show_archive_prompt, false) |> assign(:prompted_archive?, false)
+
+  defp maybe_raise_archive_prompt(socket, false, _progress), do: socket
 
   # Undo / redo availability for the toolbar (m02.06 items 4/5): the labels of
   # the next undoable / redoable action, or nil when the stack is empty that
@@ -483,7 +519,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
             root ->
               socket
-              |> assign(:initiative_progress, root.computed_progress || 0)
+              |> set_initiative_progress(root.computed_progress || 0)
               |> assign(:root_task, Map.put(root, :children, socket.assigns.tree))
           end
 
@@ -727,6 +763,42 @@ defmodule DoItWeb.InitiativeShowLive do
      socket
      |> assign(:editing_initiative?, false)
      |> assign(:selected_task_id, nil)}
+  end
+
+  # Per-user Archive (m02.08 worklist 4). Sets `archived_at` on the caller's own
+  # membership row only — never anyone else's view. Allowed for any member
+  # regardless of completion or ownership. Item 4.2: confirm first ONLY when
+  # there's unfinished work the user would care about (a member's own incomplete
+  # assignments/co-assignments, or — as owner — any incomplete task); otherwise
+  # archive immediately. The confirm reuses the styled modal via assign_pending.
+  def handle_event("archive_initiative", _params, socket) do
+    user = socket.assigns.current_user
+    initiative = socket.assigns.initiative
+
+    if Initiatives.archive_needs_confirm?(user, initiative) do
+      {:noreply,
+       assign_pending(socket, %{kind: :archive, owner?: user.id == initiative.owner_id})}
+    else
+      {:noreply, commit_archive(socket)}
+    end
+  end
+
+  # Dismiss the archive-on-completion prompt (m02.08 item 4.1). Pure view
+  # state; `prompted_archive?` stays true so it won't re-raise this session.
+  def handle_event("dismiss_archive_prompt", _params, socket) do
+    {:noreply, assign(socket, :show_archive_prompt, false)}
+  end
+
+  # Per-user Hide (m02.08 item 4.3): the lighter "off my dashboard" move. Sets
+  # `hidden_at` on the caller's own row only; never confirms.
+  def handle_event("hide_initiative", _params, socket) do
+    {:ok, _} =
+      Initiatives.hide_initiative(socket.assigns.current_user, socket.assigns.initiative)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Initiative hidden from your dashboard.")
+     |> push_navigate(to: ~p"/initiatives")}
   end
 
   # Initiative Settings (.03.07.07): switch the progress calc, recompute the
@@ -1240,6 +1312,9 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :remove_member, user_id: user_id} ->
           commit_remove_member(socket, user_id)
 
+        %{kind: :archive} ->
+          commit_archive(socket)
+
         %{kind: :leave_initiative} ->
           # The broadcast this triggers ejects our own view via
           # {:members_changed} — no navigation needed here.
@@ -1660,6 +1735,19 @@ defmodule DoItWeb.InitiativeShowLive do
 
     socket
     |> put_flash(:info, "Initiative moved to Trash.")
+    |> push_navigate(to: ~p"/initiatives")
+  end
+
+  # Per-user archive (m02.08 worklist 4): set archived_at on the caller's own
+  # membership row, then send them to the index where it now sits in their
+  # Archived list (restorable). Resolves any pending confirm first.
+  defp commit_archive(socket) do
+    {:ok, _} =
+      Initiatives.archive_initiative(socket.assigns.current_user, socket.assigns.initiative)
+
+    socket
+    |> assign_pending(nil)
+    |> put_flash(:info, "Initiative archived. Restore it anytime from your Archived list.")
     |> push_navigate(to: ~p"/initiatives")
   end
 
@@ -2247,6 +2335,38 @@ defmodule DoItWeb.InitiativeShowLive do
               editing_initiative?={@editing_initiative?}
               can_edit={@can_edit}
             />
+
+            <%!-- Archive-on-completion prompt (m02.08 item 4.1): a dismissible
+                 nudge when the roll-up hits 100%. It only OFFERS to archive —
+                 Archive runs the same per-user archive (with its own 4.2
+                 confirm); Dismiss just closes the banner. Never auto-archives. --%>
+            <div
+              :if={@show_archive_prompt}
+              id="archive-prompt"
+              class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2.5"
+            >
+              <p class="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
+                <.icon name="hero-check-circle" class="w-5 h-5 flex-none" />
+                All done! Archive this Initiative to clear it from your active list?
+              </p>
+              <div class="flex items-center gap-2 flex-none">
+                <button
+                  type="button"
+                  phx-click="archive_initiative"
+                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition"
+                >
+                  <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
+                </button>
+                <button
+                  type="button"
+                  phx-click="dismiss_archive_prompt"
+                  aria-label="Dismiss"
+                  class="inline-flex items-center justify-center w-6 h-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+                >
+                  <.icon name="hero-x-mark" class="w-4 h-4" />
+                </button>
+              </div>
+            </div>
 
             <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
                  tree's own scroll box plus two theme-matched gradient overlays
@@ -3036,6 +3156,7 @@ defmodule DoItWeb.InitiativeShowLive do
     """
   end
 
+  defp confirm_title(%{kind: :archive}), do: "Archive this Initiative?"
   defp confirm_title(%{kind: :cascade_sort}), do: "Large branch reorg"
   defp confirm_title(%{kind: :cascade_complete}), do: "Complete this branch?"
   defp confirm_title(%{kind: :cascade_incomplete}), do: "Reopen this branch?"
@@ -3055,6 +3176,16 @@ defmodule DoItWeb.InitiativeShowLive do
 
   defp confirm_body(%{kind: :remove_member, name: name}, _verb),
     do: "Remove #{name} from this Initiative? They can be re-added anytime."
+
+  defp confirm_body(%{kind: :archive, owner?: true}, _verb),
+    do:
+      "This Initiative still has incomplete tasks. Archive it anyway? " <>
+        "It moves to your Archived list, where you can restore it anytime."
+
+  defp confirm_body(%{kind: :archive}, _verb),
+    do:
+      "You still have incomplete assignments here. Archive it anyway? " <>
+        "It moves to your Archived list, where you can restore it anytime."
 
   defp confirm_body(%{kind: :leave_initiative}, _verb),
     do: "Leave this Initiative? Only the owner can add you back."
@@ -3813,9 +3944,33 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </details>
 
-      <div :if={@can_admin} class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
-        <%!-- No phx-click: the confirm opens client-side (.03.07.18). --%>
+      <%!-- Per-user Archive + Hide (m02.08 worklist 4): available to ANY member
+           (per-user, never affects others). Archive → the restorable Archived
+           list; Hide → the lighter "off my dashboard" move. Archive may confirm
+           first (item 4.2, server-decided on unfinished work), so it's a plain
+           phx-click, not a client-side dialog like delete. --%>
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3 flex flex-wrap items-center gap-2">
         <button
+          type="button"
+          id="archive-initiative-btn"
+          phx-click="archive_initiative"
+          title="Archive for yourself — restorable from your Archived list"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
+        >
+          <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
+        </button>
+        <button
+          type="button"
+          id="hide-initiative-btn"
+          phx-click="hide_initiative"
+          title="Hide from your dashboard — unhide from your Archived list"
+          class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
+        >
+          <.icon name="hero-eye-slash" class="w-3.5 h-3.5" /> Hide
+        </button>
+        <%!-- No phx-click: the delete confirm opens client-side (.03.07.18). --%>
+        <button
+          :if={@can_admin}
           type="button"
           id="delete-initiative-btn"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 active:scale-95 transition"

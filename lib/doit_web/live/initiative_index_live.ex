@@ -50,6 +50,12 @@ defmodule DoItWeb.InitiativeIndexLive do
      |> assign(:reverse_by_mode, reverse_by_mode)
      |> assign(:form, build_empty_form())
      |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
+     # Per-user Archived list (m02.08 worklist 4). `show_hidden` is plain assign
+     # state — deliberately NON-persistent: it resets to false on every mount,
+     # so hidden Initiatives stay out of sight by default each visit (unlike the
+     # account-persisted sort/group-by toggles).
+     |> assign(:archived, Initiatives.list_archived_initiatives(user))
+     |> assign(:show_hidden, false)
      |> stream(:initiatives, sort_initiatives(initiatives, sort_state))
      # Assigned-to-Me pane (m02.08 item 1.3): the ultrawide right pane reuses
      # the A2M list. Seed its stream + toggle state here.
@@ -187,6 +193,32 @@ defmodule DoItWeb.InitiativeIndexLive do
      )}
   end
 
+  # Per-user Archived list (m02.08 worklist 4). Restore clears `archived_at`,
+  # unhide clears `hidden_at` — both on the caller's own membership row only, so
+  # the Initiative reappears in *their* active index and drops from the Archived
+  # list. Both refresh both lists.
+  def handle_event("unarchive_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_member_initiative(
+       socket,
+       id,
+       &Initiatives.unarchive_initiative/2,
+       "Initiative restored."
+     )}
+  end
+
+  def handle_event("unhide_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_member_initiative(socket, id, &Initiatives.unhide_initiative/2, "Initiative unhidden.")}
+  end
+
+  # Show-hidden toggle: a plain, NON-persistent assign (m02.08 item 4.3). It
+  # resets to false on every mount, so hidden items stay off by default each
+  # visit. Deliberately unlike the persisted Group-by/sort toggles.
+  def handle_event("toggle_show_hidden", _params, socket) do
+    {:noreply, assign(socket, :show_hidden, !socket.assigns.show_hidden)}
+  end
+
   # Assigned-to-Me pane toggles (m02.08 item 1.3) — same handlers as the
   # standalone /assigned page, via the shared AssignedActions helper.
   def handle_event("assigned_toggle_completed", _params, socket) do
@@ -224,6 +256,30 @@ defmodule DoItWeb.InitiativeIndexLive do
       |> put_flash(:info, msg)
     else
       put_flash(socket, :error, "Couldn't find that Initiative in your Trash.")
+    end
+  end
+
+  # Per-user restore/unhide (m02.08 worklist 4): apply `fun` to the named
+  # Initiative the current user is a member of, then refresh the active index
+  # stream (the restored/unhidden one reappears) and the Archived list. Scoped
+  # to the caller's own membership row inside the context fun, so it never
+  # touches anyone else.
+  defp with_member_initiative(socket, id, fun, msg) do
+    user = socket.assigns.current_user
+    initiative = Initiatives.get_initiative(String.to_integer(id))
+
+    if initiative && Initiatives.get_role(initiative.id, user.id) do
+      {:ok, _} = fun.(user, initiative)
+      visible = Initiatives.list_visible_initiatives(user)
+
+      socket
+      |> assign(:initiatives, visible)
+      |> assign(:initiative_count, length(visible))
+      |> assign(:archived, Initiatives.list_archived_initiatives(user))
+      |> stream(:initiatives, sort_initiatives(visible, socket.assigns.sort_state), reset: true)
+      |> put_flash(:info, msg)
+    else
+      put_flash(socket, :error, "Couldn't find that Initiative.")
     end
   end
 
@@ -292,6 +348,13 @@ defmodule DoItWeb.InitiativeIndexLive do
 
   defp build_empty_form do
     to_form(Initiatives.change_initiative(%DoIt.Initiatives.Initiative{}))
+  end
+
+  # The Archived-list rows to show (m02.08 item 4.3): archived items always; a
+  # purely-hidden item only when Show-hidden is checked. An item that is both
+  # archived and hidden counts as archived (shown by default).
+  defp visible_archived(archived, show_hidden) do
+    Enum.filter(archived, fn a -> a.archived? or (a.hidden? and show_hidden) end)
   end
 
   @impl true
@@ -532,6 +595,74 @@ defmodule DoItWeb.InitiativeIndexLive do
               </button>
             </span>
           </li>
+        </ul>
+      </section>
+
+      <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
+           distinct from the owner-level Trash above. Archived items show by
+           default; hidden items stay behind the Show-hidden checkbox, which is
+           NON-persistent (resets each visit). Restore clears archived_at,
+           unhide clears hidden_at — both on the caller's own membership row. --%>
+      <section
+        :if={@archived != []}
+        id="archived"
+        class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+            <.icon name="hero-archive-box" class="w-4 h-4" /> Archived
+          </h2>
+          <label
+            :if={Enum.any?(@archived, & &1.hidden?)}
+            class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none"
+          >
+            <input
+              type="checkbox"
+              id="show-hidden"
+              phx-click="toggle_show_hidden"
+              checked={@show_hidden}
+              class="checkbox checkbox-xs"
+            /> Show hidden
+          </label>
+        </div>
+        <ul class="mt-2 space-y-1">
+          <%= for a <- visible_archived(@archived, @show_hidden) do %>
+            <li
+              id={"archived-#{a.id}"}
+              class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+            >
+              <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+                <span class="truncate">{a.name}</span>
+                <span
+                  :if={a.hidden? and not a.archived?}
+                  class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+                >
+                  hidden
+                </span>
+              </span>
+              <span class="flex items-center gap-1 flex-none">
+                <button
+                  :if={a.archived?}
+                  type="button"
+                  phx-click="unarchive_initiative"
+                  phx-value-id={a.id}
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                >
+                  <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                </button>
+                <button
+                  :if={a.hidden?}
+                  type="button"
+                  phx-click="unhide_initiative"
+                  phx-value-id={a.id}
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                >
+                  <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
+                </button>
+              </span>
+            </li>
+          <% end %>
         </ul>
       </section>
 
