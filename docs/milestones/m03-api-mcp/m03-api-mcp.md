@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: scoping — design decisions settled; arc summaries drafted (pending approval) · Planned start: after M02 (UX Buildout) lands · Target: TBD_
+_Status: scoping — design decisions settled; arc / worklist breakdown drafted (pending approval) · Planned start: after M02 (UX Buildout) lands · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
@@ -55,19 +55,26 @@ Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API whi
 
 ## Arcs
 
-_Draft — pending operator approval._ High-level summaries only; each arc gets its own file (`m03.NN-<slug>.md`) at build time. Sequenced — earlier arcs are the plumbing later ones sit on. Phase 1 (the HTTP API) is arcs 1–4; phase 2 (the MCP server) is arc 5. Each arc carries its own tests; testing isn't a separate arc.
+_Draft — pending operator approval._ **Two arcs, one per phase** of the Approach above — Arc 1 is the HTTP API, Arc 2 is the MCP server over it. Each arc's worklists are summarized below; the worklists' items and any per-arc detail file (`m03.NN-<slug>.md`) come at build time. Sequenced — earlier worklists are the plumbing later ones sit on. Each worklist carries its own tests; testing isn't a separate worklist.
 
-| Arc | Name | Scope summary |
-|---|---|---|
-| 1 | **API foundation** | The plumbing every endpoint sits on: per-user API tokens (mint / revoke in account settings), the `/api/v1` pipeline + `Bearer` auth resolving a token → user (reusing the existing `owner`/`editor`/`viewer` checks unchanged), per-token rate limiting (Q4), and the JSON request/response + error conventions (incl. the per-op error shape arc 3 needs). No domain logic — just identity, routing, limits, contract. |
-| 2 | **Read surface** | The GET side: whole-Initiative **tree read** (nested JSON, the shape already assembled for the LiveView), the **activity rollup** (Initiative + subtree, over `activity_events` — read queries, no schema change), and reads of members / comments. The tiny **MCP smoke-client is pulled forward here** to pressure-test API ergonomics while they're still cheap to change. |
-| 3 | **Atomic mutation surface** | The write side: the **general atomic-operations endpoint** (Q7) — ordered op list (create / update / move / reorder / soft-delete), `lid` local-ids, per-op errors, all-or-nothing via `Ecto.Multi` — covering the **reversible** operation set (Q6): task CRUD / progress / reorg, comment lifecycle, membership changes, archive / hide, create Initiative, move-to-Trash. Irreversible ops stay LiveView-only. |
-| 4 | **Cross-references** | The worklist-parity capability: an **ID-anchored task→task link** (new link data model + API create / remove), rendered with the task's live index label so the reference never rots on reorder. Read via arc 2's surface, mutated via arc 3's. |
-| 5 | **MCP server (phase 2)** | The thin **stdio** adapter consuming the public API over HTTP (never the contexts), the **tools-vs-resources** mapping (mutations → tools; tree read + activity rollup → resources), and the `claude mcp add` local setup with the per-user token. The phase-2 runtime/library decision (Open Questions) is settled here. |
+### 1 — HTTP API (phase 1)
+
+The clean, general programmatic surface for the core operations.
+
+1. **API foundation** — the plumbing every endpoint sits on: per-user API tokens (mint / revoke in account settings), the `/api/v1` pipeline + `Bearer` auth resolving a token → user (reusing the existing `owner`/`editor`/`viewer` checks unchanged), per-token rate limiting (Q4), and the JSON request/response + error conventions (incl. the per-op error shape worklist 3 needs). No domain logic — just identity, routing, limits, contract.
+2. **Read surface** — the GET side: whole-Initiative **tree read** (nested JSON, the shape already assembled for the LiveView), the **activity rollup** (Initiative + subtree, over `activity_events` — read queries, no schema change), and reads of members / comments. The tiny **MCP smoke-client is pulled forward here** to pressure-test API ergonomics while they're still cheap to change.
+3. **Atomic mutation surface** — the write side: the **general atomic-operations endpoint** (Q7) — ordered op list (create / update / move / reorder / soft-delete), `lid` local-ids, per-op errors, all-or-nothing via `Ecto.Multi` — covering the **reversible** operation set (Q6): task CRUD / progress / reorg, comment lifecycle, membership changes, archive / hide, create Initiative, move-to-Trash. Irreversible ops stay LiveView-only.
+4. **Cross-references** — the worklist-parity capability: an **ID-anchored task→task link** (new link data model + API create / remove), rendered with the task's live index label so the reference never rots on reorder. Read via worklist 2's surface, mutated via worklist 3's.
+
+### 2 — MCP server (phase 2)
+
+The thin adapter that consumes the public API — never a shortcut into the contexts.
+
+1. **MCP server** — the thin **stdio** adapter consuming the public API over HTTP, the **tools-vs-resources** mapping (mutations → tools; tree read + activity rollup → resources), and the `claude mcp add` local setup with the per-user token. The phase-2 runtime/library decision (Open Questions) is settled here.
 
 ## Status
 
-Scoping in progress. Design decisions are operator-approved; arc summaries above are drafted pending approval; the two phase-2 MCP questions are deferred (non-blocking). Per-arc detail files come at build time.
+Scoping in progress. Design decisions are operator-approved; the arc / worklist breakdown above is drafted pending approval; the two phase-2 MCP questions are deferred (non-blocking). Worklist items + any per-arc detail files come at build time.
 
 ## Preconditions
 
