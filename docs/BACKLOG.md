@@ -1,5 +1,5 @@
 # BACKLOG
-_Last updated: 2026-06-19_
+_Last updated: 2026-06-20_
 
 Work for releases _after_ the upcoming one. The currently-targeted release and its milestones live in [`PLAN.md`](PLAN.md); this file is for everything beyond that.
 
@@ -10,4 +10,5 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 
 ## Items
 
-_None currently — all known future work is scoped into milestones M3–M6 (see [`PLAN.md`](PLAN.md))._
+- **Multi-select tasks (batch edit + batch move).** Select several tasks at once — Ctrl-click toggles one in/out of the selection (add/subtract), Shift-click selects a range; tasks inside a collapsed branch are excluded. The Details pane starts blank and shows only the values shared by every selected task; editing a field applies to all selected tasks where applicable (branches skip progress, leaves skip sorting). When the selection is *compatible*, dragging one task's handle moves/reorders the whole selection as a batch.
+  - Open question: define "compatible" (which selections may be batch-moved/reordered).
