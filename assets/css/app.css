@@ -418,4 +418,19 @@ div.init-drop-placeholder {
   color: var(--color-sky-200);
 }
 
+/* Chat (m02.08 item 3.1): a brief green pulse on the collapsed chat bar when a
+   message arrives from someone else. A box-shadow ring so it doesn't fight the
+   bar's own background; reads the same in light + dark. */
+@keyframes chat-flash {
+  from {
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-emerald-500) 70%, transparent);
+  }
+  to {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+.chat-flash {
+  animation: chat-flash 0.9s ease-out;
+}
+
 /* This file is for your main application CSS */

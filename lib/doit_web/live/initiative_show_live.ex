@@ -2753,6 +2753,7 @@ defmodule DoItWeb.InitiativeShowLive do
         id="initiative-chat"
         phx-hook=".Chat"
         data-chat-log-id={@chat_log_id}
+        data-me={@current_user.id}
         class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
       >
         <button
@@ -2790,7 +2791,12 @@ defmodule DoItWeb.InitiativeShowLive do
             <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
               No messages yet — say hello to anyone else viewing this Initiative.
             </p>
-            <div :for={m <- Enum.reverse(@chat_messages)} id={"chat-msg-#{m.id}"} class="flex gap-2">
+            <div
+              :for={m <- Enum.reverse(@chat_messages)}
+              id={"chat-msg-#{m.id}"}
+              data-chat-uid={m.user_id}
+              class="flex gap-2"
+            >
               <span
                 class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
                 style={"background-image: #{m.bg}; color: #{m.fg};"}
@@ -2895,14 +2901,55 @@ defmodule DoItWeb.InitiativeShowLive do
               if (this.log) this.log.scrollTop = this.log.scrollHeight;
             },
             updated() {
-              // A new message bumps the server's chat-log id. While collapsed,
-              // peek the latest in the title bar; while open, keep it scrolled.
+              // A new message bumps the server's monotonic chat-log id.
               const id = parseInt(this.el.dataset.chatLogId || "0", 10);
               if (id > this._lastLogId) {
                 this._lastLogId = id;
-                if (this.panel.hidden) this.showLatestPreview();
+                if (this.fromOther()) {
+                  this.pop(); // a quick blip — distinct from the rejection bonk
+                  if (this.panel.hidden) {
+                    this.showLatestPreview();
+                    this.flash();
+                  }
+                }
               }
               if (this.panel && !this.panel.hidden) this.scrollToBottom();
+            },
+            // Was the latest message from someone else? No pop / flash for your
+            // own message echoing back over the broadcast.
+            fromOther() {
+              if (!this.log) return false;
+              const msgs = this.log.querySelectorAll("[data-chat-uid]");
+              const last = msgs[msgs.length - 1];
+              return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
+            },
+            // Brief green pulse on the collapsed bar (reflow to retrigger on
+            // rapid messages).
+            flash() {
+              const t = this.toggle;
+              if (!t) return;
+              t.classList.remove("chat-flash");
+              void t.offsetWidth;
+              t.classList.add("chat-flash");
+            },
+            // A short rising blip — deliberately unlike the descending bonk thud.
+            pop() {
+              try {
+                const Ctx = window.AudioContext || window.webkitAudioContext;
+                this._ac = this._ac || new Ctx();
+                const ctx = this._ac;
+                if (ctx.state === "suspended") ctx.resume();
+                const osc = ctx.createOscillator(), gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(420, ctx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
+                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
+                osc.connect(gain).connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.14);
+              } catch (_e) {}
             },
           }
         </script>
