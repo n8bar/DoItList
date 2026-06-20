@@ -45,6 +45,8 @@ Pull one tiny MCP smoke-client forward into phase 1 to pressure-test the API whi
 
 **Q4 — Rate limiting: a simple per-token limit, built in M03.** A fixed-window / token-bucket cap (N requests per window, per token), enforced at the token layer — cheap insurance against a runaway agent loop or retry-storm. Exact limits are tunable at implementation. Tiered / per-plan quotas stay out (no plans yet).
 
+**Q5 — Pull-only (no push API in M3).** Clients read on demand; no webhooks or push stream. External real-time *watching* of an Initiative is deferred until a consumer needs it — the LiveView's internal PubSub stays internal; exposing it is its own infra. An MCP agent reads the tree when it acts.
+
 **MCP transport: stdio-first (smooth local path).** DoItList ships a thin **stdio** MCP adapter — a small local process Claude Code launches directly (`claude mcp add …`), authenticated by the per-user token passed via an env var. No hosting, no OAuth: the local Claude Code experience "just works." Remote **streamable-HTTP** (for hosted clients like Claude Desktop / third parties) is deferred to hosting (M06) and is *additive*, not a precondition. Whatever MCP runtime/library we choose **must** support this stdio/local path without forcing a remote/OAuth setup.
 
 ## Status
@@ -58,7 +60,6 @@ Scoping in progress. Design decisions above are drafted pending operator approva
 ## Open Questions
 
 API:
-- Webhook / push API for real-time updates (PubSub-equivalent for external clients)?
 - Public vs. private surface — the exact operation list exposed (vs. LiveView-only).
 - Bulk operations *within* an Initiative (batch create / move / update) to match "edit many doc lines, save once."
 
