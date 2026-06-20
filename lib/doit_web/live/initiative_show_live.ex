@@ -2230,19 +2230,17 @@ defmodule DoItWeb.InitiativeShowLive do
           class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
         >
         </div>
-        <%!-- Below lg: a Show/Hide Members toggle, since the pinned Members
-             panel is lg:+ only. At the intermediate width (sm–lg) the Details
-             flyout brings Members along, but there was no way to see Members
-             WITHOUT selecting a task — so the toggle now shows up to lg. New
-             List here is phone-only (sm:hidden): the title-row New List already
-             covers sm:+. --%>
+        <%!-- Below lg: New List + a Show/Hide Members toggle, kept together as
+             one row (the pinned Members panel is lg:+ only, so the toggle is
+             needed up to lg). The title-row New List takes over at lg:+, so it's
+             hidden below lg and this pair carries New List everywhere else. --%>
         <div class="lg:hidden mb-6">
           <div class="flex justify-center items-center gap-2">
             <button
               :if={@can_edit}
               type="button"
               data-add-root
-              class="sm:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label="New list"
               title="New list"
             >
@@ -3510,7 +3508,7 @@ defmodule DoItWeb.InitiativeShowLive do
           :if={@can_edit}
           type="button"
           data-add-root
-          class="mt-1 ml-auto hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+          class="mt-1 ml-auto hidden lg:inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
           aria-label="New list"
           title="New list"
         >
