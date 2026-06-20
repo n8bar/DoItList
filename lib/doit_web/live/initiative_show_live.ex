@@ -2150,7 +2150,7 @@ defmodule DoItWeb.InitiativeShowLive do
             data-open={(@selected_task_id || @editing_initiative?) && "true"}
             class={[
               "not-data-open:hidden lg:not-data-open:block",
-              "data-open:block data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
+              "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
               "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
               "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
               "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
@@ -2805,7 +2805,7 @@ defmodule DoItWeb.InitiativeShowLive do
       </p>
 
       <div
-        class="absolute bottom-0 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+        class="absolute bottom-1 left-0 right-0 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
         role="progressbar"
         aria-valuenow={@initiative_progress}
         aria-valuemin="0"
