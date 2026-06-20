@@ -119,10 +119,31 @@ defmodule DoItWeb.Layouts do
                  root.html.heex's data-menu light-dismiss closes it on an outside
                  click / Escape; KeepOpen pins it open across LiveView patches
                  (a notification arriving over PubSub must not close it). --%>
+            <%!-- Desktop: inline nav links. --%>
+            <div class="hidden sm:flex items-center gap-3">
+              <.link
+                navigate={~p"/initiatives"}
+                class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+              >
+                Initiatives
+              </.link>
+              <.link
+                navigate={~p"/assigned"}
+                class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+              >
+                Assigned to Me
+              </.link>
+              <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
+              <.theme_toggle variant={:group} current_user={@current_user} />
+            </div>
+
+            <%!-- Bell sits immediately LEFT of the avatar at every breakpoint:
+                 a standalone item just before the account menu (sm:+) and the
+                 hamburger (<sm), which are mutually exclusive. Native <details>
+                 + KeepOpen like the others; root.html.heex's data-menu handles
+                 the outside-click / Escape. Opening marks notifications read
+                 (worklist 2.3) — the summary click toggles + pushes mark-read. --%>
             <details id="notif-menu" phx-hook="KeepOpen" class="relative" data-menu>
-              <%!-- Opening the bell marks notifications read (worklist 2.3) —
-                   the summary click both toggles <details> and pushes the
-                   mark-read event; harmless to re-fire on close. --%>
               <summary
                 title="Notifications"
                 aria-label="Notifications"
@@ -139,65 +160,45 @@ defmodule DoItWeb.Layouts do
               </ul>
             </details>
 
-            <%!-- Desktop: inline nav. --%>
-            <div class="hidden sm:flex items-center gap-3">
-              <.link
-                navigate={~p"/initiatives"}
-                class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+            <%!-- Account menu (sm:+) — pulled out of the links wrapper so the
+                 bell sits to its left. KeepOpen pins it open across patches. --%>
+            <details id="account-menu" phx-hook="KeepOpen" class="relative hidden sm:block" data-menu>
+              <summary
+                title="Account menu"
+                class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
               >
-                Initiatives
-              </.link>
-              <.link
-                navigate={~p"/assigned"}
-                class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
-              >
-                Assigned to Me
-              </.link>
-              <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-              <.theme_toggle variant={:group} current_user={@current_user} />
-              <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
-              <%!-- Account menu — same JS-free details/summary pattern as the
-                   hamburger; root.html.heex's data-menu light-dismiss covers
-                   outside clicks and Escape. KeepOpen pins it open across
-                   LiveView patches so a PubSub re-render doesn't snap it shut. --%>
-              <details id="account-menu" phx-hook="KeepOpen" class="relative" data-menu>
-                <summary
-                  title="Account menu"
-                  class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
-                >
-                  <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
-                  {@current_user.name}
-                  <.icon name="hero-chevron-down" class="w-3 h-3" />
-                </summary>
-                <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
-                  <li>
-                    <.link
-                      navigate={~p"/account"}
-                      class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                    >
-                      Account details
-                    </.link>
-                  </li>
-                  <li>
-                    <.link
-                      navigate={~p"/account#account-preferences"}
-                      class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
-                    >
-                      User Preferences
-                    </.link>
-                  </li>
-                  <li>
-                    <.link
-                      href={~p"/users/log_out"}
-                      method="delete"
-                      class="block rounded px-2 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                    >
-                      Log out
-                    </.link>
-                  </li>
-                </ul>
-              </details>
-            </div>
+                <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
+                {@current_user.name}
+                <.icon name="hero-chevron-down" class="w-3 h-3" />
+              </summary>
+              <ul class="absolute right-0 mt-2 w-72 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900">
+                <li>
+                  <.link
+                    navigate={~p"/account"}
+                    class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    Account details
+                  </.link>
+                </li>
+                <li>
+                  <.link
+                    navigate={~p"/account#account-preferences"}
+                    class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                  >
+                    User Preferences
+                  </.link>
+                </li>
+                <li>
+                  <.link
+                    href={~p"/users/log_out"}
+                    method="delete"
+                    class="block rounded px-2 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  >
+                    Log out
+                  </.link>
+                </li>
+              </ul>
+            </details>
 
             <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too).
                  Notifications no longer live here — they own the bell, which is a
