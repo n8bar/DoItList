@@ -56,6 +56,12 @@ defmodule DoItWeb.InitiativeShowLive do
           # messages live only in each viewer's socket (capped), so the chat
           # clears for a fresh viewer and disappears once the last one leaves.
           Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
+
+          # Defer the non-critical loads (undo/redo labels, the cross-Initiative
+          # Collaborators rail) off the mount critical path so the LiveView
+          # returns fast and the tree is interactive the instant it paints. They
+          # fill in a beat later via :after_mount. See handle_info(:after_mount).
+          send(self(), :after_mount)
         end
 
         {:ok,
@@ -63,7 +69,9 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:page_title, initiative.name)
          |> assign(:initiative, initiative)
          |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
-         |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+         # Deferred to :after_mount (the rail's people pane pops in a frame
+         # later); the Layouts.app `rail_collaborators` attr defaults to [].
+         |> assign(:rail_collaborators, [])
          |> assign(:subtitle, Initiatives.subtitle(initiative))
          |> assign(:role, role)
          |> assign(:can_edit, Initiatives.can_edit?(role))
@@ -99,7 +107,14 @@ defmodule DoItWeb.InitiativeShowLive do
          # and only once per session (dismiss sets prompted? so it won't return).
          |> assign(:show_archive_prompt, false)
          |> assign(:prompted_archive?, false)
-         |> load_tree()}
+         # Undo/redo labels start nil (buttons disabled) and are filled by
+         # :after_mount — keeps the undo/redo activity_events trio off the
+         # connected-mount critical path. A disconnected (dead) render has no
+         # :after_mount, so they stay nil there; that's fine — the first
+         # interactive render is the connected one.
+         |> assign(:undo_label, nil)
+         |> assign(:redo_label, nil)
+         |> load_tree(undo: false)}
     end
   end
 
@@ -213,7 +228,11 @@ defmodule DoItWeb.InitiativeShowLive do
     push_event(socket, "presence-selections", %{selections: selections, online: online})
   end
 
-  defp load_tree(socket) do
+  # `opts[:undo]` (default true) controls whether the undo/redo labels are
+  # recomputed inline. Every post-mount caller wants them fresh; the connected
+  # mount passes `undo: false` so the ~60-90ms undo/redo `activity_events` trio
+  # stays OFF the critical path and is filled in by :after_mount (a beat later).
+  defp load_tree(socket, opts \\ []) do
     initiative_id = socket.assigns.initiative.id
     tree = Tasks.initiative_task_tree(initiative_id)
     root = Tasks.get_task(socket.assigns.initiative.root_task_id)
@@ -226,14 +245,16 @@ defmodule DoItWeb.InitiativeShowLive do
     # never falls back to a per-render count query (the pane renders always now).
     root = root && Map.put(root, :children, tree)
 
-    socket
-    |> assign(:tree, tree)
-    |> assign(:root_task, root)
-    |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
-    |> set_initiative_progress((root && root.computed_progress) || 0)
-    |> assign(:led_task_ids, viewer_led_ids(socket))
-    |> assign(:direct_assignee_ids, tree_assignee_ids(tree))
-    |> assign_undo_state()
+    socket =
+      socket
+      |> assign(:tree, tree)
+      |> assign(:root_task, root)
+      |> assign(:root_sort_mode, elem(Tasks.resolve_sort(root), 0))
+      |> set_initiative_progress((root && root.computed_progress) || 0)
+      |> assign(:led_task_ids, viewer_led_ids(socket))
+      |> assign(:direct_assignee_ids, tree_assignee_ids(tree))
+
+    if Keyword.get(opts, :undo, true), do: assign_undo_state(socket), else: socket
   end
 
   # Assign the roll-up % and, on a transition INTO 100, raise the dismissible
@@ -1817,7 +1838,19 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # --- PubSub ---------------------------------------------------------------
 
+  # Deferred non-critical loads (see mount): the tree already painted and the
+  # page is interactive, so fill in the undo/redo toolbar labels and the
+  # cross-Initiative Collaborators rail now. Cheap, idempotent, and safe to run
+  # after any number of intervening renders — it touches only these assigns and
+  # never the tree, selection, or `editing_initiative?` view state.
   @impl true
+  def handle_info(:after_mount, socket) do
+    {:noreply,
+     socket
+     |> assign_undo_state()
+     |> assign(:rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
+  end
+
   # A global presence join/leave (item 8): just refresh the Collaborators
   # pane's online set. Matched first (topic is DoItWeb.Presence.global_topic/0;
   # literal here since guards can't call it) so the per-initiative head below

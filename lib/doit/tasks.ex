@@ -43,12 +43,17 @@ defmodule DoIt.Tasks do
 
   @doc "All *live* tasks for an Initiative, ordered for tree assembly."
   def list_initiative_tasks(initiative_id) do
+    # Batch the user preloads in ONE round-trip each (a single `WHERE id IN (…)`
+    # per association) rather than letting per-row resolution fan out to a
+    # `SELECT … WHERE id = $1` per distinct assignee / editor. Done as a separate
+    # `Repo.preload` after `Repo.all` so the batching is explicit and not subject
+    # to the inline-preload planner re-querying per row.
     from(t in Task,
       where: t.initiative_id == ^initiative_id and is_nil(t.deleted_at),
-      order_by: [asc: t.sort_order, asc: t.inserted_at],
-      preload: [:assignee, :updated_by]
+      order_by: [asc: t.sort_order, asc: t.inserted_at]
     )
     |> Repo.all()
+    |> Repo.preload([:assignee, :updated_by])
   end
 
   @doc """
