@@ -26,21 +26,7 @@ An AI agent — **Claude Code first** — manages an Initiative as its working w
 | What changed, when, by whom (review-as-diff) | **activity rollup** at Initiative / subtree level — `activity_events` already carries both `initiative_id` and `task_id`, so this is read queries + a surface, **no schema change** |
 | "see that other task" | **cross-references** — an ID-anchored task→task link, rendered with the task's index label so it never rots on reorder (the index from m02.07 §1.7 is the *label*; the stable ID is the *link*) |
 
-**Q1 — API transport: REST / JSON.** Resource-and-verb endpoints over plain JSON; a whole-tree read returns the nested Initiative in one response (already assembled server-side for the LiveView); targeted `PATCH` / `POST` for surgical edits. GraphQL rejected — its field-selection flexibility isn't what an MCP/CLI needs, and it adds a schema/resolver layer for no consumer benefit.
-
-**Q3 — Versioning: path versioning.** The version lives in the URL (`/api/v1/…`); v1 and v2 can run side-by-side during a migration. Within a version, changes stay additive (add fields, don't remove/rename) — a true breaking change earns a new path. Cheap now (the MCP is the only consumer, updated in lockstep) and clean later when external clients exist.
-
-**Q2 — Authentication: per-user API tokens.** A user mints a token in account settings; clients send it as `Authorization: Bearer <token>` and thereby act as that user, inheriting their `owner` / `editor` / `viewer` roles unchanged — the token adds *identification*, not a new authorization system. Revocable. Whether to upgrade to **scoped / fine-grained tokens** (per-Initiative or read-only) is a refinement to settle at implementation time — start broad-and-revocable, tighten only if wanted. OAuth (third-party-acting-on-your-behalf) is deferred and can later layer onto the same token-checking core.
-
-**Q4 — Rate limiting: a simple per-token limit, built in M03.** A fixed-window / token-bucket cap (N requests per window, per token), enforced at the token layer — cheap insurance against a runaway agent loop or retry-storm. Exact limits are tunable at implementation. Tiered / per-plan quotas stay out (no plans yet).
-
-**Q5 — Pull-only (no push API in M3).** Clients read on demand; no webhooks or push stream. External real-time *watching* of an Initiative is deferred until a consumer needs it — the LiveView's internal PubSub stays internal; exposing it is its own infra. An MCP agent reads the tree when it acts.
-
-**Q6 — Public surface: reversible Initiative work; irreversible stays web-only.** Guiding rule — operations that are **reversible (including soft deletes)** are token-exposed; **irreversible** ones are LiveView-only. **Exposed:** create Initiative, Initiative update, task CRUD / progress / reorg, comments (add / edit / soft-delete-with-tombstone), membership (add / remove / role-change), notifications (read / mark-read), archive / hide, and **move-to-Trash** (soft delete). **LiveView-only:** irreversible ops — permanent delete / empty-Trash, transfer ownership — plus account self-management (register / login / password / email / delete-account, avatars; a work token isn't for managing your account). Exact per-operation list pinned at implementation.
-
-**Q7 — Bulk: one general atomic-operations endpoint.** A single endpoint takes an **ordered list of operations** (create / update / move / reorder / soft-delete), applied **all-or-nothing** in one transaction (`Ecto.Multi`). Adopt the **JSON:API `atomic:operations`** pattern — local ids (`lid`) let a create be referenced later in the same batch (create parent → child under it), with per-op error reporting. This is the "edit many, save once" worklist parity, and the op-list shape suits an LLM agent composing a reshape. One endpoint subsumes fixed batch shapes; a single-item write is just a batch of one. Atomicity is cheap (Multi); the design work is the op-list contract + `lid` resolution + error reporting.
-
-**MCP transport: stdio-first (smooth local path).** DoItList ships a thin **stdio** MCP adapter — a small local process Claude Code launches directly (`claude mcp add …`), authenticated by the per-user token passed via an env var. No hosting, no OAuth: the local Claude Code experience "just works." Remote **streamable-HTTP** (for hosted clients like Claude Desktop / third parties) is deferred to hosting (M06) and is *additive*, not a precondition. Whatever MCP runtime/library we choose **must** support this stdio/local path without forcing a remote/OAuth setup.
+_The per-decision rationale (transport, versioning, auth, rate limiting, bulk, the public/reversible surface, MCP stdio transport) is folded into the arc items in [`m03.01-http-api.md`](m03.01-http-api.md) and [`m03.02-mcp-server.md`](m03.02-mcp-server.md)._
 
 ## Arcs
 
@@ -64,6 +50,7 @@ Scoping in progress. Design decisions are operator-approved; the two arcs are br
 - Rich-text / document-style task descriptions — the details field stays plain prose.
 - OAuth and hosted third-party MCP access — deferred to hosting (M06).
 - GraphQL.
+- Push / real-time API — M03 is pull-only; no webhooks or push stream (the LiveView's internal PubSub stays internal). Deferred until a consumer needs it.
 - Cross-Initiative bulk operations (mirrors the ProductSpec cross-Initiative reorganization deferral).
 
 ## Acceptance Criteria
