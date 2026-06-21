@@ -614,22 +614,43 @@ defmodule DoItWeb.InitiativeIndexLive do
       <.shortcuts_overlay />
 
       <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
-           distinct from the owner-level Trash above. Relocated out of the
-           scrolling content into a slim bar pinned to the bottom of the viewport
-           (fixed, above content, opaque bg so content scrolls under it).
-           Collapsed by default via a native <details> with no `open` — toggling
-           is pure client view state, zero round trip. Expanded reveals the
-           existing list + the Show-hidden checkbox; a long list scrolls within
-           the panel (capped height) instead of pushing the page. Archived items
-           show by default; hidden items stay behind the NON-persistent
-           Show-hidden checkbox (resets each visit). Restore clears archived_at,
-           unhide clears hidden_at — both on the caller's own membership row. --%>
+           distinct from the owner-level Trash above. A collapsed-by-default
+           native <details> (no `open` — toggling is pure client view state,
+           zero round trip). Placement is breakpoint-aware (bug fix 2025-06-20):
+
+           · Below 3xl the left rail isn't in flow, so the Archived list pins
+             as a full-width bar at the bottom of the viewport (fixed, opaque
+             bg, content scrolls under it).
+           · At 3xl the left rail (Layouts chrome) shows the Initiatives list;
+             the Archived list anchors to the bottom of that rail's column —
+             same fixed bar, but width-clamped to the 17rem rail and aligned to
+             the centered container's left edge (see `#archived` rules in
+             app.css). The rail's data lives in this LiveView (@archived /
+             @show_hidden), and the rail itself is rendered by the shared
+             Layouts component, which can't see those assigns — so rather than
+             plumb them through Layouts, the block stays here and is positioned
+             under the rail with CSS.
+
+           Expanded reveals the list; a long list scrolls within the panel
+           (capped height) instead of pushing the page. The Show-hidden control
+           lives in the expanded panel body — NOT the <summary> — so toggling it
+           never collapses the <details> (clicking inside a <summary> toggles
+           it). Archived items show by default; hidden items stay behind the
+           NON-persistent Show-hidden checkbox (resets each visit). Restore
+           clears archived_at, unhide clears hidden_at — both on the caller's
+           own membership row. --%>
+      <%!-- KeepOpen pins the open state across LiveView patches. Toggling
+           Show-hidden re-renders the summary count + the list, and without this
+           hook morphdom would reset the user-opened <details> back to closed —
+           the real cause of "Show hidden collapses the list" (the same hook the
+           New-Initiative <details> and the header menus use). --%>
       <details
         :if={@archived != []}
         id="archived"
-        class="group fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)]"
+        phx-hook="KeepOpen"
+        class="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
       >
-        <summary class="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+        <summary class="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 3xl:px-3 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
           <.icon name="hero-archive-box" class="w-4 h-4 flex-none" />
           <span>Archived ({length(visible_archived(@archived, @show_hidden))})</span>
           <.icon
@@ -637,7 +658,11 @@ defmodule DoItWeb.InitiativeIndexLive do
             class="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
           />
         </summary>
-        <div class="px-4 sm:px-6 pb-3">
+        <div class="px-4 sm:px-6 3xl:px-3 pb-3">
+          <%!-- Show-hidden lives in the panel body (not the summary): clicking
+               anything inside a <summary> toggles the <details>, so a control
+               there would collapse the list. Here it only renders/clicks when
+               the list is open, and toggling it leaves the list open. --%>
           <div class="flex items-center justify-end gap-2">
             <label
               :if={Enum.any?(@archived, & &1.hidden?)}
