@@ -598,77 +598,10 @@ defmodule DoItWeb.InitiativeIndexLive do
         </ul>
       </section>
 
-      <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
-           distinct from the owner-level Trash above. Archived items show by
-           default; hidden items stay behind the Show-hidden checkbox, which is
-           NON-persistent (resets each visit). Restore clears archived_at,
-           unhide clears hidden_at — both on the caller's own membership row. --%>
-      <section
-        :if={@archived != []}
-        id="archived"
-        class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4"
-      >
-        <div class="flex items-center justify-between gap-2">
-          <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
-            <.icon name="hero-archive-box" class="w-4 h-4" /> Archived
-          </h2>
-          <label
-            :if={Enum.any?(@archived, & &1.hidden?)}
-            class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none"
-          >
-            <input
-              type="checkbox"
-              id="show-hidden"
-              phx-click="toggle_show_hidden"
-              checked={@show_hidden}
-              class="checkbox checkbox-xs"
-            /> Show hidden
-          </label>
-        </div>
-        <ul class="mt-2 space-y-1">
-          <%= for a <- visible_archived(@archived, @show_hidden) do %>
-            <li
-              id={"archived-#{a.id}"}
-              class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
-            >
-              <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
-                <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
-                <span class="truncate">{a.name}</span>
-                <span
-                  :if={a.hidden? and not a.archived?}
-                  class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
-                >
-                  hidden
-                </span>
-              </span>
-              <span class="flex items-center gap-1 flex-none">
-                <button
-                  :if={a.archived?}
-                  type="button"
-                  phx-click="unarchive_initiative"
-                  phx-value-id={a.id}
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                >
-                  <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
-                </button>
-                <button
-                  :if={a.hidden?}
-                  type="button"
-                  phx-click="unhide_initiative"
-                  phx-value-id={a.id}
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                >
-                  <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
-                </button>
-              </span>
-            </li>
-          <% end %>
-        </ul>
-      </section>
-
       <%!-- Desktop-only entry to the keyboard-shortcuts help (.07.2.1); hidden on
-           mobile, which won't use shortcuts. --%>
-      <div class="hidden sm:flex justify-center mt-10">
+           mobile, which won't use shortcuts. Bottom margin keeps the last entry
+           clear of the fixed Archived bar pinned below. --%>
+      <div class="hidden sm:flex justify-center mt-10 mb-16">
         <button
           type="button"
           phx-click={Phoenix.LiveView.JS.dispatch("doit:shortcuts-toggle", to: "#shortcuts-overlay")}
@@ -679,6 +612,87 @@ defmodule DoItWeb.InitiativeIndexLive do
       </div>
 
       <.shortcuts_overlay />
+
+      <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
+           distinct from the owner-level Trash above. Relocated out of the
+           scrolling content into a slim bar pinned to the bottom of the viewport
+           (fixed, above content, opaque bg so content scrolls under it).
+           Collapsed by default via a native <details> with no `open` — toggling
+           is pure client view state, zero round trip. Expanded reveals the
+           existing list + the Show-hidden checkbox; a long list scrolls within
+           the panel (capped height) instead of pushing the page. Archived items
+           show by default; hidden items stay behind the NON-persistent
+           Show-hidden checkbox (resets each visit). Restore clears archived_at,
+           unhide clears hidden_at — both on the caller's own membership row. --%>
+      <details
+        :if={@archived != []}
+        id="archived"
+        class="group fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)]"
+      >
+        <summary class="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+          <.icon name="hero-archive-box" class="w-4 h-4 flex-none" />
+          <span>Archived ({length(visible_archived(@archived, @show_hidden))})</span>
+          <.icon
+            name="hero-chevron-up"
+            class="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
+          />
+        </summary>
+        <div class="px-4 sm:px-6 pb-3">
+          <div class="flex items-center justify-end gap-2">
+            <label
+              :if={Enum.any?(@archived, & &1.hidden?)}
+              class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none"
+            >
+              <input
+                type="checkbox"
+                id="show-hidden"
+                phx-click="toggle_show_hidden"
+                checked={@show_hidden}
+                class="checkbox checkbox-xs"
+              /> Show hidden
+            </label>
+          </div>
+          <ul class="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
+            <%= for a <- visible_archived(@archived, @show_hidden) do %>
+              <li
+                id={"archived-#{a.id}"}
+                class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+              >
+                <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                  <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+                  <span class="truncate">{a.name}</span>
+                  <span
+                    :if={a.hidden? and not a.archived?}
+                    class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+                  >
+                    hidden
+                  </span>
+                </span>
+                <span class="flex items-center gap-1 flex-none">
+                  <button
+                    :if={a.archived?}
+                    type="button"
+                    phx-click="unarchive_initiative"
+                    phx-value-id={a.id}
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                  >
+                    <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                  </button>
+                  <button
+                    :if={a.hidden?}
+                    type="button"
+                    phx-click="unhide_initiative"
+                    phx-value-id={a.id}
+                    class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                  >
+                    <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
+                  </button>
+                </span>
+              </li>
+            <% end %>
+          </ul>
+        </div>
+      </details>
 
       <%!-- Right (third) pane, a sibling of the left rail (item 6): the
            "Assigned to Me" home, filled by Arc 8 (m02.08 item 1.3) with the
