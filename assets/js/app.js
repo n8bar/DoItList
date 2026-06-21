@@ -2817,25 +2817,37 @@ function applyCollapseStates() {
     if (btn) btn.setAttribute("aria-expanded", String(!collapsed))
   })
 }
+// Re-assert ALL client-owned view state. Every step is idempotent (writes only
+// when the DOM disagrees), so it's safe to call from many triggers without
+// looping. This is the single source of truth for "make the DOM match what the
+// client owns" — the mutation guard below runs it on incremental patches, and
+// the connect/reconnect lifecycle hooks (see installConnectGuards) run it again
+// at the join boundary, where LiveView's first morphdom can replace the
+// pane/selection/rail elements wholesale against the dead-render HTML.
+function reassertClientState() {
+  applyCollapseStates()
+  // Selection is client-owned too — re-assert it across the same patch paths.
+  window.DoitSelection.apply()
+  // Editor visibility is client-owned (UX_GUARDRAILS 6.5): the server always
+  // renders the pane hidden now, so re-assert the open flag the same way.
+  window.DoitInitiativeEditor.apply()
+  // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
+  applyPendingMove()
+  applyPendingToggle()
+  // Presence badges are client-painted (m02.04 §1.12) — same guard.
+  applyPresenceBadges()
+  // While a confirm modal is up, its maybe-write hue is server-held —
+  // disarm the client's safety timer so it can't strip it mid-decision.
+  if (document.getElementById("completion-confirm")) releaseSavingHue()
+}
+window.DoitReassertClientState = reassertClientState
+
 let collapseGuardRaf = null
 new MutationObserver(() => {
   if (collapseGuardRaf) return
   collapseGuardRaf = requestAnimationFrame(() => {
     collapseGuardRaf = null
-    applyCollapseStates()
-    // Selection is client-owned too — re-assert it across the same patch paths.
-    window.DoitSelection.apply()
-    // Editor visibility is client-owned (UX_GUARDRAILS 6.5): the server always
-    // renders the pane hidden now, so re-assert the open flag the same way.
-    window.DoitInitiativeEditor.apply()
-    // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
-    applyPendingMove()
-    applyPendingToggle()
-    // Presence badges are client-painted (m02.04 §1.12) — same guard.
-    applyPresenceBadges()
-    // While a confirm modal is up, its maybe-write hue is server-held —
-    // disarm the client's safety timer so it can't strip it mid-decision.
-    if (document.getElementById("completion-confirm")) releaseSavingHue()
+    reassertClientState()
   })
 }).observe(document.body, {
   subtree: true,
@@ -2845,6 +2857,29 @@ new MutationObserver(() => {
   // re-applies are idempotent (no write when correct), so no loops.
   attributeFilter: ["class", "data-selected"],
 })
+
+// The mutation guard above catches incremental patches, but the LiveView
+// CONNECT/RECONNECT join is special: its first morphdom runs against the dead
+// (static) DOM and can replace the pane/selection/rail elements wholesale. On a
+// slow LongPoll connect that "major reload" lands seconds after the page looks
+// ready — right while the user is mid-action — and the mutation guard's
+// rAF-debounced callback can race LiveView's own focus/DOM restore on that big
+// batch, leaving the pane the user opened during the pre-connect window hidden
+// again. So we ALSO re-assert explicitly at the join boundary, not just from the
+// observer. `installConnectGuards` wires the LiveView connect lifecycle:
+//   - socket.onOpen: fires on the initial transport open and every reconnect.
+//   - phx:page-loading-stop with kind "initial": LiveView dispatches this when
+//     the join render has been applied to the DOM — the exact moment after the
+//     "major reload" patch. We re-run on the next frame so we win after morphdom
+//     has finished writing the batch.
+// Both are idempotent via reassertClientState, so double-firing is harmless.
+function installConnectGuards(socket) {
+  const reassertSoon = () => requestAnimationFrame(reassertClientState)
+  socket.onOpen(reassertSoon)
+  // Every loading-stop is safe to re-run on (reassertClientState is idempotent);
+  // the one that matters is the initial join's "major reload" patch.
+  window.addEventListener("phx:page-loading-stop", reassertSoon)
+}
 
 // Sizes the whole task tree to one width so every row — roots included —
 // renders uniformly and the tree scrolls horizontally only when depth genuinely
@@ -3659,10 +3694,20 @@ Hooks.SortRecall = {
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
-  longPollFallbackMs: 2500,
+  // Cold/first connects (especially after a dev recompile, when HEEx templates
+  // JIT-warm and a mount can take ~3s) trip a tight WS budget and fall back to
+  // LongPoll — which then STICKS via sessionStorage["phx:fallback:LongPoll"].
+  // WS is proven working here (heartbeat replies ~900ms warm, upgrades ~7s), so
+  // give the primary transport real room to win the race before falling back.
+  longPollFallbackMs: 6000,
   params: {_csrf_token: csrfToken},
   hooks: {...colocatedHooks, ...Hooks},
 })
+
+// Re-assert client-owned view state at the connect/reconnect join boundary, so
+// the slow LongPoll "major reload" can't wipe a pane the user opened during the
+// pre-connect window. See installConnectGuards.
+installConnectGuards(liveSocket.getSocket())
 
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
