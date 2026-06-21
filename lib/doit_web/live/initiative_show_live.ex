@@ -747,7 +747,8 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("update_subtitle", %{"subtitle" => subtitle}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk())}
+      {:noreply,
+       socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk()}
     else
       case Initiatives.update_subtitle(socket.assigns.initiative, subtitle) do
         {:ok, _root} ->
@@ -820,7 +821,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("set_progress_calc", %{"calc" => calc}, socket)
       when calc in ~w(leaf_average single_level) do
     if not socket.assigns.can_edit do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       case Initiatives.update_initiative(socket.assigns.initiative, %{"progress_calc" => calc}) do
         {:ok, updated} ->
@@ -846,7 +847,7 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("set_index_style", %{"index_style" => style}, socket) do
     cond do
       not socket.assigns.can_edit ->
-        {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+        {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
 
       not DoIt.Tasks.Index.valid_style?(style) ->
         {:noreply, put_flash(socket, :error, "Unknown numbering style.")}
@@ -890,7 +891,8 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("update_initiative", %{"initiative" => params}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk())}
+      {:noreply,
+       socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk()}
     else
       initiative = socket.assigns.initiative
 
@@ -1025,13 +1027,13 @@ defmodule DoItWeb.InitiativeShowLive do
         end
 
       true ->
-        {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+        {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     end
   end
 
   def handle_event("cascade_sort", params, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       task = sort_target(socket, params)
       branch_count = Tasks.count_descendant_branches(task.id)
@@ -1052,7 +1054,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("set_sort", params, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       task = sort_target(socket, params)
       user = socket.assigns.current_user
@@ -1097,7 +1099,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # reverts it, committed: true releases it to the patch.
   def handle_event("toggle_complete", %{"id" => id}, socket) do
     if not can_progress?(socket, String.to_integer(id)) do
-      {:reply, %{ok: false}, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+      {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       task = Tasks.get_task!(String.to_integer(id))
       user = socket.assigns.current_user
@@ -1125,7 +1127,7 @@ defmodule DoItWeb.InitiativeShowLive do
     task = socket.assigns.selected_task
 
     if not (task && can_progress?(socket, task.id)) do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       user = socket.assigns.current_user
 
@@ -1205,30 +1207,47 @@ defmodule DoItWeb.InitiativeShowLive do
   # currently viewing this Initiative. Nothing is persisted — the broadcast
   # fans out to each viewer's socket (including ours, via the subscription), so
   # there's a single append path in handle_info. Blank messages are dropped.
+  #
+  # When NO ONE else is viewing the Initiative right now, the message has no
+  # reader: don't broadcast (nobody to receive). Instead sound the rejection
+  # bonk and drop a dimmed "system" line into the sender's own log so the dead
+  # end is visible IN the chat (not a toast) — operator was explicit on that.
   def handle_event("send_chat", %{"body" => body}, socket) do
     body = String.trim(body || "")
     user = socket.assigns.current_user
 
-    if body == "" do
-      {:noreply, socket}
-    else
-      msg = %{
-        user_id: user.id,
-        name: user.name,
-        initials: initials(user),
-        bg: avatar_bg(user),
-        fg: avatar_fg(user),
-        body: String.slice(body, 0, 2000),
-        at: System.system_time(:second)
-      }
+    cond do
+      body == "" ->
+        {:noreply, socket}
 
-      Phoenix.PubSub.broadcast(
-        DoIt.PubSub,
-        chat_topic(socket.assigns.initiative.id),
-        {:chat_message, msg}
-      )
+      alone?(socket) ->
+        system_msg = %{
+          system: true,
+          user_id: nil,
+          body: "Nobody's here to read that yet — no one else is viewing this Initiative."
+        }
 
-      {:noreply, socket}
+        {:noreply, socket |> append_chat(system_msg) |> bonk()}
+
+      true ->
+        msg = %{
+          system: false,
+          user_id: user.id,
+          name: user.name,
+          initials: initials(user),
+          bg: avatar_bg(user),
+          fg: avatar_fg(user),
+          body: String.slice(body, 0, 2000),
+          at: System.system_time(:second)
+        }
+
+        Phoenix.PubSub.broadcast(
+          DoIt.PubSub,
+          chat_topic(socket.assigns.initiative.id),
+          {:chat_message, msg}
+        )
+
+        {:noreply, socket}
     end
   end
 
@@ -1238,7 +1257,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # confirmed; the row was already optimistically removed client-side.
   def handle_event("delete_task", %{"id" => id}, socket) do
     if not socket.assigns.can_edit do
-      {:noreply, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
+      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       {:noreply, commit_delete_task(socket, String.to_integer(id))}
     end
@@ -1328,13 +1347,6 @@ defmodule DoItWeb.InitiativeShowLive do
         %{kind: :cascade_sort, task_id: task_id} ->
           commit_cascade_sort(socket, Tasks.get_task!(task_id))
 
-        %{kind: kind, task_id: id} when kind in [:cascade_complete, :cascade_incomplete] ->
-          # Failure pushed "confirm-cancelled" inside — the held flip reverts.
-          case commit_cascade(socket, id, kind) do
-            {:ok, socket} -> socket
-            {:error, socket} -> socket
-          end
-
         _ ->
           socket
       end
@@ -1421,7 +1433,9 @@ defmodule DoItWeb.InitiativeShowLive do
       {:reply, %{ok: false},
        socket |> put_flash(:error, "Owners transfer ownership before leaving.") |> bonk()}
     else
-      {_count, _} = Initiatives.remove_member(socket.assigns.initiative.id, me, socket.assigns.current_user)
+      {_count, _} =
+        Initiatives.remove_member(socket.assigns.initiative.id, me, socket.assigns.current_user)
+
       {:reply, %{ok: true}, socket}
     end
   end
@@ -1440,7 +1454,8 @@ defmodule DoItWeb.InitiativeShowLive do
         {:noreply, socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
 
       user_id == initiative.owner_id ->
-        {:noreply, socket |> put_flash(:error, "The Initiative's owner can't be removed.") |> bonk()}
+        {:noreply,
+         socket |> put_flash(:error, "The Initiative's owner can't be removed.") |> bonk()}
 
       Tasks.member_assignment_count(initiative.id, user_id) > 0 ->
         member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
@@ -1670,26 +1685,22 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  # Branch checkbox: open the modal unless suppressed, else cascade now.
-  # Replies mirror move_task's contract — the client flipped the branch's own
-  # checkbox optimistically (.03.07.22): committed: false holds the flip while
-  # the modal decides (6.6); committed: true releases it; ok: false reverts.
+  # Branch checkbox: the "complete / reopen this branch and all subtasks?"
+  # confirm now opens CLIENT-SIDE (app.js #cascade-confirm, UX_GUARDRAILS
+  # 6.5/6.6) — its content (task title + verb) is client-known, so it never
+  # waits on the network, and the client holds the optimistic flip while it
+  # decides. This event arrives only when the cascade should COMMIT (skip
+  # suppressed, or the user Proceeded); we just write it. Permission is the
+  # authoritative backstop. Reply mirrors move_task: ok:true + committed:true
+  # releases the held flip; ok:false reverts it.
   defp request_cascade(socket, id, kind) do
-    cond do
-      not can_progress?(socket, id) ->
-        {:reply, %{ok: false}, (socket |> put_flash(:error, "You don't have permission.") |> bonk())}
-
-      skip_confirm?(socket, "cascade-complete") ->
-        case commit_cascade(socket, id, kind) do
-          {:ok, socket} -> {:reply, %{ok: true, committed: true}, socket}
-          {:error, socket} -> {:reply, %{ok: false}, socket}
-        end
-
-      true ->
-        task = Tasks.get_task!(id)
-
-        {:reply, %{ok: true, committed: false},
-         assign_pending(socket, %{kind: kind, task_id: id, title: task.title})}
+    if not can_progress?(socket, id) do
+      {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+    else
+      case commit_cascade(socket, id, kind) do
+        {:ok, socket} -> {:reply, %{ok: true, committed: true}, socket}
+        {:error, socket} -> {:reply, %{ok: false}, socket}
+      end
     end
   end
 
@@ -1708,12 +1719,11 @@ defmodule DoItWeb.InitiativeShowLive do
         {:ok, socket |> assign_pending(nil) |> load_tree() |> refresh_selected()}
 
       {:error, cs} ->
+        # The {:error, socket} reply carries ok:false — the client reverts the
+        # held optimistic flip from there (revertPendingToggle). No event needed.
         {:error,
          socket
          |> assign_pending(nil)
-         # A client may hold the optimistic flip from a confirmed cascade —
-         # the write died, so revert it.
-         |> push_event("confirm-cancelled", %{})
          |> put_flash(:error, "Couldn't cascade: #{summarize_errors(cs)}.")}
     end
   end
@@ -1885,21 +1895,30 @@ defmodule DoItWeb.InitiativeShowLive do
   # id the template uses as a stable key + autoscroll trigger. Ephemeral — only
   # ever held here, never written.
   def handle_info({:chat_message, msg}, socket) do
-    next_id = socket.assigns.chat_log_id + 1
-    entry = Map.put(msg, :id, next_id)
-
-    messages =
-      [entry | socket.assigns.chat_messages]
-      |> Enum.take(@chat_cap)
-
-    {:noreply,
-     socket
-     |> assign(:chat_messages, messages)
-     |> assign(:chat_log_id, next_id)}
+    {:noreply, append_chat(socket, msg)}
   end
 
   def handle_info({:task_moved, _id}, socket),
     do: {:noreply, socket |> load_tree() |> refresh_selected()}
+
+  # Whether the sender is the only viewer of this Initiative right now. The
+  # per-Initiative presence set (@online_ids, kept fresh on every presence_diff)
+  # minus the sender — empty means there's no one to read a chat message.
+  defp alone?(socket),
+    do: MapSet.delete(socket.assigns.online_ids, socket.assigns.current_user.id) |> Enum.empty?()
+
+  # Append one message to this viewer's own ephemeral log (capped), bumping the
+  # monotonic chat-log id the template keys on. Shared by the broadcast path
+  # (handle_info) and the alone-case system line.
+  defp append_chat(socket, msg) do
+    next_id = socket.assigns.chat_log_id + 1
+    entry = Map.put(msg, :id, next_id)
+    messages = Enum.take([entry | socket.assigns.chat_messages], @chat_cap)
+
+    socket
+    |> assign(:chat_messages, messages)
+    |> assign(:chat_log_id, next_id)
+  end
 
   # --- Render ---------------------------------------------------------------
 
@@ -2627,6 +2646,7 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.move_flip_confirm :if={@can_edit} />
+      <.cascade_confirm />
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
@@ -2791,28 +2811,40 @@ defmodule DoItWeb.InitiativeShowLive do
             <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
               No messages yet — say hello to anyone else viewing this Initiative.
             </p>
-            <div
-              :for={m <- Enum.reverse(@chat_messages)}
-              id={"chat-msg-#{m.id}"}
-              data-chat-uid={m.user_id}
-              class="flex gap-2"
-            >
-              <span
-                class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
-                style={"background-image: #{m.bg}; color: #{m.fg};"}
-              >
-                {m.initials}
-              </span>
-              <div class="min-w-0">
-                <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+            <%!-- A system line (e.g. "nobody's here to read that") is the
+                 sender's own local notice: dimmed italic, no avatar, and
+                 marked data-chat-system so the .Chat hook never treats it as a
+                 message from another viewer (no pop / flash / preview). It has
+                 no user_id, so no data-chat-uid. --%>
+            <%= for m <- Enum.reverse(@chat_messages) do %>
+              <%= if Map.get(m, :system) do %>
                 <div
-                  data-chat-body
-                  class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                  id={"chat-msg-#{m.id}"}
+                  data-chat-system
+                  class="text-xs italic text-zinc-400 dark:text-zinc-500"
                 >
                   {m.body}
                 </div>
-              </div>
-            </div>
+              <% else %>
+                <div id={"chat-msg-#{m.id}"} data-chat-uid={m.user_id} class="flex gap-2">
+                  <span
+                    class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+                    style={"background-image: #{m.bg}; color: #{m.fg};"}
+                  >
+                    {m.initials}
+                  </span>
+                  <div class="min-w-0">
+                    <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                    <div
+                      data-chat-body
+                      class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                    >
+                      {m.body}
+                    </div>
+                  </div>
+                </div>
+              <% end %>
+            <% end %>
           </div>
 
           <div
@@ -2910,11 +2942,14 @@ defmodule DoItWeb.InitiativeShowLive do
               const reopen = this._open;
               this.panel.hidden = !reopen;
               if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
-              // A new message bumps the server's monotonic chat-log id.
+              // A new message bumps the server's monotonic chat-log id. A
+              // system line (the alone-case "nobody's here" notice) also bumps
+              // it, but it's the sender's own local notice — never pop / flash /
+              // preview for it (the rejection bonk already fired server-side).
               const id = parseInt(this.el.dataset.chatLogId || "0", 10);
               if (id > this._lastLogId) {
                 this._lastLogId = id;
-                if (this.fromOther()) {
+                if (!this.latestIsSystem() && this.fromOther()) {
                   this.pop(); // a quick blip — distinct from the rejection bonk
                   if (this.panel.hidden) {
                     this.showLatestPreview();
@@ -2923,6 +2958,12 @@ defmodule DoItWeb.InitiativeShowLive do
                 }
               }
               if (this.panel && !this.panel.hidden) this.scrollToBottom();
+            },
+            // Is the newest log entry a system notice (data-chat-system)?
+            latestIsSystem() {
+              if (!this.log) return false;
+              const last = this.log.lastElementChild;
+              return !!last && last.hasAttribute("data-chat-system");
             },
             // Was the latest message from someone else? No pop / flash for your
             // own message echoing back over the broadcast.
@@ -3049,16 +3090,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # (a destructive action always confirms).
   defp confirm_class(%{kind: kind}) when kind in [:move, :create], do: "completion-flip"
   defp confirm_class(%{kind: :cascade_sort}), do: "cascade-sort"
-
-  defp confirm_class(%{kind: kind}) when kind in [:cascade_complete, :cascade_incomplete],
-    do: "cascade-complete"
-
   defp confirm_class(_), do: nil
 
   defp confirm_class_label("completion-flip"), do: "completion changes"
   defp confirm_class_label("cascade-sort"), do: "large branch reorgs"
-  defp confirm_class_label("cascade-complete"), do: "branch completion changes"
-  defp confirm_class_label("remove-member"), do: "member removals"
 
   defp skip_confirm?(socket, class),
     do: not is_nil(class) and MapSet.member?(socket.assigns.confirm_skips, class)
@@ -3082,10 +3117,6 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:pending_saving_ids, saving)
     |> assign(:pending_recompute_ids, pending_recompute_ids(pending, saving))
   end
-
-  defp pending_saving_ids(%{kind: kind, task_id: id})
-       when kind in [:cascade_complete, :cascade_incomplete],
-       do: MapSet.new(Tasks.subtree_ids(id) ++ Tasks.ancestor_ids(id))
 
   defp pending_saving_ids(%{kind: :cascade_sort, task_id: id}),
     do: MapSet.new(Tasks.subtree_ids(id))
@@ -3153,6 +3184,52 @@ defmodule DoItWeb.InitiativeShowLive do
           <button
             type="button"
             data-flip-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Branch-cascade confirm — client-opened (app.js #cascade-confirm,
+  # UX_GUARDRAILS 6.5/6.6). Checking a branch's box flips the row optimistically
+  # and, unless suppressed, opens THIS dialog instantly (title + verb are
+  # client-known) while holding the flip. app.js fills the heading/body for the
+  # complete-vs-reopen case, Proceed commits (cascade_complete / cascade_incomplete,
+  # optionally persisting the "don't ask again" skip to localStorage), and
+  # Cancel / backdrop / Esc revert the held flip. phx-update="ignore": the
+  # server never patches it.
+  defp cascade_confirm(assigns) do
+    ~H"""
+    <div
+      id="cascade-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 data-cascade-title class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Complete this branch?
+        </h2>
+        <p data-cascade-body class="mt-2 text-sm text-zinc-700 dark:text-zinc-300"></p>
+        <label class="mt-4 flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 select-none">
+          <input type="checkbox" data-cascade-dont-show class="checkbox checkbox-sm" />
+          Don't show this again for branch completion changes
+        </label>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-cascade-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-cascade-proceed
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
           >
             Proceed
@@ -3441,8 +3518,6 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp confirm_title(%{kind: :cascade_sort}), do: "Large branch reorg"
-  defp confirm_title(%{kind: :cascade_complete}), do: "Complete this branch?"
-  defp confirm_title(%{kind: :cascade_incomplete}), do: "Reopen this branch?"
   defp confirm_title(_), do: "Confirm completion change"
 
   defp confirm_body(%{kind: :cascade_sort, affected: n}, _verb) do
@@ -3450,12 +3525,6 @@ defmodule DoItWeb.InitiativeShowLive do
       "switches to Inherit — their own sort settings are overwritten and they follow " <>
       "this branch from now on; reversible only via Undo (Arc 5)."
   end
-
-  defp confirm_body(%{kind: :cascade_complete, title: t}, _verb),
-    do: "Mark \"#{t}\" and all its subtasks complete?"
-
-  defp confirm_body(%{kind: :cascade_incomplete, title: t}, _verb),
-    do: "Reopen \"#{t}\" and all its subtasks?"
 
   defp confirm_body(%{scenario: scenario}, verb) when is_integer(scenario),
     do: completion_confirm_message(scenario, verb)

@@ -748,12 +748,16 @@ document.addEventListener("click", (e) => {
     markRecomputing([...subtree.slice(1), ...ancestors])
     const ev = toggle.dataset.toggleEvent
     if (!ev || !window.DoitPush) return
+    // Flip the operated row optimistically FIRST (6.6) — the change shows
+    // before any confirm decides; the held handle survives until settled.
     applyToggleOptimism(li, toggle)
-    window.DoitPush(ev, {id: li.dataset.taskId}, (reply) => {
-      const failed = !reply || reply.ok === false
-      if (failed) revertPendingToggle()
-      else if (reply.committed !== false) window.DoitPendingToggle = null
-    })
+    // A branch cascade (complete / reopen this branch AND all subtasks) asks
+    // first, unless suppressed. The confirm opens CLIENT-SIDE (#cascade-confirm,
+    // UX_GUARDRAILS 6.5) — title + verb are client-known — holding the flip
+    // while it decides. A leaf toggle (toggle_complete) never asks.
+    const cascade = ev === "cascade_complete" || ev === "cascade_incomplete"
+    if (cascade && !cascadeConfirmSuppressed() && openCascadeConfirm(li, ev)) return
+    pushToggleCommit(ev, li)
     return
   }
   // Cascade-sort to all descendants — pink the whole subtree of the selected branch.
@@ -1012,8 +1016,11 @@ document.addEventListener("click", (e) => {
   if (btn) {
     e.preventDefault()
     const owner = btn.dataset.amOwner === "true"
+    // Incomplete rows carry NO data-done attribute: it renders as a boolean
+    // attr (data-done={status == "done"}), which HEEx omits when false. So
+    // "any incomplete task" = any row WITHOUT data-done (:not([data-done])).
     const needsConfirm =
-      owner && !!document.querySelector('#task-tree [data-task-row][data-done="false"]')
+      owner && !!document.querySelector("#task-tree [data-task-row]:not([data-done])")
     if (needsConfirm && modal) {
       modal.hidden = false
     } else {
@@ -1262,6 +1269,90 @@ function revertPendingToggle() {
   parts.row.toggleAttribute("data-done", !p.value)
   if (p.prevBarValue != null) setRowBar(parts.row, p.prevBarValue)
 }
+
+// Commit a completion toggle: push the event with the move_task-style reply
+// contract — ok:false reverts the held optimistic flip, committed:true (or any
+// non-false committed) releases the handle (the patch owns the row from there).
+function pushToggleCommit(ev, li) {
+  if (!window.DoitPush) return
+  window.DoitPush(ev, {id: li.dataset.taskId}, (reply) => {
+    const failed = !reply || reply.ok === false
+    if (failed) revertPendingToggle()
+    else if (reply.committed !== false) window.DoitPendingToggle = null
+  })
+}
+
+// Branch-cascade confirm (UX_GUARDRAILS 6.5/6.6): "complete / reopen this
+// branch and all subtasks?" opens client-side — content is client-known, so no
+// round trip — while the operated row's optimistic flip is held. Proceed
+// commits (optionally suppressing future asks); Cancel / backdrop / Esc revert
+// the flip and close. Suppression is the same localStorage key the server's
+// ConfirmSkips hook syncs ("don't ask again" persists across reloads).
+const CASCADE_SKIP_KEY = "doit:confirm-skip:cascade-complete"
+const cascadeConfirmSuppressed = () => {
+  try { return localStorage.getItem(CASCADE_SKIP_KEY) === "1" } catch (_e) { return false }
+}
+
+function openCascadeConfirm(li, ev) {
+  const modal = document.getElementById("cascade-confirm")
+  if (!modal) return false
+  const reopen = ev === "cascade_incomplete"
+  const row = li.querySelector(":scope > [data-task-row]")
+  const titleEl = row && row.querySelector("[data-task-title]")
+  const title = titleEl ? titleEl.textContent.trim() : "this branch"
+  const body = modal.querySelector("[data-cascade-body]")
+  if (body) {
+    body.textContent = reopen
+      ? `Reopen "${title}" and all its subtasks?`
+      : `Mark "${title}" and all its subtasks complete?`
+  }
+  const heading = modal.querySelector("[data-cascade-title]")
+  if (heading) heading.textContent = reopen ? "Reopen this branch?" : "Complete this branch?"
+  const dont = modal.querySelector("[data-cascade-dont-show]")
+  if (dont) dont.checked = false
+  modal.dataset.cascadeEv = ev
+  modal.dataset.cascadeLiId = li.id
+  modal.hidden = false
+  const proceed = modal.querySelector("[data-cascade-proceed]")
+  if (proceed) proceed.focus()
+  return true
+}
+
+function closeCascadeConfirm() {
+  const modal = document.getElementById("cascade-confirm")
+  if (modal) modal.hidden = true
+}
+
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("cascade-confirm")
+  if (!modal || modal.hidden) return
+  // Cancel / backdrop — revert the held flip, close, no server touch.
+  if (e.target === modal || e.target.closest("[data-cascade-cancel]")) {
+    closeCascadeConfirm()
+    revertPendingToggle()
+    return
+  }
+  if (e.target.closest("[data-cascade-proceed]")) {
+    const dont = modal.querySelector("[data-cascade-dont-show]")
+    if (dont && dont.checked) {
+      try { localStorage.setItem(CASCADE_SKIP_KEY, "1") } catch (_e) {}
+    }
+    const ev = modal.dataset.cascadeEv
+    const li = document.getElementById(modal.dataset.cascadeLiId || "")
+    closeCascadeConfirm()
+    if (ev && li) pushToggleCommit(ev, li)
+    else revertPendingToggle()
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("cascade-confirm")
+  if (modal && !modal.hidden) {
+    closeCascadeConfirm()
+    revertPendingToggle()
+  }
+})
 
 // Confirm-held optimism (§8.20): while a completion-flip confirm decides a
 // drag, the optimistic placement holds. The server announces the outcome:
