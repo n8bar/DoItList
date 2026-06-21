@@ -96,7 +96,6 @@ defmodule DoItWeb.InitiativeShowLive do
            :collaborator_online_ids,
            if(connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new())
          )
-         |> assign(:editing_initiative?, false)
          |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
          |> assign_pending(nil)
          |> assign(:pending_handoff, nil)
@@ -722,7 +721,6 @@ defmodule DoItWeb.InitiativeShowLive do
           task ->
             {:noreply,
              socket
-             |> assign(:editing_initiative?, false)
              |> assign(:selected_task_id, id)
              |> assign_selected(task)
              |> assign(:comments, Tasks.list_comments(id))
@@ -744,27 +742,11 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("edit_initiative", _params, socket) do
-    initiative = socket.assigns.initiative
-    form = to_form(Initiatives.change_initiative(initiative))
-
-    # The editor reads @root_task (kept fresh by load_tree / patch_task); the
-    # sort controls carry their own task id, so the task selection is left
-    # alone — its pane just hides while the editor is open.
-    {:noreply,
-     socket
-     |> assign(:selected_task_id, nil)
-     |> assign(:editing_initiative?, true)
-     |> assign(:initiative_form, form)
-     |> assign(:subtitle, Initiatives.subtitle(initiative))}
-  end
-
-  def handle_event("close_initiative", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:editing_initiative?, false)
-     |> assign(:selected_task_id, nil)}
-  end
+  # Opening / closing the initiative editor is pure VIEW STATE owned entirely by
+  # the client (UX_GUARDRAILS 6.5): the pane is server-rendered hidden with
+  # #initiative-form pre-populated, so DoitInitiativeEditor reveals/hides it with
+  # no round trip. No server handler exists for the open/close — only the real
+  # writes below (update_subtitle / update_initiative) touch the server.
 
   def handle_event("update_subtitle", %{"subtitle" => subtitle}, socket) do
     if not socket.assigns.can_edit do
@@ -790,13 +772,6 @@ defmodule DoItWeb.InitiativeShowLive do
     else
       {:noreply, commit_delete_initiative(socket)}
     end
-  end
-
-  def handle_event("close_panel", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:editing_initiative?, false)
-     |> assign(:selected_task_id, nil)}
   end
 
   # Per-user Archive (m02.08 worklist 4). Sets `archived_at` on the caller's own
@@ -1842,7 +1817,7 @@ defmodule DoItWeb.InitiativeShowLive do
   # page is interactive, so fill in the undo/redo toolbar labels and the
   # cross-Initiative Collaborators rail now. Cheap, idempotent, and safe to run
   # after any number of intervening renders — it touches only these assigns and
-  # never the tree, selection, or `editing_initiative?` view state.
+  # never the tree or the client-owned selection / editor view state.
   @impl true
   def handle_info(:after_mount, socket) do
     {:noreply,
@@ -2396,7 +2371,6 @@ defmodule DoItWeb.InitiativeShowLive do
               initiative={@initiative}
               subtitle={@subtitle}
               initiative_progress={@initiative_progress}
-              editing_initiative?={@editing_initiative?}
               can_edit={@can_edit}
             />
 
@@ -2511,9 +2485,9 @@ defmodule DoItWeb.InitiativeShowLive do
                rendered; the client flips `hidden` with the rail (.03.07.20). --%>
           <div
             id="pane-backdrop"
-            hidden={!(@selected_task_id || @editing_initiative?)}
+            hidden={is_nil(@selected_task_id)}
             class="lg:hidden fixed inset-0 z-20 bg-black/50"
-            phx-click="close_panel"
+            data-close-panel
             aria-hidden="true"
           >
           </div>
@@ -2532,7 +2506,7 @@ defmodule DoItWeb.InitiativeShowLive do
                (flex column, pinned Members) is lg:+ only. --%>
           <aside
             id="details-rail"
-            data-open={(@selected_task_id || @editing_initiative?) && "true"}
+            data-open={@selected_task_id && "true"}
             class={[
               "not-data-open:hidden lg:not-data-open:block",
               "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
@@ -2546,7 +2520,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <div class="lg:hidden flex justify-end">
               <button
                 type="button"
-                phx-click="close_panel"
+                data-close-panel
                 aria-label="Close details panel"
                 title="Close"
                 class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
@@ -2580,11 +2554,14 @@ defmodule DoItWeb.InitiativeShowLive do
                  aside-level one drops at lg. --%>
             <div class="space-y-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
               <%!-- Persistent like the task pane (.03.07.08): always rendered,
-                   hidden toggled — the client flips it instantly on the
-                   initiative title click and the server patch confirms. --%>
+                   the editor's #initiative-form pre-populated from the
+                   initiative. Visibility is CLIENT-OWNED view state (UX_GUARDRAILS
+                   6.5): always rendered `hidden` here, and DoitInitiativeEditor
+                   reveals it instantly on the title click — no round trip. The
+                   guard observer re-asserts the open flag across patches. --%>
               <div
                 id="initiative-editor-pane"
-                hidden={not @editing_initiative?}
+                hidden
                 class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
               >
                 <.initiative_editor
@@ -2612,7 +2589,7 @@ defmodule DoItWeb.InitiativeShowLive do
               <div
                 id="task-editor-pane"
                 data-task-id={@selected_task_id}
-                hidden={is_nil(@selected_task_id) or @editing_initiative?}
+                hidden={is_nil(@selected_task_id)}
                 class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
               >
                 <.task_editor
@@ -3578,7 +3555,6 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :initiative, :map, required: true
   attr :subtitle, :string, required: true
   attr :initiative_progress, :integer, required: true
-  attr :editing_initiative?, :boolean, required: true
   attr :can_edit, :boolean, required: true
 
   @doc """
@@ -3597,13 +3573,9 @@ defmodule DoItWeb.InitiativeShowLive do
           <.botanical_icon kind={:grove} class="w-6 h-6" />
         </span>
         <h1
-          phx-click="edit_initiative"
+          data-edit-initiative
           title="Click to edit"
-          class={[
-            "text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white",
-            !@editing_initiative? &&
-              "underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
-          ]}
+          class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
         >
           {@initiative.name}
         </h1>
@@ -3622,7 +3594,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <p
         :if={@subtitle != ""}
-        phx-click="edit_initiative"
+        data-edit-initiative
         title="Click to edit"
         class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-200"
       >
@@ -4121,7 +4093,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Initiative details</h3>
         <button
           type="button"
-          phx-click="close_initiative"
+          data-close-initiative
           aria-label="Close"
           title="Close"
           class="hidden lg:inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"

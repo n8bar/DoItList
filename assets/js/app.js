@@ -186,9 +186,9 @@ const DoitSelection = {
   // (not attributes) and skip the focused element, so the guard observer
   // converges and in-progress typing survives.
   syncPaneSkeleton() {
-    // Selecting a task always leaves the initiative editor (.03.07.08).
-    const ip = document.getElementById("initiative-editor-pane")
-    if (ip && this.id && !ip.hidden) ip.hidden = true
+    // Selecting a task always leaves the initiative editor (.03.07.08) — close
+    // it through the client-owned flag so the guard observer keeps it closed.
+    if (this.id) DoitInitiativeEditor.close({skipSelectionClear: true})
     const pane = document.getElementById("task-editor-pane")
     if (pane) {
       const arrived = pane.dataset.taskId === this.id
@@ -350,6 +350,46 @@ const DoitSelection = {
 }
 window.DoitSelection = DoitSelection
 
+// Client-owned initiative-editor visibility (UX_GUARDRAILS 6.5). Opening the
+// editor is pure VIEW STATE: the pane (#initiative-editor-pane) is already
+// server-rendered with #initiative-form pre-populated from the initiative, so
+// revealing it loads nothing — no round trip. Mirrors DoitSelection: the flag
+// lives on the client and the guard observer re-asserts it across every patch
+// (the server now always renders the pane hidden, since @editing_initiative?
+// stays false). The form SUBMIT (update_initiative) and subtitle change
+// (update_subtitle) remain real server writes — only open/close is client-side.
+const DoitInitiativeEditor = {
+  open: false,
+  // Reveal the editor. Opening it deselects any task (the rail shows the editor
+  // OR a task's Details OR Members — never editor + Details together).
+  show() {
+    if (window.DoitSelection) window.DoitSelection.clear()
+    this.open = true
+    this.apply()
+  },
+  // Hide the editor. `skipSelectionClear` is set when the caller is the
+  // selection path itself (a task was just chosen) — clearing selection there
+  // would undo the very selection that's closing the editor.
+  close(opts = {}) {
+    this.open = false
+    if (!opts.skipSelectionClear && window.DoitSelection) window.DoitSelection.clear()
+    this.apply()
+  },
+  // Idempotent: only writes when the DOM disagrees, so the guard observer
+  // converges instead of looping. Drives the pane's `hidden`, the rail flyout
+  // (via syncRail), and the title's dotted-underline signifier (shown only when
+  // the editor is closed — the server can no longer toggle it).
+  apply() {
+    const ip = document.getElementById("initiative-editor-pane")
+    if (ip && ip.hidden !== !this.open) ip.hidden = !this.open
+    document.querySelectorAll("[data-edit-initiative]").forEach((el) => {
+      el.classList.toggle("editor-open", this.open)
+    })
+    syncRail()
+  },
+}
+window.DoitInitiativeEditor = DoitInitiativeEditor
+
 // The right rail's mobile flyout state is view state (.03.07.20): `data-open`
 // on #details-rail drives the overlay classes (Tailwind data-variants) and
 // #pane-backdrop's visibility. Open = a task is selected or the initiative
@@ -358,8 +398,7 @@ window.DoitSelection = DoitSelection
 function syncRail() {
   const rail = document.getElementById("details-rail")
   if (!rail) return
-  const ip = document.getElementById("initiative-editor-pane")
-  const open = !!(DoitSelection.id || (ip && !ip.hidden))
+  const open = !!(DoitSelection.id || DoitInitiativeEditor.open)
   if (rail.hasAttribute("data-open") !== open) rail.toggleAttribute("data-open", open)
   const backdrop = document.getElementById("pane-backdrop")
   if (backdrop && backdrop.hidden !== !open) backdrop.hidden = !open
@@ -653,28 +692,33 @@ document.addEventListener("submit", (e) => {
   }, 0)
 })
 
-// Pane visibility flips client-instant (.03.07.08); the server patch
-// confirms moments later. The initiative title click swaps panes at once,
-// any close control hides both, and selecting a task hides the initiative
-// editor (see DoitSelection.apply).
+// Pane visibility is pure VIEW STATE, fully client-side (.03.07.08,
+// UX_GUARDRAILS 6.5) — no round trip gates open or close. The editor pane is
+// already server-rendered (hidden) with #initiative-form pre-populated, so the
+// title click reveals it instantly; selecting a task closes it (DoitSelection)
+// and opening it deselects any task (DoitInitiativeEditor.show). Only real
+// writes — the form submit (update_initiative) and the subtitle change
+// (update_subtitle) — still touch the server.
 document.addEventListener("click", (e) => {
-  const initiativePane = document.getElementById("initiative-editor-pane")
-  const taskPane = document.getElementById("task-editor-pane")
-  if (e.target.closest("[phx-click='edit_initiative']")) {
-    DoitSelection.clear()
-    if (initiativePane) initiativePane.hidden = false
-    if (taskPane) taskPane.hidden = true
-    syncRail()
+  // Click the initiative title / subtitle → reveal the editor. No DoitPush.
+  if (e.target.closest("[data-edit-initiative]")) {
+    DoitInitiativeEditor.show()
     return
   }
-  if (
-    e.target.closest(
-      "[phx-click='close_task'], [phx-click='close_panel'], [phx-click='close_initiative']"
-    )
-  ) {
-    DoitSelection.clear()
-    if (initiativePane) initiativePane.hidden = true
-    syncRail()
+  // The editor's own close (red X) → hide the editor.
+  if (e.target.closest("[data-close-initiative]")) {
+    DoitInitiativeEditor.close()
+    return
+  }
+  // The mobile flyout close (rail X + backdrop) shuts whichever pane is open:
+  // the editor and/or a task's Details. Closing the editor is client-only; if a
+  // task was selected, tell the server so it drops the selection presence (the
+  // row-click path's close_task equivalent for this control).
+  if (e.target.closest("[data-close-panel]")) {
+    const hadSelection = !!DoitSelection.id
+    // close() also clears the selection (skipSelectionClear is unset).
+    DoitInitiativeEditor.close()
+    if (hadSelection && window.DoitPush) window.DoitPush("close_task", {})
   }
 })
 
@@ -2781,6 +2825,9 @@ new MutationObserver(() => {
     applyCollapseStates()
     // Selection is client-owned too — re-assert it across the same patch paths.
     window.DoitSelection.apply()
+    // Editor visibility is client-owned (UX_GUARDRAILS 6.5): the server always
+    // renders the pane hidden now, so re-assert the open flag the same way.
+    window.DoitInitiativeEditor.apply()
     // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
     applyPendingMove()
     applyPendingToggle()

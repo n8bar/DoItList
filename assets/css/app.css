@@ -211,6 +211,15 @@ li[data-selected] > [data-task-row] .kbd-key {
   text-decoration: underline;
 }
 
+/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): the title /
+   subtitle carry a "click to edit" dotted-underline signifier that drops while
+   the editor is open. The pane's visibility is client-driven now (the server no
+   longer flips @editing_initiative?), so the signifier keys off the .editor-open
+   class DoitInitiativeEditor.apply() toggles, not a server assign. */
+[data-edit-initiative].editor-open {
+  text-decoration: none;
+}
+
 /* Drag-reorder visuals (Hooks.DragReorder).
    - .dragging-source: dim the row being dragged so the user can see what's
      moving without losing it visually.
