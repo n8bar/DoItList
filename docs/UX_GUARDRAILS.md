@@ -38,7 +38,12 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 6.4 Otherwise — for actions 6.3 doesn't name — prefer undo over confirm where feasible: let the user act, with a short window to reverse. Undo fits when the user sees the result and can choose to reverse it; a confirm (6.3) fits when the effect can land off-screen, since you can't undo a change you never noticed.
 6.5 Interactions that only change view state — selection, expand/collapse, focus — never wait on the network. Opening a confirmation dialog counts when its content is already client-known.
 6.6 Confirmations preserve optimism. A confirm that interrupts an optimistic action must not visually undo it while the user decides — Cancel reverts it, Proceed carries it through.
+6.7 Acknowledge every action immediately. Every user-initiated action is acknowledged the instant it's initiated — applied optimistically when the client can complete it (6.2), shown in-flight when it's server-gated (6.1). A round-trip never delays *acknowledgement*; no action leaves the initiator wondering whether it registered.
+6.8 Interactive from first paint. A painted page is a usable page — never "looks ready but isn't." Client-ownable interactions work before the connection is live; an action taken before connect is acknowledged and reconciled on connect, never silently dropped.
+6.9 Any transport. The §6 guarantees hold on both WebSocket and the LongPoll fallback — never let the experience depend on the fast path.
 
 ### 7. Navigation & state
 7.1 Same path = same content. Back button works as expected; refreshing a page returns the user where they were.
 7.2 Don't override system color-scheme preference unless the user explicitly opted in.
+7.3 State lives where its lifetime is. The client owns ephemeral UI state — selection, expand/collapse, focus, open panes, optimistic in-flight changes — and re-asserts it across every re-render and reconnect; the server owns durable data and sync (view-state changes never wait on the network, 6.5).
+7.4 Presence continuity. Navigating within the app keeps the live session, its subscriptions, and the user's presence intact — no tear-down-and-rebuild per navigation that flickers the user out and back in for others.
