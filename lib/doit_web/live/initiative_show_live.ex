@@ -3671,6 +3671,7 @@ defmodule DoItWeb.InitiativeShowLive do
     <li
       id={"task-#{@task.id}"}
       data-task-id={@task.id}
+      data-keep="selected"
       data-depth={@depth}
       data-sort={@task.sort_mode || ""}
       data-sort-reverse={to_string(@task.sort_reverse)}

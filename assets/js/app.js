@@ -143,12 +143,67 @@ window.DoitSaving = {
   savingRowOf,
 }
 
+// The single source of client-owned truth (worklist 2). One unified store that
+// survives every server re-render, reconnect, and initial connect — read by the
+// `dom:` callbacks below so the right value is reconciled INSIDE the morphdom
+// patch (never painted wrong, no post-hoc race). It supersedes the fragmented
+// `window.Doit*` objects; features migrate onto it slice by slice. This slice
+// activates `selectedId` only — the other fields are declared so the shape is
+// fixed for the slices that follow (open editor/details, optimistic flips,
+// collaborator presence, keyboard focus/caret).
+const DoitState = {
+  selectedId: null, // string|null — the client-owned task selection (active)
+  editorOpen: false, // initiative editor visibility — slice 2.3
+  pending: {toggle: null, move: null}, // confirm-held optimistic flips — slice 2.3
+  presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
+  focus: null, // focused field / caret / scroll — slice 2.3
+}
+window.DoitState = DoitState
+
+// `data-keep="<kind>"` registry. Each client-owned element carries a
+// server-rendered `data-keep` marker naming its kind; the entry's `apply(el,
+// state)` reconciles that one element to the store's truth, idempotently
+// (writes only when the DOM disagrees, removes the attribute when it shouldn't
+// be there). The `dom:` callbacks dispatch into this by `el.dataset.keep`, so a
+// new client-owned element joins the preserve path by rendering the marker — no
+// per-feature observer. This slice registers `"selected"`; later slices add the
+// editor/pane, optimistic-flip, presence, and focus kinds.
+const KeepRegistry = {
+  selected: {
+    // Match the task-row <li>'s data-selected to state.selectedId. Set when this
+    // li IS the selection (and isn't already marked); remove otherwise.
+    apply(el, state) {
+      const id = el.dataset.taskId
+      const want = state.selectedId != null && id === String(state.selectedId)
+      if (want) {
+        if (el.getAttribute("data-selected") !== id) el.setAttribute("data-selected", id)
+      } else if (el.hasAttribute("data-selected")) {
+        el.removeAttribute("data-selected")
+      }
+    },
+  },
+}
+
+// Reconcile one keep-marked element to the store. Shared by both `dom:`
+// callbacks. On update we operate on `toEl` (the incoming node) so the truth is
+// in place BEFORE morphdom copies it onto the live element — the wrong value
+// never paints. On re-add we operate on the freshly inserted node.
+function applyKeep(el, state) {
+  if (!el || !el.dataset) return
+  const entry = KeepRegistry[el.dataset.keep]
+  if (entry) entry.apply(el, state)
+}
+
 // Client-owned selection (UX_GUARDRAILS 6.5): the highlight is a DOM attribute
 // + CSS, applied instantly and re-applied across re-renders by the guard
 // observer below — the server only ever hears about it to load the Details
 // pane. `lastId` backs the Enter toggle's "reselect what I had" behavior.
+// `id` is a getter/setter backed by DoitState.selectedId so selection has a
+// single source of truth: the preserve-path `dom:` callbacks and the legacy
+// re-assert observer both read the same value and stay consistent.
 const DoitSelection = {
-  id: null,
+  get id() { return DoitState.selectedId },
+  set id(v) { DoitState.selectedId = v },
   lastId: null,
   li() { return this.id ? document.getElementById("task-" + this.id) : null },
   set(id, opts = {}) {
@@ -3702,6 +3757,22 @@ const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 6000,
   params: {_csrf_token: csrfToken},
   hooks: {...colocatedHooks, ...Hooks},
+  // Preserve path (worklist 2): keep client-owned UI state through the morphdom
+  // patch, preventively, so it's never clobbered and there's no post-hoc race.
+  // LV 1.1.29 exposes exactly two relevant `dom` hooks (see live_socket.js
+  // domCallbacks): onBeforeElUpdated(fromEl, toEl) and onNodeAdded(el).
+  //   - onBeforeElUpdated fires BEFORE morphdom commits an in-place update. Its
+  //     return value is ignored by LiveView, so we reconcile `toEl` (the
+  //     incoming node) in place — morphdom then copies the corrected value onto
+  //     the live element and the wrong value never paints.
+  //   - onNodeAdded fires AFTER morphdom inserts a node — the re-added case
+  //     (reorder, reset re-stream, the initial-join replace). We seed it from
+  //     the store on the freshly added element.
+  // Both dispatch by `data-keep` into KeepRegistry, reading DoitState.
+  dom: {
+    onBeforeElUpdated(_fromEl, toEl) { applyKeep(toEl, DoitState) },
+    onNodeAdded(el) { applyKeep(el, DoitState) },
+  },
 })
 
 // Re-assert client-owned view state at the connect/reconnect join boundary, so
