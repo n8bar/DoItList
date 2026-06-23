@@ -25,7 +25,7 @@ This is the milestone that earns the first public release.
 | 6 — Undo & Trash | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 16 | complete |
 | 7 — Initiative Layout & Task Tree, Revisited | [`m02.07-layout+task-tree-revisited.md`](m02.07-layout+task-tree-revisited.md) | 3 | complete |
 | 8 — Personal Workspace | [`m02.08-personal-workspace.md`](m02.08-personal-workspace.md) | 5 worklists | complete |
-| 9 — Client-Interaction Foundation | [`m02.09-client-interaction-foundation.md`](m02.09-client-interaction-foundation.md) | 6 worklists | draft |
+| 9 — Client-Interaction Foundation | [`m02.09-client-interaction-foundation.md`](m02.09-client-interaction-foundation.md) | 5 worklists | draft |
 
 ## Non-Goals
 
