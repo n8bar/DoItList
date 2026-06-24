@@ -2423,6 +2423,7 @@ defmodule DoItWeb.InitiativeShowLive do
               <div
                 id="tree-scroll"
                 phx-hook="TreeScrollFade"
+                data-keep="scroll"
                 class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
               >
                 <%!-- The one add-task form (parked in #add-task-home below) gets

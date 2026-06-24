@@ -157,7 +157,15 @@ const DoitState = {
   detailsOpen: {}, // {[elId]: bool} — open/closed of KeepOpen <details> (active)
   pending: {toggle: null, move: null}, // confirm-held optimistic flips — slice 2.3
   presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
-  focus: null, // focused field / caret / scroll — slice 2.3
+  // Inner scroll-container offsets, keyed by element id (slice 2.3.8). LiveView
+  // preserves window scroll on navigate and, because we keep every scroll box at
+  // a stable id, its scrollTop survives an in-place morph for free — but NOT the
+  // remove-and-re-add path (initial-join replace / a future stream reset), which
+  // re-creates the node at scrollTop 0. This store is the truth the "scroll"
+  // KeepRegistry applier restores onto the re-added node. (Focus + caret are
+  // fully covered by LiveView for this app — every focusable lives at a stable
+  // id, so node identity + LV's restoreFocus carry them; nothing to keep here.)
+  scroll: {}, // {[elId]: number} — captured scrollTop of data-keep="scroll" boxes
 }
 window.DoitState = DoitState
 
@@ -286,6 +294,21 @@ const KeepRegistry = {
       if (el.value !== v) el.value = v
       const readout = pane.querySelector("[data-progress-readout]")
       if (readout && readout.textContent !== v) readout.textContent = v
+    },
+  },
+  scroll: {
+    // An inner scroll container (e.g. #tree-scroll). Its scrollTop is client
+    // truth (state.scroll[el.id], written by the capturing `scroll` listener
+    // below). On an in-place morph the live node keeps its identity so scrollTop
+    // survives untouched — but morphdom can remove-and-re-add the node (the
+    // initial-join replace, a future stream reset), which re-creates it at 0.
+    // Restore the captured offset when an entry exists and the node disagrees;
+    // no entry → the user hasn't scrolled it, leave it alone. Idempotent: a
+    // matching scrollTop is a no-op, so this is safe on every patch path.
+    apply(el, state) {
+      if (!(el.id in state.scroll)) return
+      const want = state.scroll[el.id]
+      if (el.scrollTop !== want) el.scrollTop = want
     },
   },
 }
@@ -751,6 +774,20 @@ document.addEventListener("toggle", (e) => {
   const d = e.target
   if (d && d.matches && d.matches("details[data-keep='open']") && d.id) {
     DoitState.detailsOpen[d.id] = d.open
+  }
+}, true)
+
+// Client-owned inner scroll position (worklist 2 slice 2.3.8). A scroll box
+// renders `data-keep="scroll"`; its scrollTop is client truth in
+// DoitState.scroll (keyed by element id), restored across a remove-and-re-add
+// patch by the KeepRegistry "scroll" applier. Like `toggle`, the `scroll` event
+// doesn't bubble, so a single CAPTURE-phase listener reaches every such target —
+// including ones a later patch re-adds. We only record (cheap, idempotent
+// store); the actual reconcile happens in the dom callbacks.
+document.addEventListener("scroll", (e) => {
+  const el = e.target
+  if (el && el.matches && el.matches("[data-keep='scroll']") && el.id) {
+    DoitState.scroll[el.id] = el.scrollTop
   }
 }, true)
 
