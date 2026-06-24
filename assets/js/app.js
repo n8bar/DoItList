@@ -154,6 +154,7 @@ window.DoitSaving = {
 const DoitState = {
   selectedId: null, // string|null — the client-owned task selection (active)
   editorOpen: false, // initiative editor visibility — slice 2.3
+  detailsOpen: {}, // {[elId]: bool} — open/closed of KeepOpen <details> (active)
   pending: {toggle: null, move: null}, // confirm-held optimistic flips — slice 2.3
   presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
   focus: null, // focused field / caret / scroll — slice 2.3
@@ -222,6 +223,19 @@ const KeepRegistry = {
       if (el.classList.contains("collapsed-peek") !== collapsed) {
         el.classList.toggle("collapsed-peek", collapsed)
       }
+    },
+  },
+  open: {
+    // A KeepOpen <details> (details[data-keep="open"]). Its expanded/collapsed
+    // state is client truth (state.detailsOpen[el.id], written by the delegated
+    // `toggle` listener below); the server re-renders it at its default, so a
+    // patch would otherwise snap it shut. Reconcile `el.open` to the stored
+    // value when an entry exists, idempotently (write only when it differs).
+    // No entry → the user hasn't touched it; leave the server default alone.
+    apply(el, state) {
+      if (!(el.id in state.detailsOpen)) return
+      const want = !!state.detailsOpen[el.id]
+      if (el.open !== want) el.open = want
     },
   },
   "pending-toggle": {
@@ -722,6 +736,23 @@ document.addEventListener("click", (e) => {
     return
   }
 })
+
+// Client-owned <details> open/closed (worklist 2 slice 2.3). A KeepOpen
+// <details> renders `data-keep="open"`; its expanded state is client truth in
+// DoitState.detailsOpen (keyed by element id), re-asserted across patches by the
+// KeepRegistry "open" applier. This delegated listener records every change.
+// `toggle` doesn't bubble, so it can't be caught in the normal (bubbling) phase
+// from the document — but the CAPTURE phase reaches the target on the way down
+// regardless of bubbling, so one capturing listener covers every such element,
+// including ones re-added by a later patch. INDEPENDENT of the KeepOpen hook (it
+// retires in 2.4): the hook's per-element `_open` and this store both observe
+// the same `toggle` and stay consistent until then.
+document.addEventListener("toggle", (e) => {
+  const d = e.target
+  if (d && d.matches && d.matches("details[data-keep='open']") && d.id) {
+    DoitState.detailsOpen[d.id] = d.open
+  }
+}, true)
 
 function copyToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {
@@ -1626,7 +1657,17 @@ document.addEventListener("keydown", (e) => {
 // row to where it came from; "confirm-resolved" (modal closed via Proceed)
 // releases the handle — the commit's re-render owns the row from there. A
 // failed Proceed pushes both, cancelled first, so the revert still runs.
-window.DoitPendingMove = null
+// `window.DoitPendingMove` is now a getter/setter shim backed by
+// DoitState.pending.move (slice 2.3, mirroring DoitPendingToggle) so the held
+// drag placement has a single source of truth: the legacy
+// applyPendingMove/reassertClientState path reads the same store. Unlike the
+// attribute-level kinds, this hold is STRUCTURAL (a subtree moved to a different
+// parent), so it doesn't get a `data-keep` kind this slice — only the truth is
+// unified; applyPendingMove stays invoked by reassertClientState as before.
+Object.defineProperty(window, "DoitPendingMove", {
+  get() { return DoitState.pending.move },
+  set(v) { DoitState.pending.move = v },
+})
 
 // While a row is held away from its server-side parent, any patch touching
 // that parent's list re-creates the row there (LiveView reconciles a list

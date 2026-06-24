@@ -4194,6 +4194,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <details
         id="initiative-settings"
         phx-hook="KeepOpen"
+        data-keep="open"
         class="border-t border-zinc-200 dark:border-zinc-700 pt-3"
       >
         <summary class="cursor-pointer select-none font-medium text-zinc-800 dark:text-zinc-100">
@@ -4381,7 +4382,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
       <%!-- Client-opened (UX_GUARDRAILS 6.5): the button flips this <details>
            and KeepOpen carries the state across patches. --%>
-      <details :if={@can_admin} id={"#{@id}-form"} phx-hook="KeepOpen" class="mb-3">
+      <details :if={@can_admin} id={"#{@id}-form"} phx-hook="KeepOpen" data-keep="open" class="mb-3">
         <summary class="hidden"></summary>
         <div>
           <form phx-submit="add_member" class="flex flex-col gap-2">
@@ -5113,6 +5114,7 @@ defmodule DoItWeb.InitiativeShowLive do
         :if={@show_activity}
         id="task-activity"
         phx-hook="KeepOpen"
+        data-keep="open"
         class="group border-t border-zinc-100 dark:border-zinc-700 pt-3"
       >
         <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">
