@@ -2561,6 +2561,7 @@ defmodule DoItWeb.InitiativeShowLive do
                    guard observer re-asserts the open flag across patches. --%>
               <div
                 id="initiative-editor-pane"
+                data-keep="editor"
                 hidden
                 class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
               >
@@ -2770,7 +2771,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <.shortcuts_overlay />
       <%!-- Anchor for the selection-presence channel (.04.01.12): receives
            presence-selections pushes and paints row badges client-side. --%>
-      <div id="presence-badges" phx-hook="PresenceBadges" phx-update="ignore" hidden></div>
+      <div id="presence-badges" phx-hook="PresenceBadges" data-keep="presence" phx-update="ignore" hidden></div>
 
       <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
            for everyone currently viewing this Initiative. Fully ephemeral —
@@ -3574,6 +3575,7 @@ defmodule DoItWeb.InitiativeShowLive do
         </span>
         <h1
           data-edit-initiative
+          data-keep="editor-signifier"
           title="Click to edit"
           class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
         >
@@ -3595,6 +3597,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <p
         :if={@subtitle != ""}
         data-edit-initiative
+        data-keep="editor-signifier"
         title="Click to edit"
         class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-200"
       >
@@ -4047,6 +4050,7 @@ defmodule DoItWeb.InitiativeShowLive do
         :if={@task.children != []}
         id={"children-#{@task.id}"}
         phx-hook="CollapseChildren"
+        data-keep="collapse"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}
         data-sort-mode={@resolved_sort}

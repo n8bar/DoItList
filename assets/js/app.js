@@ -182,6 +182,48 @@ const KeepRegistry = {
       }
     },
   },
+  editor: {
+    // The initiative-editor pane (#initiative-editor-pane). Visibility is client
+    // truth (state.editorOpen); the server always renders it hidden. Reconcile
+    // the `hidden` attribute: open => not hidden, closed => hidden.
+    apply(el, state) {
+      const wantHidden = !state.editorOpen
+      if (el.hidden !== wantHidden) el.hidden = wantHidden
+    },
+  },
+  "editor-signifier": {
+    // The title/subtitle "click to edit" signifier ([data-edit-initiative]). The
+    // dotted-underline `.editor-open` class shows only while the editor is open;
+    // the server can no longer toggle it, so the client owns it via state.
+    apply(el, state) {
+      if (el.classList.contains("editor-open") !== state.editorOpen) {
+        el.classList.toggle("editor-open", state.editorOpen)
+      }
+    },
+  },
+  presence: {
+    // The presence anchor (#presence-badges, phx-update="ignore"). Truth lives in
+    // state.presence (written by the PresenceBadges handleEvent). Painting is
+    // document-wide and idempotent (per-slot signature guard, no-op class
+    // toggles), so reconciling on this one element repaints every row badge /
+    // online dot to match the store after any patch re-adds or touches it.
+    apply(_el, _state) {
+      applyPresenceBadges()
+    },
+  },
+  collapse: {
+    // A children <ul> (ul[id^='children-']). Truth stays in localStorage (keyed
+    // by initiative+task); reconcile the `.collapsed-peek` class to it. The
+    // server never renders the class, so this is purely additive — set when the
+    // stored state is collapsed, removed otherwise. No-op toggle when matched.
+    apply(el, _state) {
+      const key = `phx:collapse:${el.dataset.initiativeId}:${el.dataset.taskId}`
+      const collapsed = localStorage.getItem(key) === "1"
+      if (el.classList.contains("collapsed-peek") !== collapsed) {
+        el.classList.toggle("collapsed-peek", collapsed)
+      }
+    },
+  },
 }
 
 // Reconcile one keep-marked element to the store. Shared by both `dom:`
@@ -414,7 +456,12 @@ window.DoitSelection = DoitSelection
 // stays false). The form SUBMIT (update_initiative) and subtitle change
 // (update_subtitle) remain real server writes — only open/close is client-side.
 const DoitInitiativeEditor = {
-  open: false,
+  // `open` is a getter/setter backed by DoitState.editorOpen so editor
+  // visibility has a single source of truth: the preserve-path `dom:` callbacks
+  // (KeepRegistry.editor / "editor-signifier") and the legacy apply() below both
+  // read the same value and stay consistent.
+  get open() { return DoitState.editorOpen },
+  set open(v) { DoitState.editorOpen = v },
   // Reveal the editor. Opening it deselects any task (the rail shows the editor
   // OR a task's Details OR Members — never editor + Details together).
   show() {
@@ -2804,17 +2851,29 @@ Hooks.CollapseChildren = {
 // after any morphdom pass wipes a slot.
 Hooks.PresenceBadges = {
   mounted() {
-    window.DoitPresence = { selections: [], online: [] }
     this.handleEvent("presence-selections", ({ selections, online }) => {
-      window.DoitPresence.selections = selections
-      window.DoitPresence.online = online || []
+      DoitState.presence.selections = selections
+      DoitState.presence.online = online || []
       applyPresenceBadges()
     })
   },
   destroyed() {
-    window.DoitPresence = { selections: [], online: [] }
+    DoitState.presence.selections = []
+    DoitState.presence.online = []
   },
 }
+
+// `window.DoitPresence` is now backed by DoitState.presence so presence has a
+// single source of truth: applyPresenceBadges (reads .selections/.online), the
+// hook's handleEvent, and the preserve-path KeepRegistry.presence applier all
+// read the same store and stay consistent.
+const DoitPresence = {
+  get selections() { return DoitState.presence.selections },
+  set selections(v) { DoitState.presence.selections = v },
+  get online() { return DoitState.presence.online },
+  set online(v) { DoitState.presence.online = v },
+}
+window.DoitPresence = DoitPresence
 
 function applyPresenceBadges() {
   const sels = (window.DoitPresence && window.DoitPresence.selections) || []
