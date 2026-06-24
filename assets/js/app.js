@@ -224,6 +224,56 @@ const KeepRegistry = {
       }
     },
   },
+  "pending-toggle": {
+    // The operated task row ([data-task-row], the <li>'s child — the <li>
+    // itself already carries data-keep="selected", and an element can hold only
+    // one data-keep, so the pending-toggle marker rides the child). While
+    // state.pending.toggle holds a flip for THIS row, re-apply the optimistic
+    // aria-pressed / data-done / bar onto the incoming node so a patch landing
+    // mid-flight can't revert it. Once the incoming SERVER render already shows
+    // the flip (data-done matches), release the hold — the server owns the row
+    // from there. When no hold targets this row, leave the server value alone.
+    apply(el, state) {
+      const p = state.pending.toggle
+      const li = el.closest("li[data-task-id]")
+      if (!p || !li || li.id !== p.liId) return
+      const toggle = el.querySelector("[data-complete-toggle]")
+      if (!toggle) return
+      // The server has committed (reply landed) AND this incoming render already
+      // agrees with the optimistic flip → settled; drop the hold so we stop
+      // overriding the authoritative value. Before commit, or before the render
+      // catches up, keep holding so the gap can't revert the flip.
+      if (p.committed && el.hasAttribute("data-done") === p.value) {
+        state.pending.toggle = null
+        return
+      }
+      const want = String(p.value)
+      if (toggle.getAttribute("aria-pressed") !== want) {
+        toggle.setAttribute("aria-pressed", want)
+        toggle.setAttribute("aria-label", p.value ? "Reopen task" : "Mark task completed")
+      }
+      if (el.hasAttribute("data-done") !== p.value) el.toggleAttribute("data-done", p.value)
+      if (p.barValue != null) setRowBar(el, p.barValue)
+    },
+  },
+  "pending-toggle-slider": {
+    // The pane's manual-progress slider (#task-field-progress). Held to the
+    // pending toggle's optimistic value (100 on complete, 0 on reopen) while the
+    // flip is in flight FOR THE TASK THE PANE IS SHOWING, so a patch can't snap
+    // it back before the reconciling render. Yields to the server value once the
+    // hold is released (the row applier clears it on match).
+    apply(el, state) {
+      const p = state.pending.toggle
+      if (!p || p.sliderValue == null || el === document.activeElement) return
+      const pane = document.getElementById("task-editor-pane")
+      const li = document.getElementById(p.liId)
+      if (!pane || !li || pane.dataset.taskId !== li.dataset.taskId) return
+      const v = String(p.sliderValue)
+      if (el.value !== v) el.value = v
+      const readout = pane.querySelector("[data-progress-readout]")
+      if (readout && readout.textContent !== v) readout.textContent = v
+    },
+  },
 }
 
 // Reconcile one keep-marked element to the store. Shared by both `dom:`
@@ -1348,11 +1398,22 @@ document.addEventListener("keydown", (e) => {
 
 // Fully-optimistic operated row (.03.07.22): a completion toggle flips the
 // row's checkbox (aria-pressed), done styling (data-done), and progress bar
-// at the click. The hold handle survives patches via the guard observer (the
-// confirm's pending-hue render resets the attributes to server truth) and
-// settles exactly like a held drag: revert on cancel/failure, release on
-// commit/resolve.
-window.DoitPendingToggle = null
+// at the click. The hold handle survives patches via the guard observer AND the
+// preserve-path `dom:` callbacks (the confirm's pending-hue render resets the
+// attributes to server truth) and settles exactly like a held drag: revert on
+// cancel/failure, release on commit/resolve.
+//
+// `window.DoitPendingToggle` is now a getter/setter shim backed by
+// DoitState.pending.toggle (slice 2.3) so the held flip has a single source of
+// truth: the legacy applyPendingToggle/reassertClientState path and the new
+// KeepRegistry "pending-toggle" appliers read the same store and stay
+// consistent. The shape is {liId, value, barValue, prevBarValue, sliderValue,
+// prevSliderValue} — sliderValue/prevSliderValue carry the selected task's pane
+// manual-slider so a leaf checkoff jumps it to 100 (or 0 on reopen) optimistically.
+Object.defineProperty(window, "DoitPendingToggle", {
+  get() { return DoitState.pending.toggle },
+  set(v) { DoitState.pending.toggle = v },
+})
 
 function setRowBar(row, value) {
   const bar = row && row.querySelector("[role='progressbar']")
@@ -1365,10 +1426,26 @@ function setRowBar(row, value) {
   if (txt) txt.textContent = v + "%"
 }
 
+// The selected task's pane manual-slider, when it belongs to the given li and
+// is an active leaf slider (not disabled, not a branch). Returns {slider,
+// readout} or null. The pane is a singleton (#task-editor-pane); the slider is
+// only "this row's" when the pane is showing this task.
+function paneSliderFor(li) {
+  const pane = document.getElementById("task-editor-pane")
+  if (!pane || pane.dataset.taskId !== li.dataset.taskId) return null
+  const slider = pane.querySelector("#task-field-progress")
+  if (!slider || slider.disabled) return null
+  return {slider, readout: pane.querySelector("[data-progress-readout]")}
+}
+
 function applyToggleOptimism(li, toggle) {
   const row = li.querySelector(":scope > [data-task-row]")
   const bar = row && row.querySelector("[role='progressbar']")
   const done = !(toggle.getAttribute("aria-pressed") === "true")
+  // The selected leaf's pane slider mirrors the bar (finding 1): the row bar
+  // already jumps optimistically, but the pane's separate manual-slider control
+  // did not — sync it too so checkoff feels instant in the open pane.
+  const paneSlider = paneSliderFor(li)
   window.DoitPendingToggle = {
     liId: li.id,
     value: done,
@@ -1377,6 +1454,10 @@ function applyToggleOptimism(li, toggle) {
     // branch, and cascade alike; see maybe_set_done_progress).
     barValue: done ? "100" : "0",
     prevBarValue: bar && bar.getAttribute("aria-valuenow"),
+    // The pane slider follows the same 100/0 rule. prevSliderValue restores it
+    // on a revert (cancel / failed write).
+    sliderValue: paneSlider ? (done ? "100" : "0") : null,
+    prevSliderValue: paneSlider ? paneSlider.slider.value : null,
   }
   applyPendingToggle()
 }
@@ -1388,11 +1469,33 @@ function pendingToggleParts(p) {
   return toggle ? {row, toggle} : null
 }
 
+// Write a value onto the selected task's pane manual-slider + its readout,
+// idempotently (skip a focused/dragging slider so the user's own drag isn't
+// stomped; skip when the value already matches so the guard converges).
+function setPaneSlider(li, value) {
+  if (value == null) return
+  const parts = paneSliderFor(li)
+  if (!parts || parts.slider === document.activeElement) return
+  const v = String(value)
+  if (parts.slider.value !== v) parts.slider.value = v
+  if (parts.readout && parts.readout.textContent !== v) parts.readout.textContent = v
+}
+
 function applyPendingToggle() {
   const p = window.DoitPendingToggle
   if (!p) return
   const parts = pendingToggleParts(p)
   if (!parts) return
+  // Self-release once the server has BOTH committed (reply landed) AND rendered
+  // the flip (live DOM shows data-done == the flip). We can't release on the
+  // DOM value alone — our own optimistic write set it — so the committed flag
+  // disambiguates "server confirmed" from "we faked it". This closes the
+  // reply→render gap: the hold persists from the reply until the reconciling
+  // render actually lands, so an interleaved patch can't revert the bar/slider.
+  if (p.committed && parts.row.hasAttribute("data-done") === p.value) {
+    window.DoitPendingToggle = null
+    return
+  }
   const want = String(p.value)
   if (parts.toggle.getAttribute("aria-pressed") !== want) {
     parts.toggle.setAttribute("aria-pressed", want)
@@ -1402,6 +1505,10 @@ function applyPendingToggle() {
     parts.row.toggleAttribute("data-done", p.value)
   }
   if (p.barValue != null) setRowBar(parts.row, p.barValue)
+  // Hold the pane slider on the optimistic value too (finding 1) so a patch
+  // landing between the click and the reconciling render can't revert it.
+  const li = document.getElementById(p.liId)
+  if (li && p.sliderValue != null) setPaneSlider(li, p.sliderValue)
 }
 
 function revertPendingToggle() {
@@ -1414,17 +1521,30 @@ function revertPendingToggle() {
   parts.toggle.setAttribute("aria-label", !p.value ? "Reopen task" : "Mark task completed")
   parts.row.toggleAttribute("data-done", !p.value)
   if (p.prevBarValue != null) setRowBar(parts.row, p.prevBarValue)
+  // Restore the pane slider to what it showed before the optimistic flip.
+  const li = document.getElementById(p.liId)
+  if (li && p.prevSliderValue != null) setPaneSlider(li, p.prevSliderValue)
 }
 
 // Commit a completion toggle: push the event with the move_task-style reply
-// contract — ok:false reverts the held optimistic flip, committed:true (or any
-// non-false committed) releases the handle (the patch owns the row from there).
+// contract — ok:false reverts the held optimistic flip. On a commit we DON'T
+// null the handle here: the reconciling render can land a beat after the reply,
+// so nulling now would let an interleaved patch revert the optimistic bar /
+// slider in the gap. Instead the "pending-toggle" keep-applier releases the
+// hold the moment the server-rendered data-done matches the flip (and
+// reassertClientState/applyPendingToggle re-hold it on any patch until then).
+// committed:false (a confirm modal is deciding) keeps holding via the same path,
+// settled later by phx:confirm-cancelled/-resolved.
 function pushToggleCommit(ev, li) {
   if (!window.DoitPush) return
   window.DoitPush(ev, {id: li.dataset.taskId}, (reply) => {
-    const failed = !reply || reply.ok === false
-    if (failed) revertPendingToggle()
-    else if (reply.committed !== false) window.DoitPendingToggle = null
+    if (!reply || reply.ok === false) { revertPendingToggle(); return }
+    // committed:false → a confirm modal is deciding; keep holding (settled later
+    // by phx:confirm-cancelled/-resolved). Otherwise mark committed so the keep-
+    // appliers release the hold the moment the reconciling render lands.
+    if (reply.committed !== false && window.DoitPendingToggle) {
+      window.DoitPendingToggle = {...window.DoitPendingToggle, committed: true}
+    }
   })
 }
 

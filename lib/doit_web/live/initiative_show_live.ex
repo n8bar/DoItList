@@ -3685,6 +3685,7 @@ defmodule DoItWeb.InitiativeShowLive do
            flips one attribute; group/row scopes it. --%>
       <div
         data-task-row
+        data-keep="pending-toggle"
         data-done={@task.status == "done"}
         data-task-progress={progress_value(@task)}
         data-can-progress={to_string(@can_progress)}
@@ -4719,6 +4720,7 @@ defmodule DoItWeb.InitiativeShowLive do
           </div>
           <input
             id="task-field-progress"
+            data-keep="pending-toggle-slider"
             type="range"
             name="task[manual_progress]"
             min="0"
