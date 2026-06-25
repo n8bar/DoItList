@@ -483,4 +483,29 @@ input[data-chat-input].input {
   gap: 0;
 }
 
+/* iOS Safari zoom-on-focus fix (M02.09).
+   Mobile Safari auto-zooms the whole page when a text field with a computed
+   font-size < 16px is focused, and never zooms back — pushing fixed/edge UI
+   off-screen. Our form controls render at 14px (daisyUI's `.input`/`.select`/
+   `.textarea` default `font-size: var(--fontsize, 0.875rem)`), 12px (`*-sm`) or
+   11px (`*-xs`), so every one of them trips it.
+
+   Fix: floor every text-entry control to 16px ON MOBILE ONLY. The `@media
+   (max-width: 767px)` query means desktop (>= 768px, Tailwind's `md`) keeps the
+   exact daisyUI sizes — the desktop look is untouched. Checkbox/radio are
+   excluded (no text caret; they size via `--size`, not font-size).
+
+   This rule is intentionally UNLAYERED. daisyUI ships inside
+   `@layer components`, and any unlayered rule beats every layered rule
+   regardless of selector specificity — the same mechanism the chat-input caret
+   fix above relies on. So `var(--fontsize, …)` on `.input`/`.select`/`.textarea`
+   (12–14px) loses to this 16px floor on mobile, no `!important` needed. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
 /* This file is for your main application CSS */
