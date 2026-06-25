@@ -591,29 +591,41 @@ defmodule DoItWeb.Layouts do
                 class="w-56 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
               >
                 <div id={"collab-menu-#{collab.user.id}"} data-menu-step>
+                  <%!-- Route through the EXISTING client-opened remove-member
+                       confirm (#remove-member-confirm, app.js) instead of a bare
+                       round-trip (WL3 item 3.6): carry the same data-remove-member
+                       attributes the members-panel X uses, so the click opens the
+                       confirm client-side (§6.5) — Proceed then commits or
+                       escalates to the server hand-off modal. The popover still
+                       closes natively. --%>
                   <button
                     :if={@current_id && MapSet.member?(@member_ids, collab.user.id)}
                     type="button"
-                    phx-click={
-                      JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})
-                    }
+                    data-remove-member
+                    data-user-id={collab.user.id}
+                    data-user-name={collab.user.name}
                     popovertarget={"collab-pop-#{collab.user.id}"}
                     popovertargetaction="hide"
                     class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
                   >
                     Remove from {@current_name}
                   </button>
+                  <%!-- Optimistic add (WL3 item 3.6, §6.7): app.js intercepts the
+                       click, inserts a dimmed pending member row into the members
+                       panel at once, then pushes add_collaborator_to and pulls the
+                       stand-in on the reply (ok:false reverts — MUST NOT LIE). The
+                       button still closes the popover natively. --%>
                   <button
                     :if={@current_id && not MapSet.member?(@member_ids, collab.user.id)}
                     type="button"
-                    phx-click={
-                      JS.push("add_collaborator_to",
-                        value: %{
-                          "user-id" => to_string(collab.user.id),
-                          "initiative-id" => to_string(@current_id)
-                        }
-                      )
-                    }
+                    data-add-collaborator
+                    data-user-id={collab.user.id}
+                    data-initiative-id={@current_id}
+                    data-user-name={collab.user.name}
+                    data-username={collab.user.username}
+                    data-initials={initials(collab.user)}
+                    data-avatar-bg={avatar_bg(collab.user)}
+                    data-avatar-fg={avatar_fg(collab.user)}
                     popovertarget={"collab-pop-#{collab.user.id}"}
                     popovertargetaction="hide"
                     class="block w-full rounded px-2 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
@@ -640,13 +652,14 @@ defmodule DoItWeb.Layouts do
                     Remove {collab.user.name} from your collaborators?
                   </p>
                   <div class="flex gap-1 p-1">
+                    <%!-- Optimistic prune (WL3 item 3.6, §6.7): app.js hides the
+                         rail row at once, then pushes remove_collaborator and
+                         un-hides on ok:false (still sharing — MUST NOT LIE). The
+                         popover still closes natively. --%>
                     <button
                       type="button"
-                      phx-click={
-                        JS.push("remove_collaborator",
-                          value: %{"user-id" => to_string(collab.user.id)}
-                        )
-                      }
+                      data-prune-collaborator
+                      data-user-id={collab.user.id}
                       popovertarget={"collab-pop-#{collab.user.id}"}
                       popovertargetaction="hide"
                       class="flex-1 rounded px-2 py-1 text-sm font-medium text-white bg-red-600 hover:bg-red-700"

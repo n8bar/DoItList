@@ -1418,6 +1418,164 @@ document.addEventListener("keydown", (e) => {
   if (m && !m.hidden) m.hidden = true
 })
 
+// ---------------------------------------------------------------------------
+// Optimistic echoes for server-gated comment writes (WL3 item 3.6, §6.7).
+// add_comment / save_comment are phx-submit (server-driven), but the result
+// shows in the same pane — so we acknowledge instantly at submit and let the
+// reply (or the reconciling refresh_selected render) settle it. MUST NOT LIE:
+// a rejected add pulls its bubble; a rejected edit reverts to the saved text.
+// ---------------------------------------------------------------------------
+
+// ADD-COMMENT: intercept the submit, insert a dimmed pending <li>, and push via
+// DoitPush so we get the reply callback (the same contract used everywhere
+// else). On ok the refresh_selected render carries the real comment and we pull
+// the pending one; on !ok the bubble must not stand (MUST NOT LIE). Registered
+// in capture phase (like #add-task-form) and stopImmediatePropagation() so
+// LiveView's bubble-phase phx-submit never double-posts.
+document.addEventListener(
+  "submit",
+  (e) => {
+    const form = e.target.closest("[data-add-comment-form]")
+    if (!form) return
+    const input = form.querySelector("[name='comment[body]']")
+    const body = input ? input.value.trim() : ""
+    if (!window.DoitPush) return // no push channel → let the native phx-submit run
+    e.preventDefault()
+    e.stopImmediatePropagation() // stop LiveView's own phx-submit push
+    if (!body) return // empty → nothing to send (the server would just reject it)
+    const list = document.querySelector("[data-comment-list]")
+    const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+    if (list) list.appendChild(buildPendingComment(echoId, body, form.dataset))
+    if (input) input.value = ""
+    window.DoitPush(
+      "add_comment",
+      {comment: {body}, echo_id: echoId},
+      (reply) => {
+        // ok → the refresh carries the real li; pull the pending stand-in.
+        // !ok → the comment was refused (permission / empty); pull it too.
+        removePendingComment((reply && reply.echo_id) || echoId)
+      }
+    )
+  },
+  true // capture phase: run before LiveView's bubble-phase phx-submit handler
+)
+
+// Build a dimmed pending comment <li> mirroring the rendered row (avatar +
+// header + body). Keyed by nonce so the reply can pull exactly this node.
+function buildPendingComment(echoId, body, d) {
+  const li = document.createElement("li")
+  li.id = "comment-echo-" + echoId
+  li.setAttribute("data-comment-echo", echoId)
+  li.setAttribute("data-comment-pending", "")
+  li.className = "group/comment text-sm opacity-60"
+  const head = document.createElement("div")
+  head.className = "text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1"
+  const av = document.createElement("span")
+  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-4 h-4 text-[8px]"
+  av.style.backgroundImage = (d && d.myBg) || ""
+  av.style.color = (d && d.myFg) || ""
+  av.textContent = (d && d.myInitials) || ""
+  const meta = document.createElement("span")
+  meta.textContent = ((d && d.myName) || "") + " · now"
+  head.appendChild(av)
+  head.appendChild(meta)
+  const bodyEl = document.createElement("div")
+  bodyEl.className = "text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap"
+  bodyEl.textContent = body
+  li.appendChild(head)
+  li.appendChild(bodyEl)
+  return li
+}
+
+// Remove a pending comment bubble by nonce (reply-callback reconcile point).
+function removePendingComment(echoId) {
+  const n = document.getElementById("comment-echo-" + echoId)
+  if (n) n.remove()
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic collaborator add (WL3 item 3.6, §6.7). The rail-menu "Add to
+// {current}" is server-gated (only the Initiative's owner may add; the server
+// can also report already-a-member / forbidden). We acknowledge instantly by
+// inserting a dimmed pending member row, then push and reconcile on the reply:
+// ok:true → the @members refresh renders the canonical row (the patch
+// supersedes the stand-in); ok:false → pull the stand-in (MUST NOT LIE — they
+// weren't added). Deduped by user-id so we never double a real row.
+// ---------------------------------------------------------------------------
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-add-collaborator]")
+  if (!btn) return
+  const uid = btn.dataset.userId
+  const iid = btn.dataset.initiativeId
+  if (!uid || !iid) return
+  // Insert a pending stand-in into every visible members list lacking a real
+  // row for this user. Keyed by echo so the reply pulls exactly these.
+  const echoId = "m" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+  document.querySelectorAll("[data-members-list]").forEach((list) => {
+    if (list.offsetParent === null) return // not visible — skip
+    if (list.querySelector(`[data-member-row][data-user-id="${uid}"]`)) return // already there
+    list.appendChild(buildPendingMemberRow(echoId, btn.dataset))
+  })
+  const pull = () => document.querySelectorAll(`[data-member-echo="${echoId}"]`).forEach((n) => n.remove())
+  if (!window.DoitPush) { pull(); return }
+  window.DoitPush("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+    // On ok the server refresh carries the real row; pull the stand-in either
+    // way (success → superseded; failure → must not stand).
+    pull()
+    if (!reply || reply.ok === false) { if (window.DoitBonk) window.DoitBonk() }
+  })
+})
+
+// A dimmed pending member row: avatar + name + @username only. Deliberately
+// minimal — it never claims a role or owner-controls the server didn't grant.
+function buildPendingMemberRow(echoId, d) {
+  const li = document.createElement("li")
+  li.setAttribute("data-member-echo", echoId)
+  li.className = "flex items-center justify-between opacity-60"
+  const left = document.createElement("span")
+  left.className = "flex items-center gap-1 min-w-0 text-zinc-700 dark:text-zinc-200"
+  const av = document.createElement("span")
+  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-6 h-6 text-xs"
+  av.style.backgroundImage = (d && d.avatarBg) || ""
+  av.style.color = (d && d.avatarFg) || ""
+  av.textContent = (d && d.initials) || ""
+  const name = document.createElement("span")
+  name.className = "truncate"
+  name.textContent = (d && d.userName) || ""
+  const handle = document.createElement("span")
+  handle.className = "text-xs text-zinc-400 dark:text-zinc-500 truncate"
+  handle.textContent = "@" + ((d && d.username) || "")
+  left.appendChild(av)
+  left.appendChild(name)
+  left.appendChild(handle)
+  li.appendChild(left)
+  return li
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic past-collaborator prune (WL3 item 3.6, §6.7). "Remove from My
+// Collaborators" (the inline confirm's Proceed) is server-gated — the server
+// can refuse with :still_collaborating. We hide the rail row at once, then push
+// and reconcile: ok:true → the server's rail refresh drops the row for good;
+// ok:false → un-hide it (MUST NOT LIE — they weren't pruned). We hide (not
+// remove) so the revert is a clean restore that survives a no-op patch.
+// ---------------------------------------------------------------------------
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-prune-collaborator]")
+  if (!btn) return
+  const uid = btn.dataset.userId
+  if (!uid) return
+  const row = document.getElementById("collabrow-" + uid)
+  if (row) row.hidden = true
+  if (!window.DoitPush) { if (row) row.hidden = false; return }
+  window.DoitPush("remove_collaborator", {"user-id": uid}, (reply) => {
+    if (!reply || reply.ok === false) {
+      const r = document.getElementById("collabrow-" + uid)
+      if (r) r.hidden = false
+    }
+  })
+})
+
 // Remove-member confirm — opens client-side (the name is client-known,
 // UX_GUARDRAILS 6.5). The removal itself can't be optimistic: whether the
 // member holds assignments (→ a server-data hand-off modal) is server-known, so
@@ -1449,6 +1607,14 @@ document.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-remove-member]")
   if (btn) {
     e.preventDefault()
+    // When invoked from the rail-menu popover, preventDefault cancels the
+    // button's native popover-hide — close the popover explicitly so the menu
+    // doesn't linger behind the confirm.
+    const pt = btn.getAttribute("popovertarget")
+    if (pt) {
+      const pop = document.getElementById(pt)
+      if (pop && pop.matches(":popover-open")) pop.hidePopover()
+    }
     if (!modal) {
       pushRemoveMember(btn.dataset.userId)
       return

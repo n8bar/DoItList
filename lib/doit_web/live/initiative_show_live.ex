@@ -1102,17 +1102,26 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("cascade_incomplete", %{"id" => id}, socket),
     do: request_cascade(socket, String.to_integer(id), :cascade_incomplete)
 
-  def handle_event("add_comment", %{"comment" => %{"body" => body}}, socket) do
+  def handle_event("add_comment", params, socket) do
+    %{"comment" => %{"body" => body}} = params
+    echo_id = params["echo_id"]
     task = socket.assigns.selected_task
 
     if not (task && can_progress?(socket, task.id)) do
-      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+      # Reply ok:false so the client pulls its optimistic bubble — a rejected
+      # comment must not stand (MUST NOT LIE).
+      {:reply, %{ok: false, echo_id: echo_id},
+       socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       user = socket.assigns.current_user
 
       case Tasks.add_comment(task, user, body) do
-        {:ok, _comment} -> {:noreply, refresh_selected(socket)}
-        {:error, _cs} -> {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+        {:ok, comment} ->
+          {:reply, %{ok: true, echo_id: echo_id, id: comment.id}, refresh_selected(socket)}
+
+        {:error, _cs} ->
+          {:reply, %{ok: false, echo_id: echo_id},
+           put_flash(socket, :error, "Comment cannot be empty.")}
       end
     end
   end
@@ -1131,6 +1140,13 @@ defmodule DoItWeb.InitiativeShowLive do
     {:noreply, assign(socket, :editing_comment_id, nil)}
   end
 
+  # Save acknowledges instantly via the Save button's phx-disable-with="Saving…"
+  # in-flight signifier (§6.7) — a server-gated edit whose result (the canonical
+  # re-rendered row) is shown by refresh_selected. We deliberately do NOT
+  # optimistically rewrite the body here: the displayed body div isn't in the
+  # DOM during edit mode (the form replaces it), so a faithful optimistic
+  # rewrite would mean reconstructing the row markup — brittle, and the
+  # signifier already keeps the initiator un-stranded honestly.
   def handle_event("save_comment", %{"id" => id, "comment" => %{"body" => body}}, socket) do
     user = socket.assigns.current_user
 
@@ -1191,13 +1207,16 @@ defmodule DoItWeb.InitiativeShowLive do
   # reader: don't broadcast (nobody to receive). Instead sound the rejection
   # bonk and drop a dimmed "system" line into the sender's own log so the dead
   # end is visible IN the chat (not a toast) — operator was explicit on that.
-  def handle_event("send_chat", %{"body" => body}, socket) do
-    body = String.trim(body || "")
+  def handle_event("send_chat", params, socket) do
+    body = String.trim(params["body"] || "")
+    echo_id = params["echo_id"]
     user = socket.assigns.current_user
 
     cond do
       body == "" ->
-        {:noreply, socket}
+        # Backstop: the hook already trims + guards empty. Reply ok:false so a
+        # stray empty submit pulls any optimistic bubble (it must not stand).
+        {:reply, %{ok: false}, socket}
 
       alone?(socket) ->
         system_msg = %{
@@ -1206,7 +1225,10 @@ defmodule DoItWeb.InitiativeShowLive do
           body: "Nobody's here to read that yet — no one else is viewing this Initiative."
         }
 
-        {:noreply, socket |> append_chat(system_msg) |> bonk()}
+        # No reader got it — the server's own dimmed system line is the honest
+        # acknowledgement. Reply alone:true so the hook REMOVES its optimistic
+        # "sent" bubble (MUST NOT LIE: don't leave a faked-sent bubble standing).
+        {:reply, %{ok: false, alone: true}, socket |> append_chat(system_msg) |> bonk()}
 
       true ->
         msg = %{
@@ -1216,6 +1238,10 @@ defmodule DoItWeb.InitiativeShowLive do
           initials: initials(user),
           bg: avatar_bg(user),
           fg: avatar_fg(user),
+          # Carry the sender's client nonce on the broadcast so the sender's own
+          # hook can match + dedupe its optimistic echo when the real line lands.
+          # Other viewers ignore echo_id.
+          echo_id: echo_id,
           body: String.slice(body, 0, 2000),
           at: System.system_time(:second)
         }
@@ -1226,7 +1252,7 @@ defmodule DoItWeb.InitiativeShowLive do
           {:chat_message, msg}
         )
 
-        {:noreply, socket}
+        {:reply, %{ok: true}, socket}
     end
   end
 
@@ -1561,19 +1587,22 @@ defmodule DoItWeb.InitiativeShowLive do
     iid = String.to_integer(iid)
     uid = String.to_integer(uid)
 
-    socket =
+    {ok?, socket} =
       case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
         {:ok, added} ->
-          put_flash(socket, :info, "Added #{added.name} as a viewer.")
+          {true, put_flash(socket, :info, "Added #{added.name} as a viewer.")}
 
+        # Already a member → the real row is already present; treat the optimistic
+        # chip as not-needed (ok:false pulls the dimmed stand-in; the flash is
+        # informational, no lie left behind).
         {:error, :already_member} ->
-          put_flash(socket, :info, "They're already a member there.")
+          {false, put_flash(socket, :info, "They're already a member there.")}
 
         {:error, :forbidden} ->
-          put_flash(socket, :error, "Only that Initiative's owner can add members.")
+          {false, put_flash(socket, :error, "Only that Initiative's owner can add members.")}
 
         {:error, :failed} ->
-          put_flash(socket, :error, "Couldn't add them.")
+          {false, put_flash(socket, :error, "Couldn't add them.")}
       end
 
     socket = assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
@@ -1583,7 +1612,7 @@ defmodule DoItWeb.InitiativeShowLive do
         do: assign(socket, :members, Initiatives.list_members(iid)),
         else: socket
 
-    {:noreply, socket}
+    {:reply, %{ok: ok?}, socket}
   end
 
   # Prune a past collaborator from My Collaborators (m02.05 item 12.11). Only
@@ -1592,16 +1621,18 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("remove_collaborator", %{"user-id" => uid}, socket) do
     user = socket.assigns.current_user
 
-    socket =
+    {ok?, socket} =
       case Initiatives.remove_collaborator(user, String.to_integer(uid)) do
         {:ok, _} ->
-          assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
+          {true, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
 
+        # Still sharing an Initiative → the row stays; ok:false un-hides the
+        # optimistically-removed rail row (MUST NOT LIE — they weren't pruned).
         {:error, :still_collaborating} ->
-          put_flash(socket, :error, "You still share an Initiative with them.")
+          {false, put_flash(socket, :error, "You still share an Initiative with them.")}
       end
 
-    {:noreply, socket}
+    {:reply, %{ok: ok?}, socket}
   end
 
   # --- Pending-action commits -----------------------------------------------
@@ -2826,6 +2857,10 @@ defmodule DoItWeb.InitiativeShowLive do
         phx-hook=".Chat"
         data-chat-log-id={@chat_log_id}
         data-me={@current_user.id}
+        data-my-name={@current_user.name}
+        data-my-initials={initials(@current_user)}
+        data-my-bg={avatar_bg(@current_user)}
+        data-my-fg={avatar_fg(@current_user)}
         class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
       >
         <button
@@ -2878,7 +2913,12 @@ defmodule DoItWeb.InitiativeShowLive do
                   {m.body}
                 </div>
               <% else %>
-                <div id={"chat-msg-#{m.id}"} data-chat-uid={m.user_id} class="flex gap-2">
+                <div
+                  id={"chat-msg-#{m.id}"}
+                  data-chat-uid={m.user_id}
+                  data-chat-echo={Map.get(m, :echo_id)}
+                  class="flex gap-2"
+                >
                   <span
                     class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
                     style={"background-image: #{m.bg}; color: #{m.fg};"}
@@ -2950,9 +2990,67 @@ defmodule DoItWeb.InitiativeShowLive do
                 e.preventDefault();
                 const body = this.input.value.trim();
                 if (!body) return;
-                this.pushEvent("send_chat", { body });
+                // Optimistic own-line echo (§6.7): show the sent bubble at submit
+                // instead of waiting for the PubSub broadcast to round-trip back.
+                // A client nonce ties the pending node to the real line so we can
+                // dedupe it in updated() (and pull it on alone/empty/failure — a
+                // sent bubble must never stand if no reader got it).
+                const echoId = "e" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+                this.appendEcho(echoId, body);
+                this.pushEvent("send_chat", { body, echo_id: echoId }, (reply) => {
+                  if (!reply || reply.ok === false) {
+                    const n = this.log && this.log.querySelector(`[data-chat-echo="${echoId}"][data-chat-pending]`);
+                    if (n) n.remove();
+                  }
+                });
                 this.input.value = "";
                 this.input.focus();
+              });
+            },
+            // Build + append a pending own-message node matching the server's
+            // own-message markup (avatar from data-my-*), dimmed while pending.
+            // Lives in the morphdom-owned log; updated() reconciles it once the
+            // real (broadcast) line arrives carrying the same echo id.
+            appendEcho(echoId, body) {
+              if (!this.log) return;
+              const d = this.el.dataset;
+              const row = document.createElement("div");
+              row.className = "flex gap-2 opacity-60";
+              row.setAttribute("data-chat-uid", d.me || "");
+              row.setAttribute("data-chat-echo", echoId);
+              row.setAttribute("data-chat-pending", "");
+              const av = document.createElement("span");
+              av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]";
+              av.style.backgroundImage = d.myBg || "";
+              av.style.color = d.myFg || "";
+              av.textContent = d.myInitials || "";
+              const wrap = document.createElement("div");
+              wrap.className = "min-w-0";
+              const name = document.createElement("div");
+              name.className = "text-xs text-zinc-500 dark:text-zinc-400";
+              name.textContent = d.myName || "";
+              const bodyEl = document.createElement("div");
+              bodyEl.setAttribute("data-chat-body", "");
+              bodyEl.className = "break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100";
+              bodyEl.textContent = body;
+              wrap.appendChild(name);
+              wrap.appendChild(bodyEl);
+              row.appendChild(av);
+              row.appendChild(wrap);
+              this.log.appendChild(row);
+              this.scrollToBottom();
+            },
+            // Remove any pending echo whose nonce now appears on a real
+            // (server-rendered, non-pending) message node — the broadcast line
+            // has landed and supersedes the optimistic bubble.
+            reconcileEchoes() {
+              if (!this.log) return;
+              const pending = this.log.querySelectorAll("[data-chat-pending][data-chat-echo]");
+              pending.forEach((p) => {
+                const id = p.getAttribute("data-chat-echo");
+                if (!id) return;
+                const real = this.log.querySelector(`[data-chat-echo="${id}"]:not([data-chat-pending])`);
+                if (real) p.remove();
               });
             },
             setOpen(open) {
@@ -2994,6 +3092,11 @@ defmodule DoItWeb.InitiativeShowLive do
               const reopen = this._open;
               this.panel.hidden = !reopen;
               if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
+              // Reconcile optimistic echoes: when the real (broadcast) own-line
+              // arrives it carries the same client nonce on a NON-pending node.
+              // Drop the dimmed pending bubble so the canonical line supersedes
+              // it — no duplicate, and the dimmed "pending" look clears.
+              this.reconcileEchoes();
               // A new message bumps the server's monotonic chat-log id. A
               // system line (the alone-case "nobody's here" notice) also bumps
               // it, but it's the sender's own local notice — never pop / flash /
@@ -4533,8 +4636,8 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </details>
 
-      <ul class="space-y-1 text-sm">
-        <li :for={m <- @members} class="flex items-center justify-between">
+      <ul data-members-list class="space-y-1 text-sm">
+        <li :for={m <- @members} data-member-row data-user-id={m.user_id} class="flex items-center justify-between">
           <span class="flex items-center gap-1 min-w-0 text-zinc-700 dark:text-zinc-200">
             <%!-- Drag handle (item 12.8.1): grab a member and drop them on a
                  task to assign. Shown only when this user can assign; desktop
@@ -5076,7 +5179,7 @@ defmodule DoItWeb.InitiativeShowLive do
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mb-2">
           Loading…
         </p>
-        <ul data-async-list class="space-y-2 mb-2">
+        <ul data-async-list data-comment-list class="space-y-2 mb-2">
           <li :for={c <- @comments} id={"comment-#{c.id}"} class="group/comment text-sm">
             <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
               <.avatar
@@ -5198,7 +5301,16 @@ defmodule DoItWeb.InitiativeShowLive do
             </div>
           </li>
         </ul>
-        <form :if={@can_progress} phx-submit="add_comment" class="flex gap-2">
+        <form
+          :if={@can_progress}
+          phx-submit="add_comment"
+          data-add-comment-form
+          data-my-name={@current_user.name}
+          data-my-initials={initials(@current_user)}
+          data-my-bg={avatar_bg(@current_user)}
+          data-my-fg={avatar_fg(@current_user)}
+          class="flex gap-2"
+        >
           <input
             type="text"
             name="comment[body]"
