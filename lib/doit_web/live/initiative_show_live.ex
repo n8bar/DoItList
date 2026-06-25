@@ -658,45 +658,18 @@ defmodule DoItWeb.InitiativeShowLive do
         "position" => position
       }
 
-      case Tasks.preview_create(user, attrs) do
-        {:ok, %{scenario: nil}} ->
+      # The client predicts the (only possible) create flip — a new incomplete
+      # leaf landing under a complete parent reopens it (scenario 2) — from the
+      # DOM and opens #move-flip-confirm itself (UX_GUARDRAILS 6.5), then re-sends
+      # with confirmed: true on Proceed. Suppressed commits the same way. Either
+      # path commits straight through; the preview_create gate below is the
+      # authoritative backstop for a flip the client did NOT predict (stale DOM).
+      cond do
+        Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") ->
           {:noreply, commit_create(socket, attrs)}
 
-        {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
-          if skip_confirm?(socket, "completion-flip") do
-            {:noreply, commit_create(socket, attrs)}
-          else
-            # Optimism (§8.20, parity with a held move): the task must SHOW UP
-            # before the confirm decides. Splice a preview row into the tree at
-            # the target, marked maybe-write (pink) via pending_saving_ids;
-            # confirm → real create + load_tree replaces it, cancel → reload
-            # drops it.
-            preview = preview_task(title)
-
-            {:noreply,
-             socket
-             |> assign(
-               :tree,
-               splice_preview(
-                 socket.assigns.tree,
-                 initiative.root_task_id,
-                 parent_id,
-                 position,
-                 preview
-               )
-             )
-             |> assign_pending(%{
-               kind: :create,
-               attrs: attrs,
-               scenario: scenario,
-               titles: titles,
-               flip_ids: flip_ids,
-               preview_id: preview.id
-             })}
-          end
-
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
+        true ->
+          create_with_flip_check(socket, user, attrs, title)
       end
     end
   end
@@ -1032,18 +1005,28 @@ defmodule DoItWeb.InitiativeShowLive do
       {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       task = sort_target(socket, params)
-      branch_count = Tasks.count_descendant_branches(task.id)
 
-      if branch_count > 10 and not skip_confirm?(socket, "cascade-sort") do
-        {:noreply,
-         assign_pending(socket, %{
-           kind: :cascade_sort,
-           task_id: task.id,
-           branch_count: branch_count,
-           affected: Tasks.count_descendants(task.id)
-         })}
-      else
-        {:noreply, commit_cascade_sort(socket, task)}
+      cond do
+        # The client predicts the branch count from the DOM and opens the
+        # confirm itself (UX_GUARDRAILS 6.5 — a client-known confirm never waits
+        # on the network), then re-sends with confirmed: true on Proceed.
+        # Suppressed ("don't ask again") commits the same way. The count gate
+        # below is the authoritative backstop for a client that did NOT predict
+        # (modal missing, stale DOM).
+        Map.get(params, "confirmed") == true or skip_confirm?(socket, "cascade-sort") ->
+          {:noreply, commit_cascade_sort(socket, task)}
+
+        Tasks.count_descendant_branches(task.id) > 10 ->
+          {:noreply,
+           assign_pending(socket, %{
+             kind: :cascade_sort,
+             task_id: task.id,
+             branch_count: Tasks.count_descendant_branches(task.id),
+             affected: Tasks.count_descendants(task.id)
+           })}
+
+        true ->
+          {:noreply, commit_cascade_sort(socket, task)}
       end
     end
   end
@@ -1441,23 +1424,34 @@ defmodule DoItWeb.InitiativeShowLive do
   # assignments still routes to the hand-off modal — its content (count + who to
   # reassign to) is server data, so that's a legitimate round trip — otherwise
   # commit the removal.
+  # The confirm already opened client-side (#remove-member-confirm — the name is
+  # client-known); only Proceed pushes here. Proceed holds a working state until
+  # this replies (UX_GUARDRAILS 6.7 — the round trip can't be optimistic because
+  # whether the member holds assignments is server-known). The reply releases
+  # that working state: ok:true on a plain commit / forbidden / owner-guard,
+  # ok:true + handoff:true when we escalate to the (server-data) hand-off modal,
+  # ok:false on a refusal so the client restores Proceed.
   def handle_event("remove_member", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
     user_id = String.to_integer(user_id)
 
     cond do
       not socket.assigns.can_admin ->
-        {:noreply, socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
+        {:reply, %{ok: false},
+         socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
 
       user_id == initiative.owner_id ->
-        {:noreply,
+        {:reply, %{ok: false},
          socket |> put_flash(:error, "The Initiative's owner can't be removed.") |> bonk()}
 
       Tasks.member_assignment_count(initiative.id, user_id) > 0 ->
         member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
         name = (member && member.user.name) || "this member"
 
-        {:noreply,
+        # The hand-off modal's body (count + who to reassign to) is server data,
+        # so it renders server-side; the reply releases the client confirm the
+        # instant this modal is up.
+        {:reply, %{ok: true, handoff: true},
          assign(socket, :pending_handoff, %{
            user_id: user_id,
            name: name,
@@ -1466,7 +1460,7 @@ defmodule DoItWeb.InitiativeShowLive do
          })}
 
       true ->
-        {:noreply, commit_remove_member(socket, user_id)}
+        {:reply, %{ok: true}, commit_remove_member(socket, user_id)}
     end
   end
 
@@ -1611,6 +1605,50 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   # --- Pending-action commits -----------------------------------------------
+
+  # The authoritative completion-flip backstop for create: only reached when the
+  # client did NOT predict the flip (or the modal was missing). No flip → commit
+  # straight through; a flip the client missed → splice the preview row and raise
+  # the server @pending_action confirm (#completion-confirm).
+  defp create_with_flip_check(socket, user, attrs, title) do
+    initiative = socket.assigns.initiative
+
+    case Tasks.preview_create(user, attrs) do
+      {:ok, %{scenario: nil}} ->
+        {:noreply, commit_create(socket, attrs)}
+
+      {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
+        # Optimism (§8.20, parity with a held move): the task must SHOW UP before
+        # the confirm decides. Splice a preview row into the tree at the target,
+        # marked maybe-write (pink) via pending_saving_ids; confirm → real create
+        # + load_tree replaces it, cancel → reload drops it.
+        preview = preview_task(title)
+
+        {:noreply,
+         socket
+         |> assign(
+           :tree,
+           splice_preview(
+             socket.assigns.tree,
+             initiative.root_task_id,
+             attrs["parent_id"],
+             attrs["position"],
+             preview
+           )
+         )
+         |> assign_pending(%{
+           kind: :create,
+           attrs: attrs,
+           scenario: scenario,
+           titles: titles,
+           flip_ids: flip_ids,
+           preview_id: preview.id
+         })}
+
+      {:error, cs} ->
+        {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
+    end
+  end
 
   defp commit_create(socket, attrs) do
     case Tasks.create_task(socket.assigns.current_user, attrs) do
@@ -2660,6 +2698,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
       <.move_flip_confirm :if={@can_edit} />
       <.cascade_confirm />
+      <.cascade_sort_confirm :if={@can_edit} />
       <.delete_task_confirm :if={@can_edit} />
       <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
       <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
@@ -3243,6 +3282,54 @@ defmodule DoItWeb.InitiativeShowLive do
           <button
             type="button"
             data-cascade-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Large-branch-reorg confirm — client-opened (app.js #cascade-sort-confirm,
+  # UX_GUARDRAILS 6.5). "Make descendants inherit" predicts the descendant-branch
+  # count from the DOM (the whole tree is rendered regardless of collapse); when
+  # it exceeds 10 and isn't suppressed, app.js opens THIS dialog instantly (the
+  # count is client-derivable) while holding the maybe-write hue on the subtree.
+  # app.js fills the body's affected count, Proceed commits (cascade_sort with
+  # confirmed: true, optionally persisting the "don't ask again" skip), and
+  # Cancel / backdrop / Esc strip the hue with no server touch. phx-update="ignore":
+  # the server never patches it. The server count gate (handle_event) stays as the
+  # authoritative backstop for a client that didn't predict.
+  defp cascade_sort_confirm(assigns) do
+    ~H"""
+    <div
+      id="cascade-sort-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Large branch reorg
+        </h2>
+        <p data-cascade-sort-body class="mt-2 text-sm text-zinc-700 dark:text-zinc-300"></p>
+        <label class="mt-4 flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 select-none">
+          <input type="checkbox" data-cascade-sort-dont-show class="checkbox checkbox-sm" />
+          Don't show this again for large branch reorgs
+        </label>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-cascade-sort-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-cascade-sort-proceed
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
           >
             Proceed
@@ -4633,8 +4720,8 @@ defmodule DoItWeb.InitiativeShowLive do
       <button
         :if={@can_edit}
         type="button"
-        phx-click="cascade_sort"
-        phx-value-id={@task.id}
+        data-cascade-sort
+        data-task-id={@task.id}
         data-saving-subtree
         class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition"
         title="Force every descendant branch to inherit this branch's sort"

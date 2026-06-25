@@ -908,25 +908,106 @@ function insertPendingRow(parentId, afterId, title) {
   }
 }
 
-// Rapid entry: clear the title after LiveView serializes the submit and stay
-// focused, so consecutive adds need no clicks at all.
-document.addEventListener("submit", (e) => {
-  if (e.target.id !== "add-task-form") return
-  const form = e.target
-  const input = form.querySelector("[name='title']")
-  const title = input.value.trim()
-  if (title) {
-    insertPendingRow(
-      form.querySelector("[name='parent_id']").value,
-      form.querySelector("[name='after_id']").value,
-      title
-    )
+// A brand-new leaf is always a 0% incomplete task, so the only completion flip
+// it can cause is scenario 2: it lands under a parent that's currently complete
+// (done), reopening that ancestor. That's client-derivable — the target parent's
+// done state is in its rendered row (data-done) — so we predict it and open the
+// instant #move-flip-confirm client-side (UX_GUARDRAILS 6.5), reusing the move's
+// modal. The server's preview_create / @pending_action path stays the
+// authoritative backstop for any flip the client didn't predict (stale DOM).
+// A top-level create (no parent_id) can't reopen any visible ancestor, so it
+// never predicts a flip.
+function predictCreateFlip(parentId) {
+  if (!parentId) return false
+  const parentLi = document.getElementById("task-" + parentId)
+  const row = parentLi && parentLi.querySelector(":scope > [data-task-row]")
+  return !!(row && row.hasAttribute("data-done"))
+}
+
+// Push create_task ourselves (so we can carry confirmed:true). On success/flip
+// the server's load_tree re-render reconciles the preview row away; on failure
+// it surfaces a flash and the 8s preview-row timer self-heals.
+function pushCreateTask(title, parentId, afterId, confirmed) {
+  if (!window.DoitPush) return
+  const payload = {title, parent_id: parentId || "", after_id: afterId || ""}
+  if (confirmed) payload.confirmed = true
+  window.DoitPush("create_task", payload)
+}
+
+// Rapid entry: clear the title after the submit is handled and stay focused, so
+// consecutive adds need no clicks at all.
+document.addEventListener(
+  "submit",
+  (e) => {
+    if (e.target.id !== "add-task-form") return
+    const form = e.target
+    const input = form.querySelector("[name='title']")
+    const title = input.value.trim()
+    const parentId = form.querySelector("[name='parent_id']").value
+    const afterId = form.querySelector("[name='after_id']").value
+    const resetInput = () =>
+      setTimeout(() => {
+        input.value = ""
+        input.focus()
+      }, 0)
+
+    if (!title) {
+      resetInput()
+      return
+    }
+
+    // Predicted completion flip (scenario 2): intercept the native phx-submit,
+    // open the client confirm, and push ourselves only on Proceed. The preview
+    // row still goes in immediately (the task SHOWS UP while the modal decides,
+    // §8.20 parity with a held move/cascade). Suppressed → commit straight
+    // through without the modal.
+    if (predictCreateFlip(parentId) && !createFlipSuppressed()) {
+      e.preventDefault()
+      e.stopImmediatePropagation() // stop LiveView's own phx-submit push
+      insertPendingRow(parentId, afterId, title)
+      openCreateFlipConfirm({title, parentId, afterId})
+      resetInput()
+      return
+    }
+
+    // No predicted flip: let the native phx-submit fire; splice the preview row.
+    insertPendingRow(parentId, afterId, title)
+    resetInput()
+  },
+  true // capture phase: run before LiveView's bubble-phase phx-submit handler
+)
+
+// Completion-flip suppression shares the move's localStorage key + ConfirmSkips
+// class ("completion-flip"), so "don't ask again" set from a move also silences
+// the create flip (and vice-versa) — they're the same confirm class.
+const CREATE_FLIP_SKIP_KEY = "doit:confirm-skip:completion-flip"
+const createFlipSuppressed = () => {
+  try { return localStorage.getItem(CREATE_FLIP_SKIP_KEY) === "1" } catch (_e) { return false }
+}
+
+// Reuse #move-flip-confirm for the create flip: same scenario-2 copy, same
+// modal. Stash the create params on the modal so the Proceed handler (below)
+// can re-submit with confirmed:true. Cancel drops the optimistic preview row.
+function openCreateFlipConfirm(params) {
+  const modal = document.getElementById("move-flip-confirm")
+  if (!modal) {
+    // No modal — fall back to the server path: push unconfirmed and let the
+    // server raise its backstop confirm.
+    pushCreateTask(params.title, params.parentId, params.afterId, false)
+    return
   }
-  setTimeout(() => {
-    input.value = ""
-    input.focus()
-  }, 0)
-})
+  modal.dataset.createFlip = "1"
+  modal.dataset.createTitle = params.title
+  modal.dataset.createParentId = params.parentId || ""
+  modal.dataset.createAfterId = params.afterId || ""
+  openMoveFlipConfirm({scenario: 2, titles: []})
+}
+
+// Drop the optimistic preview row(s) — the create the modal was deciding never
+// committed. (They also self-expire at 8s; remove now for an instant response.)
+function dropPendingRows() {
+  document.querySelectorAll("[data-pending-row]").forEach((el) => el.remove())
+}
 
 // Pane visibility is pure VIEW STATE, fully client-side (.03.07.08,
 // UX_GUARDRAILS 6.5) — no round trip gates open or close. The editor pane is
@@ -1338,10 +1419,29 @@ document.addEventListener("keydown", (e) => {
 })
 
 // Remove-member confirm — opens client-side (the name is client-known,
-// UX_GUARDRAILS 6.5). Proceed pushes remove_member; the server commits or, for
-// a member holding assignments, returns the (server-data) hand-off modal.
-function pushRemoveMember(userId) {
-  if (window.DoitPush && userId) window.DoitPush("remove_member", {"user-id": userId})
+// UX_GUARDRAILS 6.5). The removal itself can't be optimistic: whether the
+// member holds assignments (→ a server-data hand-off modal) is server-known, so
+// Proceed is a true round trip. Rather than leave the initiator hanging
+// (UX_GUARDRAILS 6.7), Proceed enters a working state and the confirm stays open
+// until the reply settles: {ok:true, handoff:false} or a plain commit closes it;
+// {ok:true, handoff:true} closes it because the server hand-off modal has taken
+// over; {ok:false} restores Proceed and surfaces the flash.
+const REMOVE_MEMBER_TIMEOUT_MS = 8000
+let removeMemberInFlight = false
+
+function resetRemoveMemberModal(modal) {
+  const proceed = modal && modal.querySelector("[data-remove-proceed]")
+  const cancel = modal && modal.querySelector("[data-remove-cancel]")
+  if (proceed) {
+    proceed.classList.remove("animate-pulse", "opacity-60")
+    proceed.textContent = "Remove"
+  }
+  if (cancel) cancel.classList.remove("pointer-events-none", "opacity-50")
+  removeMemberInFlight = false
+}
+
+function pushRemoveMember(userId, onReply) {
+  if (window.DoitPush && userId) window.DoitPush("remove_member", {"user-id": userId}, onReply)
 }
 
 document.addEventListener("click", (e) => {
@@ -1353,6 +1453,7 @@ document.addEventListener("click", (e) => {
       pushRemoveMember(btn.dataset.userId)
       return
     }
+    resetRemoveMemberModal(modal)
     modal.dataset.userId = btn.dataset.userId
     const nameEl = modal.querySelector("[data-remove-name]")
     if (nameEl) nameEl.textContent = btn.dataset.userName || "this member"
@@ -1360,20 +1461,52 @@ document.addEventListener("click", (e) => {
     return
   }
   if (!modal || modal.hidden) return
-  if (e.target === modal || e.target.closest("[data-remove-cancel]")) {
+  // Cancel / backdrop — only when not mid-flight (Cancel is disabled then).
+  if (!removeMemberInFlight && (e.target === modal || e.target.closest("[data-remove-cancel]"))) {
     modal.hidden = true
     return
   }
   if (e.target.closest("[data-remove-proceed]")) {
-    modal.hidden = true
-    pushRemoveMember(modal.dataset.userId)
+    if (removeMemberInFlight) return
+    const proceed = modal.querySelector("[data-remove-proceed]")
+    const cancel = modal.querySelector("[data-remove-cancel]")
+    removeMemberInFlight = true
+    // Acknowledge the click instantly: the confirm stays open showing a working
+    // Proceed, so nothing leaves the initiator hanging across the round trip.
+    if (proceed) {
+      proceed.classList.add("animate-pulse", "opacity-60")
+      proceed.textContent = "Removing…"
+    }
+    if (cancel) cancel.classList.add("pointer-events-none", "opacity-50")
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resetRemoveMemberModal(modal) // restore Proceed; the flash (if any) covers the error
+    }, REMOVE_MEMBER_TIMEOUT_MS)
+    const finish = (reply) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (reply && reply.ok) {
+        // Committed, or the server hand-off modal has taken over — either way
+        // release this confirm; the next view (roster or hand-off modal) owns it.
+        modal.hidden = true
+        removeMemberInFlight = false
+      } else {
+        // The server refused — restore Proceed; the flash carries the reason.
+        resetRemoveMemberModal(modal)
+      }
+    }
+    pushRemoveMember(modal.dataset.userId, finish)
+    if (!window.DoitPush) finish({ok: false})
   }
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const m = document.getElementById("remove-member-confirm")
-  if (m && !m.hidden) m.hidden = true
+  if (m && !m.hidden && !removeMemberInFlight) m.hidden = true
 })
 
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
@@ -1716,6 +1849,104 @@ document.addEventListener("keydown", (e) => {
   }
 })
 
+// Large-branch-reorg confirm (UX_GUARDRAILS 6.5): "Make descendants inherit"
+// predicts the descendant-branch count straight from the DOM — the whole task
+// tree is rendered regardless of collapse (collapse is CSS-only) — so the
+// confirm opens client-side with no round trip. Below the threshold (or
+// suppressed) the cascade pushes immediately; above it, the static modal opens
+// instantly while the operated subtree holds the maybe-write hue. Proceed
+// commits (cascade_sort with confirmed:true, optionally persisting the skip);
+// Cancel / backdrop / Esc strip the hue with no server touch. The server count
+// gate stays as the authoritative backstop for a client that didn't predict.
+const CASCADE_SORT_SKIP_KEY = "doit:confirm-skip:cascade-sort"
+const cascadeSortSuppressed = () => {
+  try { return localStorage.getItem(CASCADE_SORT_SKIP_KEY) === "1" } catch (_e) { return false }
+}
+
+// A "branch" matches the server's count_descendant_branches: a descendant that
+// itself has children. In the DOM that's an li[data-task-id] containing its own
+// children list (:scope > ul[id^="children-"]).
+function countDescendantBranches(li) {
+  return [...li.querySelectorAll('li[data-task-id]')].filter(
+    (d) => d.querySelector(':scope > ul[id^="children-"]')
+  ).length
+}
+
+function stripCascadeSortHue() {
+  document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
+    el.classList.remove("is-saving", "is-recomputing")
+  })
+}
+
+document.addEventListener("click", (e) => {
+  const trigger = e.target.closest("[data-cascade-sort]")
+  if (trigger) {
+    e.preventDefault()
+    const id = trigger.dataset.taskId
+    if (!id) return
+    const li = document.querySelector(`li[data-task-id="${CSS.escape(id)}"]`)
+    const modal = document.getElementById("cascade-sort-confirm")
+    const branches = li ? countDescendantBranches(li) : 0
+    // Below threshold or suppressed → commit straight through. (Modal missing
+    // also pushes — the server count gate is the backstop.)
+    if (!modal || branches <= 10 || cascadeSortSuppressed()) {
+      if (window.DoitPush) window.DoitPush("cascade_sort", {id})
+      return
+    }
+    // Predicted large reorg: hold the maybe-write hue on the subtree (sticky —
+    // the dialog clears it) and open the confirm instantly.
+    if (li) markSaving(savingSubtree(li), {sticky: true})
+    const body = modal.querySelector("[data-cascade-sort-body]")
+    if (body) {
+      const affected = li ? li.querySelectorAll('li[data-task-id]').length : 0
+      body.textContent =
+        `This is a large branch reorg affecting ${affected} task(s). Every descendant ` +
+        `branch switches to Inherit — their own sort settings are overwritten and they ` +
+        `follow this branch from now on; reversible only via Undo (Arc 5).`
+    }
+    const dont = modal.querySelector("[data-cascade-sort-dont-show]")
+    if (dont) dont.checked = false
+    modal.dataset.taskId = id
+    modal.hidden = false
+    const proceed = modal.querySelector("[data-cascade-sort-proceed]")
+    if (proceed) proceed.focus()
+    return
+  }
+  const modal = document.getElementById("cascade-sort-confirm")
+  if (!modal || modal.hidden) return
+  // Cancel / backdrop — strip the hue, close, no server touch.
+  if (e.target === modal || e.target.closest("[data-cascade-sort-cancel]")) {
+    modal.hidden = true
+    stripCascadeSortHue()
+    return
+  }
+  if (e.target.closest("[data-cascade-sort-proceed]")) {
+    const dont = modal.querySelector("[data-cascade-sort-dont-show]")
+    if (dont && dont.checked) {
+      try { localStorage.setItem(CASCADE_SORT_SKIP_KEY, "1") } catch (_e) {}
+    }
+    const id = modal.dataset.taskId
+    modal.hidden = true
+    if (id && window.DoitPush) {
+      // The server's load_tree re-render owns the subtree from here; the hue is
+      // cleared by that patch (the class is client-added, morphdom strips it),
+      // but clear it explicitly so a dropped reply can't strand it.
+      window.DoitPush("cascade_sort", {id, confirmed: true}, () => stripCascadeSortHue())
+    } else {
+      stripCascadeSortHue()
+    }
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("cascade-sort-confirm")
+  if (modal && !modal.hidden) {
+    modal.hidden = true
+    stripCascadeSortHue()
+  }
+})
+
 // Confirm-held optimism (§8.20): while a completion-flip confirm decides a
 // drag, the optimistic placement holds. The server announces the outcome:
 // "confirm-cancelled" (Cancel, click-away, or a failed Proceed) reverts the
@@ -1983,11 +2214,27 @@ function openMoveFlipConfirm(prediction) {
   return true
 }
 
-// Cancel / backdrop / Esc: revert the held placement and strip the saving hue.
+// Clear the create-flip markers stashed on the reused #move-flip-confirm.
+function clearCreateFlipMarkers(modal) {
+  if (!modal) return
+  delete modal.dataset.createFlip
+  delete modal.dataset.createTitle
+  delete modal.dataset.createParentId
+  delete modal.dataset.createAfterId
+}
+
+// Cancel / backdrop / Esc: revert the held placement (move) or drop the preview
+// row (create) and strip the saving hue.
 function closeMoveFlipConfirmCancel() {
   const modal = document.getElementById("move-flip-confirm")
   if (modal) modal.hidden = true
-  revertPendingMove()
+  if (modal && modal.dataset.createFlip) {
+    // Create flip cancelled: the task never gets created — drop its preview row.
+    dropPendingRows()
+    clearCreateFlipMarkers(modal)
+  } else {
+    revertPendingMove()
+  }
   document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
     el.classList.remove("is-saving", "is-recomputing")
   })
@@ -2004,11 +2251,24 @@ document.addEventListener("click", (e) => {
   }
   if (e.target.closest("[data-flip-proceed]")) {
     modal.hidden = true
-    const handle = window.DoitPendingMove
     const stripHue = () =>
       document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
         el.classList.remove("is-saving", "is-recomputing")
       })
+    // Create flip: re-submit the create, now confirmed — the server commits
+    // straight through and its load_tree re-render reconciles the preview row.
+    if (modal.dataset.createFlip) {
+      pushCreateTask(
+        modal.dataset.createTitle,
+        modal.dataset.createParentId,
+        modal.dataset.createAfterId,
+        true
+      )
+      clearCreateFlipMarkers(modal)
+      stripHue()
+      return
+    }
+    const handle = window.DoitPendingMove
     // Re-send the move, now confirmed — the server commits straight through.
     if (window.DoitPush && handle && handle.moveParams) {
       const params = {...handle.moveParams, confirmed: true}
