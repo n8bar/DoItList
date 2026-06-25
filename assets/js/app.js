@@ -155,6 +155,12 @@ const DoitState = {
   selectedId: null, // string|null — the client-owned task selection (active)
   editorOpen: false, // initiative editor visibility — slice 2.3
   detailsOpen: {}, // {[elId]: bool} — open/closed of data-keep="open" <details> (active)
+  // Comment editors & popups are client-owned (WL3 3.3, §6.5): which comment's
+  // inline edit form is open, and which comment's edit-history popup is open.
+  // string|null comment ids; the "comment-edit" / "comment-versions" appliers
+  // read these so a list-refresh patch can't snap an open editor/popup shut.
+  commentEditId: null, // string|null — the comment whose inline editor is open
+  commentVersionsId: null, // string|null — the comment whose history popup is open
   pending: {toggle: null, move: null}, // confirm-held optimistic flips — slice 2.3
   presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
   // Inner scroll-container offsets, keyed by element id (slice 2.3.8). LiveView
@@ -262,6 +268,36 @@ const KeepRegistry = {
       if (el.open !== want) el.open = want
     },
   },
+  "comment-edit": {
+    // A comment <li> (li[data-keep="comment-edit"]). Its inline editor's
+    // open/close is client truth (state.commentEditId, written by the delegated
+    // click listener below); the server renders BOTH the display block and the
+    // author's form (form hidden by default) and never knows which is open, so a
+    // patch would otherwise snap the editor shut. Reconcile by toggling `hidden`
+    // on this row's [data-comment-display] and [data-comment-edit-form] to match
+    // whether THIS comment is the open one. Idempotent (no-op when matched). A
+    // tombstoned/non-author row has neither child — the lookups are null-safe.
+    apply(el, state) {
+      const editing = state.commentEditId != null && el.id === `comment-${state.commentEditId}`
+      const display = el.querySelector("[data-comment-display]")
+      const form = el.querySelector("[data-comment-edit-form]")
+      if (display && display.hidden !== editing) display.hidden = editing
+      if (form && form.hidden === editing) form.hidden = !editing
+    },
+  },
+  "comment-versions": {
+    // A comment's edit-history popup (div[data-keep="comment-versions"], id
+    // `comment-versions-<id>`). Its visibility is client truth
+    // (state.commentVersionsId); the server renders it hidden and never knows
+    // it's open, so a patch would snap it shut. Reconcile `hidden` to whether
+    // THIS popup's comment is the open one. Idempotent.
+    apply(el, state) {
+      const want =
+        state.commentVersionsId != null &&
+        el.id === `comment-versions-${state.commentVersionsId}`
+      if (el.hidden !== !want) el.hidden = !want
+    },
+  },
   "pending-toggle": {
     // The operated task row ([data-task-row], the <li>'s child — the <li>
     // itself already carries data-keep="selected", and an element can hold only
@@ -338,6 +374,12 @@ function applyKeep(el, state) {
   const entry = KeepRegistry[el.dataset.keep]
   if (entry) entry.apply(el, state)
 }
+
+// Exposed for the colocated TaskKeys hook (can't import): after a client-owned
+// open/close flip, re-apply one keep element immediately so the view reflects
+// the new state without waiting for the next patch (e.g. the "comment-saved"
+// push closes the editor — re-run the row's "comment-edit" applier at once).
+window.DoitApplyKeep = (el) => applyKeep(el, DoitState)
 
 // Client-owned selection (UX_GUARDRAILS 6.5): the highlight is a DOM attribute
 // + CSS, applied instantly and re-applied across re-renders by the guard
@@ -1418,6 +1460,112 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const modal = document.getElementById("leave-confirm")
   if (modal && !modal.hidden && modal.dataset.leaving !== "true") modal.hidden = true
+})
+
+// Comment inline editor + edit-history popup — open/close is CLIENT-OWNED (WL3
+// 3.3, §6.5). Both the display block and the author's form render statically;
+// these toggles flip DoitState and re-run the row's keep applier at once, so the
+// reveal is instant with zero round trip. The comment id comes from the row's
+// `id="comment-<id>"`. SAVE stays server-owned (the form's phx-submit); the
+// server closes the editor by pushing "comment-saved" (TaskKeys hook) — these
+// listeners never fake a save.
+function commentIdOf(el) {
+  const li = el.closest("li[id^='comment-']")
+  return li ? li.id.slice("comment-".length) : null
+}
+document.addEventListener("click", (e) => {
+  const editOpen = e.target.closest("[data-comment-edit-open]")
+  if (editOpen) {
+    const id = commentIdOf(editOpen)
+    if (!id) return
+    DoitState.commentEditId = id
+    const li = document.getElementById(`comment-${id}`)
+    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li)
+    // Seed + focus the textarea so the editor opens on the current body with the
+    // caret at the end — no stale value, ready to type.
+    const form = li && li.querySelector("[data-comment-edit-form]")
+    const ta = form && form.querySelector("textarea")
+    if (ta) {
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    }
+    return
+  }
+  const editCancel = e.target.closest("[data-comment-edit-cancel]")
+  if (editCancel) {
+    const id = commentIdOf(editCancel)
+    DoitState.commentEditId = null
+    const li = id && document.getElementById(`comment-${id}`)
+    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li)
+    return
+  }
+  const versOpen = e.target.closest("[data-comment-versions-open]")
+  if (versOpen) {
+    const id = commentIdOf(versOpen)
+    if (!id) return
+    DoitState.commentVersionsId = id
+    const popup = document.getElementById(`comment-versions-${id}`)
+    if (popup && window.DoitApplyKeep) window.DoitApplyKeep(popup)
+    return
+  }
+  const versCancel = e.target.closest("[data-comment-versions-cancel]")
+  if (versCancel) {
+    const id = commentIdOf(versCancel)
+    DoitState.commentVersionsId = null
+    const popup = id && document.getElementById(`comment-versions-${id}`)
+    if (popup && window.DoitApplyKeep) window.DoitApplyKeep(popup)
+    return
+  }
+})
+// True when a full-screen overlay modal (leave / handoff / archive / delete /
+// transfer — all `fixed inset-0`, none `hidden`) is currently open. The comment
+// editor + history popup live in the always-rendered Details pane BEHIND such an
+// overlay, so when one is up Escape belongs to it — not the editor underneath.
+// Without this, one Escape would dismiss the overlay AND silently discard the
+// editor's unsaved text.
+function overlayModalOpen() {
+  return Array.from(document.querySelectorAll(".fixed.inset-0")).some(
+    (el) => !el.hidden && el.offsetParent !== null
+  )
+}
+// Escape closes an open comment editor / history popup (closest one first), the
+// same client-owned dismissal the Cancel buttons do — unless an overlay modal is
+// up, which owns the Escape.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || overlayModalOpen()) return
+  if (DoitState.commentEditId != null) {
+    const li = document.getElementById(`comment-${DoitState.commentEditId}`)
+    DoitState.commentEditId = null
+    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li)
+    return
+  }
+  if (DoitState.commentVersionsId != null) {
+    const popup = document.getElementById(`comment-versions-${DoitState.commentVersionsId}`)
+    DoitState.commentVersionsId = null
+    if (popup && window.DoitApplyKeep) window.DoitApplyKeep(popup)
+  }
+})
+
+// Hand-off-cancel modal close — the dismissal is CLIENT-OWNED (WL3 3.3, §6.5),
+// mirroring the leave-confirm convention. The OPEN still round-trips (the body
+// needs the server's assignment count), so the modal renders from @pending_handoff
+// and confirm_handoff (the real write) is untouched. Cancel / backdrop / Escape
+// hide the modal INSTANTLY, then push cancel_handoff reconciliatorily so the
+// server clears its pending_handoff assign (the next patch re-hides it idempotently).
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("handoff-confirm")
+  if (!modal || modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-handoff-cancel]")) {
+    modal.hidden = true
+    if (window.DoitPush) window.DoitPush("cancel_handoff", {})
+  }
+})
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("handoff-confirm")
+  if (!modal || modal.hidden) return
+  modal.hidden = true
+  if (window.DoitPush) window.DoitPush("cancel_handoff", {})
 })
 
 // Archive confirm — the gate is decided WITHOUT a round trip (UX_GUARDRAILS

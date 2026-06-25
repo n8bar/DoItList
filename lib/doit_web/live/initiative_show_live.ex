@@ -81,9 +81,6 @@ defmodule DoItWeb.InitiativeShowLive do
          |> assign(:selected_task, nil)
          |> assign(:selected_staff_pool, nil)
          |> assign(:comments, [])
-         |> assign(:editing_comment_id, nil)
-         |> assign(:versions_comment_id, nil)
-         |> assign(:comment_versions, [])
          |> assign(:activity, [])
          |> assign(:chat_messages, [])
          |> assign(:chat_log_id, 0)
@@ -697,9 +694,6 @@ defmodule DoItWeb.InitiativeShowLive do
              |> assign(:selected_task_id, id)
              |> assign_selected(task)
              |> assign(:comments, Tasks.list_comments(id))
-             |> assign(:editing_comment_id, nil)
-             |> assign(:versions_comment_id, nil)
-             |> assign(:comment_versions, [])
              |> assign(:activity, Tasks.list_task_activity(id))
              |> update_presence(id)}
         end
@@ -1145,35 +1139,33 @@ defmodule DoItWeb.InitiativeShowLive do
   # the context (Tasks.edit_comment / delete_comment) — these handlers map the
   # result to a flash; the view guards (author-only controls) are convenience.
 
-  # Open the inline editor for one's own comment. Pure pane state (the edited
-  # comment is already loaded); flipping the assign re-renders the row's form.
-  def handle_event("edit_comment", %{"id" => id}, socket) do
-    {:noreply, assign(socket, :editing_comment_id, String.to_integer(id))}
-  end
-
-  def handle_event("cancel_edit_comment", _params, socket) do
-    {:noreply, assign(socket, :editing_comment_id, nil)}
-  end
-
   # Save acknowledges instantly via the Save button's phx-disable-with="Saving…"
-  # in-flight signifier (§6.7) — a server-gated edit whose result (the canonical
-  # re-rendered row) is shown by refresh_selected. We deliberately do NOT
-  # optimistically rewrite the body here: the displayed body div isn't in the
-  # DOM during edit mode (the form replaces it), so a faithful optimistic
-  # rewrite would mean reconstructing the row markup — brittle, and the
-  # signifier already keeps the initiator un-stranded honestly.
+  # in-flight signifier (§6.7) — a server-gated edit. The editor's open/close is
+  # now client-owned (WL3 3.3, §6.5): the row statically renders BOTH the display
+  # block and the author's edit form, and DoitState.commentEditId toggles which
+  # shows at click. So the server no longer holds an `editing_comment_id` assign;
+  # on a granted save it pushes "comment-saved" (handled in the TaskKeys hook) to
+  # clear the client's open state, then refresh_selected re-renders the canonical
+  # body. We deliberately do NOT optimistically rewrite the body — a faithful
+  # rewrite would mean reconstructing markup, and the signifier already keeps the
+  # initiator un-stranded honestly. CRUCIALLY, only the server-granted branches
+  # ({:ok} / {:error, :not_found} — both terminal) push "comment-saved" to close
+  # the editor; an :unauthorized or invalid-body result leaves the editor open
+  # (no false success — §6 / optimistic-UI-must-not-lie).
   def handle_event("save_comment", %{"id" => id, "comment" => %{"body" => body}}, socket) do
     user = socket.assigns.current_user
 
     case Tasks.edit_comment(String.to_integer(id), user, body) do
       {:ok, _comment} ->
-        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+        {:noreply,
+         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+        {:noreply,
+         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
 
       {:error, _cs} ->
         {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
@@ -1185,7 +1177,7 @@ defmodule DoItWeb.InitiativeShowLive do
 
     case Tasks.delete_comment(String.to_integer(id), user) do
       {:ok, _comment} ->
-        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+        {:noreply, refresh_selected(socket)}
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
@@ -1193,24 +1185,6 @@ defmodule DoItWeb.InitiativeShowLive do
       {:error, :not_found} ->
         {:noreply, refresh_selected(socket)}
     end
-  end
-
-  # Show / hide the prior-versions popup for a comment (item 2.2). Loads the
-  # history on open; a missing/closed state clears it.
-  def handle_event("show_comment_versions", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-
-    {:noreply,
-     socket
-     |> assign(:versions_comment_id, id)
-     |> assign(:comment_versions, Tasks.list_comment_versions(id))}
-  end
-
-  def handle_event("hide_comment_versions", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:versions_comment_id, nil)
-     |> assign(:comment_versions, [])}
   end
 
   # Live chat (m02.08 worklist 3 item 3.1): broadcast a message to everyone
@@ -2058,6 +2032,20 @@ defmodule DoItWeb.InitiativeShowLive do
                 if (box) { clearTimeout(box._vpTimer); box.disabled = false; }
                 if (window.DoitSavedTick) window.DoitSavedTick("viewer-plus-saved-tick");
               });
+              // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
+              // client-owned (DoitState.commentEditId), but SAVE is server-gated.
+              // The server pushes this ONLY on a granted save (an :ok, or a
+              // :not_found that's already terminal) — never on a refusal — so it
+              // can clear the client open state honestly. Re-apply the row's
+              // "comment-edit" keep at once so the editor closes immediately,
+              // ahead of the reconciling patch.
+              this.handleEvent("comment-saved", ({id}) => {
+                if (String(window.DoitState.commentEditId) === String(id)) {
+                  window.DoitState.commentEditId = null;
+                }
+                const li = document.getElementById("comment-" + id);
+                if (li && window.DoitApplyKeep) window.DoitApplyKeep(li);
+              });
               // A selection can land before we connect (DoitSelection is
               // client-only; slow longpoll connect). Replay it now so the server
               // loads the pane's comments / activity / co-assignees for it.
@@ -2697,9 +2685,6 @@ defmodule DoItWeb.InitiativeShowLive do
                   task={@selected_task || blank_task()}
                   comments={@comments}
                   current_user={@current_user}
-                  editing_comment_id={@editing_comment_id}
-                  versions_comment_id={@versions_comment_id}
-                  comment_versions={@comment_versions}
                   activity={@activity}
                   members={@members}
                   can_edit={@can_edit}
@@ -2774,7 +2759,6 @@ defmodule DoItWeb.InitiativeShowLive do
           :if={@pending_handoff}
           id="handoff-form"
           phx-submit="confirm_handoff"
-          phx-click-away="cancel_handoff"
           class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
         >
           <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
@@ -2812,7 +2796,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <div class="mt-5 flex justify-end gap-2">
             <button
               type="button"
-              phx-click="cancel_handoff"
+              data-handoff-cancel
               class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
             >
               Cancel
@@ -4896,11 +4880,12 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :task, :map, required: true
   attr :comments, :list, required: true
   attr :current_user, :map, required: true
-  # Comment lifecycle (m02.08 worklist 3 item 2): which comment is in inline-edit
-  # mode, which has its prior-versions popup open, and that popup's contents.
-  attr :editing_comment_id, :any, default: nil
-  attr :versions_comment_id, :any, default: nil
-  attr :comment_versions, :list, default: []
+  # Comment lifecycle (m02.08 worklist 3 item 2): the inline edit editor and the
+  # prior-versions popup are now CLIENT-OWNED (m02.09 WL3 3.3, §6.5) — both render
+  # statically (hidden by default) and DoitState.commentEditId / commentVersionsId
+  # toggle visibility at click on the client; the server no longer holds an
+  # editing/versions assign. Versions render inline from the preloaded
+  # `c.versions` association (ordered newest-first in list_comments/1).
   attr :activity, :list, required: true
   attr :show_activity, :boolean, default: true
   attr :online_ids, :any, required: true
@@ -5231,7 +5216,18 @@ defmodule DoItWeb.InitiativeShowLive do
           Loading…
         </p>
         <ul data-async-list data-comment-list class="space-y-2 mb-2">
-          <li :for={c <- @comments} id={"comment-#{c.id}"} class="group/comment text-sm">
+          <%!-- Open/close of the inline editor is CLIENT-OWNED (m02.09 WL3 3.3,
+               §6.5): the <li> carries data-keep="comment-edit" so a list-refresh
+               patch can't snap an open editor shut, and the "comment-edit"
+               applier reads DoitState.commentEditId to show the display block or
+               the author's form. Both render statically; the form is hidden by
+               default and revealed at click with no round trip. --%>
+          <li
+            :for={c <- @comments}
+            id={"comment-#{c.id}"}
+            data-keep="comment-edit"
+            class="group/comment text-sm"
+          >
             <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
               <.avatar
                 :if={c.user}
@@ -5247,11 +5243,54 @@ defmodule DoItWeb.InitiativeShowLive do
                 <%!-- Tombstone (item 2.3): the row survives so thread shape +
                      references hold, shown as deleted. --%>
                 <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
-              <% @editing_comment_id == c.id -> %>
-                <%!-- Inline editor (item 2.2): author-only; the context
-                     re-checks authorship on save. --%>
+              <% true -> %>
+                <%!-- Display block — shown when NOT editing (the applier toggles
+                     `hidden` against DoitState.commentEditId). --%>
+                <div data-comment-display>
+                  <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
+                  <div class="mt-0.5 flex items-center gap-2 text-xs">
+                    <button
+                      :if={c.versions != []}
+                      type="button"
+                      data-comment-versions-open
+                      phx-value-id={c.id}
+                      class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
+                    >
+                      edited · history
+                    </button>
+                    <%= if comment_author?(c, @current_user) do %>
+                      <button
+                        type="button"
+                        id={"edit-comment-btn-#{c.id}"}
+                        data-comment-edit-open
+                        phx-value-id={c.id}
+                        class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        id={"delete-comment-btn-#{c.id}"}
+                        phx-click="delete_comment"
+                        phx-value-id={c.id}
+                        data-confirm="Delete this comment? It will be marked as deleted."
+                        class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
+                      >
+                        Delete
+                      </button>
+                    <% end %>
+                  </div>
+                </div>
+                <%!-- Inline editor (item 2.2) — author-only, rendered hidden;
+                     the "comment-edit" applier reveals it when this comment is
+                     the client-owned commentEditId. Save stays server-owned; the
+                     context re-checks authorship. The Edit button seeds + focuses
+                     the textarea at click (app.js), so a stale value never shows. --%>
                 <form
+                  :if={comment_author?(c, @current_user)}
                   id={"edit-comment-form-#{c.id}"}
+                  data-comment-edit-form
+                  hidden
                   phx-submit="save_comment"
                   phx-value-id={c.id}
                   class="mt-1 flex flex-col gap-1"
@@ -5272,54 +5311,27 @@ defmodule DoItWeb.InitiativeShowLive do
                     </button>
                     <button
                       type="button"
-                      phx-click="cancel_edit_comment"
+                      data-comment-edit-cancel
                       class="text-xs px-2.5 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                     >
                       Cancel
                     </button>
                   </div>
                 </form>
-              <% true -> %>
-                <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
-                <div class="mt-0.5 flex items-center gap-2 text-xs">
-                  <button
-                    :if={c.versions != []}
-                    type="button"
-                    phx-click="show_comment_versions"
-                    phx-value-id={c.id}
-                    class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
-                  >
-                    edited · history
-                  </button>
-                  <%= if comment_author?(c, @current_user) do %>
-                    <button
-                      type="button"
-                      id={"edit-comment-btn-#{c.id}"}
-                      phx-click="edit_comment"
-                      phx-value-id={c.id}
-                      class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      id={"delete-comment-btn-#{c.id}"}
-                      phx-click="delete_comment"
-                      phx-value-id={c.id}
-                      data-confirm="Delete this comment? It will be marked as deleted."
-                      class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      Delete
-                    </button>
-                  <% end %>
-                </div>
             <% end %>
 
             <%!-- Prior-versions popup (item 2.2): a minimal inline panel listing
-                 earlier bodies, newest first. Opens via show_comment_versions. --%>
+                 earlier bodies, NEWEST FIRST (the `versions` preload is ordered
+                 desc in list_comments/1). Open/close is CLIENT-OWNED (m02.09 WL3
+                 3.3, §6.5): rendered statically + hidden, carries
+                 data-keep="comment-versions" so a patch can't snap it shut, and
+                 the "comment-versions" applier reveals it when this comment is the
+                 client-owned commentVersionsId — no round trip on open or close. --%>
             <div
-              :if={@versions_comment_id == c.id}
+              :if={not Tasks.comment_deleted?(c) and c.versions != []}
               id={"comment-versions-#{c.id}"}
+              data-keep="comment-versions"
+              hidden
               class="mt-1 rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 p-2"
             >
               <div class="flex items-center justify-between mb-1">
@@ -5328,7 +5340,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 </span>
                 <button
                   type="button"
-                  phx-click="hide_comment_versions"
+                  data-comment-versions-cancel
                   aria-label="Close history"
                   class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                 >
@@ -5336,11 +5348,18 @@ defmodule DoItWeb.InitiativeShowLive do
                 </button>
               </div>
               <ul class="space-y-1">
-                <li class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
-                  No earlier versions.
+                <%!-- Forward-compatible lazy-load hook: a future fetch-on-open
+                     can reveal this while versions stream in. Hidden today —
+                     versions render inline from the preload. --%>
+                <li
+                  data-versions-loading
+                  hidden
+                  class="text-xs italic text-zinc-400 dark:text-zinc-500"
+                >
+                  Loading…
                 </li>
                 <li
-                  :for={v <- @comment_versions}
+                  :for={v <- c.versions}
                   class="text-xs text-zinc-600 dark:text-zinc-300"
                 >
                   <span class="text-zinc-400 dark:text-zinc-500">

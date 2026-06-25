@@ -128,7 +128,7 @@ defmodule DoItWeb.InitiativeShowCollabTest do
       assert has_element?(view, "#comment-#{comment.id}")
     end
 
-    test "editing surfaces prior versions in the history popup", %{
+    test "the edit-history popup renders statically with the prior versions", %{
       conn: conn,
       owner: owner,
       ini: ini
@@ -140,10 +140,53 @@ defmodule DoItWeb.InitiativeShowCollabTest do
       {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
       render_hook(view, "select_task", %{"id" => to_string(task.id)})
 
-      # Live body shows the revision; the history popup surfaces the prior text.
-      assert render(view) =~ "revised body"
-      view |> element("#comment-#{comment.id} button", "history") |> render_click()
-      assert render(view) =~ "original body"
+      # WL3 3.3 (§6.5): the popup is client-owned — it renders statically
+      # (hidden until the open toggle flips it client-side, no round trip), so
+      # the popup element and the prior text are present from first paint.
+      assert has_element?(view, "#comment-versions-#{comment.id}")
+      html = render(view)
+      # Live body shows the revision; the history popup carries the prior text.
+      assert html =~ "revised body"
+      assert html =~ "original body"
     end
+
+    test "the edit-history popup orders versions newest-first (2+ edits)", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      task = new_task(owner, ini, %{"title" => "T"})
+      {:ok, comment} = Tasks.add_comment(task, owner, "v0 original")
+      # Each edit captures the prior body as a version, so after three edits the
+      # version bodies are v0/v1/v2 (the live body is v3). Newest-first means the
+      # most recently captured ("v2 second-edit") appears before the oldest
+      # ("v0 original") in the rendered popup — this is the regression the
+      # versions preload order_by guards (m02.09 WL3 3.3).
+      {:ok, _} = Tasks.edit_comment(comment.id, owner, "v1 first-edit")
+      {:ok, _} = Tasks.edit_comment(comment.id, owner, "v2 second-edit")
+      {:ok, _} = Tasks.edit_comment(comment.id, owner, "v3 third-edit")
+
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+      render_hook(view, "select_task", %{"id" => to_string(task.id)})
+
+      html = render(view)
+      # All three captured versions render in the popup.
+      assert html =~ "v0 original"
+      assert html =~ "v1 first-edit"
+      assert html =~ "v2 second-edit"
+
+      # Newest-first ordering: the newest version body precedes the oldest in the
+      # document. If the preload ever loses its order_by (the bug), these flip.
+      newest_pos = pos(html, "v2 second-edit")
+      oldest_pos = pos(html, "v0 original")
+      assert newest_pos < oldest_pos,
+             "expected versions newest-first in the popup, got oldest-first"
+    end
+  end
+
+  # First byte offset of `needle` in `haystack` (for document-order assertions).
+  defp pos(haystack, needle) do
+    [{start, _len} | _] = :binary.matches(haystack, needle)
+    start
   end
 end

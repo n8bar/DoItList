@@ -1867,7 +1867,16 @@ defmodule DoIt.Tasks do
         c.task_id == ^task_id and
           (is_nil(c.deleted_at) or not is_nil(c.deleted_by_id)),
       order_by: [asc: c.inserted_at],
-      preload: [:user, :deleted_by, :versions]
+      # Order the `versions` preload newest-first so the inline edit-history
+      # popup (rendered straight off this association — m02.09 WL3 3.3) honors
+      # the same newest-first contract list_comment_versions/1 asserts. The
+      # `has_many :versions` carries no order_by, so without this the popup
+      # would show oldest-first and contradict the docstrings.
+      preload: [
+        :user,
+        :deleted_by,
+        versions: ^from(v in CommentVersion, order_by: [desc: v.inserted_at, desc: v.id])
+      ]
     )
     |> Repo.all()
   end
