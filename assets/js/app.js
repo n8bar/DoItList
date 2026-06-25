@@ -154,7 +154,7 @@ window.DoitSaving = {
 const DoitState = {
   selectedId: null, // string|null — the client-owned task selection (active)
   editorOpen: false, // initiative editor visibility — slice 2.3
-  detailsOpen: {}, // {[elId]: bool} — open/closed of KeepOpen <details> (active)
+  detailsOpen: {}, // {[elId]: bool} — open/closed of data-keep="open" <details> (active)
   pending: {toggle: null, move: null}, // confirm-held optimistic flips — slice 2.3
   presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
   // Inner scroll-container offsets, keyed by element id (slice 2.3.8). LiveView
@@ -250,7 +250,7 @@ const KeepRegistry = {
     },
   },
   open: {
-    // A KeepOpen <details> (details[data-keep="open"]). Its expanded/collapsed
+    // A preserved <details> (details[data-keep="open"]). Its expanded/collapsed
     // state is client truth (state.detailsOpen[el.id], written by the delegated
     // `toggle` listener below); the server re-renders it at its default, so a
     // patch would otherwise snap it shut. Reconcile `el.open` to the stored
@@ -344,8 +344,8 @@ function applyKeep(el, state) {
 // observer below — the server only ever hears about it to load the Details
 // pane. `lastId` backs the Enter toggle's "reselect what I had" behavior.
 // `id` is a getter/setter backed by DoitState.selectedId so selection has a
-// single source of truth: the preserve-path `dom:` callbacks and the legacy
-// re-assert observer both read the same value and stay consistent.
+// single source of truth: the preserve-path `dom:` callbacks and this object's
+// immediate apply() both read the same value and stay consistent.
 const DoitSelection = {
   get id() { return DoitState.selectedId },
   set id(v) { DoitState.selectedId = v },
@@ -367,7 +367,7 @@ const DoitSelection = {
     this.apply()
   },
   // Idempotent: setting an attribute to its current value doesn't mutate, so
-  // the guard observer converges instead of looping.
+  // re-applying from the preserve-path callbacks is a safe no-op when matched.
   apply() {
     document.querySelectorAll("li[data-selected]").forEach((li) => {
       if (!this.id || li.id !== "task-" + this.id) li.removeAttribute("data-selected")
@@ -383,11 +383,11 @@ const DoitSelection = {
   // match the client selection yet), the row-known values are written into
   // the REAL fields immediately and the server-only sections dim; the server
   // patch reconciles the same elements in place. Value writes are properties
-  // (not attributes) and skip the focused element, so the guard observer
-  // converges and in-progress typing survives.
+  // (not attributes) and skip the focused element, so re-applying converges
+  // and in-progress typing survives.
   syncPaneSkeleton() {
     // Selecting a task always leaves the initiative editor (.03.07.08) — close
-    // it through the client-owned flag so the guard observer keeps it closed.
+    // it through the client-owned flag so the preserve path keeps it closed.
     if (this.id) DoitInitiativeEditor.close({skipSelectionClear: true})
     const pane = document.getElementById("task-editor-pane")
     if (pane) {
@@ -554,15 +554,15 @@ window.DoitSelection = DoitSelection
 // editor is pure VIEW STATE: the pane (#initiative-editor-pane) is already
 // server-rendered with #initiative-form pre-populated from the initiative, so
 // revealing it loads nothing — no round trip. Mirrors DoitSelection: the flag
-// lives on the client and the guard observer re-asserts it across every patch
-// (the server now always renders the pane hidden, since @editing_initiative?
+// lives on the client and the preserve-path `dom:` callbacks re-assert it across
+// every patch (the server now always renders the pane hidden, since @editing_initiative?
 // stays false). The form SUBMIT (update_initiative) and subtitle change
 // (update_subtitle) remain real server writes — only open/close is client-side.
 const DoitInitiativeEditor = {
   // `open` is a getter/setter backed by DoitState.editorOpen so editor
   // visibility has a single source of truth: the preserve-path `dom:` callbacks
-  // (KeepRegistry.editor / "editor-signifier") and the legacy apply() below both
-  // read the same value and stay consistent.
+  // (KeepRegistry.editor / "editor-signifier") and the immediate apply() below
+  // both read the same value and stay consistent.
   get open() { return DoitState.editorOpen },
   set open(v) { DoitState.editorOpen = v },
   // Reveal the editor. Opening it deselects any task (the rail shows the editor
@@ -580,8 +580,8 @@ const DoitInitiativeEditor = {
     if (!opts.skipSelectionClear && window.DoitSelection) window.DoitSelection.clear()
     this.apply()
   },
-  // Idempotent: only writes when the DOM disagrees, so the guard observer
-  // converges instead of looping. Drives the pane's `hidden`, the rail flyout
+  // Idempotent: only writes when the DOM disagrees, so re-applying converges
+  // instead of looping. Drives the pane's `hidden`, the rail flyout
   // (via syncRail), and the title's dotted-underline signifier (shown only when
   // the editor is closed — the server can no longer toggle it).
   apply() {
@@ -746,7 +746,8 @@ document.addEventListener("click", (e) => {
   if (sibling) return DoitAddForm.openSibling(sibling.dataset.addSibling)
   if (e.target.closest("[data-add-cancel]")) DoitAddForm.close()
 
-  // Generic client-side <details> drivers (KeepOpen records the state).
+  // Generic client-side <details> drivers (the data-keep="open" toggle
+  // listener records the state into DoitState.detailsOpen).
   const toggle = e.target.closest("[data-details-toggle]")
   if (toggle) {
     const d = document.getElementById(toggle.dataset.detailsToggle)
@@ -776,16 +777,15 @@ document.addEventListener("click", (e) => {
   }
 })
 
-// Client-owned <details> open/closed (worklist 2 slice 2.3). A KeepOpen
+// Client-owned <details> open/closed (worklist 2 slice 2.3). A preserved
 // <details> renders `data-keep="open"`; its expanded state is client truth in
 // DoitState.detailsOpen (keyed by element id), re-asserted across patches by the
-// KeepRegistry "open" applier. This delegated listener records every change.
+// KeepRegistry "open" applier. This delegated listener records every change —
+// the sole recorder now that the KeepOpen hook is retired (worklist 2.4).
 // `toggle` doesn't bubble, so it can't be caught in the normal (bubbling) phase
 // from the document — but the CAPTURE phase reaches the target on the way down
 // regardless of bubbling, so one capturing listener covers every such element,
-// including ones re-added by a later patch. INDEPENDENT of the KeepOpen hook (it
-// retires in 2.4): the hook's per-element `_open` and this store both observe
-// the same `toggle` and stay consistent until then.
+// including ones re-added by a later patch.
 document.addEventListener("toggle", (e) => {
   const d = e.target
   if (d && d.matches && d.matches("details[data-keep='open']") && d.id) {
@@ -1494,14 +1494,14 @@ document.addEventListener("keydown", (e) => {
 
 // Fully-optimistic operated row (.03.07.22): a completion toggle flips the
 // row's checkbox (aria-pressed), done styling (data-done), and progress bar
-// at the click. The hold handle survives patches via the guard observer AND the
-// preserve-path `dom:` callbacks (the confirm's pending-hue render resets the
-// attributes to server truth) and settles exactly like a held drag: revert on
-// cancel/failure, release on commit/resolve.
+// at the click. The hold handle survives patches via the preserve-path `dom:`
+// callbacks (the confirm's pending-hue render resets the attributes to server
+// truth) and settles exactly like a held drag: revert on cancel/failure,
+// release on commit/resolve.
 //
 // `window.DoitPendingToggle` is now a getter/setter shim backed by
 // DoitState.pending.toggle (slice 2.3) so the held flip has a single source of
-// truth: the legacy applyPendingToggle/reassertClientState path and the new
+// truth: the immediate applyPendingToggle (called at click) and the
 // KeepRegistry "pending-toggle" appliers read the same store and stay
 // consistent. The shape is {liId, value, barValue, prevBarValue, sliderValue,
 // prevSliderValue} — sliderValue/prevSliderValue carry the selected task's pane
@@ -1627,8 +1627,8 @@ function revertPendingToggle() {
 // null the handle here: the reconciling render can land a beat after the reply,
 // so nulling now would let an interleaved patch revert the optimistic bar /
 // slider in the gap. Instead the "pending-toggle" keep-applier releases the
-// hold the moment the server-rendered data-done matches the flip (and
-// reassertClientState/applyPendingToggle re-hold it on any patch until then).
+// hold the moment the server-rendered data-done matches the flip (and the
+// preserve-path `dom:` callbacks re-hold it on any patch until then).
 // committed:false (a confirm modal is deciding) keeps holding via the same path,
 // settled later by phx:confirm-cancelled/-resolved.
 function pushToggleCommit(ev, li) {
@@ -1724,11 +1724,11 @@ document.addEventListener("keydown", (e) => {
 // failed Proceed pushes both, cancelled first, so the revert still runs.
 // `window.DoitPendingMove` is now a getter/setter shim backed by
 // DoitState.pending.move (slice 2.3, mirroring DoitPendingToggle) so the held
-// drag placement has a single source of truth: the legacy
-// applyPendingMove/reassertClientState path reads the same store. Unlike the
-// attribute-level kinds, this hold is STRUCTURAL (a subtree moved to a different
-// parent), so it doesn't get a `data-keep` kind this slice — only the truth is
-// unified; applyPendingMove stays invoked by reassertClientState as before.
+// drag placement has a single source of truth: applyPendingMove reads the same
+// store. Unlike the attribute-level kinds, this hold is STRUCTURAL (a subtree
+// moved to a different parent), so it doesn't get a `data-keep` kind — instead
+// applyPendingMove is re-run from onPatchEnd (the preserve path's post-patch
+// global re-assert) after every morphdom patch.
 Object.defineProperty(window, "DoitPendingMove", {
   get() { return DoitState.pending.move },
   set(v) { DoitState.pending.move = v },
@@ -1777,7 +1777,7 @@ document.addEventListener("click", (e) => {
 
 // Re-assert the held placement: server-side the row still belongs to its old
 // parent, so every patch that touches either child list moves it back. Runs
-// from the guard observer; insert-only-when-different, so it converges.
+// from onPatchEnd; insert-only-when-different, so it converges.
 function applyPendingMove() {
   const p = window.DoitPendingMove
   if (!p || !p.destContainer) return
@@ -2611,7 +2611,7 @@ Hooks.DragReorder = {
     this.cleanup()
     // The hold is registered BEFORE the reply can race it: any patch landing
     // first (the confirm's pending-hue render) re-creates the row under its
-    // server-side parent, and the guard observer needs the handle to fix that
+    // server-side parent, and onPatchEnd needs the handle to fix that
     // (incl. removing the re-created clone — see applyPendingMove). Captured
     // after cleanup so the drop placeholder doesn't pollute the held position.
     // moveParams rides along so a predicted-flip Proceed can re-send the same
@@ -3019,18 +3019,6 @@ Hooks.Popover = {
   },
 }
 
-// Native <details> whose open state survives LiveView patches — the server
-// renders it closed, so morphdom would otherwise slam it shut on every patch.
-Hooks.KeepOpen = {
-  mounted() {
-    this._open = this.el.open
-    this.el.addEventListener("toggle", () => { this._open = this.el.open })
-  },
-  updated() {
-    if (this.el.open !== this._open) this.el.open = this._open
-  },
-}
-
 Hooks.CollapseToggle = {
   mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.bind(); this.apply() },
   updated() { this.apply() },
@@ -3053,20 +3041,6 @@ Hooks.CollapseToggle = {
       this.el.setAttribute("aria-expanded", String(!collapsed))
       localStorage.setItem(this.storageKey(), collapsed ? "1" : "0")
     })
-  },
-}
-
-// Re-applies the persisted collapsed-peek class to a children <ul> whenever
-// LiveView re-renders it. The toggle button (CollapseToggle) carries
-// phx-update="ignore", so its updated() never fires after a tree refresh —
-// without this hook, morphdom strips the JS-added class on every diff.
-Hooks.CollapseChildren = {
-  mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.apply() },
-  updated() { this.apply() },
-  apply() {
-    const key = `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`
-    const collapsed = localStorage.getItem(key) === "1"
-    this.el.classList.toggle("collapsed-peek", collapsed)
   },
 }
 
@@ -3138,87 +3112,6 @@ function applyPresenceBadges() {
   document.querySelectorAll("[data-pill-avatar]").forEach((el) => {
     el.classList.toggle("chip-online", !!el.dataset.assigneeId && online.has(el.dataset.assigneeId))
   })
-}
-
-// The net under the hooks above: collapse state's source of truth is
-// localStorage and the server never renders collapsed-peek, but per-hook
-// updated() callbacks miss some patch paths (nodes moved optimistically by
-// DragReorder then reconciled by morphdom, replaced subtrees) — which
-// expanded collapsed branches on sort/reorder. After ANY class/childList
-// change in the document, re-apply every collapse state. classList.toggle
-// with a no-op force doesn't write the attribute, so this converges instead
-// of looping.
-function applyCollapseStates() {
-  document.querySelectorAll("ul[id^='children-']").forEach((ul) => {
-    const key = `phx:collapse:${ul.dataset.initiativeId}:${ul.dataset.taskId}`
-    const collapsed = localStorage.getItem(key) === "1"
-    ul.classList.toggle("collapsed-peek", collapsed)
-    const btn = document.getElementById(`collapse-${ul.dataset.taskId}`)
-    if (btn) btn.setAttribute("aria-expanded", String(!collapsed))
-  })
-}
-// Re-assert ALL client-owned view state. Every step is idempotent (writes only
-// when the DOM disagrees), so it's safe to call from many triggers without
-// looping. This is the single source of truth for "make the DOM match what the
-// client owns" — the mutation guard below runs it on incremental patches, and
-// the connect/reconnect lifecycle hooks (see installConnectGuards) run it again
-// at the join boundary, where LiveView's first morphdom can replace the
-// pane/selection/rail elements wholesale against the dead-render HTML.
-function reassertClientState() {
-  applyCollapseStates()
-  // Selection is client-owned too — re-assert it across the same patch paths.
-  window.DoitSelection.apply()
-  // Editor visibility is client-owned (UX_GUARDRAILS 6.5): the server always
-  // renders the pane hidden now, so re-assert the open flag the same way.
-  window.DoitInitiativeEditor.apply()
-  // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
-  applyPendingMove()
-  applyPendingToggle()
-  // Presence badges are client-painted (m02.04 §1.12) — same guard.
-  applyPresenceBadges()
-  // While a confirm modal is up, its maybe-write hue is server-held —
-  // disarm the client's safety timer so it can't strip it mid-decision.
-  if (document.getElementById("completion-confirm")) releaseSavingHue()
-}
-window.DoitReassertClientState = reassertClientState
-
-let collapseGuardRaf = null
-new MutationObserver(() => {
-  if (collapseGuardRaf) return
-  collapseGuardRaf = requestAnimationFrame(() => {
-    collapseGuardRaf = null
-    reassertClientState()
-  })
-}).observe(document.body, {
-  subtree: true,
-  childList: true,
-  attributes: true,
-  // data-selected: morphdom strips the client-set attr on patch; both
-  // re-applies are idempotent (no write when correct), so no loops.
-  attributeFilter: ["class", "data-selected"],
-})
-
-// The mutation guard above catches incremental patches, but the LiveView
-// CONNECT/RECONNECT join is special: its first morphdom runs against the dead
-// (static) DOM and can replace the pane/selection/rail elements wholesale. On a
-// slow LongPoll connect that "major reload" lands seconds after the page looks
-// ready — right while the user is mid-action — and the mutation guard's
-// rAF-debounced callback can race LiveView's own focus/DOM restore on that big
-// batch, leaving the pane the user opened during the pre-connect window hidden
-// again. So we ALSO re-assert explicitly at the join boundary, not just from the
-// observer. `installConnectGuards` wires the LiveView connect lifecycle:
-//   - socket.onOpen: fires on the initial transport open and every reconnect.
-//   - phx:page-loading-stop with kind "initial": LiveView dispatches this when
-//     the join render has been applied to the DOM — the exact moment after the
-//     "major reload" patch. We re-run on the next frame so we win after morphdom
-//     has finished writing the batch.
-// Both are idempotent via reassertClientState, so double-firing is harmless.
-function installConnectGuards(socket) {
-  const reassertSoon = () => requestAnimationFrame(reassertClientState)
-  socket.onOpen(reassertSoon)
-  // Every loading-stop is safe to re-run on (reassertClientState is idempotent);
-  // the one that matters is the initial join's "major reload" patch.
-  window.addEventListener("phx:page-loading-stop", reassertSoon)
 }
 
 // Sizes the whole task tree to one width so every row — roots included —
@@ -4044,6 +3937,11 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks, ...Hooks},
   // Preserve path (worklist 2): keep client-owned UI state through the morphdom
   // patch, preventively, so it's never clobbered and there's no post-hoc race.
+  // This is the SOLE mechanism (worklist 2.4 retired the legacy reactive
+  // re-assert machinery — the body MutationObserver, reassertClientState, and
+  // the connect-lifecycle guards). The connect/reconnect join is itself a
+  // morphdom patch, so these callbacks fire on it too: onNodeAdded reconciles
+  // the wholesale-replaced join nodes, onPatchEnd runs the global re-asserts.
   // LV 1.1.29 exposes three relevant `dom` hooks (see live_socket.js
   // domCallbacks): onBeforeElUpdated(fromEl, toEl), onNodeAdded(el), and
   // onPatchEnd() (fires once AFTER each morphdom patch).
@@ -4055,14 +3953,11 @@ const liveSocket = new LiveSocket("/live", Socket, {
   //     (reorder, reset re-stream, the initial-join replace). We seed it from
   //     the store on the freshly added element.
   //   - onPatchEnd is the home for GLOBAL re-asserts that don't fit the
-  //     per-element model: presence painting (document-wide, idempotent) and the
-  //     structural pending-move re-apply both ran ONLY on the legacy
-  //     MutationObserver/reassertClientState path (retires in 2.4); calling them
-  //     here gives them a real post-patch trigger that survives that retirement.
-  //     It also prunes DoitState.detailsOpen of entries whose element is gone, so
-  //     a re-added <details data-keep="open"> falls back to the server default
-  //     instead of reopening from a stale entry. Independent of the KeepOpen hook
-  //     (which also retires in 2.4).
+  //     per-element model: presence painting (document-wide, idempotent), the
+  //     structural pending-move re-apply, the confirm saving-hue safety, and the
+  //     detailsOpen prune. It prunes DoitState.detailsOpen of entries whose
+  //     element is gone, so a re-added <details data-keep="open"> falls back to
+  //     the server default instead of reopening from a stale entry.
   // onBeforeElUpdated / onNodeAdded dispatch by `data-keep` into KeepRegistry,
   // reading DoitState.
   dom: {
@@ -4071,6 +3966,11 @@ const liveSocket = new LiveSocket("/live", Socket, {
     onPatchEnd() {
       applyPresenceBadges()
       applyPendingMove()
+      // While a confirm modal is up, its maybe-write hue is server-held
+      // (pending_saving_ids) — disarm the client's 1.5s safety timer so it
+      // can't strip the pink mid-decision. The patch that renders the modal is
+      // exactly when this matters (§-finding: Proceed looked like it unpinked).
+      if (document.getElementById("completion-confirm")) releaseSavingHue()
       // Evict stale detailsOpen entries (the store is otherwise add-only): once
       // an element id no longer resolves, drop it so the "open" applier won't
       // reopen a re-added <details> from a dead entry (e.g. the Delete-account
@@ -4081,11 +3981,6 @@ const liveSocket = new LiveSocket("/live", Socket, {
     },
   },
 })
-
-// Re-assert client-owned view state at the connect/reconnect join boundary, so
-// the slow LongPoll "major reload" can't wipe a pane the user opened during the
-// pre-connect window. See installConnectGuards.
-installConnectGuards(liveSocket.getSocket())
 
 // Show progress bar on live navigation and form submits
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})

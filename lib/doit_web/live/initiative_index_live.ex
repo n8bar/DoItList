@@ -72,8 +72,8 @@ defmodule DoItWeb.InitiativeIndexLive do
   end
 
   # The New Initiative form opens/closes client-side (UX_GUARDRAILS 6.5 —
-  # typing must never wait on a round trip): a <details> + KeepOpen, driven by
-  # the data-details-toggle/-close handlers in app.js. Only a successful
+  # typing must never wait on a round trip): a <details> + data-keep="open",
+  # driven by the data-details-toggle/-close handlers in app.js. Only a successful
   # create closes it from here.
   @impl true
   def handle_event("create", %{"initiative" => params}, socket) do
@@ -386,9 +386,9 @@ defmodule DoItWeb.InitiativeIndexLive do
         </button>
       </div>
 
-      <%!-- Client-toggled (no round trip before typing); KeepOpen preserves
-           the open state across patches, e.g. a validation error re-render. --%>
-      <details id="new-initiative" phx-hook="KeepOpen" data-keep="open" class="mb-6">
+      <%!-- Client-toggled (no round trip before typing); data-keep="open"
+           preserves the open state across patches, e.g. a validation error re-render. --%>
+      <details id="new-initiative" data-keep="open" class="mb-6">
         <summary class="hidden"></summary>
         <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
           <.form :let={f} for={@form} phx-submit="create" class="space-y-3">
@@ -639,15 +639,14 @@ defmodule DoItWeb.InitiativeIndexLive do
            NON-persistent Show-hidden checkbox (resets each visit). Restore
            clears archived_at, unhide clears hidden_at — both on the caller's
            own membership row. --%>
-      <%!-- KeepOpen pins the open state across LiveView patches. Toggling
+      <%!-- data-keep="open" pins the open state across LiveView patches. Toggling
            Show-hidden re-renders the summary count + the list, and without this
-           hook morphdom would reset the user-opened <details> back to closed —
-           the real cause of "Show hidden collapses the list" (the same hook the
+           morphdom would reset the user-opened <details> back to closed — the
+           real cause of "Show hidden collapses the list" (the same marker the
            New-Initiative <details> and the header menus use). --%>
       <details
         :if={@archived != []}
         id="archived"
-        phx-hook="KeepOpen"
         data-keep="open"
         class="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
       >

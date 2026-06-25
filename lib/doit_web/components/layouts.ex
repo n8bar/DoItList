@@ -117,8 +117,8 @@ defmodule DoItWeb.Layouts do
                  (NOT collapsed into the hamburger), so notifications are one tap
                  away on mobile too. Native <details> like the other menus, so
                  root.html.heex's data-menu light-dismiss closes it on an outside
-                 click / Escape; KeepOpen pins it open across LiveView patches
-                 (a notification arriving over PubSub must not close it). --%>
+                 click / Escape; data-keep="open" pins it open across LiveView
+                 patches (a notification arriving over PubSub must not close it). --%>
             <%!-- Desktop: inline nav links. --%>
             <div class="hidden sm:flex items-center gap-3">
               <.link
@@ -140,10 +140,10 @@ defmodule DoItWeb.Layouts do
             <%!-- Bell sits immediately LEFT of the avatar at every breakpoint:
                  a standalone item just before the account menu (sm:+) and the
                  hamburger (<sm), which are mutually exclusive. Native <details>
-                 + KeepOpen like the others; root.html.heex's data-menu handles
-                 the outside-click / Escape. Opening marks notifications read
-                 (worklist 2.3) — the summary click toggles + pushes mark-read. --%>
-            <details id="notif-menu" phx-hook="KeepOpen" data-keep="open" class="relative" data-menu>
+                 + data-keep="open" like the others; root.html.heex's data-menu
+                 handles the outside-click / Escape. Opening marks notifications
+                 read (worklist 2.3) — the summary click toggles + pushes mark-read. --%>
+            <details id="notif-menu" data-keep="open" class="relative" data-menu>
               <summary
                 title="Notifications"
                 aria-label="Notifications"
@@ -161,8 +161,8 @@ defmodule DoItWeb.Layouts do
             </details>
 
             <%!-- Account menu (sm:+) — pulled out of the links wrapper so the
-                 bell sits to its left. KeepOpen pins it open across patches. --%>
-            <details id="account-menu" phx-hook="KeepOpen" data-keep="open" class="relative hidden sm:block" data-menu>
+                 bell sits to its left. data-keep="open" pins it open across patches. --%>
+            <details id="account-menu" data-keep="open" class="relative hidden sm:block" data-menu>
               <summary
                 title="Account menu"
                 class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
@@ -202,9 +202,9 @@ defmodule DoItWeb.Layouts do
 
             <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too).
                  Notifications no longer live here — they own the bell, which is a
-                 top-level nav item visible on mobile. KeepOpen pins it open
-                 across patches like the other menus. --%>
-            <details id="mobile-menu" phx-hook="KeepOpen" data-keep="open" class="relative sm:hidden" data-menu>
+                 top-level nav item visible on mobile. data-keep="open" pins it
+                 open across patches like the other menus. --%>
+            <details id="mobile-menu" data-keep="open" class="relative sm:hidden" data-menu>
               <summary
                 class="btn btn-sm btn-ghost cursor-pointer list-none [&::-webkit-details-marker]:hidden"
                 aria-label="Menu"

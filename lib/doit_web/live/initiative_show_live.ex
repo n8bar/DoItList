@@ -4074,7 +4074,6 @@ defmodule DoItWeb.InitiativeShowLive do
       <ul
         :if={@task.children != []}
         id={"children-#{@task.id}"}
-        phx-hook="CollapseChildren"
         data-keep="collapse"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}
@@ -4213,11 +4212,10 @@ defmodule DoItWeb.InitiativeShowLive do
       <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" scope="init" />
 
       <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
-           behavior that isn't day-to-day editing. KeepOpen preserves the
-           open/closed state across LiveView patches. --%>
+           behavior that isn't day-to-day editing. data-keep="open" preserves
+           the open/closed state across LiveView patches. --%>
       <details
         id="initiative-settings"
-        phx-hook="KeepOpen"
         data-keep="open"
         class="border-t border-zinc-200 dark:border-zinc-700 pt-3"
       >
@@ -4382,8 +4380,8 @@ defmodule DoItWeb.InitiativeShowLive do
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
   (desktop/tablet) and the mobile header collapsible (.05.04.1). The form
-  opens client-side (native <details>, UX_GUARDRAILS 6.5); KeepOpen carries
-  its state across patches.
+  opens client-side (native <details>, UX_GUARDRAILS 6.5); data-keep="open"
+  carries its state across patches.
   """
   def members_panel(assigns) do
     ~H"""
@@ -4405,8 +4403,8 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <%!-- Client-opened (UX_GUARDRAILS 6.5): the button flips this <details>
-           and KeepOpen carries the state across patches. --%>
-      <details :if={@can_admin} id={"#{@id}-form"} phx-hook="KeepOpen" data-keep="open" class="mb-3">
+           and data-keep="open" carries the state across patches. --%>
+      <details :if={@can_admin} id={"#{@id}-form"} data-keep="open" class="mb-3">
         <summary class="hidden"></summary>
         <div>
           <form phx-submit="add_member" class="flex flex-col gap-2">
@@ -5132,12 +5130,11 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <%!-- Hideable per user preference (m02.04 §2.4); collapsed by default,
-           expandable. KeepOpen persists the user's open/closed choice across
-           pane patches. --%>
+           expandable. data-keep="open" persists the user's open/closed choice
+           across pane patches. --%>
       <details
         :if={@show_activity}
         id="task-activity"
-        phx-hook="KeepOpen"
         data-keep="open"
         class="group border-t border-zinc-100 dark:border-zinc-700 pt-3"
       >

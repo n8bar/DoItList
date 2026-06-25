@@ -428,9 +428,9 @@ defmodule DoItWeb.AccountLive do
             with other members are handed to another member, so their work isn't lost.
           </p>
 
-          <%!-- Two-step confirm, client-side (no round trip to open); KeepOpen
-               holds it open across any patch while the user decides. --%>
-          <details id="delete-account-confirm" phx-hook="KeepOpen" data-keep="open">
+          <%!-- Two-step confirm, client-side (no round trip to open);
+               data-keep="open" holds it open across any patch while the user decides. --%>
+          <details id="delete-account-confirm" data-keep="open">
             <summary class="w-fit cursor-pointer list-none [&::-webkit-details-marker]:hidden px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
               Delete account…
             </summary>
