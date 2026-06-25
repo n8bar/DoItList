@@ -2508,6 +2508,7 @@ defmodule DoItWeb.InitiativeShowLive do
           <aside
             id="details-rail"
             data-open={@selected_task_id && "true"}
+            data-keep="rail"
             class={[
               "not-data-open:hidden lg:not-data-open:block",
               "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",

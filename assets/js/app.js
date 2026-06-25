@@ -210,6 +210,22 @@ const KeepRegistry = {
       }
     },
   },
+  rail: {
+    // The mobile right-rail flyout (#details-rail). Its `data-open` AND the
+    // sibling #pane-backdrop's `hidden` are pure VIEW STATE (.03.07.20): open
+    // when a task is selected OR the initiative editor is showing — both client
+    // truth. The server renders both SOLELY from @selected_task_id, so the
+    // editor-open case (selectedId null) leaves them unmanaged and a patch
+    // strips/resets them. This kind owns BOTH elements (the backdrop carries no
+    // marker of its own) and mirrors syncRail's computation, idempotently (no-op
+    // when already matched). `el` is #details-rail (where the marker renders).
+    apply(el, state) {
+      const open = !!(state.selectedId || state.editorOpen)
+      if (el.hasAttribute("data-open") !== open) el.toggleAttribute("data-open", open)
+      const backdrop = document.getElementById("pane-backdrop")
+      if (backdrop && backdrop.hidden !== !open) backdrop.hidden = !open
+    },
+  },
   presence: {
     // The presence anchor (#presence-badges, phx-update="ignore"). Truth lives in
     // state.presence (written by the PresenceBadges handleEvent). Painting is
@@ -4028,8 +4044,9 @@ const liveSocket = new LiveSocket("/live", Socket, {
   hooks: {...colocatedHooks, ...Hooks},
   // Preserve path (worklist 2): keep client-owned UI state through the morphdom
   // patch, preventively, so it's never clobbered and there's no post-hoc race.
-  // LV 1.1.29 exposes exactly two relevant `dom` hooks (see live_socket.js
-  // domCallbacks): onBeforeElUpdated(fromEl, toEl) and onNodeAdded(el).
+  // LV 1.1.29 exposes three relevant `dom` hooks (see live_socket.js
+  // domCallbacks): onBeforeElUpdated(fromEl, toEl), onNodeAdded(el), and
+  // onPatchEnd() (fires once AFTER each morphdom patch).
   //   - onBeforeElUpdated fires BEFORE morphdom commits an in-place update. Its
   //     return value is ignored by LiveView, so we reconcile `toEl` (the
   //     incoming node) in place — morphdom then copies the corrected value onto
@@ -4037,10 +4054,31 @@ const liveSocket = new LiveSocket("/live", Socket, {
   //   - onNodeAdded fires AFTER morphdom inserts a node — the re-added case
   //     (reorder, reset re-stream, the initial-join replace). We seed it from
   //     the store on the freshly added element.
-  // Both dispatch by `data-keep` into KeepRegistry, reading DoitState.
+  //   - onPatchEnd is the home for GLOBAL re-asserts that don't fit the
+  //     per-element model: presence painting (document-wide, idempotent) and the
+  //     structural pending-move re-apply both ran ONLY on the legacy
+  //     MutationObserver/reassertClientState path (retires in 2.4); calling them
+  //     here gives them a real post-patch trigger that survives that retirement.
+  //     It also prunes DoitState.detailsOpen of entries whose element is gone, so
+  //     a re-added <details data-keep="open"> falls back to the server default
+  //     instead of reopening from a stale entry. Independent of the KeepOpen hook
+  //     (which also retires in 2.4).
+  // onBeforeElUpdated / onNodeAdded dispatch by `data-keep` into KeepRegistry,
+  // reading DoitState.
   dom: {
     onBeforeElUpdated(_fromEl, toEl) { applyKeep(toEl, DoitState) },
     onNodeAdded(el) { applyKeep(el, DoitState) },
+    onPatchEnd() {
+      applyPresenceBadges()
+      applyPendingMove()
+      // Evict stale detailsOpen entries (the store is otherwise add-only): once
+      // an element id no longer resolves, drop it so the "open" applier won't
+      // reopen a re-added <details> from a dead entry (e.g. the Delete-account
+      // destructive confirm reappearing expanded after nav).
+      for (const id of Object.keys(DoitState.detailsOpen)) {
+        if (!document.getElementById(id)) delete DoitState.detailsOpen[id]
+      }
+    },
   },
 })
 
