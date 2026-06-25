@@ -466,4 +466,21 @@ div.init-drop-placeholder {
   animation: chat-flash 0.9s ease-out;
 }
 
+/* Chat input — iOS Safari caret fix (M02.09).
+   daisyUI v5's `.input` is meant to wrap an input, so it forces the element
+   to `display: inline-flex` with `gap` + `align-items: center` (see the
+   compiled `.input { display: inline-flex } &:where(input) { ... }` rules).
+   We apply `.input` directly to a bare `<input>`, so iOS Safari renders a
+   text field as an inline-flex container: the native caret then sits ~8px
+   (the flex `gap`) to the RIGHT of the typed glyphs. Desktop WebKit/Blink/
+   Gecko position the caret correctly regardless, which is why it's iOS-only.
+   Restore a normal text-input box model (block flow, no flex gap). This does
+   NOT touch daisyUI's border/padding/radius/font-size, so the desktop look is
+   unchanged; it only undoes the inline-flex container behavior the caret trips
+   on. Scoped to the chat input alone via [data-chat-input]. */
+input[data-chat-input].input {
+  display: block;
+  gap: 0;
+}
+
 /* This file is for your main application CSS */
