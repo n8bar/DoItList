@@ -3571,17 +3571,39 @@ defmodule DoItWeb.InitiativeShowLive do
     <div class="relative pb-6">
       <%!-- Title row (dedicated): grove icon + name. New List inline on desktop only. --%>
       <div class="flex items-start gap-2">
-        <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
-          <.botanical_icon kind={:grove} class="w-6 h-6" />
-        </span>
-        <h1
-          data-edit-initiative
-          data-keep="editor-signifier"
-          title="Click to edit"
-          class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
-        >
-          {@initiative.name}
-        </h1>
+        <%!-- The grove icon + title are one click/tap-to-edit affordance, styled as a
+             subtle button (persistent soft border, hover tint, pressed state) so the
+             edit cue reads without hover (mobile). An <h1> can't live in a real
+             <button>, so this is a role="button" wrapper with keyboard support; the
+             delegated [data-edit-initiative] click + the editor-signifier preserve
+             path ride on the wrapper. Gated on @can_edit — viewers see a plain title. --%>
+        <%= if @can_edit do %>
+          <span
+            data-edit-initiative
+            data-keep="editor-signifier"
+            role="button"
+            tabindex="0"
+            aria-label="Edit initiative name"
+            title="Edit name"
+            class="group flex items-start gap-2 px-2 py-1 -ml-2 rounded-lg cursor-pointer border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:bg-zinc-200 dark:active:bg-zinc-700 transition-colors"
+          >
+            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+              <.botanical_icon kind={:grove} class="w-6 h-6" />
+            </span>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-zinc-900 dark:group-hover:text-white">
+              {@initiative.name}
+            </h1>
+          </span>
+        <% else %>
+          <span class="flex items-start gap-2">
+            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+              <.botanical_icon kind={:grove} class="w-6 h-6" />
+            </span>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">
+              {@initiative.name}
+            </h1>
+          </span>
+        <% end %>
         <button
           :if={@can_edit}
           type="button"

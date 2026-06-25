@@ -235,13 +235,18 @@ li[data-selected] > [data-task-row] .kbd-key {
   text-decoration: underline;
 }
 
-/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): the title /
-   subtitle carry a "click to edit" dotted-underline signifier that drops while
-   the editor is open. The pane's visibility is client-driven now (the server no
-   longer flips @editing_initiative?), so the signifier keys off the .editor-open
-   class DoitInitiativeEditor.apply() toggles, not a server assign. */
-[data-edit-initiative].editor-open {
-  text-decoration: none;
+/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): the title is a
+   button-styled click/tap-to-edit affordance ([data-edit-initiative]). While its
+   editor is open the affordance reads as pressed/active. The pane's visibility is
+   client-driven now (the server no longer flips @editing_initiative?), so this
+   keys off the .editor-open class DoitInitiativeEditor.apply() toggles, not a
+   server assign. The pressed tint matches the Tailwind active: states in both
+   themes (zinc-200 light / zinc-700 dark). */
+[data-edit-initiative][role="button"].editor-open {
+  background-color: var(--color-zinc-200);
+}
+.dark [data-edit-initiative][role="button"].editor-open {
+  background-color: var(--color-zinc-700);
 }
 
 /* Drag-reorder visuals (Hooks.DragReorder).

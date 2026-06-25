@@ -201,9 +201,9 @@ const KeepRegistry = {
     },
   },
   "editor-signifier": {
-    // The title/subtitle "click to edit" signifier ([data-edit-initiative]). The
-    // dotted-underline `.editor-open` class shows only while the editor is open;
-    // the server can no longer toggle it, so the client owns it via state.
+    // The title/subtitle "click to edit" affordance ([data-edit-initiative]). The
+    // `.editor-open` class marks the affordance as pressed/active while its editor
+    // is open; the server can no longer toggle it, so the client owns it via state.
     apply(el, state) {
       if (el.classList.contains("editor-open") !== state.editorOpen) {
         el.classList.toggle("editor-open", state.editorOpen)
@@ -940,6 +940,18 @@ document.addEventListener("click", (e) => {
     DoitInitiativeEditor.close()
     if (hadSelection && window.DoitPush) window.DoitPush("close_task", {})
   }
+})
+
+// The title affordance is a role="button" wrapper (an <h1> can't live in a real
+// <button>), so it needs explicit keyboard activation: Enter / Space reveal the
+// editor, mirroring the click path above. preventDefault on Space stops the page
+// from scrolling.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return
+  const trigger = e.target.closest("[data-edit-initiative][role='button']")
+  if (!trigger) return
+  e.preventDefault()
+  DoitInitiativeEditor.show()
 })
 
 // Row clicks: selection toggles instantly client-side; the server event only
