@@ -728,7 +728,13 @@ defmodule DoItWeb.InitiativeShowLive do
     else
       case Initiatives.update_subtitle(socket.assigns.initiative, subtitle) do
         {:ok, _root} ->
-          {:noreply, assign(socket, :subtitle, Initiatives.subtitle(socket.assigns.initiative))}
+          # The field already shows the typed text, so the SAVE is the invisible
+          # part (§6.7). Pulse a brief "Saved" tick beside the input so the
+          # debounced write is acknowledged, not silent.
+          {:noreply,
+           socket
+           |> assign(:subtitle, Initiatives.subtitle(socket.assigns.initiative))
+           |> push_event("subtitle-saved", %{})}
 
         {:error, _} ->
           {:noreply, socket}
@@ -761,7 +767,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
     if Map.get(params, "confirmed") == true or
          not Initiatives.archive_needs_confirm?(user, initiative) do
-      {:noreply, commit_archive(socket)}
+      # Reply ok so the client can tell a commit-in-flight (latch + hold the
+      # archive button) from the needs_confirm probe (open the modal). The
+      # commit ends in push_navigate, which replaces the page and the latch.
+      {:reply, %{ok: true}, commit_archive(socket)}
     else
       {:reply, %{needs_confirm: true}, socket}
     end
@@ -845,11 +854,17 @@ defmodule DoItWeb.InitiativeShowLive do
         {:ok, updated} ->
           Tasks.notify_tree_changed(updated.id, updated.root_task_id)
 
+          # Re-enable the checkbox + flash a "Saved" tick — the re-enable IS the
+          # success ack for the in-flight signifier armed client-side (§6.7).
+          # Sent via push_event because the box is inside a phx-change form (no
+          # reply callback), and carries the persisted state so the box's
+          # checked stays honest if the value was coerced.
           {:noreply,
            socket
            |> assign(:initiative, updated)
            |> load_tree()
-           |> refresh_selected()}
+           |> refresh_selected()
+           |> push_event("viewer-plus-saved", %{on: updated.viewer_plus})}
 
         {:error, cs} ->
           {:noreply,
@@ -2029,6 +2044,20 @@ defmodule DoItWeb.InitiativeShowLive do
               // attempting a disallowed action) sounds the same rejection thud,
               // however the attempt arrived — key, form, click, or drop.
               this.handleEvent("bonk", () => this.bonk());
+              // Saved-tick acks (WL3 item 3.7, §6.7): a debounced subtitle write
+              // and the viewer+ flip have no reply callback (they ride phx-change
+              // forms), so the server pushes these one-shot events; reveal the
+              // brief "✓ Saved" span. viewer-plus additionally re-enables its
+              // checkbox here (the in-flight signifier disabled it client-side) —
+              // that re-enable IS the success ack.
+              this.handleEvent("subtitle-saved", () => {
+                if (window.DoitSavedTick) window.DoitSavedTick("subtitle-saved-tick");
+              });
+              this.handleEvent("viewer-plus-saved", () => {
+                const box = document.querySelector("input[name='viewer_plus']");
+                if (box) { clearTimeout(box._vpTimer); box.disabled = false; }
+                if (window.DoitSavedTick) window.DoitSavedTick("viewer-plus-saved-tick");
+              });
               // A selection can land before we connect (DoitSelection is
               // client-only; slow longpoll connect). Replay it now so the server
               // loads the pane's comments / activity / co-assignees for it.
@@ -4340,9 +4369,23 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- Subtitle is stored in the root task's title (.05.03), so it has its
              own write path rather than riding the Initiative changeset. --%>
         <div>
-          <label for="initiative-subtitle" class="text-xs text-zinc-500 dark:text-zinc-400">
-            Subtitle
-          </label>
+          <div class="flex items-center gap-2">
+            <label for="initiative-subtitle" class="text-xs text-zinc-500 dark:text-zinc-400">
+              Subtitle
+            </label>
+            <%!-- Saved-tick (WL3 item 3.7, §6.7): server-rendered hidden, revealed
+                 for ~1.2s by the TaskKeys hook on the "subtitle-saved" push_event,
+                 then re-hidden. Transient + self-clearing like flashCopied, so it
+                 rides the preserve path with no data-keep (the server always
+                 renders it hidden, so any patch can only re-hide it). --%>
+            <span
+              id="subtitle-saved-tick"
+              hidden
+              class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+            >
+              <.icon name="hero-check" class="w-3 h-3" /> Saved
+            </span>
+          </div>
           <input
             id="initiative-subtitle"
             type="text"
@@ -4522,6 +4565,16 @@ defmodule DoItWeb.InitiativeShowLive do
                   checked={@initiative.viewer_plus}
                   class="checkbox checkbox-sm"
                 /> Viewer+ — an assigned viewer leads their subtree
+                <%!-- Saved-tick (WL3 item 3.7, §6.7): the success ack for the
+                     in-flight signifier; revealed for ~1.2s by the TaskKeys hook
+                     on "viewer-plus-saved", then re-hidden (same as subtitle). --%>
+                <span
+                  id="viewer-plus-saved-tick"
+                  hidden
+                  class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+                >
+                  <.icon name="hero-check" class="w-3 h-3" /> Saved
+                </span>
               </label>
               <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
                 A viewer who is a task's assignee can update its progress and comments (and

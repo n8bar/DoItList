@@ -368,6 +368,16 @@ div.init-drop-placeholder {
   background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
 }
 
+/* Saving hue on the small inline task-index labels (WL3 item 3.7): the faint
+   pink background is nearly invisible on a tiny inline span, so the
+   in-flight signifier there is a gentle pulse + dim instead, until the
+   re-label patch strips is-saving. */
+[data-task-index].is-saving {
+  background-color: transparent !important;
+  opacity: 0.45;
+  animation: doit-recompute-pulse 2s ease-in-out infinite;
+}
+
 /* Indeterminate progress (.03.07.23): rows whose % is genuinely in flight
    (progress-pinked, but not the operated row) stop claiming a number — the
    fill becomes a full-width left-to-right fade from the progress color into

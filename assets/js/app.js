@@ -827,6 +827,21 @@ function fallbackCopy(text) {
   document.body.removeChild(ta)
 }
 
+// Briefly reveal a server-rendered-hidden "✓ Saved" span, then re-hide it
+// (WL3 item 3.7, §6.7). The success ack where the effect is otherwise invisible
+// (a debounced subtitle write, the viewer+ flip). Self-clearing on a fixed
+// timeout, exactly like flashCopied — transient, rides the preserve path with
+// no data-keep (the server always renders the span hidden). Reused by the
+// subtitle-saved and viewer-plus-saved push_events routed through TaskKeys.
+function showSavedTick(spanId) {
+  const span = document.getElementById(spanId)
+  if (!span) return
+  span.hidden = false
+  clearTimeout(span._tickTimer)
+  span._tickTimer = setTimeout(() => { span.hidden = true }, 1200)
+}
+window.DoitSavedTick = showSavedTick
+
 // Briefly swap the clipboard icon for a check to confirm the copy, then revert.
 function flashCopied(btn) {
   const copyIcon = btn.querySelector("[data-copy-icon]")
@@ -1141,6 +1156,40 @@ document.addEventListener("click", (e) => {
 })
 
 document.addEventListener("change", (e) => {
+  // Settings: task-numbering style (WL3 item 3.7, §6.7). Re-deriving every
+  // node's positional label in JS would duplicate Tasks.Index, so instead of a
+  // true optimistic relabel we show a transient "saving" hue across the index
+  // spans; the re-label patch strips it (the server never emits is-saving) and
+  // markSaving's safety timer covers a dropped reply. No data-keep needed —
+  // same lifecycle as every other saving-hue path.
+  if (e.target.id === "index-style") {
+    markSaving([...document.querySelectorAll("#task-tree [data-task-index]")])
+    return
+  }
+  // Settings: progress calc (WL3 item 3.7, §6.1/§6.7). A whole-tree % recompute
+  // round trips before any bar changes — acknowledge it's in flight by pinking
+  // + setting every row's bar indeterminate (the same "% genuinely in flight"
+  // treatment), cleared by the authoritative recompute patch. Don't fake a
+  // number — markRecomputing shows the gradient + "…" until the real %s land.
+  if (e.target.id === "progress-calc") {
+    const rows = [...document.querySelectorAll("#task-tree li[data-task-id]")].map(savingRowOf)
+    markSaving(rows)
+    markRecomputing(rows)
+    return
+  }
+  // Settings: viewer+ toggle (WL3 item 3.7, §6.7). Flipping it re-evaluates
+  // edit-ability across the tree on the round trip. In-flight signifier: disable
+  // the checkbox + pink the tree rows whose edit affordances change; the server
+  // replies with a "viewer-plus-saved" push_event (handled in the TaskKeys hook)
+  // that re-enables the box and flashes a saved tick — that re-enable IS the
+  // success ack. A safety timer re-enables on a dropped reply so it never sticks.
+  if (e.target.name === "viewer_plus") {
+    e.target.disabled = true
+    markSaving([...document.querySelectorAll("#task-tree li[data-task-id]")].map(savingRowOf))
+    clearTimeout(e.target._vpTimer)
+    e.target._vpTimer = setTimeout(() => { e.target.disabled = false }, 8000)
+    return
+  }
   // Sort menu — pink the resorted children of the selected branch.
   if (e.target.closest("[data-saving-children]")) {
     const li = selectedLi()
@@ -1373,13 +1422,50 @@ document.addEventListener("keydown", (e) => {
 // 6.5): the owner case predicts from the DOM (any incomplete task in the tree);
 // the member case defers to the server backstop, which replies needs_confirm
 // only when there's actually unfinished work. Proceed commits with confirmed.
-function pushArchive(confirmed) {
+//
+// In-flight signifier (WL3 item 3.7, §6.7): the originating control latches —
+// disabled + "Archiving…" + pulse — so the wait on the push_navigate isn't
+// dead air. A non-committing reply (needs_confirm probe) or a refusal / dropped
+// reply restores it; an ok commit stays latched because the navigation
+// replaces the whole page. Mirrors the leave_initiative latch above.
+function latchArchiveBtn(ctl) {
+  if (!ctl) return () => {}
+  // The archive button holds an icon + a trailing text node (" Archive"); the
+  // modal Proceed is text-only. Replace JUST the last text node so an icon (if
+  // present) survives, and restore() can put the original label back — keeping
+  // morphdom out of it for the phx-update="ignore" modal Proceed too.
+  const textNode = [...ctl.childNodes].reverse().find((n) => n.nodeType === 3 && n.textContent.trim())
+  const label = textNode ? textNode.textContent : null
+  ctl.disabled = true
+  ctl.classList.add("animate-pulse", "opacity-60")
+  if (textNode) textNode.textContent = " Archiving…"
+  return () => {
+    ctl.disabled = false
+    ctl.classList.remove("animate-pulse", "opacity-60")
+    if (textNode && label != null) textNode.textContent = label
+  }
+}
+
+function pushArchive(confirmed, ctl, onRestore) {
   if (!window.DoitPush) return
+  // Latch the originating control now — the client can't know in advance
+  // whether the server will commit or reply needs_confirm (the member case
+  // only the server decides), so we latch optimistically and release on a
+  // non-commit reply. A commit ends in push_navigate (stays latched); a
+  // needs_confirm probe / refusal / dropped reply restores it.
+  const latch = latchArchiveBtn(ctl)
+  const restore = () => { latch(); if (onRestore) onRestore() }
+  const t = setTimeout(restore, 8000) // dropped reply → never hang
   window.DoitPush("archive_initiative", confirmed ? {confirmed: true} : {}, (reply) => {
+    clearTimeout(t)
     if (reply && reply.needs_confirm) {
+      restore() // the probe came back asking — release and open the modal
       const m = document.getElementById("archive-confirm")
       if (m) m.hidden = false
+    } else if (!reply || reply.ok === false) {
+      restore() // refusal / dropped reply → let them retry
     }
+    // ok:true → stay latched; the push_navigate replaces this page.
   })
 }
 
@@ -1397,25 +1483,32 @@ document.addEventListener("click", (e) => {
     if (needsConfirm && modal) {
       modal.hidden = false
     } else {
-      pushArchive(false)
+      // Committing straight away — latch the archive button (member case may
+      // still probe needs_confirm, which releases it and opens the modal).
+      pushArchive(false, btn)
     }
     return
   }
   if (!modal || modal.hidden) return
+  // Mid-commit ("Archiving…") — backdrop / Cancel can't dismiss it.
+  if (modal.dataset.archiving === "true") return
   if (e.target === modal || e.target.closest("[data-archive-cancel]")) {
     modal.hidden = true
     return
   }
-  if (e.target.closest("[data-archive-proceed]")) {
-    modal.hidden = true
-    pushArchive(true)
+  const proceed = e.target.closest("[data-archive-proceed]")
+  if (proceed) {
+    // Don't hide — Proceed commits; latch it through the navigate (the page
+    // replacement tears down the modal). A refusal / dropped reply restores it.
+    modal.dataset.archiving = "true"
+    pushArchive(true, proceed, () => { delete modal.dataset.archiving })
   }
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const m = document.getElementById("archive-confirm")
-  if (m && !m.hidden) m.hidden = true
+  if (m && !m.hidden && m.dataset.archiving !== "true") m.hidden = true
 })
 
 // ---------------------------------------------------------------------------
