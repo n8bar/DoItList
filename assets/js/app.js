@@ -471,6 +471,8 @@ const DoitSelection = {
       const cr = computedNote.querySelector("[data-computed-readout]")
       if (cr && cp !== null) cr.textContent = cp
     }
+    const mpHint = pane.querySelector("[data-mp-hint]")
+    if (mpHint) mpHint.classList.toggle("invisible", !isBranch)
 
     // The title attr always carries the priority ("Priority: high"). Either
     // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,

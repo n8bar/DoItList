@@ -4974,15 +4974,13 @@ defmodule DoItWeb.InitiativeShowLive do
             <label for="task-field-progress" class="text-xs text-zinc-500 dark:text-zinc-400">
               Manual progress: <span data-progress-readout>{if leaf?(@task), do: @task.manual_progress, else: @task.computed_progress}</span>%
             </label>
-            <.info_hint
-              :if={not leaf?(@task)}
-              id={"mp-hint-#{@task.id}"}
-              label="Why is this disabled?"
-            >
-              Progress on a task with subtasks is calculated from its subtasks instead of
-              being set manually. Your manual value is kept and will start being used again
-              if you remove all subtasks.
-            </.info_hint>
+            <span data-mp-hint class={["inline-flex", leaf?(@task) && "invisible"]}>
+              <.info_hint id={"mp-hint-#{@task.id}"} label="Why is this disabled?">
+                Progress on a task with subtasks is calculated from its subtasks instead of
+                being set manually. Your manual value is kept and will start being used again
+                if you remove all subtasks.
+              </.info_hint>
+            </span>
           </div>
           <input
             id="task-field-progress"
