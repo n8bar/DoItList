@@ -13,8 +13,14 @@ defmodule DoItWeb.AccountLive do
      |> assign(:profile_form, to_form(Accounts.change_profile(user)))
      |> assign(:username_form, to_form(Accounts.change_username(user)))
      |> assign(:password_form, to_form(Accounts.change_password(user)))
-     |> assign(:prefs_form, to_form(Accounts.change_preferences(Accounts.get_preferences(user))))}
+     |> assign(:prefs_form, to_form(Accounts.change_preferences(Accounts.get_preferences(user))))
+     |> assign(:api_token_form, new_api_token_form())
+     # The just-minted plaintext, shown ONCE then dismissed. Never re-derivable.
+     |> assign(:new_api_token, nil)
+     |> assign(:api_tokens, Accounts.list_api_tokens(user))}
   end
+
+  defp new_api_token_form, do: to_form(%{"label" => ""}, as: :api_token)
 
   @impl true
   def handle_event("validate_preferences", %{"user_preferences" => params}, socket) do
@@ -121,6 +127,56 @@ defmodule DoItWeb.AccountLive do
         {:noreply,
          assign(socket, :username_form, to_form(Map.put(changeset, :action, :validate)))}
     end
+  end
+
+  # --- API tokens (m03.01 worklist 1.2) --------------------------------------
+
+  def handle_event("mint_api_token", %{"api_token" => %{"label" => label}}, socket) do
+    user = socket.assigns.current_user
+
+    case Accounts.mint_api_token(user, label) do
+      {:ok, {plaintext, _token}} ->
+        {:noreply,
+         socket
+         |> assign(:new_api_token, plaintext)
+         |> assign(:api_token_form, new_api_token_form())
+         |> assign(:api_tokens, Accounts.list_api_tokens(user))
+         |> put_flash(:info, "Token minted. Copy it now — it won't be shown again.")}
+
+      {:error, :token_limit_reached} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Token limit reached (#{Accounts.max_active_api_tokens()} active). Revoke one to mint another."
+         )}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> assign(:api_token_form, to_form(Map.put(changeset, :action, :validate), as: :api_token))
+         |> put_flash(:error, "Couldn't mint token.")}
+    end
+  end
+
+  def handle_event("revoke_api_token", %{"id" => id}, socket) do
+    user = socket.assigns.current_user
+
+    case Accounts.revoke_api_token(user, id) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> assign(:api_tokens, Accounts.list_api_tokens(user))
+         |> put_flash(:info, "Token revoked.")}
+
+      {:error, :not_found} ->
+        {:noreply, put_flash(socket, :error, "Token not found.")}
+    end
+  end
+
+  # Dismiss the one-time plaintext reveal so it can't be screen-scraped later.
+  def handle_event("dismiss_api_token", _params, socket) do
+    {:noreply, assign(socket, :new_api_token, nil)}
   end
 
   @impl true
@@ -269,6 +325,146 @@ defmodule DoItWeb.AccountLive do
               <.button type="submit" data-latch="Saving…">Change password</.button>
             </div>
           </.form>
+        </section>
+
+        <section
+          id="account-api-tokens"
+          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+        >
+          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
+            API tokens
+          </h2>
+          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">
+            Personal access tokens let scripts and AI agents act as you over the HTTP API, under your
+            existing roles. Send one as
+            <code phx-no-curly-interpolation class="text-xs">Authorization: Bearer &lt;token&gt;</code>.
+          </p>
+
+          <%!-- One-time plaintext reveal: shown once, right after minting; never
+               again (the server keeps only a hash). A copy affordance + a clear
+               "copy it now" note, and a Done button to dismiss it. --%>
+          <%= if @new_api_token do %>
+            <div
+              id="api-token-reveal"
+              role="status"
+              aria-live="polite"
+              class="mb-4 rounded border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-3"
+            >
+              <p class="text-sm font-medium text-emerald-800 dark:text-emerald-300 mb-2">
+                Your new token — copy it now. It won't be shown again.
+              </p>
+              <div class="flex items-center gap-2">
+                <input
+                  id="api-token-value"
+                  type="text"
+                  readonly
+                  value={@new_api_token}
+                  aria-label="New API token"
+                  class="flex-1 font-mono text-xs px-2 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100"
+                />
+                <button
+                  type="button"
+                  id="api-token-copy"
+                  phx-hook=".CopyToken"
+                  data-token-target="api-token-value"
+                  class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                >
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  id="api-token-dismiss"
+                  phx-click="dismiss_api_token"
+                  class="shrink-0 px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          <% end %>
+
+          <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
+            export default {
+              mounted() {
+                this.el.addEventListener("click", async () => {
+                  const target = document.getElementById(this.el.dataset.tokenTarget)
+                  if (!target) return
+                  try {
+                    await navigator.clipboard.writeText(target.value)
+                  } catch (_e) {
+                    target.select()
+                    document.execCommand("copy")
+                  }
+                  const original = this.el.textContent
+                  this.el.textContent = "Copied!"
+                  setTimeout(() => { this.el.textContent = original }, 1500)
+                })
+              }
+            }
+          </script>
+
+          <.form
+            for={@api_token_form}
+            id="api-token-form"
+            phx-submit="mint_api_token"
+            class="space-y-2"
+          >
+            <.input
+              field={@api_token_form[:label]}
+              type="text"
+              label="Label (optional)"
+              placeholder="e.g. Claude Code, laptop CLI"
+              autocomplete="off"
+            />
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+              A name to recognize this token later.
+            </p>
+            <div class="flex justify-end">
+              <.button type="submit" data-latch="Minting…">Mint token</.button>
+            </div>
+          </.form>
+
+          <div class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+            <h3 class="text-sm font-medium text-zinc-700 dark:text-zinc-200 mb-2">
+              Active tokens
+            </h3>
+            <%= if @api_tokens == [] do %>
+              <p class="text-sm text-zinc-500 dark:text-zinc-400">No tokens yet.</p>
+            <% else %>
+              <ul id="api-tokens-list" class="divide-y divide-zinc-200 dark:divide-zinc-800">
+                <%= for token <- @api_tokens do %>
+                  <li
+                    id={"api-token-#{token.id}"}
+                    class="flex items-center justify-between gap-4 py-2"
+                  >
+                    <div class="min-w-0">
+                      <p class="text-sm text-zinc-800 dark:text-zinc-100 truncate">
+                        {token.label || "Unlabeled token"}
+                      </p>
+                      <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                        Minted {Calendar.strftime(token.inserted_at, "%b %-d, %Y")} ·
+                        <%= if token.last_used_at do %>
+                          Last used {Calendar.strftime(token.last_used_at, "%b %-d, %Y")}
+                        <% else %>
+                          Never used
+                        <% end %>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      id={"revoke-api-token-#{token.id}"}
+                      phx-click="revoke_api_token"
+                      phx-value-id={token.id}
+                      data-latch="Revoking…"
+                      class="shrink-0 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                <% end %>
+              </ul>
+            <% end %>
+          </div>
         </section>
 
         <section

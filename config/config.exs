@@ -52,6 +52,15 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# HTTP API rate limits (m03.01 worklist 1.5). `limit` requests per `window_ms`
+# window, per token; `ip_limit` is the coarser pre-auth per-IP cap that also
+# meters unauthenticated traffic. config/test.exs tunes these so tests can trip
+# a per-token 429 in a few requests without the per-IP cap interfering.
+config :doit, DoIt.Api.RateLimiter,
+  limit: 120,
+  window_ms: 60_000,
+  ip_limit: 600
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

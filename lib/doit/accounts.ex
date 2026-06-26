@@ -5,7 +5,7 @@ defmodule DoIt.Accounts do
 
   import Ecto.Query, warn: false
   alias DoIt.Repo
-  alias DoIt.Accounts.{User, UserPreferences}
+  alias DoIt.Accounts.{ApiTokens, User, UserPreferences}
 
   def get_user(id), do: Repo.get(User, id)
 
@@ -139,4 +139,15 @@ defmodule DoIt.Accounts do
   end
 
   def update_theme(_user, _theme), do: {:error, :invalid_theme}
+
+  # --- API tokens (m03.01 worklist 1.1) --------------------------------------
+  # Per-user Bearer tokens. Implementation lives in `DoIt.Accounts.ApiTokens`;
+  # delegated here so callers use the context as the single front door.
+
+  defdelegate mint_api_token(user, label \\ nil), to: ApiTokens
+  defdelegate max_active_api_tokens(), to: ApiTokens
+  defdelegate list_api_tokens(user), to: ApiTokens
+  defdelegate revoke_api_token(user, id), to: ApiTokens
+  defdelegate fetch_user_by_api_token(plaintext), to: ApiTokens
+  defdelegate resolve_api_token(plaintext), to: ApiTokens
 end

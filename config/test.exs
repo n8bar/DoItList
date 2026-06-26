@@ -26,6 +26,19 @@ config :doit, DoItWeb.Endpoint,
 # test registers + logs in a user, paying ~hundreds of ms of bcrypt each.
 config :bcrypt_elixir, :log_rounds, 1
 
+# Small per-token API rate limit so tests trip a 429 deterministically within a
+# single window (m03.01 worklist 1.5). The window is long enough that a test's
+# burst stays in one window; each test mints a fresh token (unique id → unique
+# counter key), so counts don't bleed across tests.
+config :doit, DoIt.Api.RateLimiter,
+  limit: 5,
+  window_ms: 60_000,
+  # The per-IP cap is shared by every ConnCase request (all from 127.0.0.1), so
+  # keep it far above any single suite's request count: the per-token cap is
+  # what those tests assert on, while the per-IP throttle is exercised directly
+  # in its own unit test with an isolated remote_ip and a small override.
+  ip_limit: 100_000
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

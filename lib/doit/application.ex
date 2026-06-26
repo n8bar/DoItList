@@ -13,6 +13,8 @@ defmodule DoIt.Application do
       {DNSCluster, query: Application.get_env(:doit, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: DoIt.PubSub},
       DoItWeb.Presence,
+      # Owns the ETS table backing the per-token API rate limiter (m03.01 wl1.5).
+      DoIt.Api.RateLimiter,
       # Start a worker by calling: DoIt.Worker.start_link(arg)
       # {DoIt.Worker, arg},
       # Start to serve requests, typically the last entry

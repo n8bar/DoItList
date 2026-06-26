@@ -17,6 +17,31 @@ defmodule DoItWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Pre-auth per-IP throttle (m03.01 worklist 1.5). Runs BEFORE :api_auth so the
+  # unauthenticated path is metered too — caps requests by source IP before auth
+  # spends a hash + DB lookup resolving a (possibly garbage) Bearer token.
+  pipeline :api_ip_rate_limit do
+    plug DoItWeb.Api.IpRateLimitPlug
+  end
+
+  # Bearer-token auth for the HTTP API (m03.01 worklist 1.3): resolves the token
+  # to the acting user and assigns :current_user + :api_token_id, or 401s.
+  pipeline :api_auth do
+    plug DoItWeb.Api.AuthPlug
+  end
+
+  # Per-token rate limiting (m03.01 worklist 1.5). Runs after :api_auth so it
+  # keys on the token; over-limit 429s with a Retry-After hint.
+  pipeline :api_rate_limit do
+    plug DoItWeb.Api.RateLimitPlug
+  end
+
+  scope "/api/v1", DoItWeb.Api do
+    pipe_through [:api, :api_ip_rate_limit, :api_auth, :api_rate_limit]
+
+    get "/me", MeController, :show
+  end
+
   scope "/", DoItWeb do
     pipe_through :browser
 
