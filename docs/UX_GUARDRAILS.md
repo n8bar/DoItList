@@ -39,7 +39,7 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 6.5 Interactions that only change view state — selection, expand/collapse, focus — never wait on the network. Opening a confirmation dialog counts when its content is already client-known.
 6.6 Confirmations preserve optimism. A confirm that interrupts an optimistic action must not visually undo it while the user decides — Cancel reverts it, Proceed carries it through.
 6.7 Acknowledge every action immediately. Every user-initiated action is acknowledged the instant it's initiated — applied optimistically when the client can complete it (6.2), shown in-flight when it's server-gated (6.1). A round-trip never delays *acknowledgement*; no action leaves the initiator wondering whether it registered.
-6.8 Interactive from first paint. A painted page is a usable page — never "looks ready but isn't." Client-ownable interactions work before the connection is live; an action taken before connect is acknowledged and reconciled on connect, never silently dropped.
+6.8 Interactive from first paint. A painted page is a usable page — never "looks ready but isn't." Client-ownable interactions work before the connection is live; **every** action taken before connect — client-ownable or server-gated, and including affordances added later — is acknowledged at the moment of the action and reconciled on connect: never silently dropped, and never shown as succeeded when it wasn't. New server-gated affordances ride the dead-window capture path; they don't get to reintroduce the gap.
 6.9 Any transport. The §6 guarantees hold on both WebSocket and the LongPoll fallback — never let the experience depend on the fast path.
 
 ### 7. Navigation & state
