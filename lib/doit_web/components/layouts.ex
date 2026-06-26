@@ -121,8 +121,11 @@ defmodule DoItWeb.Layouts do
                  patches (a notification arriving over PubSub must not close it). --%>
             <%!-- Desktop: inline nav links. --%>
             <div class="hidden sm:flex items-center gap-3">
+              <%!-- Inside the kept-mounted workspace (rail_initiatives set) the
+                   list is a same-module push_patch; elsewhere it's a full nav. --%>
               <.link
-                navigate={~p"/initiatives"}
+                patch={if(@rail_initiatives, do: ~p"/initiatives")}
+                navigate={if(@rail_initiatives, do: nil, else: ~p"/initiatives")}
                 class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
               >
                 Initiatives
@@ -231,7 +234,8 @@ defmodule DoItWeb.Layouts do
                 </li>
                 <li>
                   <.link
-                    navigate={~p"/initiatives"}
+                    patch={if(@rail_initiatives, do: ~p"/initiatives")}
+                    navigate={if(@rail_initiatives, do: nil, else: ~p"/initiatives")}
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     Initiatives
@@ -523,9 +527,11 @@ defmodule DoItWeb.Layouts do
         Initiatives
       </h2>
       <nav id="rail-initiatives" class="space-y-0.5">
+        <%!-- The rail only renders inside the kept-mounted workspace LiveView, so
+             list<->detail here is a same-module push_patch (no remount). --%>
         <.link
           :for={init <- @initiatives}
-          navigate={
+          patch={
             if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")
           }
           aria-current={(init.id == @current_id && "page") || nil}

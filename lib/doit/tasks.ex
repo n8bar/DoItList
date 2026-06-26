@@ -2447,6 +2447,14 @@ defmodule DoIt.Tasks do
     Phoenix.PubSub.subscribe(DoIt.PubSub, topic(initiative_id))
   end
 
+  # Explicit teardown for the kept-mounted workspace LiveView (M02.09 WL5.3/5.4):
+  # leaving or switching an Initiative no longer rides process death, so the
+  # per-Initiative task topic must be dropped by hand or its broadcasts keep
+  # hitting a process that has moved on (a leaked subscription).
+  def unsubscribe(initiative_id) do
+    Phoenix.PubSub.unsubscribe(DoIt.PubSub, topic(initiative_id))
+  end
+
   @pending_broadcasts :doit_pending_broadcasts
 
   # PubSub must fire AFTER commit. A broadcast sent mid-transaction reaches

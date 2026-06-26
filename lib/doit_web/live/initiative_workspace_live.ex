@@ -1,148 +1,336 @@
-defmodule DoItWeb.InitiativeShowLive do
+defmodule DoItWeb.InitiativeWorkspaceLive do
+  # M02.09 WL5.3/5.4: ONE kept-mounted shell LiveView serving both
+  # `/initiatives` (the index/list) and `/initiatives/:id` (the detail). mount
+  # runs once and owns the shell (global presence, the rail data, the dead-window
+  # livePush registration via the always-present .Workspace root hook). The
+  # list<->detail hop is a push_patch driving handle_params with NO remount, so
+  # the socket, PubSub subscriptions and presence stay intact and other viewers
+  # never flicker. Per-Initiative subscriptions + presence are torn down/entered
+  # EXPLICITLY on leave/switch (they no longer ride process death).
   use DoItWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  import DoItWeb.AssignedComponents
 
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
   alias DoIt.Tasks.Tree
+  alias DoItWeb.AssignedActions
+
+  # Sort modes the index understands. `nil` = the server's default order
+  # (owner-first, recently-updated); "manual" = the user's drag order, stored
+  # on their membership rows (m02.04 §2.6).
+  @sort_modes ~w(name progress created updated manual)
+
+  # Postgres `bigint` (int8) bounds. An id parsed from the URL that fits
+  # `Integer.parse/1`'s `{int, ""}` can still be too large for an int8 column —
+  # `Repo.get/2` then raises DBConnection.EncodeError BEFORE it can return nil,
+  # crashing the LiveView instead of routing into the not-found path. Range-guard
+  # every parsed id against these bounds so an out-of-range id resolves to nil.
+  @pg_bigint_min -9_223_372_036_854_775_808
+  @pg_bigint_max 9_223_372_036_854_775_807
 
   @impl true
-  def mount(%{"id" => id}, _session, socket) do
+  # The shell mount — runs ONCE for the kept-mounted workspace, regardless of
+  # which route was hit first. It sets up everything that persists across the
+  # list<->detail hops (global presence subscription, the rail/collaborator data,
+  # the list-mode assigns + streams) and seeds every detail-mode assign to a safe
+  # default so a list render never touches a stale detail value. handle_params/3
+  # is the mode switch that enters/leaves/switches the per-Initiative detail.
+  def mount(_params, _session, socket) do
     user = socket.assigns.current_user
-    initiative = Initiatives.get_initiative(id)
-    role = initiative && Initiatives.get_role(initiative.id, user.id)
 
-    cond do
-      is_nil(initiative) ->
-        {:ok,
-         socket
-         |> put_flash(:error, "Initiative not found.")
-         |> push_navigate(to: ~p"/initiatives")}
+    # Lazy retention sweep (m02.06 item 11): purge anything past the window on
+    # the way in, so the Trash never shows stale, already-expired entries.
+    Initiatives.purge_expired_trash()
 
-      is_nil(role) ->
-        {:ok,
-         socket
-         |> put_flash(:error, "You don't have access to that initiative.")
-         |> push_navigate(to: ~p"/initiatives")}
+    # Global presence (m02.05 item 8): light up Collaborators avatars for anyone
+    # connected to the app. on_mount already TRACKS us once per process; we just
+    # subscribe to learn when others come and go. Shell-level — one subscription
+    # for the life of the mount, never re-done on a hop.
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
+    end
 
-      true ->
-        if connected?(socket) do
-          Tasks.subscribe(initiative.id)
+    {:ok,
+     socket
+     |> assign(:page_title, "Initiatives")
+     |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+     |> assign(
+       :collaborator_online_ids,
+       if(connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new())
+     )
+     |> assign_display_prefs(Accounts.get_preferences(user))
+     |> assign(:confirm_skips, MapSet.new())
+     |> assign_index_data(user)
+     |> assign_detail_defaults()
+     |> restream_sorted()}
+  end
 
-          # Selection presence (.04.01.12): subscribe first, then track — our
-          # own join diff arrives as the initial push to this client, and it
-          # already includes everyone who was here before us.
-          Phoenix.PubSub.subscribe(DoIt.PubSub, presence_topic(initiative.id))
-
-          {:ok, _} =
-            DoItWeb.Presence.track(self(), presence_topic(initiative.id), to_string(user.id), %{
-              user_id: user.id,
-              task_id: nil,
-              name: user.name,
-              initials: initials(user),
-              bg: avatar_bg(user),
-              fg: avatar_fg(user)
-            })
-
-          # Global presence (m02.05 item 8): the Collaborators pane lights up
-          # avatars for anyone online anywhere. on_mount already tracks us;
-          # subscribe to follow others. Distinct from the per-initiative topic
-          # above — the presence_diff handler tells them apart by topic.
-          Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
-
-          # Live chat (m02.08 worklist 3 item 3.1): a per-Initiative topic for
-          # everyone currently viewing. Fully ephemeral — nothing persisted;
-          # messages live only in each viewer's socket (capped), so the chat
-          # clears for a fresh viewer and disappears once the last one leaves.
-          Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
-
-          # Defer the non-critical loads (undo/redo labels, the cross-Initiative
-          # Collaborators rail) off the mount critical path so the LiveView
-          # returns fast and the tree is interactive the instant it paints. They
-          # fill in a beat later via :after_mount. See handle_info(:after_mount).
-          send(self(), :after_mount)
-        end
-
-        {:ok,
-         socket
-         |> assign(:page_title, initiative.name)
-         |> assign(:initiative, initiative)
-         |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
-         # Deferred to :after_mount (the rail's people pane pops in a frame
-         # later); the Layouts.app `rail_collaborators` attr defaults to [].
-         |> assign(:rail_collaborators, [])
-         |> assign(:subtitle, Initiatives.subtitle(initiative))
-         |> assign(:role, role)
-         |> assign(:can_edit, Initiatives.can_edit?(role))
-         |> assign(:can_admin, Initiatives.can_admin?(role))
-         |> assign(:members, Initiatives.list_members(initiative.id))
-         |> assign(:selected_task_id, nil)
-         |> assign(:selected_task, nil)
-         |> assign(:selected_staff_pool, nil)
-         |> assign(:comments, [])
-         |> assign(:activity, [])
-         |> assign(:chat_messages, [])
-         |> assign(:chat_log_id, 0)
-         |> assign_display_prefs(Accounts.get_preferences(user))
-         |> assign(
-           :online_ids,
-           if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
-         )
-         |> assign(
-           :collaborator_online_ids,
-           if(connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new())
-         )
-         |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
-         |> assign_pending(nil)
-         |> assign(:pending_handoff, nil)
-         |> assign(:confirm_skips, MapSet.new())
-         # Archive-on-completion prompt (m02.08 item 4.1): a dismissible nudge
-         # when roll-up hits 100% — it NEVER auto-archives. We only prompt on the
-         # transition into 100, not for an Initiative already complete on entry,
-         # and only once per session (dismiss sets prompted? so it won't return).
-         |> assign(:show_archive_prompt, false)
-         |> assign(:prompted_archive?, false)
-         # Undo/redo labels start nil (buttons disabled) and are filled by
-         # :after_mount — keeps the undo/redo activity_events trio off the
-         # connected-mount critical path. A disconnected (dead) render has no
-         # :after_mount, so they stay nil there; that's fine — the first
-         # interactive render is the connected one.
-         |> assign(:undo_label, nil)
-         |> assign(:redo_label, nil)
-         |> load_tree(undo: false)}
+  @impl true
+  # The mode switch. :index tears any open detail down and shows the list;
+  # :show enters (from the list) or switches (from another Initiative) into a
+  # per-Initiative detail. Both run on the disconnected (static) render too.
+  def handle_params(params, _uri, socket) do
+    case socket.assigns.live_action do
+      :index -> {:noreply, enter_index(socket)}
+      :show -> {:noreply, enter_show(socket, params)}
     end
   end
 
-  @impl true
-  # Deep-link to a task (m02.08 item 1.7): the Assigned-to-Me list opens
-  # `/initiatives/:id?task=<id>`. Selection is client/DOM-owned, so on the
-  # connected mount we push the target plus its ancestor chain to the client,
-  # which expands any collapsed ancestors, selects the row, and scrolls it into
-  # view. Pure view state (UX_GUARDRAILS 6.5) — no round trip gates it. The
-  # param is honored once on entry; a missing/foreign task is ignored.
-  def handle_params(%{"task" => task_id}, _uri, socket) do
+  # --- Index (list) mode -----------------------------------------------------
+
+  # Land on the list. Leaving an open detail tears its per-Initiative
+  # subscriptions + presence down EXPLICITLY (they no longer ride process death)
+  # and refreshes the list so a change made while inside a detail shows here.
+  defp enter_index(socket) do
     socket =
-      with true <- connected?(socket),
-           %{initiative: %{id: initiative_id}} <- socket.assigns,
-           {id, ""} <- Integer.parse(task_id),
-           %Task{initiative_id: ^initiative_id, deleted_at: nil} <-
-             Tasks.get_task(id) do
-        # id crosses as a string: the client echoes it back through the
-        # "select_task" hook event, whose handler runs String.to_integer/1
-        # (matches the to_string convention the undo/redo "select-task" push uses).
-        push_event(socket, "deep-link-task", %{
-          id: to_string(id),
-          ancestors: Tasks.ancestor_ids(id)
-        })
+      if socket.assigns.initiative do
+        socket
+        |> teardown_detail()
+        |> clear_detail_assigns()
+        |> assign_index_data(socket.assigns.current_user)
       else
-        _ -> socket
+        socket
       end
 
-    {:noreply, socket}
+    socket
+    |> assign(:page_title, "Initiatives")
+    |> restream_sorted()
+    |> AssignedActions.restream(socket.assigns.current_user)
   end
 
-  def handle_params(_params, _uri, socket), do: {:noreply, socket}
+  # Seed / refresh the list-mode assigns (initiatives, sort, trash, archive,
+  # the Assigned-to-Me pane). Used by mount and on every return to the list.
+  defp assign_index_data(socket, user) do
+    initiatives = Initiatives.list_visible_initiatives(user)
+    prefs = Accounts.get_preferences(user)
+    mode = normalize_mode(prefs.index_sort_mode)
+    reverse_by_mode = prefs.index_sort_reverse_by_mode || %{}
+
+    sort_state = %{
+      mode: mode,
+      reverse: !!Map.get(reverse_by_mode, mode || ""),
+      order: stored_order(initiatives)
+    }
+
+    socket
+    |> assign(:initiative_count, length(initiatives))
+    |> assign(:initiatives, initiatives)
+    |> assign(:sort_state, sort_state)
+    |> assign(:reverse_by_mode, reverse_by_mode)
+    |> assign(:form, build_empty_form())
+    |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
+    # `show_hidden` is plain assign state — deliberately NON-persistent: it resets
+    # to false on every mount, so hidden Initiatives stay out of sight by default.
+    |> assign(:archived, Initiatives.list_archived_initiatives(user))
+    |> assign(:show_hidden, false)
+    |> AssignedActions.assign_initial(user)
+  end
+
+  # --- Detail (show) mode ----------------------------------------------------
+
+  # Enter or switch into an Initiative's detail. Guards a nil Initiative / nil
+  # role by ejecting to the list (push_navigate remounts, so no manual teardown
+  # is needed for the reject path). Re-entering the SAME Initiative (e.g. a
+  # ?task= deep-link patch) only honors the param — it never re-subscribes.
+  defp enter_show(socket, params) do
+    user = socket.assigns.current_user
+    initiative = fetch_initiative(params["id"])
+    role = initiative && Initiatives.get_role(initiative.id, user.id)
+    current = socket.assigns.initiative
+
+    cond do
+      is_nil(initiative) ->
+        socket |> put_flash(:error, "Initiative not found.") |> push_navigate(to: ~p"/initiatives")
+
+      is_nil(role) ->
+        socket
+        |> put_flash(:error, "You don't have access to that initiative.")
+        |> push_navigate(to: ~p"/initiatives")
+
+      current && current.id == initiative.id ->
+        honor_task_param(socket, params)
+
+      true ->
+        socket
+        |> teardown_detail()
+        |> clear_detail_assigns()
+        |> enter_initiative(initiative, role)
+        |> honor_task_param(params)
+    end
+  end
+
+  # Every id that reaches this module from the client — a URL/:id segment, an
+  # event payload, a form/phx-value param — arrives as an untrusted string (or,
+  # for a malformed payload, a non-string like a map or a repeated-param list).
+  # `Repo.get(_, "abc")` raises Ecto.Query.CastError, `String.to_integer("abc")`
+  # raises ArgumentError, `Integer.parse(%{})` raises FunctionClauseError, and a
+  # numeric id outside the signed-64-bit (int8) range parses cleanly yet raises
+  # DBConnection.EncodeError once Repo encodes it — each one crashes the LiveView
+  # instead of failing soft. parse_id/1 is the single gate: it returns the integer
+  # only for a binary that parses cleanly AND fits the int8 range, and nil for
+  # anything else (a non-binary, non-numeric text, trailing garbage, or an
+  # out-of-range value). Every client-supplied id parse routes through it and the
+  # handler no-ops on nil.
+  defp parse_id(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} when int >= @pg_bigint_min and int <= @pg_bigint_max -> int
+      _ -> nil
+    end
+  end
+
+  defp parse_id(_), do: nil
+
+  # The :id route segment matches any string, but the Initiative primary key is
+  # an integer; a malformed id resolves to nil and routes into the SAME not-found
+  # flash+eject as a valid-but-missing id (the guard's "never crash").
+  defp fetch_initiative(id) do
+    case parse_id(id) do
+      nil -> nil
+      iid -> Initiatives.get_initiative(iid)
+    end
+  end
+
+  # Subscribe + track for the entered Initiative and load its detail. Mirrors the
+  # old mount's connected-setup, but runs on every list->detail enter and
+  # initiative->initiative switch (no remount happens now).
+  defp enter_initiative(socket, initiative, role) do
+    user = socket.assigns.current_user
+
+    if connected?(socket) do
+      Tasks.subscribe(initiative.id)
+
+      # Selection presence (.04.01.12): subscribe first, then track — our own
+      # join diff arrives as the initial push and already includes everyone here.
+      Phoenix.PubSub.subscribe(DoIt.PubSub, presence_topic(initiative.id))
+
+      {:ok, _} =
+        DoItWeb.Presence.track(self(), presence_topic(initiative.id), to_string(user.id), %{
+          user_id: user.id,
+          task_id: nil,
+          name: user.name,
+          initials: initials(user),
+          bg: avatar_bg(user),
+          fg: avatar_fg(user)
+        })
+
+      # Live chat (m02.08 worklist 3 item 3.1): a per-Initiative ephemeral topic.
+      Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
+
+      # Defer the non-critical loads (undo/redo labels, the cross-Initiative
+      # Collaborators rail) off the enter critical path so the tree is interactive
+      # the instant it paints; they fill a beat later via :after_mount.
+      send(self(), :after_mount)
+    end
+
+    socket
+    |> assign(:page_title, initiative.name)
+    |> assign(:initiative, initiative)
+    # The rail shows the visible Initiatives in both modes; refresh on enter so a
+    # newly created/renamed Initiative is current.
+    |> assign(:initiatives, Initiatives.list_visible_initiatives(user))
+    |> assign(:subtitle, Initiatives.subtitle(initiative))
+    |> assign(:role, role)
+    |> assign(:can_edit, Initiatives.can_edit?(role))
+    |> assign(:can_admin, Initiatives.can_admin?(role))
+    |> assign(:members, Initiatives.list_members(initiative.id))
+    |> assign(:selected_task_id, nil)
+    |> assign(:selected_task, nil)
+    |> assign(:selected_staff_pool, nil)
+    |> assign(:comments, [])
+    |> assign(:activity, [])
+    |> assign(:chat_messages, [])
+    |> assign(:chat_log_id, 0)
+    |> assign(:online_ids, if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new()))
+    |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
+    |> assign_pending(nil)
+    |> assign(:pending_handoff, nil)
+    |> assign(:show_archive_prompt, false)
+    |> assign(:prompted_archive?, false)
+    |> assign(:undo_label, nil)
+    |> assign(:redo_label, nil)
+    |> load_tree(undo: false)
+  end
+
+  # Deep-link to a task (m02.08 item 1.7): the Assigned-to-Me list opens
+  # `/initiatives/:id?task=<id>`. Selection is client/DOM-owned, so we push the
+  # target plus its ancestor chain to the client, which expands any collapsed
+  # ancestors, selects the row, and scrolls it into view. Pure view state
+  # (UX_GUARDRAILS 6.5) — no round trip gates it. A missing/foreign task is
+  # ignored; absent ?task= is a no-op.
+  defp honor_task_param(socket, %{"task" => task_id}) do
+    with true <- connected?(socket),
+         %{initiative: %{id: initiative_id}} when not is_nil(initiative_id) <- socket.assigns,
+         id when not is_nil(id) <- parse_id(task_id),
+         %Task{initiative_id: ^initiative_id, deleted_at: nil} <- Tasks.get_task(id) do
+      push_event(socket, "deep-link-task", %{id: to_string(id), ancestors: Tasks.ancestor_ids(id)})
+    else
+      _ -> socket
+    end
+  end
+
+  defp honor_task_param(socket, _params), do: socket
+
+  # Drop the per-Initiative subscriptions + presence for the currently-open
+  # detail. A no-op when no detail is open (list mount, or already torn down).
+  # A leaked subscription (a left Initiative's broadcasts still hitting this
+  # process) is the top bug this prevents, so be explicit.
+  defp teardown_detail(socket) do
+    initiative = socket.assigns[:initiative]
+
+    if initiative && connected?(socket) do
+      iid = initiative.id
+      Tasks.unsubscribe(iid)
+      Phoenix.PubSub.unsubscribe(DoIt.PubSub, presence_topic(iid))
+      Phoenix.PubSub.unsubscribe(DoIt.PubSub, chat_topic(iid))
+      DoItWeb.Presence.untrack(self(), presence_topic(iid), to_string(socket.assigns.current_user.id))
+    end
+
+    socket
+  end
+
+  # Seed every detail-mode assign to a safe default so a list render never
+  # references a stale detail value, and a fresh enter starts clean. confirm_skips
+  # and the display prefs are user-level (not per-Initiative), so they live in
+  # mount and are deliberately NOT reset here.
+  defp assign_detail_defaults(socket) do
+    socket
+    |> assign(:initiative, nil)
+    |> assign(:subtitle, nil)
+    |> assign(:role, nil)
+    |> assign(:can_edit, false)
+    |> assign(:can_admin, false)
+    |> assign(:members, [])
+    |> assign(:selected_task_id, nil)
+    |> assign(:selected_task, nil)
+    |> assign(:selected_staff_pool, nil)
+    |> assign(:tree, [])
+    |> assign(:root_task, nil)
+    |> assign(:root_sort_mode, nil)
+    # nil (not 0) so the FIRST set_initiative_progress on a detail-enter sees no
+    # prior value and an already-complete Initiative does not raise the
+    # archive-on-completion nag (it only fires on a live crossing into 100).
+    |> assign(:initiative_progress, nil)
+    |> assign(:led_task_ids, MapSet.new())
+    |> assign(:direct_assignee_ids, MapSet.new())
+    |> assign(:comments, [])
+    |> assign(:activity, [])
+    |> assign(:chat_messages, [])
+    |> assign(:chat_log_id, 0)
+    |> assign(:online_ids, MapSet.new())
+    |> assign(:initiative_form, nil)
+    |> assign(:pending_handoff, nil)
+    |> assign(:show_archive_prompt, false)
+    |> assign(:prompted_archive?, false)
+    |> assign(:undo_label, nil)
+    |> assign(:redo_label, nil)
+    |> assign_pending(nil)
+  end
+
+  # clear_detail_assigns reuses the defaults; the name reads as intent at the
+  # call sites (leaving/switching a detail).
+  defp clear_detail_assigns(socket), do: assign_detail_defaults(socket)
 
   # The viewing user's Display elements preferences (m02.04 §2.4): the
   # activity-log toggle plus which task attributes render on rows.
@@ -433,7 +621,11 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp to_int(n) when is_integer(n), do: n
-  defp to_int(s) when is_binary(s), do: String.to_integer(s)
+  # A client-supplied uid string (params["assignee_id"] / a co-assignee uid):
+  # route through parse_id so a non-numeric / out-of-range value yields nil
+  # (MapSet.member?(pool, nil) is false → out of pool) instead of crashing.
+  defp to_int(s) when is_binary(s), do: parse_id(s)
+  defp to_int(_), do: nil
 
   defp assign_result(socket, task, {:ok, _}),
     do: {:reply, %{ok: true}, patch_task(socket, task.id)}
@@ -619,7 +811,119 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # --- Events ----------------------------------------------------------------
 
+  # --- Index (list) events ---------------------------------------------------
+
   @impl true
+  # The New Initiative form opens/closes client-side (UX_GUARDRAILS 6.5 — typing
+  # must never wait on a round trip): a <details> + data-keep="open". Only a
+  # successful create closes it from here.
+  def handle_event("create", %{"initiative" => params}, socket) do
+    user = socket.assigns.current_user
+
+    case Initiatives.create_initiative(user, params) do
+      {:ok, initiative} ->
+        # `members: [user]` seeds the rail avatar row (WL3.5) — the creator is the
+        # sole member until others are added.
+        initiative = %{initiative | my_role: "owner", members: [user]}
+
+        {:noreply,
+         socket
+         |> assign(:form, build_empty_form())
+         |> update(:initiative_count, &(&1 + 1))
+         |> update(:initiatives, &[initiative | &1])
+         |> put_flash(:info, "Initiative created.")
+         |> push_event("close-details", %{id: "new-initiative"})
+         |> restream_sorted()}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :form, to_form(changeset))}
+    end
+  end
+
+  # Sort changes persist server-side (m02.04 §2.6): mode + per-mode reverse onto
+  # the prefs record, a pushed manual order onto the membership rows. The control
+  # pushes no order; only a drag does — absent, the session's existing order stands.
+  def handle_event("apply_sort", params, socket) do
+    user = socket.assigns.current_user
+    mode = normalize_mode(params["mode"])
+    reverse = params["reverse"] in [true, "true"]
+    pushed_order = params["order"] || []
+
+    reverse_by_mode = Map.put(socket.assigns.reverse_by_mode, mode || "", reverse)
+
+    {:ok, _} =
+      Accounts.update_preferences(user, %{
+        "index_sort_mode" => mode,
+        "index_sort_reverse_by_mode" => reverse_by_mode
+      })
+
+    if pushed_order != [], do: Initiatives.set_index_order(user, pushed_order)
+
+    sort_state = %{
+      mode: mode,
+      reverse: reverse,
+      order: if(pushed_order == [], do: socket.assigns.sort_state.order, else: pushed_order)
+    }
+
+    # Reply ok so the drag's drop-time optimistic reorder (WL3.5 Fix A) can settle.
+    {:reply, %{ok: true},
+     socket
+     |> assign(:initiatives, reindex_order(socket.assigns.initiatives, pushed_order))
+     |> assign(:sort_state, sort_state)
+     |> assign(:reverse_by_mode, reverse_by_mode)
+     |> restream_sorted()}
+  end
+
+  # Prune a past collaborator from My Collaborators (m02.05 item 12.11).
+  # Trash (m02.06 item 10): owner-only restore / permanent delete.
+  def handle_event("restore_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_owned_trashed(socket, id, &Initiatives.restore_initiative/1, "Initiative restored.")}
+  end
+
+  def handle_event("purge_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_owned_trashed(
+       socket,
+       id,
+       &Initiatives.purge_initiative/1,
+       "Initiative permanently deleted."
+     )}
+  end
+
+  # Per-user Archived list (m02.08 worklist 4). Restore clears `archived_at`,
+  # unhide clears `hidden_at` — both on the caller's own membership row only.
+  def handle_event("unarchive_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_member_initiative(socket, id, &Initiatives.unarchive_initiative/2, "Initiative restored.")}
+  end
+
+  def handle_event("unhide_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_member_initiative(socket, id, &Initiatives.unhide_initiative/2, "Initiative unhidden.")}
+  end
+
+  # Show-hidden toggle: a plain, NON-persistent assign (m02.08 item 4.3).
+  def handle_event("toggle_show_hidden", _params, socket) do
+    {:noreply, assign(socket, :show_hidden, !socket.assigns.show_hidden)}
+  end
+
+  # Assigned-to-Me pane toggles (m02.08 item 1.3) — same handlers as the
+  # standalone /assigned page, via the shared AssignedActions helper.
+  def handle_event("assigned_toggle_completed", _params, socket) do
+    {:noreply, AssignedActions.toggle_completed(socket, socket.assigns.current_user)}
+  end
+
+  def handle_event("assigned_toggle_archived_hidden", _params, socket) do
+    {:noreply, AssignedActions.toggle_archived_hidden(socket, socket.assigns.current_user)}
+  end
+
+  def handle_event("assigned_toggle_group_by", _params, socket) do
+    {:noreply, AssignedActions.toggle_group_by(socket, socket.assigns.current_user)}
+  end
+
+  # --- Detail (show) events --------------------------------------------------
+
   # Confirmation suppression (.03.01.11): the ConfirmSkips hook reads the
   # per-class skip flags from localStorage on mount and pushes them here.
   def handle_event("confirm_skips_loaded", %{"classes" => classes}, socket) do
@@ -636,16 +940,12 @@ defmodule DoItWeb.InitiativeShowLive do
       # The form carries its own target (client-positioned, UX_GUARDRAILS
       # 6.5): empty parent_id = top level (a child of the system root);
       # after_id places the new task just after that sibling, else at top.
-      parent_id =
-        case params["parent_id"] do
-          id when is_binary(id) and id != "" -> String.to_integer(id)
-          _ -> initiative.root_task_id
-        end
+      parent_id = parse_id(params["parent_id"]) || initiative.root_task_id
 
       position =
-        case params["after_id"] do
-          id when is_binary(id) and id != "" -> sibling_after_position(String.to_integer(id))
-          _ -> 0
+        case parse_id(params["after_id"]) do
+          nil -> 0
+          id -> sibling_after_position(id)
         end
 
       attrs = %{
@@ -676,27 +976,35 @@ defmodule DoItWeb.InitiativeShowLive do
   # Field focus (pill taps, Alt+P/W/A) is pure view state and happens
   # client-side — this event only loads pane data (.03.07.17).
   def handle_event("select_task", %{"id" => id}, socket) do
-    id = String.to_integer(id)
+    # Guard against a stray/foreign id: @initiative must be open (never the list),
+    # the id must parse to an in-range integer (a non-binary payload like a map, a
+    # non-numeric, or an overflow id would otherwise raise), and the fetched task
+    # must belong to THIS Initiative — a select replayed/queued against another
+    # tree is a no-op.
+    with %{id: iid} <- socket.assigns[:initiative],
+         tid when not is_nil(tid) <- parse_id(id) do
+      cond do
+        # Pane already shows this task — nothing to load.
+        socket.assigns.selected_task_id == tid ->
+          {:noreply, socket}
 
-    cond do
-      # Pane already shows this task — nothing to load.
-      socket.assigns.selected_task_id == id ->
-        {:noreply, socket}
+        true ->
+          case Tasks.get_task_with_relations(tid) do
+            %Task{initiative_id: ^iid} = task ->
+              {:noreply,
+               socket
+               |> assign(:selected_task_id, tid)
+               |> assign_selected(task)
+               |> assign(:comments, Tasks.list_comments(tid))
+               |> assign(:activity, Tasks.list_task_activity(tid))
+               |> update_presence(tid)}
 
-      true ->
-        case Tasks.get_task_with_relations(id) do
-          nil ->
-            {:noreply, socket}
-
-          task ->
-            {:noreply,
-             socket
-             |> assign(:selected_task_id, id)
-             |> assign_selected(task)
-             |> assign(:comments, Tasks.list_comments(id))
-             |> assign(:activity, Tasks.list_task_activity(id))
-             |> update_presence(id)}
-        end
+            _ ->
+              {:noreply, socket}
+          end
+      end
+    else
+      _ -> {:noreply, socket}
     end
   end
 
@@ -911,9 +1219,15 @@ defmodule DoItWeb.InitiativeShowLive do
     with_co(socket, fn task, user ->
       # Viewer+ may only add from the handed pool (item 12.6.3); an out-of-pool
       # add fails so the optimistic row reverts. Editors place anyone.
-      if staff_pool_allows?(socket, uid),
-        do: Tasks.add_co_assignee(task, user, String.to_integer(uid)),
-        else: {:error, :not_in_pool}
+      case parse_id(uid) do
+        nil ->
+          {:error, :invalid}
+
+        id ->
+          if staff_pool_allows?(socket, uid),
+            do: Tasks.add_co_assignee(task, user, id),
+            else: {:error, :not_in_pool}
+      end
     end)
   end
 
@@ -921,15 +1235,24 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("remove_co_assignee", %{"user-id" => uid}, socket) do
     with_co(socket, fn task, user ->
-      Tasks.remove_co_assignee(task, user, String.to_integer(uid))
+      case parse_id(uid) do
+        nil -> {:error, :invalid}
+        id -> Tasks.remove_co_assignee(task, user, id)
+      end
     end)
   end
 
   def handle_event("move_co_assignee", %{"user-id" => uid, "dir" => dir}, socket)
       when dir in ~w(up down) do
     with_co(socket, fn task, user ->
-      ids = Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id)
-      Tasks.reorder_co_assignees(task, user, shift(ids, String.to_integer(uid), dir))
+      case parse_id(uid) do
+        nil ->
+          {:error, :invalid}
+
+        id ->
+          ids = Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id)
+          Tasks.reorder_co_assignees(task, user, shift(ids, id, dir))
+      end
     end)
   end
 
@@ -939,12 +1262,18 @@ defmodule DoItWeb.InitiativeShowLive do
   # editor/owner anywhere; a viewer+ only within a led subtree, from its pool.
   # Replies ok:bool so the drag's optimistic row settles (item 12.5).
   def handle_event("assign_member", %{"user-id" => uid, "task-id" => tid}, socket) do
-    uid = String.to_integer(uid)
-    task = Tasks.get_task(String.to_integer(tid))
+    uid = parse_id(uid)
+
+    task =
+      case parse_id(tid) do
+        nil -> nil
+        id -> Tasks.get_task(id)
+      end
+
     user = socket.assigns.current_user
 
     cond do
-      is_nil(task) or task.initiative_id != socket.assigns.initiative.id ->
+      is_nil(uid) or is_nil(task) or task.initiative_id != socket.assigns.initiative.id ->
         {:reply, %{ok: false}, socket}
 
       not member_id?(socket, uid) ->
@@ -1092,30 +1421,42 @@ defmodule DoItWeb.InitiativeShowLive do
   # Replies so the client's optimistic flip (.03.07.22) can settle: ok: false
   # reverts it, committed: true releases it to the patch.
   def handle_event("toggle_complete", %{"id" => id}, socket) do
-    if not can_progress?(socket, String.to_integer(id)) do
-      {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
-    else
-      task = Tasks.get_task!(String.to_integer(id))
-      user = socket.assigns.current_user
+    task_id = parse_id(id)
 
-      case Tasks.toggle_complete(task, user) do
-        {:ok, _} ->
-          {:reply, %{ok: true, committed: true}, patch_task(socket, task.id)}
+    cond do
+      # Bad/absent id (or a valid id whose task was just deleted by a collaborator)
+      # → reply ok:false so the client reverts its optimistic flip; never crash.
+      is_nil(task_id) ->
+        {:reply, %{ok: false}, socket}
 
-        {:error, cs} ->
-          {:reply, %{ok: false},
-           put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
-      end
+      not can_progress?(socket, task_id) ->
+        {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+
+      true ->
+        case Tasks.get_task(task_id) do
+          nil ->
+            {:reply, %{ok: false}, socket}
+
+          task ->
+            case Tasks.toggle_complete(task, socket.assigns.current_user) do
+              {:ok, _} ->
+                {:reply, %{ok: true, committed: true}, patch_task(socket, task.id)}
+
+              {:error, cs} ->
+                {:reply, %{ok: false},
+                 put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
+            end
+        end
     end
   end
 
   # Branch checkbox (.03.01.11): confirm via the styled modal unless the
   # "branch completion changes" class is suppressed, in which case cascade now.
   def handle_event("cascade_complete", %{"id" => id}, socket),
-    do: request_cascade(socket, String.to_integer(id), :cascade_complete)
+    do: request_cascade(socket, parse_id(id), :cascade_complete)
 
   def handle_event("cascade_incomplete", %{"id" => id}, socket),
-    do: request_cascade(socket, String.to_integer(id), :cascade_incomplete)
+    do: request_cascade(socket, parse_id(id), :cascade_incomplete)
 
   def handle_event("add_comment", params, socket) do
     %{"comment" => %{"body" => body}} = params
@@ -1160,37 +1501,33 @@ defmodule DoItWeb.InitiativeShowLive do
   # the editor; an :unauthorized or invalid-body result leaves the editor open
   # (no false success — §6 / optimistic-UI-must-not-lie).
   def handle_event("save_comment", %{"id" => id, "comment" => %{"body" => body}}, socket) do
-    user = socket.assigns.current_user
-
-    case Tasks.edit_comment(String.to_integer(id), user, body) do
-      {:ok, _comment} ->
-        {:noreply,
-         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
-
-      {:error, :unauthorized} ->
-        {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
-
-      {:error, :not_found} ->
-        {:noreply,
-         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
-
-      {:error, _cs} ->
-        {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+    case parse_id(id) do
+      # Bad/absent comment id — nothing to save; leave the editor open (no false
+      # close), no crash.
+      nil -> {:noreply, socket}
+      cid -> do_save_comment(socket, cid, id, body)
     end
   end
 
   def handle_event("delete_comment", %{"id" => id}, socket) do
     user = socket.assigns.current_user
 
-    case Tasks.delete_comment(String.to_integer(id), user) do
-      {:ok, _comment} ->
-        {:noreply, refresh_selected(socket)}
+    case parse_id(id) do
+      # Bad/absent comment id — nothing to delete; no-op, no crash.
+      nil ->
+        {:noreply, socket}
 
-      {:error, :unauthorized} ->
-        {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
+      cid ->
+        case Tasks.delete_comment(cid, user) do
+          {:ok, _comment} ->
+            {:noreply, refresh_selected(socket)}
 
-      {:error, :not_found} ->
-        {:noreply, refresh_selected(socket)}
+          {:error, :unauthorized} ->
+            {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
+
+          {:error, :not_found} ->
+            {:noreply, refresh_selected(socket)}
+        end
     end
   end
 
@@ -1228,6 +1565,9 @@ defmodule DoItWeb.InitiativeShowLive do
 
       true ->
         msg = %{
+          # Stamp the source Initiative so a receiver can drop a stale cross-
+          # Initiative delivery (async PubSub can arrive after an A->B switch).
+          initiative_id: socket.assigns.initiative.id,
           system: false,
           user_id: user.id,
           name: user.name,
@@ -1260,73 +1600,30 @@ defmodule DoItWeb.InitiativeShowLive do
     if not socket.assigns.can_edit do
       {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
-      {:noreply, commit_delete_task(socket, String.to_integer(id))}
+      {:noreply, commit_delete_task(socket, parse_id(id))}
     end
   end
 
   def handle_event("move_task", %{"task_id" => task_id} = params, socket) do
-    if not socket.assigns.can_edit do
-      {:reply, %{ok: false, error: "forbidden"},
-       socket |> put_flash(:error, "You don't have permission to move tasks.") |> bonk()}
-    else
-      task = Tasks.get_task!(task_id)
-      user = socket.assigns.current_user
+    cond do
+      not socket.assigns.can_edit ->
+        {:reply, %{ok: false, error: "forbidden"},
+         socket |> put_flash(:error, "You don't have permission to move tasks.") |> bonk()}
 
-      attrs = %{
-        # A root-zone drop (promotion) carries no parent → it lands under the
-        # Initiative's root task, the new meaning of "root level".
-        "parent_id" => Map.get(params, "parent_id") || socket.assigns.initiative.root_task_id,
-        "position" => Map.get(params, "position"),
-        "reorder" => Map.get(params, "reorder")
-      }
+      true ->
+        # Both the moved task id and the destination parent id are client-supplied;
+        # a bad/absent/just-deleted task replies ok:false (the drag reverts) instead
+        # of crashing.
+        case parse_id(task_id) do
+          nil ->
+            {:reply, %{ok: false, error: "not_found"}, socket}
 
-      case Tasks.preview_move(task, user, attrs) do
-        {:ok, %{scenario: nil}} ->
-          case commit_move(socket, task, attrs) do
-            {:ok, socket} ->
-              {:reply, %{ok: true, committed: true}, socket}
-
-            {:error, reason, socket} ->
-              {:reply, %{ok: false, error: format_move_error(reason)}, socket}
-          end
-
-        {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
-          # The client predicts the flip from the DOM and opens the confirm
-          # itself (UX_GUARDRAILS 6.5 — a client-known confirm never waits on the
-          # network), then re-sends with confirmed: true on Proceed. Suppressed
-          # ("don't ask again") commits the same way. Either path commits straight
-          # through; the gate below is the authoritative backstop for a move the
-          # client did NOT predict as a flip.
-          if Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") do
-            case commit_move(socket, task, attrs) do
-              {:ok, socket} ->
-                {:reply, %{ok: true, committed: true}, socket}
-
-              {:error, reason, socket} ->
-                {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+          tid ->
+            case Tasks.get_task(tid) do
+              nil -> {:reply, %{ok: false, error: "not_found"}, socket}
+              task -> do_move_task(socket, params, task)
             end
-          else
-            # A completion-flip confirmation is required: the move is NOT yet
-            # persisted, but the client KEEPS its optimistic placement while
-            # the modal decides (§8.20 — confirmations must not undo optimism).
-            # committed: false tells it to hold a revert handle: Cancel / a
-            # failed Proceed reverts via "confirm-cancelled"; a Proceed commit
-            # re-renders the same placement.
-            {:reply, %{ok: true, committed: false},
-             assign_pending(socket, %{
-               kind: :move,
-               task_id: task.id,
-               attrs: attrs,
-               scenario: scenario,
-               titles: titles,
-               flip_ids: flip_ids
-             })}
-          end
-
-        {:error, reason} ->
-          {:reply, %{ok: false, error: format_move_error(reason)},
-           put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
-      end
+        end
     end
   end
 
@@ -1337,16 +1634,27 @@ defmodule DoItWeb.InitiativeShowLive do
     socket =
       case pending do
         %{kind: :move, task_id: task_id, attrs: attrs} ->
-          case commit_move(socket, Tasks.get_task!(task_id), attrs) do
-            {:ok, socket} -> socket
-            {:error, _reason, socket} -> socket
+          # The held task may have been deleted by a collaborator while the confirm
+          # sat open — resolve the modal without crashing.
+          case Tasks.get_task(task_id) do
+            nil ->
+              assign_pending(socket, nil)
+
+            task ->
+              case commit_move(socket, task, attrs) do
+                {:ok, socket} -> socket
+                {:error, _reason, socket} -> socket
+              end
           end
 
         %{kind: :create, attrs: attrs} ->
           commit_create(socket, attrs)
 
         %{kind: :cascade_sort, task_id: task_id} ->
-          commit_cascade_sort(socket, Tasks.get_task!(task_id))
+          case Tasks.get_task(task_id) do
+            nil -> assign_pending(socket, nil)
+            task -> commit_cascade_sort(socket, task)
+          end
 
         _ ->
           socket
@@ -1391,7 +1699,9 @@ defmodule DoItWeb.InitiativeShowLive do
   # dialog stashed. Not suppressible — transferring ownership always asks.
   def handle_event("confirm_transfer", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
-    user_id = String.to_integer(user_id)
+    user_id = parse_id(user_id)
+    # A nil (malformed) id finds no member, so the `not is_nil(member)` guard below
+    # routes it to the ok:false reply — never a crash.
     member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
 
     with true <- socket.assigns.can_admin and not is_nil(member),
@@ -1455,9 +1765,12 @@ defmodule DoItWeb.InitiativeShowLive do
   # ok:false on a refusal so the client restores Proceed.
   def handle_event("remove_member", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
-    user_id = String.to_integer(user_id)
+    user_id = parse_id(user_id)
 
     cond do
+      is_nil(user_id) ->
+        {:reply, %{ok: false}, socket}
+
       not socket.assigns.can_admin ->
         {:reply, %{ok: false},
          socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
@@ -1494,11 +1807,7 @@ defmodule DoItWeb.InitiativeShowLive do
     initiative = socket.assigns.initiative
     pending = socket.assigns.pending_handoff
 
-    takeover_id =
-      case params["takeover"] do
-        id when is_binary(id) and id != "" -> String.to_integer(id)
-        _ -> nil
-      end
+    takeover_id = parse_id(params["takeover"])
 
     promote_co = params["promote_co"] in ["true", "on"]
 
@@ -1529,9 +1838,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("update_member_role", %{"user_id" => uid, "role" => role}, socket) do
     initiative = socket.assigns.initiative
-    uid = String.to_integer(uid)
+    uid = parse_id(uid)
 
-    if socket.assigns.can_admin and uid != initiative.owner_id and role in ~w(editor viewer) do
+    if not is_nil(uid) and socket.assigns.can_admin and uid != initiative.owner_id and
+         role in ~w(editor viewer) do
       {:ok, _} =
         Initiatives.update_member_role(initiative.id, uid, role, socket.assigns.current_user)
 
@@ -1580,9 +1890,128 @@ defmodule DoItWeb.InitiativeShowLive do
   # "remove_member" (with its hand-off flow).
   def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
     user = socket.assigns.current_user
-    iid = String.to_integer(iid)
-    uid = String.to_integer(uid)
 
+    # Both ids are client-supplied; a malformed either-side no-ops with ok:false so
+    # the optimistic rail chip is pulled (MUST NOT LIE) rather than crashing.
+    case {parse_id(iid), parse_id(uid)} do
+      {nil, _} -> {:reply, %{ok: false}, socket}
+      {_, nil} -> {:reply, %{ok: false}, socket}
+      {iid, uid} -> do_add_collaborator_to(socket, user, iid, uid)
+    end
+  end
+
+  # Prune a past collaborator from My Collaborators (m02.05 item 12.11). Only
+  # offered for someone with no current shared Initiative; the context re-guards
+  # that and removes just this user's own edge.
+  def handle_event("remove_collaborator", %{"user-id" => uid}, socket) do
+    user = socket.assigns.current_user
+
+    case parse_id(uid) do
+      # Malformed id — un-hide the optimistically-removed row (ok:false), no crash.
+      nil ->
+        {:reply, %{ok: false}, socket}
+
+      cid ->
+        {ok?, socket} =
+          case Initiatives.remove_collaborator(user, cid) do
+            {:ok, _} ->
+              {true, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
+
+            # Still sharing an Initiative → the row stays; ok:false un-hides the
+            # optimistically-removed rail row (MUST NOT LIE — they weren't pruned).
+            {:error, :still_collaborating} ->
+              {false, put_flash(socket, :error, "You still share an Initiative with them.")}
+          end
+
+        {:reply, %{ok: ok?}, socket}
+    end
+  end
+
+  # --- Detail-event helpers (kept out of the handle_event clause group) ------
+
+  defp do_save_comment(socket, cid, id, body) do
+    user = socket.assigns.current_user
+
+    case Tasks.edit_comment(cid, user, body) do
+      {:ok, _comment} ->
+        {:noreply,
+         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
+
+      {:error, :not_found} ->
+        {:noreply,
+         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+
+      {:error, _cs} ->
+        {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+    end
+  end
+
+  defp do_move_task(socket, params, task) do
+    user = socket.assigns.current_user
+
+    attrs = %{
+      # A root-zone drop (promotion) carries no parent → it lands under the
+      # Initiative's root task, the new meaning of "root level". A malformed
+      # parent id falls back the same way rather than crashing the move.
+      "parent_id" =>
+        parse_id(Map.get(params, "parent_id")) || socket.assigns.initiative.root_task_id,
+      "position" => Map.get(params, "position"),
+      "reorder" => Map.get(params, "reorder")
+    }
+
+    case Tasks.preview_move(task, user, attrs) do
+      {:ok, %{scenario: nil}} ->
+        case commit_move(socket, task, attrs) do
+          {:ok, socket} ->
+            {:reply, %{ok: true, committed: true}, socket}
+
+          {:error, reason, socket} ->
+            {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+        end
+
+      {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
+        # The client predicts the flip from the DOM and opens the confirm itself
+        # (UX_GUARDRAILS 6.5 — a client-known confirm never waits on the network),
+        # then re-sends with confirmed: true on Proceed. Suppressed ("don't ask
+        # again") commits the same way. Either path commits straight through; the
+        # gate below is the authoritative backstop for a move the client did NOT
+        # predict as a flip.
+        if Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") do
+          case commit_move(socket, task, attrs) do
+            {:ok, socket} ->
+              {:reply, %{ok: true, committed: true}, socket}
+
+            {:error, reason, socket} ->
+              {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+          end
+        else
+          # A completion-flip confirmation is required: the move is NOT yet
+          # persisted, but the client KEEPS its optimistic placement while the
+          # modal decides (§8.20 — confirmations must not undo optimism).
+          # committed: false tells it to hold a revert handle: Cancel / a failed
+          # Proceed reverts via "confirm-cancelled"; a Proceed commit re-renders
+          # the same placement.
+          {:reply, %{ok: true, committed: false},
+           assign_pending(socket, %{
+             kind: :move,
+             task_id: task.id,
+             attrs: attrs,
+             scenario: scenario,
+             titles: titles,
+             flip_ids: flip_ids
+           })}
+        end
+
+      {:error, reason} ->
+        {:reply, %{ok: false, error: format_move_error(reason)},
+         put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
+    end
+  end
+
+  defp do_add_collaborator_to(socket, user, iid, uid) do
     {ok?, socket} =
       case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
         {:ok, added} ->
@@ -1604,36 +2033,19 @@ defmodule DoItWeb.InitiativeShowLive do
     # Refresh the collaborators pane AND the rail initiatives (their member-
     # avatar rows) so the server render carries the real avatar after the add —
     # otherwise the optimistic rail chip (WL3.5 Fix B) would be pulled on the
-    # reply with nothing to replace it (a lie).
+    # reply with nothing to replace it (a lie). The rail uses @initiatives in
+    # both list and detail modes.
     socket =
       socket
       |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
-      |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
+      |> assign(:initiatives, Initiatives.list_visible_initiatives(user))
 
+    # Only refresh members when the add landed on the currently-open Initiative
+    # (detail mode). In list mode @initiative is nil, so guard it.
     socket =
-      if iid == socket.assigns.initiative.id,
+      if socket.assigns.initiative && iid == socket.assigns.initiative.id,
         do: assign(socket, :members, Initiatives.list_members(iid)),
         else: socket
-
-    {:reply, %{ok: ok?}, socket}
-  end
-
-  # Prune a past collaborator from My Collaborators (m02.05 item 12.11). Only
-  # offered for someone with no current shared Initiative; the context re-guards
-  # that and removes just this user's own edge.
-  def handle_event("remove_collaborator", %{"user-id" => uid}, socket) do
-    user = socket.assigns.current_user
-
-    {ok?, socket} =
-      case Initiatives.remove_collaborator(user, String.to_integer(uid)) do
-        {:ok, _} ->
-          {true, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
-
-        # Still sharing an Initiative → the row stays; ok:false un-hides the
-        # optimistically-removed rail row (MUST NOT LIE — they weren't pruned).
-        {:error, :still_collaborating} ->
-          {false, put_flash(socket, :error, "You still share an Initiative with them.")}
-      end
 
     {:reply, %{ok: ok?}, socket}
   end
@@ -1761,6 +2173,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # suppressed, or the user Proceeded); we just write it. Permission is the
   # authoritative backstop. Reply mirrors move_task: ok:true + committed:true
   # releases the held flip; ok:false reverts it.
+  # `id` is nil for a bad/absent client id (parse_id rejected it) — reply ok:false
+  # so the held optimistic flip reverts, never crash.
+  defp request_cascade(socket, nil, _kind), do: {:reply, %{ok: false}, socket}
+
   defp request_cascade(socket, id, kind) do
     if not can_progress?(socket, id) do
       {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
@@ -1773,16 +2189,20 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp commit_cascade(socket, id, kind) do
-    task = Tasks.get_task!(id)
     user = socket.assigns.current_user
 
     result =
-      case kind do
-        :cascade_complete -> Tasks.cascade_complete(task, user)
-        :cascade_incomplete -> Tasks.cascade_incomplete(task, user)
+      case Tasks.get_task(id) do
+        # Just-deleted under us (real-time collab) — nothing to cascade.
+        nil -> {:error, :not_found}
+        task when kind == :cascade_complete -> Tasks.cascade_complete(task, user)
+        task -> Tasks.cascade_incomplete(task, user)
       end
 
     case result do
+      {:error, :not_found} ->
+        {:error, assign_pending(socket, nil)}
+
       {:ok, _} ->
         {:ok, socket |> assign_pending(nil) |> load_tree() |> refresh_selected()}
 
@@ -1796,20 +2216,30 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  defp commit_delete_task(socket, id) do
-    case Tasks.delete_task(Tasks.get_task!(id), socket.assigns.current_user) do
-      {:ok, _} ->
-        socket
-        |> assign_pending(nil)
-        |> assign(:selected_task_id, nil)
-        |> assign(:selected_task, nil)
-        |> put_flash(:info, "Task deleted.")
-        |> load_tree()
+  # A bad/absent id, or one whose task a collaborator already deleted, is a no-op
+  # (the row was optimistically removed client-side; the tree reload reconciles).
+  defp commit_delete_task(socket, nil), do: socket
 
-      {:error, cs} ->
+  defp commit_delete_task(socket, id) do
+    case Tasks.get_task(id) do
+      nil ->
         socket
-        |> assign_pending(nil)
-        |> put_flash(:error, "Couldn't delete task: #{summarize_errors(cs)}.")
+
+      task ->
+        case Tasks.delete_task(task, socket.assigns.current_user) do
+          {:ok, _} ->
+            socket
+            |> assign_pending(nil)
+            |> assign(:selected_task_id, nil)
+            |> assign(:selected_task, nil)
+            |> put_flash(:info, "Task deleted.")
+            |> load_tree()
+
+          {:error, cs} ->
+            socket
+            |> assign_pending(nil)
+            |> put_flash(:error, "Couldn't delete task: #{summarize_errors(cs)}.")
+        end
     end
   end
 
@@ -1892,10 +2322,13 @@ defmodule DoItWeb.InitiativeShowLive do
   # never the tree or the client-owned selection / editor view state.
   @impl true
   def handle_info(:after_mount, socket) do
+    # Guard the undo/redo labels on still being in a detail: the user may have
+    # patched back to the list (clearing @initiative) before this deferred load
+    # ran. The collaborators rail is shell-level, so always refresh it.
+    socket = if socket.assigns.initiative, do: assign_undo_state(socket), else: socket
+
     {:noreply,
-     socket
-     |> assign_undo_state()
-     |> assign(:rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
+     assign(socket, :rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
   end
 
   # A global presence join/leave (item 8): just refresh the Collaborators
@@ -1911,50 +2344,81 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # A presence join/leave/move anywhere in the initiative: push the full
   # selection list to this client (the PresenceBadges hook redraws rows) and
-  # refresh who's-here for the server-rendered online dots.
+  # refresh who's-here for the server-rendered online dots. Guarded against a
+  # stray in-flight diff arriving after we left the detail (@initiative nil).
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    {:noreply,
-     socket
-     |> assign(:online_ids, online_ids(socket.assigns.initiative.id))
-     |> push_presence()}
+    if socket.assigns.initiative do
+      {:noreply,
+       socket
+       |> assign(:online_ids, online_ids(socket.assigns.initiative.id))
+       |> push_presence()}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Membership changed somewhere in this initiative: re-check OUR role —
   # removed means ejected on the spot, not at the next refresh; a role change
-  # (e.g. an ownership transfer) re-renders the right controls live.
+  # (e.g. an ownership transfer) re-renders the right controls live. A stray
+  # in-flight message after leaving the detail (@initiative nil) is ignored.
   def handle_info({:members_changed, _initiative_id}, socket) do
-    initiative = Initiatives.get_initiative(socket.assigns.initiative.id)
-    role = initiative && Initiatives.get_role(initiative.id, socket.assigns.current_user.id)
+    cond do
+      is_nil(socket.assigns.initiative) ->
+        {:noreply, socket}
 
-    if role do
-      {:noreply,
-       socket
-       |> assign(:initiative, initiative)
-       |> assign(:role, role)
-       |> assign(:can_edit, Initiatives.can_edit?(role))
-       |> assign(:can_admin, Initiatives.can_admin?(role))
-       |> assign(:members, Initiatives.list_members(initiative.id))
-       # A removal here may drop the last Initiative shared with someone, so
-       # refresh the Collaborators pane too (item 9).
-       |> assign(:rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
-    else
-      {:noreply,
-       socket
-       |> put_flash(:info, "You're no longer a member of that Initiative.")
-       |> push_navigate(to: ~p"/initiatives")}
+      true ->
+        initiative = Initiatives.get_initiative(socket.assigns.initiative.id)
+        role = initiative && Initiatives.get_role(initiative.id, socket.assigns.current_user.id)
+
+        if role do
+          {:noreply,
+           socket
+           |> assign(:initiative, initiative)
+           |> assign(:role, role)
+           |> assign(:can_edit, Initiatives.can_edit?(role))
+           |> assign(:can_admin, Initiatives.can_admin?(role))
+           |> assign(:members, Initiatives.list_members(initiative.id))
+           # A removal here may drop the last Initiative shared with someone, so
+           # refresh the Collaborators pane too (item 9).
+           |> assign(
+             :rail_collaborators,
+             Initiatives.list_collaborators(socket.assigns.current_user)
+           )}
+        else
+          {:noreply,
+           socket
+           |> put_flash(:info, "You're no longer a member of that Initiative.")
+           |> push_navigate(to: ~p"/initiatives")}
+        end
     end
   end
 
-  def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
+  # Task-tree broadcasts are guarded against a stray in-flight delivery after we
+  # unsubscribed on leave/switch: @initiative nil → ignore (the list isn't a
+  # tree), AND a message whose task belongs to a DIFFERENT Initiative is dropped.
+  # PubSub delivery is async, so a broadcast for the just-left Initiative A can
+  # already be enqueued before teardown_detail unsubscribed and still arrive after
+  # we switched to B — patching A's lineage into B's tree. own_task_broadcast?/2
+  # confirms the task is ours before we touch the tree (see its note for why a
+  # gone task falls through to the harmless reload path).
+  def handle_info({:task_created, id}, socket),
+    do: {:noreply, if(own_task_broadcast?(socket, id), do: load_tree(socket), else: socket)}
 
-  def handle_info({:task_updated, id}, socket), do: {:noreply, patch_task(socket, id)}
+  def handle_info({:task_updated, id}, socket),
+    do: {:noreply, if(own_task_broadcast?(socket, id), do: patch_task(socket, id), else: socket)}
 
-  def handle_info({:task_deleted, _id}, socket),
-    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+  def handle_info({:task_deleted, id}, socket),
+    do:
+      {:noreply,
+       if(own_task_broadcast?(socket, id),
+         do: socket |> load_tree() |> refresh_selected(),
+         else: socket
+       )}
 
   # A comment landed in the Initiative (item 14.3): refresh the pane only for a
   # viewer who has that task open, so the comment appears live for them without
-  # every other viewer needlessly reloading their own selected pane.
+  # every other viewer needlessly reloading their own selected pane. In list mode
+  # selected_task_id is nil, so this is a safe no-op there.
   def handle_info({:comment_added, task_id}, socket) do
     if socket.assigns.selected_task_id == task_id,
       do: {:noreply, refresh_selected(socket)},
@@ -1973,13 +2437,52 @@ defmodule DoItWeb.InitiativeShowLive do
   # Live chat (item 3.1): a message arrived for this Initiative. Append to the
   # capped in-socket list (oldest dropped past @chat_cap) and bump a monotonic
   # id the template uses as a stable key + autoscroll trigger. Ephemeral — only
-  # ever held here, never written.
+  # ever held here, never written. Ignored when not in a detail (stray delivery).
   def handle_info({:chat_message, msg}, socket) do
-    {:noreply, append_chat(socket, msg)}
+    case socket.assigns[:initiative] do
+      %{id: iid} ->
+        # PubSub delivery is async: a chat broadcast for the just-left Initiative A
+        # can already be enqueued before teardown_detail unsubscribed and still
+        # arrive after we switched to B (own_task_broadcast?/2 covers the task
+        # topics; this is the chat-topic equivalent). Drop a message not stamped for
+        # the open Initiative — and any message while in list mode (@initiative nil)
+        # — so A's chat can't leak into B.
+        if Map.get(msg, :initiative_id) == iid,
+          do: {:noreply, append_chat(socket, msg)},
+          else: {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
-  def handle_info({:task_moved, _id}, socket),
-    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+  def handle_info({:task_moved, id}, socket),
+    do:
+      {:noreply,
+       if(own_task_broadcast?(socket, id),
+         do: socket |> load_tree() |> refresh_selected(),
+         else: socket
+       )}
+
+  # True only when a task-tree broadcast's task belongs to the Initiative now
+  # open. @initiative nil (list mode) is always false. A task that POSITIVELY
+  # belongs to another Initiative is dropped; a task we can't find (nil — e.g. a
+  # create immediately undone) falls through to true so the existing reload path
+  # still runs, which is harmless (load_tree always loads the CURRENT tree). The
+  # task row is fetched even when soft-deleted (Repo.get ignores deleted_at), so
+  # a {:task_deleted} for a foreign Initiative is still correctly rejected.
+  defp own_task_broadcast?(socket, task_id) do
+    case socket.assigns[:initiative] do
+      %{id: iid} ->
+        case Tasks.get_task(task_id) do
+          %Task{initiative_id: other} when other != iid -> false
+          _ -> true
+        end
+
+      _ ->
+        false
+    end
+  end
 
   # Whether the sender is the only viewer of this Initiative right now. The
   # per-Initiative presence set (@online_ids, kept fresh on every presence_diff)
@@ -2000,6 +2503,127 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:chat_log_id, next_id)
   end
 
+  # --- Index (list) helpers --------------------------------------------------
+
+  # The saved manual order as an id list, derived from the membership rows'
+  # sort_order — feeds the same order-list sorting the drag push uses.
+  defp stored_order(initiatives) do
+    initiatives
+    |> Enum.filter(& &1.my_sort_order)
+    |> Enum.sort_by(& &1.my_sort_order)
+    |> Enum.map(&to_string(&1.id))
+  end
+
+  # Keep the in-memory my_sort_order in step with a freshly pushed order, so
+  # re-renders (and the cards' data-my-order) reflect what was just saved.
+  defp reindex_order(initiatives, []), do: initiatives
+
+  defp reindex_order(initiatives, order) do
+    idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
+
+    Enum.map(initiatives, fn it ->
+      %{it | my_sort_order: Map.get(idx, to_string(it.id), it.my_sort_order)}
+    end)
+  end
+
+  defp restream_sorted(socket) do
+    sorted = sort_initiatives(socket.assigns.initiatives, socket.assigns.sort_state)
+    stream(socket, :initiatives, sorted, reset: true)
+  end
+
+  defp normalize_mode(mode) when mode in @sort_modes, do: mode
+  defp normalize_mode(_), do: nil
+
+  defp sort_initiatives(list, %{mode: nil, reverse: reverse}), do: maybe_reverse(list, reverse)
+
+  defp sort_initiatives(list, %{mode: "manual", order: order, reverse: reverse}) do
+    idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
+
+    list
+    |> Enum.sort_by(fn it -> Map.get(idx, to_string(it.id), length(order)) end)
+    |> maybe_reverse(reverse)
+  end
+
+  defp sort_initiatives(list, %{mode: mode, reverse: reverse}) do
+    list |> Enum.sort_by(&index_sort_key(&1, mode), index_sorter(mode)) |> maybe_reverse(reverse)
+  end
+
+  defp index_sort_key(i, "name"), do: String.downcase(i.name || "")
+  defp index_sort_key(i, "progress"), do: i.progress || 0
+  defp index_sort_key(i, "created"), do: i.inserted_at
+  defp index_sort_key(i, "updated"), do: i.updated_at
+
+  defp index_sorter(mode) when mode in ~w(created updated), do: DateTime
+  defp index_sorter(_), do: :asc
+
+  defp maybe_reverse(list, true), do: Enum.reverse(list)
+  defp maybe_reverse(list, _), do: list
+
+  # The Initiative's subtitle (root task title) for the card, or nil when blank
+  # (stored as a single space). nil hides the row via `:if`.
+  defp subtitle_text(%{subtitle: s}) when is_binary(s) do
+    case String.trim(s) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp subtitle_text(_), do: nil
+
+  defp build_empty_form do
+    to_form(Initiatives.change_initiative(%DoIt.Initiatives.Initiative{}))
+  end
+
+  # The Archived-list rows to show (m02.08 item 4.3): archived items always; a
+  # purely-hidden item only when Show-hidden is checked.
+  defp visible_archived(archived, show_hidden) do
+    Enum.filter(archived, fn a -> a.archived? or (a.hidden? and show_hidden) end)
+  end
+
+  # Owner-gated Trash action (m02.06 item 10): apply `fun` to the named trashed
+  # Initiative the current user owns, then refresh both the Trash list and the
+  # live index stream (a restore reappears there).
+  defp with_owned_trashed(socket, id, fun, msg) do
+    user = socket.assigns.current_user
+    initiative = fetch_initiative(id)
+
+    if initiative && initiative.owner_id == user.id && initiative.trashed_at do
+      {:ok, _} = fun.(initiative)
+      visible = Initiatives.list_visible_initiatives(user)
+
+      socket
+      |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
+      |> assign(:initiatives, visible)
+      |> assign(:initiative_count, length(visible))
+      |> stream(:initiatives, sort_initiatives(visible, socket.assigns.sort_state), reset: true)
+      |> put_flash(:info, msg)
+    else
+      put_flash(socket, :error, "Couldn't find that Initiative in your Trash.")
+    end
+  end
+
+  # Per-user restore/unhide (m02.08 worklist 4): apply `fun` to the named
+  # Initiative the current user is a member of, then refresh the active index
+  # stream and the Archived list. Scoped to the caller's own membership row.
+  defp with_member_initiative(socket, id, fun, msg) do
+    user = socket.assigns.current_user
+    initiative = fetch_initiative(id)
+
+    if initiative && Initiatives.get_role(initiative.id, user.id) do
+      {:ok, _} = fun.(user, initiative)
+      visible = Initiatives.list_visible_initiatives(user)
+
+      socket
+      |> assign(:initiatives, visible)
+      |> assign(:initiative_count, length(visible))
+      |> assign(:archived, Initiatives.list_archived_initiatives(user))
+      |> stream(:initiatives, sort_initiatives(visible, socket.assigns.sort_state), reset: true)
+      |> put_flash(:info, msg)
+    else
+      put_flash(socket, :error, "Couldn't find that Initiative.")
+    end
+  end
+
   # --- Render ---------------------------------------------------------------
 
   @impl true
@@ -2009,28 +2633,87 @@ defmodule DoItWeb.InitiativeShowLive do
       flash={@flash}
       current_user={@current_user}
       width={:wide}
-      rail_initiatives={@rail_initiatives}
-      rail_current_id={@initiative.id}
-      rail_current_name={@initiative.name}
+      rail_initiatives={@initiatives}
+      rail_current_id={@initiative && @initiative.id}
+      rail_current_name={@initiative && @initiative.name}
       rail_collaborators={@rail_collaborators}
       rail_online_ids={@collaborator_online_ids}
       rail_member_ids={MapSet.new(@members, & &1.user_id)}
     >
-      <div id="initiative-show-root" phx-hook=".TaskKeys">
+      <%!-- Shell root hook (M02.09 WL5.4): ALWAYS present in both list and detail
+           modes. It owns the §6.8 dead-window livePush registration — registered
+           once at first connect and NEVER unregistered on a list<->detail hop, so
+           the dead window exists only at first connect (today's per-hop
+           registration/presence churn is gone). The detail-specific .TaskKeys
+           duties live on a hook mounted only in detail mode (below). --%>
+      <div id="workspace-root" phx-hook=".Workspace">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".Workspace">
+          export default {
+            mounted() {
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
+            },
+            destroyed() {
+              window.DoitUnregisterLivePush(this._livePush);
+            },
+          }
+        </script>
+      </div>
+
+      <%= if @live_action == :show do %>
+        <div id={"initiative-detail-#{@initiative.id}"}>
+          <div
+            id={"initiative-show-root-#{@initiative.id}"}
+            data-initiative-id={@initiative.id}
+            phx-hook=".TaskKeys"
+          >
         <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
           export default {
             mounted() {
               this._h = (e) => this.handle(e);
               window.addEventListener("keydown", this._h);
-              // Row clicks are handled by a delegated listener in app.js (no
-              // hook of its own) — give it a push channel into this LiveView.
-              // §6.8 dead-window flush (WL4.2.3): DoitPush itself now lives at
-              // app.js module load (so dead-window calls are CAPTURED, not
-              // dropped); registering this channel's pushEvent is the "now live"
-              // signal — it hands DoitPush its live backend and flushes, in
-              // order, every write captured during the dead window.
-              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
-              window.DoitRegisterLivePush(this._livePush);
+              // M02.09 WL5 defect fix: this hook's element now carries the
+              // per-Initiative id, so an A->B rail switch truly DESTROYS this hook
+              // and MOUNTS a fresh one (morphdom can no longer move a static-id
+              // node into the new wrapper). But LiveView fires destroyed() in its
+              // post-patch removal pass — AFTER the new Initiative's subtree is
+              // morphed and this mounted() runs — so the leaving hook's cleanup is
+              // too late to stop B painting with A's client state. Detect the
+              // switch HERE (the prior Initiative still owns DoitDetailInitiativeId,
+              // since its destroyed() hasn't run yet) and clear the leaked
+              // detail-scoped state BEFORE B's data-keep appliers settle. Re-assert
+              // the keeps on the moved stable-id elements (editor pane, mobile rail,
+              // edit signifiers) that morphdom relocated with A's DoitState still
+              // set — all synchronous, so the corrected state is what the browser
+              // paints (no flash of A's editor/flyout on B). The query is scoped to
+              // the per-Initiative detail WRAPPER (#initiative-detail-<id>), NOT this
+              // hook's own element (#initiative-show-root-<id>): show-root holds only
+              // the tree column (#tree-scroll, the mobile members panel and the
+              // archive-prompt banner), while the right-rail flyout (#details-rail,
+              // carrying the initiative/task editor panes and the desktop members
+              // panel) is a SIBLING of show-root inside the wrapper. A this.el-scoped
+              // (show-root) query would skip those rail/editor keeps and leave A's
+              // editor/flyout state stuck on B, so we scope to the wrapper to
+              // re-assert every detail keep.
+              this._iid = this.el.dataset.initiativeId;
+              if (window.DoitDetailInitiativeId &&
+                  window.DoitDetailInitiativeId !== this._iid) {
+                this.clearDetailState();
+                const detail =
+                  document.getElementById("initiative-detail-" + this._iid) || this.el;
+                detail.querySelectorAll("[data-keep]").forEach((el) => {
+                  if (window.DoitApplyKeep) window.DoitApplyKeep(el);
+                });
+              }
+              window.DoitDetailInitiativeId = this._iid;
+              // M02.09 WL5.4: the dead-window livePush registration moved to the
+              // always-present .Workspace shell hook, so a list<->detail hop never
+              // unregisters it (the dead window exists only at first connect). This
+              // detail hook mounts on detail-enter and is destroyed on leave/switch
+              // (its element rides the per-Initiative keyed wrapper), so it owns the
+              // detail-only duties: the keydown handler, undo/redo clicks, the
+              // selection replay, and the deep-link / comment-saved / viewer-plus /
+              // bonk handleEvents.
               // Expose the bonk so delegated listeners in app.js (e.g. the
               // transfer-confirm in-flight latch, item 15.16) can sound it too.
               window.DoitBonk = () => this.bonk();
@@ -2126,8 +2809,69 @@ defmodule DoItWeb.InitiativeShowLive do
             destroyed() {
               window.removeEventListener("keydown", this._h);
               window.removeEventListener("click", this._undoBtn);
-              window.DoitUnregisterLivePush(this._livePush);
               clearTimeout(this._paneT);
+              // M02.09 WL5.4 + defect fix: leaving the detail (patch to the list)
+              // must clear ALL detail-scoped client state, or it leaks into the
+              // next detail — e.g. a stale selection replayed against another
+              // Initiative's tree, or an editor/comment editor re-opening. On an
+              // Initiative SWITCH this destroyed() runs AFTER the next
+              // Initiative's hook has already mounted and reset the state
+              // (LiveView mounts on add, destroys on the later removal pass), so
+              // guard on the tracked id: only clear when WE are still the active
+              // detail (the leave-to-list case). On a switch the newer mount owns
+              // DoitDetailInitiativeId — skip, or we'd wipe B's freshly-set state
+              // and break detection of the next switch. The livePush stays
+              // registered (owned by the always-present .Workspace shell hook), so
+              // the dead-window funnel is untouched here.
+              if (window.DoitDetailInitiativeId === this._iid) {
+                window.DoitDetailInitiativeId = null;
+                this.clearDetailState();
+              }
+            },
+            // Reset every detail-scoped client store to its default. Shared by the
+            // leave path (destroyed) and the switch path (mounted) so the two stay
+            // in lock-step.
+            clearDetailState() {
+              // editorOpen must be cleared BEFORE the selection: DoitSelection.clear()
+              // runs syncRail (via apply -> syncPaneSkeleton), and syncRail computes
+              // the mobile rail/backdrop open state from BOTH the selection AND
+              // DoitInitiativeEditor.open. Clearing the editor flag first means that
+              // syncRail pass already sees the editor closed, so a switch-with-editor-
+              // open doesn't leave the rail/backdrop stuck open (nothing re-runs
+              // syncRail after clear()).
+              if (window.DoitState) {
+                window.DoitState.editorOpen = false;
+                window.DoitState.commentEditId = null;
+                window.DoitState.commentVersionsId = null;
+                window.DoitState.pending = {toggle: null, move: null, initiativeOrder: null};
+                window.DoitState.presence = {selections: [], online: []};
+                // Tree scroll is detail-scoped: the only data-keep="scroll" box is
+                // the per-Initiative #tree-scroll, so reset it wholesale — B's tree
+                // must open at the top, not inherit A's scrollTop.
+                window.DoitState.scroll = {};
+                // <details data-keep="open"> open-state is keyed by STABLE element
+                // id, and the detail disclosures (initiative-settings, task-activity,
+                // members-*-form) reuse the same ids across Initiatives — so A's open
+                // state would re-assert on B. Clear every detailsOpen entry EXCEPT the
+                // genuinely non-detail ones: the app-shell menus (notif/account/mobile
+                // -menu, cross-page) and the index-mode disclosures (new-initiative,
+                // archived, list-scoped). Everything else is a detail disclosure and
+                // must reset to its server default. (Keeping this an allow-list of the
+                // few stable non-detail ids means a NEW detail disclosure is cleared by
+                // default — failing safe against the very leak this closes.)
+                const KEEP_OPEN = new Set([
+                  "notif-menu", "account-menu", "mobile-menu", "new-initiative", "archived"
+                ]);
+                Object.keys(window.DoitState.detailsOpen).forEach((id) => {
+                  if (!KEEP_OPEN.has(id)) delete window.DoitState.detailsOpen[id];
+                });
+                // The archive-on-completion banner dismissal is detail-scoped
+                // (#archive-prompt renders per-Initiative); clear it so a fresh detail
+                // re-evaluates from the server's show_archive_prompt instead of
+                // inheriting A's dismissal.
+                window.DoitState.archivePromptDismissed = false;
+              }
+              if (window.DoitSelection) window.DoitSelection.clear();
             },
             inField() {
               const a = document.activeElement;
@@ -2438,7 +3182,7 @@ defmodule DoItWeb.InitiativeShowLive do
                  matching the task pane's close affordance. --%>
             <div class="mb-4 flex items-center justify-between gap-2">
               <.link
-                navigate={~p"/initiatives"}
+                patch={~p"/initiatives"}
                 title="Close this Initiative — back to all Initiatives"
                 class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
               >
@@ -3200,6 +3944,353 @@ defmodule DoItWeb.InitiativeShowLive do
           }
         </script>
       </div>
+        </div>
+      <% else %>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+          <div>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">My Initiatives</h1>
+            <p class="text-sm text-zinc-500 dark:text-zinc-400">
+              An Initiative holds multiple Lists. Each List is a tree of nested tasks.
+            </p>
+          </div>
+          <button
+            type="button"
+            data-details-toggle="new-initiative"
+            class="w-fit self-center inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+          >
+            <.icon name="hero-plus" class="w-4 h-4" />
+            <span>New Initiative</span>
+          </button>
+        </div>
+
+        <%!-- Client-toggled (no round trip before typing); data-keep="open"
+             preserves the open state across patches, e.g. a validation error re-render. --%>
+        <details id="new-initiative" data-keep="open" class="mb-6">
+          <summary class="hidden"></summary>
+          <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <.form :let={f} for={@form} phx-submit="create" class="space-y-3">
+              <.input field={f[:name]} type="text" label="Name" required />
+              <.input field={f[:description]} type="textarea" label="Description (optional)" />
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-details-close="new-initiative"
+                  class="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+                <.button type="submit" data-latch="Creating…">Create initiative</.button>
+              </div>
+            </.form>
+          </div>
+        </details>
+
+        <%!-- Sort control (.06.2, server-persisted by m02.04 §2.6). The server
+             renders the saved state (initial values survive phx-update="ignore");
+             the hook owns it from there and pushes apply_sort on change. --%>
+        <form
+          :if={@initiative_count > 0}
+          id="initiative-sort"
+          phx-hook="InitiativeSort"
+          phx-update="ignore"
+          data-reverse-by-mode={Jason.encode!(@reverse_by_mode)}
+          class="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300 3xl:hidden"
+        >
+          <label for="initiative-sort-mode" class="text-xs">Sort</label>
+          <select id="initiative-sort-mode" name="mode" class="select select-bordered select-sm">
+            <option value="" selected={is_nil(@sort_state.mode)}>Recent</option>
+            <option value="manual" selected={@sort_state.mode == "manual"}>Manual</option>
+            <option value="name" selected={@sort_state.mode == "name"}>Name</option>
+            <option value="progress" selected={@sort_state.mode == "progress"}>Progress</option>
+            <option value="created" selected={@sort_state.mode == "created"}>Created</option>
+            <option value="updated" selected={@sort_state.mode == "updated"}>Updated</option>
+          </select>
+          <label class="flex items-center gap-1 text-xs select-none">
+            <input
+              type="checkbox"
+              name="reverse"
+              value="true"
+              checked={@sort_state.reverse}
+              class="checkbox checkbox-xs"
+            /> Reverse
+          </label>
+        </form>
+
+        <%!-- Card list: full-width below 3xl. At 3xl the left rail (Layouts
+             chrome) covers it, so it hides and the center shows a "pick an
+             Initiative" prompt; the "Assigned to Me" pane rides the layout's
+             right pane (a sibling of the left rail, via <:rail_right> below). --%>
+        <div id="initiatives" phx-update="stream" class="space-y-2 3xl:hidden">
+          <div
+            :for={{dom_id, initiative} <- @streams.initiatives}
+            id={dom_id}
+            data-initiative-id={initiative.id}
+            data-name={initiative.name}
+            data-progress={initiative.progress || 0}
+            data-created={to_string(initiative.inserted_at)}
+            data-updated={to_string(initiative.updated_at)}
+            data-my-order={initiative.my_sort_order}
+            class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
+          >
+            <%!-- list<->detail is a same-module push_patch (no remount): use
+                 patch, not navigate, so the kept-mounted shell stays intact. --%>
+            <.link patch={~p"/initiatives/#{initiative.id}"} draggable="false" class="block p-4">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
+                <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
+                  <span
+                    id={"init-drag-#{initiative.id}"}
+                    phx-hook="InitiativeDrag"
+                    data-id={initiative.id}
+                    aria-hidden="true"
+                    title="Drag to reorder"
+                    class="flex-none inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 cursor-grab active:cursor-grabbing touch-none select-none"
+                  >
+                    <.icon
+                      name="hero-ellipsis-vertical"
+                      class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
+                    />
+                    <.botanical_icon kind={:grove} class="w-5 h-5" />
+                    <.icon
+                      name="hero-ellipsis-vertical"
+                      class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
+                    />
+                  </span>
+                  <span class="truncate">{initiative.name}</span>
+                </span>
+                <div class="flex items-center gap-2 flex-none">
+                  <span
+                    :if={initiative.my_role}
+                    class={[
+                      "text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded",
+                      role_badge_class(initiative.my_role)
+                    ]}
+                    title={"Your role: #{initiative.my_role}"}
+                  >
+                    {initiative.my_role}
+                  </span>
+                  <span class="text-xs text-zinc-500 dark:text-zinc-400">
+                    Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
+                  </span>
+                </div>
+              </div>
+              <p
+                :if={subtitle_text(initiative)}
+                class="mt-1 text-sm text-zinc-600 dark:text-zinc-300 line-clamp-1"
+              >
+                {subtitle_text(initiative)}
+              </p>
+              <p
+                :if={initiative.description}
+                class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2"
+              >
+                {initiative.description}
+              </p>
+
+              <div
+                class="relative mt-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+                role="progressbar"
+                aria-valuenow={initiative.progress || 0}
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-label={"Progress: #{initiative.progress || 0}%"}
+                style={"--progress: #{initiative.progress || 0}%"}
+              >
+                <div
+                  class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+                  style="width: var(--progress)"
+                >
+                </div>
+                <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+                  {initiative.progress || 0}%
+                </span>
+              </div>
+            </.link>
+          </div>
+        </div>
+
+        <%!-- Center prompt at 3xl: the rail covers the list, so this column
+             just asks the user to pick one. --%>
+        <div class="hidden 3xl:flex flex-col items-center justify-center text-center py-24 text-zinc-500 dark:text-zinc-400">
+          <.botanical_icon kind={:grove} class="w-12 h-12 mb-3 text-zinc-300 dark:text-zinc-600" />
+          <p class="text-lg font-medium text-zinc-600 dark:text-zinc-300">Pick an Initiative</p>
+          <p class="text-sm">Choose one from the list on the left to open it.</p>
+        </div>
+
+        <p :if={@initiative_count == 0} class="text-zinc-500 dark:text-zinc-400 mt-4">
+          No initiatives yet. Create one to get started.
+        </p>
+
+        <%!-- Trash (m02.06 item 10): the owner's soft-deleted Initiatives. --%>
+        <section
+          :if={@trashed != []}
+          id="trash"
+          class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4"
+        >
+          <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+            <.icon name="hero-trash" class="w-4 h-4" /> Trash
+            <span class="font-normal text-xs text-zinc-400 dark:text-zinc-500">
+              · auto-deletes after {Initiatives.trash_retention_days()} days
+            </span>
+          </h2>
+          <ul class="mt-2 space-y-1">
+            <li
+              :for={t <- @trashed}
+              id={"trashed-#{t.id}"}
+              class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+            >
+              <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+                <span class="truncate">{t.name}</span>
+                <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
+                  trashed {Calendar.strftime(t.trashed_at, "%b %-d")}
+                </span>
+              </span>
+              <span class="flex items-center gap-1 flex-none">
+                <button
+                  type="button"
+                  phx-click="restore_initiative"
+                  phx-value-id={t.id}
+                  data-latch="Restoring…"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                >
+                  <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                </button>
+                <button
+                  type="button"
+                  phx-click="purge_initiative"
+                  phx-value-id={t.id}
+                  phx-disable-with="Deleting…"
+                  data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                >
+                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
+                </button>
+              </span>
+            </li>
+          </ul>
+        </section>
+
+        <%!-- Desktop-only entry to the keyboard-shortcuts help (.07.2.1). --%>
+        <div class="hidden sm:flex justify-center mt-10 mb-16">
+          <button
+            type="button"
+            phx-click={Phoenix.LiveView.JS.dispatch("doit:shortcuts-toggle", to: "#shortcuts-overlay")}
+            class="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+          >
+            <.icon name="hero-command-line" class="w-4 h-4" /> Keyboard shortcuts
+          </button>
+        </div>
+
+        <.shortcuts_overlay />
+
+        <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
+             distinct from the owner-level Trash above. data-keep="open" pins the
+             open state across LiveView patches. --%>
+        <details
+          :if={@archived != []}
+          id="archived"
+          data-keep="open"
+          class="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
+        >
+          <summary class="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 3xl:px-3 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <.icon name="hero-archive-box" class="w-4 h-4 flex-none" />
+            <span>Archived ({length(visible_archived(@archived, @show_hidden))})</span>
+            <.icon
+              name="hero-chevron-up"
+              class="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 sm:px-6 3xl:px-3 pb-3">
+            <div class="flex items-center justify-end gap-2">
+              <label
+                :if={Enum.any?(@archived, & &1.hidden?)}
+                class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none"
+              >
+                <input
+                  type="checkbox"
+                  id="show-hidden"
+                  phx-click="toggle_show_hidden"
+                  checked={@show_hidden}
+                  data-keep="reveal-toggle"
+                  class="checkbox checkbox-xs"
+                /> Show hidden
+                <span
+                  class="doit-reveal-slot inline-flex w-3.5 flex-none items-center justify-center"
+                  aria-hidden="true"
+                >
+                  <.icon
+                    name="hero-arrow-path"
+                    class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+                  />
+                </span>
+              </label>
+            </div>
+            <ul class="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
+              <%= for a <- visible_archived(@archived, @show_hidden) do %>
+                <li
+                  id={"archived-#{a.id}"}
+                  class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+                >
+                  <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                    <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+                    <span class="truncate">{a.name}</span>
+                    <span
+                      :if={a.hidden? and not a.archived?}
+                      class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+                    >
+                      hidden
+                    </span>
+                  </span>
+                  <span class="flex items-center gap-1 flex-none">
+                    <button
+                      :if={a.archived?}
+                      type="button"
+                      phx-click="unarchive_initiative"
+                      phx-value-id={a.id}
+                      data-latch="Restoring…"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                    >
+                      <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                    </button>
+                    <button
+                      :if={a.hidden?}
+                      type="button"
+                      phx-click="unhide_initiative"
+                      phx-value-id={a.id}
+                      data-latch="Unhiding…"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
+                    </button>
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+          </div>
+        </details>
+      <% end %>
+
+      <%!-- Right (third) pane (item 6): the "Assigned to Me" home, list mode
+           only — a sibling of the left rail at 3xl. --%>
+      <:rail_right :if={@live_action == :index}>
+        <div class="min-h-[calc(100dvh-9rem)]">
+          <h2 class="mb-3 flex items-center gap-1.5 text-lg font-semibold text-zinc-700 dark:text-zinc-200">
+            <.botanical_icon
+              kind={:leaf}
+              class="w-5 h-5 text-emerald-500/70 dark:text-emerald-400/70"
+            /> Assigned to Me
+          </h2>
+          <.assigned_list
+            id="assigned-pane"
+            rows={@streams.assigned_tasks}
+            empty?={@assigned_empty?}
+            show_completed={@show_completed}
+            show_archived_hidden={@show_archived_hidden}
+            group_by_initiative={@group_by_initiative}
+            variant={:pane}
+          />
+        </div>
+      </:rail_right>
     </Layouts.app>
     """
   end
@@ -3212,9 +4303,8 @@ defmodule DoItWeb.InitiativeShowLive do
   # task (never the wrong one, never a silent drop); guard it to this initiative's
   # tree and fall back to the current selection for a stale/absent id.
   defp update_task_target(socket, payload) do
-    with id when is_binary(id) <- payload["id"],
-         {n, ""} <- Integer.parse(id),
-         %Task{} = task <- Tasks.get_task(n),
+    with id when not is_nil(id) <- parse_id(payload["id"]),
+         %Task{} = task <- Tasks.get_task(id),
          true <- task.initiative_id == socket.assigns.initiative.id do
       task
     else
@@ -3225,9 +4315,11 @@ defmodule DoItWeb.InitiativeShowLive do
   # The sort controls name their own target (the form's hidden task_id /
   # the cascade button's phx-value-id); fall back to the pane task.
   defp sort_target(socket, params) do
-    case params["task_id"] || params["id"] do
-      id when is_binary(id) -> Tasks.get_task!(String.to_integer(id))
-      _ -> socket.assigns.selected_task
+    case parse_id(params["task_id"] || params["id"]) do
+      # No / malformed named target → the pane task; a valid-but-just-deleted id
+      # also falls back to the pane task instead of crashing.
+      nil -> socket.assigns.selected_task
+      id -> Tasks.get_task(id) || socket.assigns.selected_task
     end
   end
 
@@ -3235,10 +4327,12 @@ defmodule DoItWeb.InitiativeShowLive do
   # (the DOM-owned selection); fall back to the server's pane task. Guarded
   # to this initiative and to editors.
   defp kbd_target(socket, params) do
+    # An explicit (but malformed) id no-ops via the is_nil check below rather than
+    # falling back to the selection; an absent id targets the pane task.
     id =
       case params["id"] do
-        id when is_binary(id) -> String.to_integer(id)
-        _ -> socket.assigns.selected_task_id
+        nil -> socket.assigns.selected_task_id
+        raw -> parse_id(raw)
       end
 
     with true <- socket.assigns.can_edit,
@@ -5728,12 +6822,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # created task lands there. Root/child "add" forms render at the top of
   # their list → index 0; an "add sibling after X" form → just after X. For an
   defp sibling_after_position(after_id) do
-    anchor = Tasks.get_task!(after_id)
-    sibs = sibling_ids(anchor)
+    # after_id is a client-supplied anchor; if it was just deleted, fall back to
+    # the top (nil position) instead of crashing.
+    case Tasks.get_task(after_id) do
+      nil ->
+        nil
 
-    case Enum.find_index(sibs, &(&1 == anchor.id)) do
-      nil -> nil
-      idx -> idx + 1
+      anchor ->
+        case Enum.find_index(sibling_ids(anchor), &(&1 == anchor.id)) do
+          nil -> nil
+          idx -> idx + 1
+        end
     end
   end
 

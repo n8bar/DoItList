@@ -335,8 +335,10 @@ function flushPreconnect() {
 // pushEvent IS the "now live" signal (the hook mounts only after the channel
 // joins) and triggers the flush; unregister is keyed on the fn so a navigate
 // where the next view mounts before the old is destroyed can't null a live
-// backend. Both the show page (.TaskKeys) and index page (.IndexLive) register,
-// so BOTH dead windows flush.
+// backend. As of M02.09 WL5.4 the index and detail are ONE kept-mounted
+// workspace LiveView, so a single always-present .Workspace shell hook registers
+// (and never unregisters on a list<->detail patch) — the dead window exists only
+// at first connect, not on every hop.
 window.DoitRegisterLivePush = (fn) => { livePush = fn; flushPreconnect() }
 window.DoitUnregisterLivePush = (fn) => { if (livePush === fn) livePush = null }
 
