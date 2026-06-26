@@ -525,6 +525,43 @@ defmodule DoItWeb.Layouts do
           <div class="mt-1 h-1 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
             <div class="h-full bg-emerald-400" style={"width: #{init.progress || 0}%"}></div>
           </div>
+          <%!-- Member avatar row (m02.09 WL3.5): a width-filling, capped stack of
+               member avatars with a "+N" overflow. It is also the optimistic
+               target for drag-collaborator-onto-initiative (Fix B) —
+               CollaboratorDrag inserts a dimmed pending chip into the group at
+               drop and the add_collaborator_to reply reconciles it (the server's
+               rail refresh renders the real avatar). The preserve path's
+               `rail-avatars` KeepRegistry applier re-inserts the pending chip
+               across any mid-flight patch (e.g. a presence diff repainting the
+               rail) so it can't be stomped before the reply. Always rendered
+               (an Initiative always has ≥1 member) so the drop target exists.
+               a11y: the row carries the member count as its label and the
+               avatars are decorative (aria-hidden) — not the only signal. --%>
+          <div
+            :if={init.members != []}
+            id={"rail-avatars-#{init.id}"}
+            data-keep="rail-avatars"
+            data-rail-avatars-initiative-id={init.id}
+            class="mt-1.5 flex items-center"
+            aria-label={member_count_label(length(init.members))}
+          >
+            <span data-rail-avatar-group class="flex -space-x-1">
+              <.avatar
+                :for={u <- Enum.take(init.members, rail_avatar_cap())}
+                user={u}
+                online={MapSet.member?(@online_ids, u.id)}
+                data-member-id={u.id}
+                aria-hidden="true"
+                class="w-5 h-5 text-[9px] ring-1 ring-white dark:ring-zinc-900"
+              />
+            </span>
+            <span
+              :if={length(init.members) > rail_avatar_cap()}
+              class="ml-1 flex-none text-[10px] font-medium tabular-nums text-zinc-400 dark:text-zinc-500"
+            >
+              +{length(init.members) - rail_avatar_cap()}
+            </span>
+          </div>
         </.link>
       </nav>
 
@@ -544,6 +581,10 @@ defmodule DoItWeb.Layouts do
             id={"collabrow-#{collab.user.id}"}
             phx-hook="CollaboratorDrag"
             data-user-id={collab.user.id}
+            data-user-name={collab.user.name}
+            data-initials={initials(collab.user)}
+            data-avatar-bg={avatar_bg(collab.user)}
+            data-avatar-fg={avatar_fg(collab.user)}
             class="min-w-0"
           >
             <%!-- The menu opens when there's an action to offer: a current
@@ -715,6 +756,14 @@ defmodule DoItWeb.Layouts do
   # "Initiative" / "Initiatives" for the Collaborators shared-count tooltip.
   defp ngettext_initiative(1), do: "Initiative"
   defp ngettext_initiative(_), do: "Initiatives"
+
+  # How many member avatars the rail entry shows before collapsing the rest
+  # into a "+N" overflow (m02.09 WL3.5). Sized for the 17rem rail width.
+  defp rail_avatar_cap, do: 6
+
+  # a11y label for the rail member-avatar row — avatars aren't the only signal.
+  defp member_count_label(1), do: "1 member"
+  defp member_count_label(n), do: "#{n} members"
 
   @doc """
   Three-state theme toggle (System / Light / Dark). Each button dispatches

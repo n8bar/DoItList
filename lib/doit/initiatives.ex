@@ -46,6 +46,35 @@ defmodule DoIt.Initiatives do
       ]
     )
     |> Repo.all()
+    |> attach_member_avatars()
+  end
+
+  # Batch-load each Initiative's members into the virtual `:members` field for
+  # the left-rail avatar chip row (m02.09 WL3.5). ONE query over the whole set
+  # (no N+1), grouped by Initiative and ordered owner-first then by name to
+  # match the rail's read order. Empty input → no query.
+  defp attach_member_avatars([]), do: []
+
+  defp attach_member_avatars(initiatives) do
+    ids = Enum.map(initiatives, & &1.id)
+
+    members_by_initiative =
+      from(m in InitiativeMember,
+        where: m.initiative_id in ^ids,
+        join: u in User,
+        on: u.id == m.user_id,
+        order_by: [
+          asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
+          asc: u.name
+        ],
+        select: {m.initiative_id, u}
+      )
+      |> Repo.all()
+      |> Enum.group_by(fn {iid, _u} -> iid end, fn {_iid, u} -> u end)
+
+    Enum.map(initiatives, fn i ->
+      %{i | members: Map.get(members_by_initiative, i.id, [])}
+    end)
   end
 
   @doc """

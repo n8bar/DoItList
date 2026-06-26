@@ -1594,7 +1594,14 @@ defmodule DoItWeb.InitiativeShowLive do
           {false, put_flash(socket, :error, "Couldn't add them.")}
       end
 
-    socket = assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
+    # Refresh the collaborators pane AND the rail initiatives (their member-
+    # avatar rows) so the server render carries the real avatar after the add —
+    # otherwise the optimistic rail chip (WL3.5 Fix B) would be pulled on the
+    # reply with nothing to replace it (a lie).
+    socket =
+      socket
+      |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+      |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
 
     socket =
       if iid == socket.assigns.initiative.id,

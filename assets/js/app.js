@@ -161,7 +161,19 @@ const DoitState = {
   // read these so a list-refresh patch can't snap an open editor/popup shut.
   commentEditId: null, // string|null — the comment whose inline editor is open
   commentVersionsId: null, // string|null — the comment whose history popup is open
-  pending: {toggle: null, move: null}, // confirm-held optimistic flips — slice 2.3
+  // Confirm-held / drop-held optimistic structural holds. `toggle`/`move` are
+  // slice 2.3; `initiativeOrder` (WL3.5 Fix A) holds a drag-reordered Initiatives
+  // card order {wrapId, order:[ids], prior:[ids]} at drop until the apply_sort
+  // reply settles (release on ok, revert to prior on failure) — re-asserted by
+  // applyPendingInitiativeOrder from onPatchEnd, mirroring applyPendingMove.
+  pending: {toggle: null, move: null, initiativeOrder: null},
+  // Optimistic rail member-avatar chips (WL3.5 Fix B), keyed by echo id →
+  // {iid, uid, name, initials, bg, fg}. A drag-collaborator-onto-initiative drop
+  // inserts the dropped user's avatar into that rail entry's avatar row at once;
+  // the `rail-avatars` KeepRegistry applier re-inserts it across mid-flight
+  // patches until the add_collaborator_to reply clears the entry (ok → the
+  // server's rail refresh renders the real avatar; failure → pulled, MUST NOT LIE).
+  railAvatarAdds: {}, // {[echoId]: {iid, uid, name, initials, bg, fg}}
   presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
   // Inner scroll-container offsets, keyed by element id (slice 2.3.8). LiveView
   // preserves window scroll on navigate and, because we keep every scroll box at
@@ -448,6 +460,29 @@ const KeepRegistry = {
     // element, so a later re-raise (a fresh 100% crossing) shows normally.
     apply(el, state) {
       if (state.archivePromptDismissed && !el.hidden) el.hidden = true
+    },
+  },
+  "rail-avatars": {
+    // A rail Initiative entry's member-avatar row (#rail-avatars-<iid>). A
+    // drag-collaborator-onto-initiative drop (WL3.5 Fix B, §6.2) optimistically
+    // inserts the dropped user's avatar chip into this row's group at once; the
+    // add is server-gated (owner-only, may already be a member), so the chip is
+    // held by a railAvatarAdds entry until the add_collaborator_to reply lands.
+    // Re-insert any pending chip for THIS Initiative the incoming render doesn't
+    // already carry (deduped by data-member-id) so a mid-flight patch — e.g. a
+    // presence diff repainting the rail — can't strip it before the reply. The
+    // reply (or its 8s safety timeout) clears the entry; once cleared this is a
+    // no-op and the server-rendered members stand (MUST NOT LIE on failure).
+    apply(el, state) {
+      const iid = el.dataset.railAvatarsInitiativeId
+      const group = el.querySelector("[data-rail-avatar-group]")
+      if (!group) return
+      for (const echoId of Object.keys(state.railAvatarAdds)) {
+        const a = state.railAvatarAdds[echoId]
+        if (String(a.iid) !== String(iid)) continue
+        if (group.querySelector(`[data-member-id="${a.uid}"]`)) continue
+        group.appendChild(buildRailAvatarChip(echoId, a))
+      }
     },
   },
 }
@@ -4092,11 +4127,74 @@ window.addEventListener("phx:close-details", (e) => {
   if (form) form.reset()
 })
 
+// ---- Drop-time optimism for the Initiatives card reorder (WL3.5 Fix A) -----
+//
+// A drag-reorder of the workspace Initiative cards (#initiatives) used to wait
+// on the server re-stream — no drop-time feedback (§6.2 violation). We now apply
+// the new order to the DOM AT DROP, snapshot the prior order, and hold it on the
+// preserve path until the apply_sort reply settles. This mirrors the structural
+// applyPendingMove hold: it's a child reorder, so it gets no per-element
+// data-keep kind — applyPendingInitiativeOrder re-asserts it from onPatchEnd
+// (covering any unrelated mid-flight patch), and the reply releases it (ok) or
+// reverts to the prior snapshot (failure — MUST NOT LIE). A dropped reply
+// self-heals on the 8s safety timer by releasing (the server stays
+// authoritative; the next re-stream reconciles the order honestly).
+
+// Re-sequence #initiatives' card children to `order` (an id list) by appending
+// in order — idempotent, so re-running from onPatchEnd converges.
+function reorderInitiativeCards(wrap, order) {
+  const byId = new Map(
+    [...wrap.querySelectorAll(":scope > [data-initiative-id]")].map((c) => [
+      c.dataset.initiativeId,
+      c,
+    ]),
+  )
+  order.forEach((id) => {
+    const card = byId.get(String(id))
+    if (card) wrap.appendChild(card)
+  })
+}
+
+// Re-assert the held optimistic order after every patch (onPatchEnd). While a
+// hold stands, the cards stay in the dropped order even if an unrelated patch
+// re-touches the stream container.
+function applyPendingInitiativeOrder() {
+  const p = DoitState.pending.initiativeOrder
+  if (!p) return
+  const wrap = document.getElementById(p.wrapId)
+  if (wrap) reorderInitiativeCards(wrap, p.order)
+}
+
+// Settle the hold on the apply_sort reply. ok → release (the server persisted
+// the order and re-streamed it; it now stands). failure → revert to the prior
+// snapshot + bonk (the order didn't take — don't leave a phantom reorder).
+function settlePendingInitiativeOrder(reply) {
+  const p = DoitState.pending.initiativeOrder
+  if (!p) return
+  if (p.timer) clearTimeout(p.timer)
+  if (reply && reply.ok === false) {
+    revertPendingInitiativeOrder()
+    if (window.DoitBonk) window.DoitBonk()
+  } else {
+    DoitState.pending.initiativeOrder = null
+  }
+}
+
+function revertPendingInitiativeOrder() {
+  const p = DoitState.pending.initiativeOrder
+  DoitState.pending.initiativeOrder = null
+  if (!p) return
+  if (p.timer) clearTimeout(p.timer)
+  const wrap = document.getElementById(p.wrapId)
+  if (wrap) reorderInitiativeCards(wrap, p.prior)
+}
+
 // Drag-to-reorder the Initiatives index (.06.3). The grove icon is the handle;
 // dropping inserts the card before/after another (no reparent / center drop).
-// The new order is pushed as apply_sort (mode "manual") and the server
-// persists it onto the membership rows (m02.04 §2.6). Reuses the
-// pointer-event pattern from DragReorder, in a simpler reorder-only form.
+// The new order is applied at drop (WL3.5 Fix A) and pushed as apply_sort (mode
+// "manual"); the server persists it onto the membership rows (m02.04 §2.6).
+// Reuses the pointer-event pattern from DragReorder, in a simpler reorder-only
+// form.
 const INIT_DRAG_THRESHOLD_PX = 4
 const INIT_DRAG_LONG_PRESS_MS = 400
 const INIT_DRAG_TOUCH_TOLERANCE_PX = 8
@@ -4201,18 +4299,18 @@ Hooks.InitiativeDrag = {
     this.clearPlaceholder()
 
     if (target) {
-      const ids = [...this.container.querySelectorAll(":scope > [data-initiative-id]")].map(
+      const prior = [...this.container.querySelectorAll(":scope > [data-initiative-id]")].map(
         (c) => c.dataset.initiativeId,
       )
       const dragged = this.card.dataset.initiativeId
-      const order = ids.filter((id) => id !== dragged)
+      const order = prior.filter((id) => id !== dragged)
       const ti = order.indexOf(target.dataset.initiativeId)
       order.splice(after ? ti + 1 : ti, 0, dragged)
-      this.persistAndPush(order)
+      this.persistAndPush(order, prior)
     }
     this.cleanup()
   },
-  persistAndPush(order) {
+  persistAndPush(order, prior) {
     // A drop lands you in manual mode; the server persists the order onto
     // the membership rows (m02.04 §2.6). Per-mode reverse memory comes from
     // the sort form's data attribute (kept fresh by InitiativeSort).
@@ -4221,7 +4319,24 @@ Hooks.InitiativeDrag = {
     const rev = document.querySelector("#initiative-sort input[name=reverse]")
     if (sel) sel.value = "manual"
     if (rev) rev.checked = reverse
-    this.pushEvent("apply_sort", {mode: "manual", reverse, order})
+    // Apply the new order at drop (§6.2) and hold it on the preserve path until
+    // the reply settles. Snapshot `prior` for an honest revert on failure.
+    if (this.container && this.container.id) {
+      DoitState.pending.initiativeOrder = {
+        wrapId: this.container.id,
+        order,
+        prior,
+        timer: setTimeout(() => {
+          // Dropped reply: release the hold (don't revert — the server is
+          // authoritative; the next re-stream reconciles the order).
+          if (DoitState.pending.initiativeOrder) DoitState.pending.initiativeOrder = null
+        }, 8000),
+      }
+      reorderInitiativeCards(this.container, order)
+    }
+    this.pushEvent("apply_sort", {mode: "manual", reverse, order}, (reply) => {
+      settlePendingInitiativeOrder(reply)
+    })
   },
   abort() {
     this.cleanup()
@@ -4254,6 +4369,25 @@ Hooks.InitiativeDrag = {
     this.dragging = false
     this.target = null
   },
+}
+
+// A dimmed pending avatar chip for the optimistic rail add (WL3.5 Fix B),
+// mirroring the rendered <.avatar> span (avatar-emboss + the rail's size/ring
+// classes). data-member-id dedupes it against the server-rendered avatar;
+// data-rail-avatar-echo keys it for the reply-callback pull. opacity-60 signals
+// pending — the same dimmed treatment the comment/member echoes use.
+function buildRailAvatarChip(echoId, a) {
+  const span = document.createElement("span")
+  span.className =
+    "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[9px] ring-1 ring-white dark:ring-zinc-900 opacity-60"
+  span.style.backgroundImage = a.bg || ""
+  span.style.color = a.fg || ""
+  span.setAttribute("data-member-id", a.uid)
+  span.setAttribute("data-rail-avatar-echo", echoId)
+  span.setAttribute("aria-hidden", "true")
+  span.title = a.name || ""
+  span.textContent = a.initials || ""
+  return span
 }
 
 // Drag a Collaborator (left-rail pane) onto an Initiative rail entry to add
@@ -4322,14 +4456,47 @@ Hooks.CollaboratorDrag = {
     if (this.pid !== undefined && e.pointerId !== this.pid) return
     if (this.dragging) {
       this.suppressClick()
-      if (this.target) {
-        this.pushEvent("add_collaborator_to", {
-          "user-id": this.userId,
-          "initiative-id": this.target.dataset.railInitiativeId,
-        })
-      }
+      if (this.target) this.optimisticAdd(this.target.dataset.railInitiativeId)
     }
     this.cleanup()
+  },
+  // Optimistic add (WL3.5 Fix B, §6.2): insert the dropped collaborator's
+  // avatar chip into the target rail entry's avatar row AT DROP, hold it on the
+  // preserve path (railAvatarAdds + the rail-avatars applier), then push and
+  // reconcile on the reply — ok pulls the dimmed stand-in (the server's rail
+  // refresh now carries the real avatar), failure pulls it + bonks (MUST NOT
+  // LIE). An 8s safety timer self-heals a dropped reply. The chip data rides
+  // this collaborator <li>'s data attributes (mirrors the rendered avatar).
+  optimisticAdd(iid) {
+    const uid = this.userId
+    const d = this.el.dataset
+    const echoId = "ra" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+    const a = {
+      iid,
+      uid,
+      name: d.userName || "",
+      initials: d.initials || "",
+      bg: d.avatarBg || "",
+      fg: d.avatarFg || "",
+    }
+    DoitState.railAvatarAdds[echoId] = a
+    // Insert now so the ack is instant; the applier covers any later patch.
+    const row = document.getElementById("rail-avatars-" + iid)
+    const group = row && row.querySelector("[data-rail-avatar-group]")
+    if (group && !group.querySelector(`[data-member-id="${uid}"]`)) {
+      group.appendChild(buildRailAvatarChip(echoId, a))
+    }
+    const clear = () => {
+      clearTimeout(timer)
+      delete DoitState.railAvatarAdds[echoId]
+      document.querySelectorAll(`[data-rail-avatar-echo="${echoId}"]`).forEach((n) => n.remove())
+    }
+    // Dropped reply → release the hold + pull the chip (server authoritative).
+    const timer = setTimeout(clear, 8000)
+    this.pushEvent("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+      clear()
+      if (reply && reply.ok === false && window.DoitBonk) window.DoitBonk()
+    })
   },
   suppressClick() {
     const swallow = (e) => {
@@ -4770,6 +4937,10 @@ const liveSocket = new LiveSocket("/live", Socket, {
     onPatchEnd() {
       applyPresenceBadges()
       applyPendingMove()
+      // Re-assert the drop-time Initiatives card order (WL3.5 Fix A) — a child
+      // reorder hold, structural like applyPendingMove, so it lives here rather
+      // than in a per-element data-keep kind.
+      applyPendingInitiativeOrder()
       // While a confirm modal is up, its maybe-write hue is server-held
       // (pending_saving_ids) — disarm the client's 1.5s safety timer so it
       // can't strip the pink mid-decision. The patch that renders the modal is

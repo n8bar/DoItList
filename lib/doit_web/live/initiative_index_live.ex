@@ -81,7 +81,10 @@ defmodule DoItWeb.InitiativeIndexLive do
 
     case Initiatives.create_initiative(user, params) do
       {:ok, initiative} ->
-        initiative = %{initiative | my_role: "owner"}
+        # `members: [user]` seeds the rail avatar row (WL3.5) — the creator is the
+        # sole member until others are added; without it the new entry's row is
+        # empty until the next mount re-lists.
+        initiative = %{initiative | my_role: "owner", members: [user]}
 
         {:noreply,
          socket
@@ -123,7 +126,11 @@ defmodule DoItWeb.InitiativeIndexLive do
       order: if(pushed_order == [], do: socket.assigns.sort_state.order, else: pushed_order)
     }
 
-    {:noreply,
+    # Reply ok so the drag's drop-time optimistic reorder (WL3.5 Fix A) can
+    # settle — the InitiativeDrag hold releases on ok and reverts to its prior
+    # snapshot on a failure/dropped reply. The non-drag sort control pushes with
+    # no callback, so the reply is simply ignored there.
+    {:reply, %{ok: true},
      socket
      |> assign(:initiatives, reindex_order(socket.assigns.initiatives, pushed_order))
      |> assign(:sort_state, sort_state)
@@ -137,26 +144,35 @@ defmodule DoItWeb.InitiativeIndexLive do
   def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
     user = socket.assigns.current_user
 
-    socket =
+    {ok?, socket} =
       case Initiatives.add_collaborator_as_viewer(
              user,
              String.to_integer(iid),
              String.to_integer(uid)
            ) do
         {:ok, added} ->
-          put_flash(socket, :info, "Added #{added.name} as a viewer.")
+          {true, put_flash(socket, :info, "Added #{added.name} as a viewer.")}
 
+        # Already a member → the real avatar is already in the rail row; the
+        # optimistic chip was deduped at insert, so nothing to pull (ok:true).
         {:error, :already_member} ->
-          put_flash(socket, :info, "They're already a member there.")
+          {true, put_flash(socket, :info, "They're already a member there.")}
 
         {:error, :forbidden} ->
-          put_flash(socket, :error, "Only that Initiative's owner can add members.")
+          {false, put_flash(socket, :error, "Only that Initiative's owner can add members.")}
 
         {:error, :failed} ->
-          put_flash(socket, :error, "Couldn't add them.")
+          {false, put_flash(socket, :error, "Couldn't add them.")}
       end
 
-    {:noreply, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
+    # Refresh BOTH lists: the collaborators pane (shared counts) AND the rail
+    # initiatives (their member-avatar rows) so the server render carries the
+    # real avatar after the add — otherwise the optimistic chip (WL3.5 Fix B)
+    # would be pulled on the reply with nothing to replace it (a lie).
+    {:reply, %{ok: ok?},
+     socket
+     |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+     |> assign(:initiatives, Initiatives.list_visible_initiatives(user))}
   end
 
   # Prune a past collaborator from My Collaborators (m02.05 item 12.11). The

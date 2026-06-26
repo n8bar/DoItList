@@ -167,4 +167,34 @@ defmodule DoIt.InitiativesCollaboratorsTest do
       assert Initiatives.get_role(i.id, dot.id) == nil
     end
   end
+
+  describe "list_visible_initiatives/1 member avatars (m02.09 WL3.5)" do
+    test "attaches each Initiative's members, owner first then by name" do
+      ann = user("Ann")
+      cal = user("Cal")
+      bob = user("Bob")
+      {:ok, i} = Initiatives.create_initiative(ann, %{"name" => "One"})
+      {:ok, _} = Initiatives.add_member(i.id, cal.id, "viewer")
+      {:ok, _} = Initiatives.add_member(i.id, bob.id, "editor")
+
+      [visible] = Initiatives.list_visible_initiatives(ann)
+      member_ids = Enum.map(visible.members, & &1.id)
+
+      # The owner (Ann) leads; the rest follow by name (Bob, Cal).
+      assert member_ids == [ann.id, bob.id, cal.id]
+      # Members are full %User{} structs (the avatar component reads them).
+      assert Enum.all?(visible.members, &match?(%Accounts.User{}, &1))
+    end
+
+    test "a freshly added viewer shows up in the member list (Fix B reconcile)" do
+      ann = user("Ann")
+      cal = user("Cal")
+      {:ok, i} = Initiatives.create_initiative(ann, %{"name" => "One"})
+
+      assert {:ok, _} = Initiatives.add_collaborator_as_viewer(ann, i.id, cal.id)
+
+      [visible] = Initiatives.list_visible_initiatives(ann)
+      assert cal.id in Enum.map(visible.members, & &1.id)
+    end
+  end
 end
