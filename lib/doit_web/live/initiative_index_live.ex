@@ -385,6 +385,24 @@ defmodule DoItWeb.InitiativeIndexLive do
       rail_collaborators={@rail_collaborators}
       rail_online_ids={@collaborator_online_ids}
     >
+      <%!-- §6.8 dead-window flush (WL4.2.3): the index page has its own dead
+           window but no root hook before now. This minimal hook mirrors
+           .TaskKeys' registration so any DoitPush call captured during the index
+           dead window gets a live backend and flushes on connect. --%>
+      <div id="initiative-index-root" phx-hook=".IndexLive">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".IndexLive">
+          export default {
+            mounted() {
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
+            },
+            destroyed() {
+              window.DoitUnregisterLivePush(this._livePush);
+            },
+          }
+        </script>
+      </div>
+
       <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
         <div>
           <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">My Initiatives</h1>

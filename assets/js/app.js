@@ -198,8 +198,118 @@ const DoitState = {
   // the click; the flag holds it hidden across any mid-flight patch until the
   // server's dismiss reply removes the element (onPatchEnd then clears it).
   archivePromptDismissed: false,
+  // §6.8 dead-window capture queue (WL4.2.2/4.2.3): server-gated writes taken
+  // before the LiveView is live are captured here as ordered {key, ev, payload,
+  // cb} entries and flushed, in order, on connect (see DoitPush below). In-memory
+  // only — never persisted (entries hold reply callbacks).
+  preconnectQueue: [],
 }
 window.DoitState = DoitState
+
+// --- §6.8 dead-window capture-and-replay (WL4.2.2 / 4.2.3) ------------------
+//
+// A LiveView page paints ~2.8s before it's live (the dead window). Server-gated
+// writes funnel through window.DoitPush; until 4.2.2 that funnel existed only
+// AFTER the root hook mounted (post-connect), so a dead-window call hit
+// `undefined` and vanished. Here DoitPush exists from module load: when live it
+// dispatches immediately through the mounted root hook's pushEvent; in the dead
+// window it CAPTURES the call onto DoitState.preconnectQueue (deduped per the
+// policy below), and the root hook flushes the queue, in order, the instant it
+// mounts (= channel join = "now live"). The caller's optimistic / in-flight ack
+// already stood at the click, so nothing is lost, and the server stays
+// authoritative on flush — the preserved reply cbs + KeepRegistry appliers
+// reconcile exactly as in steady state, and a refusal bonks/reverts through the
+// existing paths (MUST NOT LIE — never an unsent success).
+//
+// The live backend is a root hook's bound pushEvent: null in the dead window
+// and during a navigate teardown→remount gap; set for the life of a mounted
+// view. It is NOT re-set on reconnect (the hook isn't re-mounted), so the queue
+// is a FIRST-connect mechanism only — a reconnect re-joins on its own and never
+// re-flushes committed work (the queue is already empty by then).
+let livePush = null
+
+// Coalesce policy: return a stable key when re-enqueuing this event should
+// REPLACE the prior queued entry (last-write-wins, kept at its original
+// position), or null to APPEND (every distinct act preserved, in order).
+// Default (event absent here) = append — safe: never silently drops a distinct
+// intent (§6 / [[feedback_optimistic_ui_must_not_lie]]).
+function preconnectCoalesceKey(ev, payload) {
+  switch (ev) {
+    // Singleton view prefs — only the final choice matters. (Today these
+    // dispatch via phx-change / phx-click, not DoitPush, so they don't actually
+    // reach the queue; the policy is declared so it's correct the day they're
+    // routed through DoitPush.)
+    case "set_index_style":
+    case "assigned_toggle_group_by":
+      return ev
+    // Inline pane-field write: the phx-change snapshot already carries the full
+    // current field state, so one latest entry per task supersedes earlier ones.
+    case "update_task":
+      return "update_task:" + (payload && (payload.id || (payload.task && payload.task.id)))
+    // Structural move / cascade: latest intent per target wins (these carry a
+    // single latest intent in DoitState.pending.*). move_task is a hook gesture
+    // (post-connect), so it won't reach the queue — declared for completeness; a
+    // directional branch cascade is idempotent per (event, row).
+    case "move_task":
+      return "move_task:" + (payload && payload.task_id)
+    case "cascade_complete":
+    case "cascade_incomplete":
+      return ev + ":" + (payload && payload.id)
+    // NOTE: toggle_complete is a server-side FLIP, not a set — two flips on one
+    // row must BOTH replay (check→uncheck nets to no change), so it APPENDS
+    // (default). Coalescing it would desync the optimistic net from the server.
+    // NOTE: select_task / close_task are not queued at all — see PRECONNECT_SKIP.
+    default:
+      return null
+  }
+}
+
+// Selection is replayed separately by the .TaskKeys mount, which pushes the
+// FINAL selection from DoitSelection.id (the selection slot's single source of
+// truth — it also captures pill-click selections, which never call DoitPush). So
+// don't ALSO queue select_task/close_task: that would double-push the selection.
+const PRECONNECT_SKIP = new Set(["select_task", "close_task"])
+
+function enqueuePreconnect(ev, payload, cb) {
+  const key = preconnectCoalesceKey(ev, payload)
+  const q = DoitState.preconnectQueue
+  const entry = {key, ev, payload, cb}
+  if (key != null) {
+    const at = q.findIndex((e) => e.key === key)
+    if (at !== -1) { q[at] = entry; return } // last-write-wins at a stable position
+  }
+  q.push(entry)
+}
+
+// THE single server-gated write funnel (every delegated listener calls it).
+// Live → dispatch now (cb receives the reply, exactly as before). Dead window →
+// capture for the flush. No call site changed: callers that guarded on
+// `window.DoitPush` being defined now always proceed, so their dead-window
+// action is captured instead of dropped — which is the whole point of §6.8.
+window.DoitPush = (ev, payload = {}, cb) => {
+  if (livePush) return livePush(ev, payload, cb)
+  if (PRECONNECT_SKIP.has(ev)) return // owned by the .TaskKeys selection replay
+  enqueuePreconnect(ev, payload, cb)
+}
+
+// Flush every captured entry, in original order, through the now-live backend,
+// then clear. Cleared BEFORE dispatch so a flushed event's synchronous re-entry
+// (now live) sends immediately rather than re-queuing or re-flushing.
+function flushPreconnect() {
+  if (!livePush || DoitState.preconnectQueue.length === 0) return
+  const batch = DoitState.preconnectQueue
+  DoitState.preconnectQueue = []
+  for (const {ev, payload, cb} of batch) livePush(ev, payload, cb)
+}
+
+// A root hook calls these from mounted()/destroyed(): registering its bound
+// pushEvent IS the "now live" signal (the hook mounts only after the channel
+// joins) and triggers the flush; unregister is keyed on the fn so a navigate
+// where the next view mounts before the old is destroyed can't null a live
+// backend. Both the show page (.TaskKeys) and index page (.IndexLive) register,
+// so BOTH dead windows flush.
+window.DoitRegisterLivePush = (fn) => { livePush = fn; flushPreconnect() }
+window.DoitUnregisterLivePush = (fn) => { if (livePush === fn) livePush = null }
 
 // `data-keep="<kind>"` registry. Each client-owned element carries a
 // server-rendered `data-keep` marker naming its kind; the entry's `apply(el,

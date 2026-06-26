@@ -2017,7 +2017,13 @@ defmodule DoItWeb.InitiativeShowLive do
               window.addEventListener("keydown", this._h);
               // Row clicks are handled by a delegated listener in app.js (no
               // hook of its own) — give it a push channel into this LiveView.
-              window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              // §6.8 dead-window flush (WL4.2.3): DoitPush itself now lives at
+              // app.js module load (so dead-window calls are CAPTURED, not
+              // dropped); registering this channel's pushEvent is the "now live"
+              // signal — it hands DoitPush its live backend and flushes, in
+              // order, every write captured during the dead window.
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
               // Expose the bonk so delegated listeners in app.js (e.g. the
               // transfer-confirm in-flight latch, item 15.16) can sound it too.
               window.DoitBonk = () => this.bonk();
@@ -2055,7 +2061,13 @@ defmodule DoItWeb.InitiativeShowLive do
               });
               // A selection can land before we connect (DoitSelection is
               // client-only; slow longpoll connect). Replay it now so the server
-              // loads the pane's comments / activity / co-assignees for it.
+              // loads the pane's comments / activity / co-assignees for it. This
+              // is ALSO the §6.8 de-confliction (WL4.2.2): the dead-window queue
+              // deliberately SKIPS select_task/close_task, leaving this one push
+              // of the FINAL selection (DoitSelection.id is the selection slot's
+              // single source of truth — it captures pill-click selections that
+              // never call DoitPush, which the queue would miss). One push, no
+              // double-fire.
               if (window.DoitSelection && window.DoitSelection.id) {
                 this.pushEvent("select_task", {id: window.DoitSelection.id});
               }
@@ -2107,7 +2119,7 @@ defmodule DoItWeb.InitiativeShowLive do
             destroyed() {
               window.removeEventListener("keydown", this._h);
               window.removeEventListener("click", this._undoBtn);
-              if (window.DoitPush) delete window.DoitPush;
+              window.DoitUnregisterLivePush(this._livePush);
               clearTimeout(this._paneT);
             },
             inField() {
