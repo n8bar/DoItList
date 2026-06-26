@@ -56,11 +56,10 @@ defmodule DoIt.Notifications do
 
     case result do
       {:ok, notification} ->
-        Phoenix.PubSub.broadcast(
-          DoIt.PubSub,
-          user_topic(recipient_id),
-          {:notification, notification}
-        )
+        # Routed through `DoIt.Broadcast` so the push defers to post-commit
+        # inside a transaction (e.g. a multi-op batch) instead of leaking
+        # pre-commit / surviving a rollback.
+        DoIt.Broadcast.broadcast(user_topic(recipient_id), {:notification, notification})
 
         {:ok, notification}
 
@@ -82,6 +81,14 @@ defmodule DoIt.Notifications do
   def notify(_actor_id, recipient_id, kind, data) when kind in @kinds do
     create(recipient_id, kind, data)
   end
+
+  @doc """
+  Fetch a notification by id, or `nil`. Public so the HTTP API's atomic-operations
+  endpoint (m03.01 worklist 3) can resolve a notification and verify it belongs to
+  the acting user before marking it read — notifications are user-scoped, so
+  authorization is ownership, not an Initiative role.
+  """
+  def get(id), do: Repo.get(Notification, id)
 
   @doc "Most-recent notifications for a user, newest-first (capped for the flyout)."
   def list_recent(%User{id: user_id}, limit \\ @recent_limit) do

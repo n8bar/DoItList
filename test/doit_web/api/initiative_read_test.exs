@@ -40,7 +40,11 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       Tasks.create_task(
         owner,
         Map.merge(
-          %{"initiative_id" => initiative.id, "parent_id" => initiative.root_task_id, "title" => title},
+          %{
+            "initiative_id" => initiative.id,
+            "parent_id" => initiative.root_task_id,
+            "title" => title
+          },
           attrs
         )
       )
@@ -96,7 +100,8 @@ defmodule DoItWeb.Api.InitiativeReadTest do
 
   describe "GET /api/v1/initiatives/:id (tree read)" do
     test "returns the nested tree with roll-up progress and index labels", ctx do
-      conn = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
 
       assert %{"data" => data} = json_response(conn, 200)
       assert data["id"] == ctx.ini.id
@@ -172,7 +177,11 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       tok = token(ctx.owner)
 
       # Whole-Initiative rollup includes Phase 2's create event.
-      full = build_conn() |> bearer(tok) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/activity?limit=200")
+      full =
+        build_conn()
+        |> bearer(tok)
+        |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/activity?limit=200")
+
       assert %{"data" => all_events, "meta" => meta} = json_response(full, 200)
       assert meta["scope"]["task_id"] == nil
       assert Enum.any?(all_events, &(&1["task_id"] == ctx.phase2.id))
@@ -190,7 +199,9 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       refute Enum.any?(sub_events, &(&1["task_id"] == ctx.phase2.id))
 
       # Pagination: a small page reports has_more + the next offset.
-      page = build_conn() |> bearer(tok) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/activity?limit=2")
+      page =
+        build_conn() |> bearer(tok) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/activity?limit=2")
+
       assert %{"data" => events, "meta" => page_meta} = json_response(page, 200)
       assert length(events) == 2
       assert page_meta["limit"] == 2
@@ -201,7 +212,10 @@ defmodule DoItWeb.Api.InitiativeReadTest do
 
   describe "GET /api/v1/initiatives/:id/members" do
     test "returns the members with their roles", ctx do
-      conn = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/members")
+      conn =
+        build_conn()
+        |> bearer(token(ctx.owner))
+        |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/members")
 
       assert %{"data" => members} = json_response(conn, 200)
       assert length(members) == 3
@@ -215,7 +229,9 @@ defmodule DoItWeb.Api.InitiativeReadTest do
 
   describe "authorization" do
     test "a viewer-role token can read the tree", ctx do
-      conn = build_conn() |> bearer(token(ctx.viewer)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+      conn =
+        build_conn() |> bearer(token(ctx.viewer)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
       assert json_response(conn, 200)["data"]["role"] == "viewer"
     end
 

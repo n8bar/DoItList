@@ -50,8 +50,11 @@ defmodule DoItWeb.Api.Authz do
 
       int_id ->
         case Initiatives.get_initiative(int_id) do
-          nil -> {:error, :not_found}
-          %Initiative{} = initiative -> with :ok <- authorize(user, initiative, capability), do: {:ok, initiative}
+          nil ->
+            {:error, :not_found}
+
+          %Initiative{} = initiative ->
+            with :ok <- authorize(user, initiative, capability), do: {:ok, initiative}
         end
     end
   end

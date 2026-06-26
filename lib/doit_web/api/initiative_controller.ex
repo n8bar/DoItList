@@ -64,7 +64,11 @@ defmodule DoItWeb.Api.InitiativeController do
     with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view),
          {:ok, task_ids, task_id} <- resolve_subtree(initiative, params["task_id"]) do
       opts =
-        [limit: parse_int(params["limit"]), offset: parse_int(params["offset"]), task_ids: task_ids]
+        [
+          limit: parse_int(params["limit"]),
+          offset: parse_int(params["offset"]),
+          task_ids: task_ids
+        ]
         |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
       %{events: events, limit: limit, offset: offset, has_more: has_more} =

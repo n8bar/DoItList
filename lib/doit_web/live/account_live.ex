@@ -154,7 +154,10 @@ defmodule DoItWeb.AccountLive do
       {:error, changeset} ->
         {:noreply,
          socket
-         |> assign(:api_token_form, to_form(Map.put(changeset, :action, :validate), as: :api_token))
+         |> assign(
+           :api_token_form,
+           to_form(Map.put(changeset, :action, :validate), as: :api_token)
+         )
          |> put_flash(:error, "Couldn't mint token.")}
     end
   end
@@ -336,8 +339,7 @@ defmodule DoItWeb.AccountLive do
           </h2>
           <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">
             Personal access tokens let scripts and AI agents act as you over the HTTP API, under your
-            existing roles. Send one as
-            <code phx-no-curly-interpolation class="text-xs">Authorization: Bearer &lt;token&gt;</code>.
+            existing roles. Send one as <code phx-no-curly-interpolation class="text-xs">Authorization: Bearer &lt;token&gt;</code>.
           </p>
 
           <%!-- One-time plaintext reveal: shown once, right after minting; never

@@ -1890,7 +1890,13 @@ defmodule DoIt.Tasks do
     |> Repo.all()
   end
 
-  defp get_comment(comment_id), do: Repo.get(Comment, comment_id)
+  @doc """
+  Fetch a comment by id (live or tombstoned), or `nil`. Public so the HTTP API's
+  atomic-operations endpoint (m03.01 worklist 3) can resolve a comment → its task
+  → the owning Initiative for the per-op edit-capability check before delegating
+  the author-only enforcement to `edit_comment/3` / `delete_comment/2`.
+  """
+  def get_comment(comment_id), do: Repo.get(Comment, comment_id)
 
   # A tombstoned comment is presented as deleted (item 2.3) — both markers set.
   def comment_deleted?(%Comment{deleted_by_id: id}), do: not is_nil(id)
@@ -2533,54 +2539,20 @@ defmodule DoIt.Tasks do
     Phoenix.PubSub.unsubscribe(DoIt.PubSub, topic(initiative_id))
   end
 
-  @pending_broadcasts :doit_pending_broadcasts
-
   # PubSub must fire AFTER commit. A broadcast sent mid-transaction reaches
   # subscribers while the writes are still invisible to their connections —
-  # they reload the OLD state and stay stale forever. (The test sandbox
-  # shares one connection, so tests cannot catch this; it only breaks against
-  # real Postgres.) Inside a transaction the message queues in the process
-  # dictionary; flush_broadcasts/1 sends the queue once the outermost
-  # mutator's result is known.
-  defp broadcast_change(initiative_id, message) do
-    if Repo.in_transaction?() do
-      Process.put(@pending_broadcasts, [
-        {initiative_id, message} | Process.get(@pending_broadcasts, [])
-      ])
-    else
-      Phoenix.PubSub.broadcast(DoIt.PubSub, topic(initiative_id), message)
-    end
+  # they reload the OLD state and stay stale forever. The transaction-aware
+  # queue lives in `DoIt.Broadcast` so member/notification broadcasts ride the
+  # same deferral as task broadcasts (so a multi-op batch's PubSub side effects
+  # are all-or-nothing too).
+  defp broadcast_change(initiative_id, message),
+    do: DoIt.Broadcast.broadcast(topic(initiative_id), message)
 
-    :ok
-  end
+  # No-op while still inside a transaction (an outer mutator will flush). Sends
+  # the queue on a successful result; drops it otherwise (rollback).
+  defp flush_broadcasts(result), do: DoIt.Broadcast.flush(result)
 
-  # No-op while still inside a transaction (an outer mutator will flush).
-  # Sends the queue on a successful result; drops it otherwise (rollback).
-  defp flush_broadcasts(result) do
-    cond do
-      Repo.in_transaction?() ->
-        result
-
-      match?({:ok, _}, result) ->
-        pending = Process.get(@pending_broadcasts, [])
-        Process.delete(@pending_broadcasts)
-
-        for {initiative_id, message} <- Enum.reverse(pending) do
-          Phoenix.PubSub.broadcast(DoIt.PubSub, topic(initiative_id), message)
-        end
-
-        result
-
-      true ->
-        Process.delete(@pending_broadcasts)
-        result
-    end
-  end
-
-  defp discard_broadcasts(result) do
-    Process.delete(@pending_broadcasts)
-    result
-  end
+  defp discard_broadcasts(result), do: DoIt.Broadcast.discard(result)
 
   defp topic(initiative_id), do: "initiative:#{initiative_id}"
 

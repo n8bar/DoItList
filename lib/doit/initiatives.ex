@@ -723,13 +723,11 @@ defmodule DoIt.Initiatives do
 
   # Membership changes fan out on the initiative's existing topic so every
   # open LiveView re-checks its own role — a removed member is ejected
-  # without waiting for a refresh, and role changes apply live.
+  # without waiting for a refresh, and role changes apply live. Routed through
+  # `DoIt.Broadcast` so the message defers to post-commit inside a transaction
+  # (e.g. a multi-op batch) instead of leaking pre-commit / surviving rollback.
   defp broadcast_members_changed(initiative_id) do
-    Phoenix.PubSub.broadcast(
-      DoIt.PubSub,
-      "initiative:#{initiative_id}",
-      {:members_changed, initiative_id}
-    )
+    DoIt.Broadcast.broadcast("initiative:#{initiative_id}", {:members_changed, initiative_id})
   end
 
   @doc """

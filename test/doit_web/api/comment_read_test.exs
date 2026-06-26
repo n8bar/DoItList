@@ -111,7 +111,8 @@ defmodule DoItWeb.Api.CommentReadTest do
     assert %{"error" => %{"status" => 404}} = json_response(conn, 404)
   end
 
-  test "a soft-deleted task in this Initiative is a 404 (aligned with the activity rollup)", ctx do
+  test "a soft-deleted task in this Initiative is a 404 (aligned with the activity rollup)",
+       ctx do
     {:ok, _} = Tasks.delete_task(ctx.task, ctx.owner)
 
     conn =

@@ -296,6 +296,7 @@ defmodule DoItWeb.Api.Serializer do
   # value to "" so the list path matches the tree path's Initiatives.header/1
   # trim — a non-blank subtitle is passed through verbatim.
   defp blank_to_empty(nil), do: ""
+
   defp blank_to_empty(s) when is_binary(s) do
     if String.trim(s) == "", do: "", else: s
   end
