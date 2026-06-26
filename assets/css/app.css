@@ -548,5 +548,11 @@ input[data-chat-input].input {
    to colorblind users (4), and aria-busy on the control announces it. */
 .doit-reveal-spinner { visibility: hidden; }
 input.phx-click-loading ~ .doit-reveal-slot .doit-reveal-spinner { visibility: visible; }
+/* Connect-independent twin (WL4.3, §6.7): phx-click-loading is only added once
+   the view is live, so it never shows in the pre-connect dead window. The
+   delegated `change` listener sets doit-reveal-busy on the box at the click
+   (cleared by the "reveal-toggle" applier alongside aria-busy), so the same
+   spinner fires at the gesture regardless of connect state. */
+input.doit-reveal-busy ~ .doit-reveal-slot .doit-reveal-spinner { visibility: visible; }
 
 /* This file is for your main application CSS */

@@ -203,7 +203,7 @@ defmodule DoItWeb.AccountLive do
               autocomplete="email"
             />
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save profile</.button>
+              <.button type="submit" data-latch="Saving…">Save profile</.button>
             </div>
           </.form>
 
@@ -225,7 +225,7 @@ defmodule DoItWeb.AccountLive do
               3–30 characters: letters, numbers, _ and -. Your login and @handle across the app.
             </p>
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save username</.button>
+              <.button type="submit" data-latch="Saving…">Save username</.button>
             </div>
           </.form>
         </section>
@@ -266,7 +266,7 @@ defmodule DoItWeb.AccountLive do
               autocomplete="new-password"
             />
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Change password</.button>
+              <.button type="submit" data-latch="Saving…">Change password</.button>
             </div>
           </.form>
         </section>
@@ -395,7 +395,7 @@ defmodule DoItWeb.AccountLive do
             </fieldset>
 
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save preferences</.button>
+              <.button type="submit" data-latch="Saving…">Save preferences</.button>
             </div>
           </.form>
 

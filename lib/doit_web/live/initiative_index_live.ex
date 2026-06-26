@@ -436,7 +436,7 @@ defmodule DoItWeb.InitiativeIndexLive do
               >
                 Cancel
               </button>
-              <.button type="submit" phx-disable-with="Creating...">Create initiative</.button>
+              <.button type="submit" data-latch="Creating…">Create initiative</.button>
             </div>
           </.form>
         </div>
@@ -614,7 +614,7 @@ defmodule DoItWeb.InitiativeIndexLive do
                 type="button"
                 phx-click="restore_initiative"
                 phx-value-id={t.id}
-                phx-disable-with="Restoring…"
+                data-latch="Restoring…"
                 class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               >
                 <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
@@ -748,7 +748,7 @@ defmodule DoItWeb.InitiativeIndexLive do
                     type="button"
                     phx-click="unarchive_initiative"
                     phx-value-id={a.id}
-                    phx-disable-with="Restoring…"
+                    data-latch="Restoring…"
                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
                   >
                     <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
@@ -758,7 +758,7 @@ defmodule DoItWeb.InitiativeIndexLive do
                     type="button"
                     phx-click="unhide_initiative"
                     phx-value-id={a.id}
-                    phx-disable-with="Unhiding…"
+                    data-latch="Unhiding…"
                     class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                   >
                     <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide

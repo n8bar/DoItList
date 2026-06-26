@@ -1145,8 +1145,9 @@ defmodule DoItWeb.InitiativeShowLive do
   # the context (Tasks.edit_comment / delete_comment) — these handlers map the
   # result to a flash; the view guards (author-only controls) are convenience.
 
-  # Save acknowledges instantly via the Save button's phx-disable-with="Saving…"
-  # in-flight signifier (§6.7) — a server-gated edit. The editor's open/close is
+  # Save acknowledges instantly via the Save button's up-front latch (data-latch,
+  # WL4.3 — fires at submit independent of connect, the connect-independent
+  # stand-in for phx-disable-with) — a server-gated edit. The editor's open/close is
   # now client-owned (WL3 3.3, §6.5): the row statically renders BOTH the display
   # block and the author's edit form, and DoitState.commentEditId toggles which
   # shows at click. So the server no longer holds an `editing_comment_id` assign;
@@ -4457,6 +4458,7 @@ defmodule DoItWeb.InitiativeShowLive do
           type="button"
           id="hide-initiative-btn"
           phx-click="hide_initiative"
+          data-latch="Hiding…"
           title="Hide from your dashboard — unhide from your Archived list"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
         >
@@ -4708,7 +4710,7 @@ defmodule DoItWeb.InitiativeShowLive do
               </button>
               <button
                 type="submit"
-                phx-disable-with="Adding..."
+                data-latch="Adding…"
                 class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
               >
                 Add
@@ -5349,7 +5351,7 @@ defmodule DoItWeb.InitiativeShowLive do
                   <div class="flex items-center gap-2">
                     <button
                       type="submit"
-                      phx-disable-with="Saving..."
+                      data-latch="Saving…"
                       class="text-xs px-2.5 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
                     >
                       Save

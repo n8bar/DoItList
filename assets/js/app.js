@@ -568,25 +568,32 @@ const KeepRegistry = {
     // disagree once settled (class gone) → the server rejected the flip, so
     // revert honestly by releasing and letting the server value stand.
     apply(el, state) {
+      // doit-reveal-busy is the connect-independent twin of phx-click-loading
+      // that drives the spinner (WL4.3) — cleared/held in lockstep with aria-busy.
+      const clearBusy = () => {
+        if (el.getAttribute("aria-busy") === "true") el.removeAttribute("aria-busy")
+        el.classList.remove("doit-reveal-busy")
+      }
       const want = state.revealInflight[el.id]
       if (want === undefined) {
-        if (el.getAttribute("aria-busy") === "true") el.removeAttribute("aria-busy")
+        clearBusy()
         return
       }
       if (el.checked === want) {
         delete state.revealInflight[el.id]
-        el.removeAttribute("aria-busy")
+        clearBusy()
         return
       }
       const live = document.getElementById(el.id)
       const inFlight = live && live.classList.contains("phx-click-loading")
       if (!inFlight) {
         delete state.revealInflight[el.id]
-        el.removeAttribute("aria-busy")
+        clearBusy()
         return
       }
       el.checked = want
       el.setAttribute("aria-busy", "true")
+      el.classList.add("doit-reveal-busy")
     },
   },
   "archive-prompt": {
@@ -1557,6 +1564,12 @@ document.addEventListener("change", (e) => {
   if (box.matches("input[data-keep='reveal-toggle']")) {
     DoitState.revealInflight[box.id] = box.checked
     box.setAttribute("aria-busy", "true")
+    // Connect-independent spinner (WL4.3, §6.7): the server-rendered spinner CSS
+    // keys off LiveView's phx-click-loading, which isn't added pre-connect (or in
+    // the dead window). This client class — set here at the click, cleared by the
+    // "reveal-toggle" applier alongside aria-busy — drives the same spinner so it
+    // shows at the gesture too. Mirrors the phx-click-loading rule (app.css).
+    box.classList.add("doit-reveal-busy")
     return
   }
 })
@@ -1968,6 +1981,84 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const m = document.getElementById("archive-confirm")
   if (m && !m.hidden && m.dataset.archiving !== "true") m.hidden = true
+})
+
+// ---------------------------------------------------------------------------
+// Up-front in-flight latches for server-gated controls (WL4.3, §6.7).
+//
+// Several not-immediate actions today acknowledge ONLY through LiveView-applied
+// phx-disable-with / phx-click-loading — neither of which is attached until the
+// view is live, so they signal NOTHING in the pre-connect dead window (and the
+// show-page Hide button signalled nothing even when live). These delegated
+// listeners, registered at module load, set the in-flight cue at the gesture
+// itself — connect-independent, exactly like the leave_initiative / archive
+// latches above. They are in-flight signifiers ONLY, never success: the action
+// rides its own native phx-click / phx-submit, captured + replayed across the
+// dead window by the §6.8 interceptor (4.2) and reconciled by the server's
+// render; the 8s safety timer only restores a control if no patch / navigation
+// already has (MUST NOT LIE — never an unearned "done"). The phx-disable-with
+// that used to label these is DROPPED wherever a latch replaces it, so the
+// label never swaps twice.
+
+// Latch one button to its in-flight state: swap the trailing text label, pulse,
+// and announce via aria-busy AT ONCE; disable on the next microtask. The defer
+// matters: LiveView's closestPhxBinding skips a `disabled` control and a disabled
+// submitter drops from the serialized form, so a synchronous disable would
+// suppress the very LIVE phx-click / phx-submit we're acknowledging — the
+// microtask lets that handler run first, then locks the control. An ~8s safety
+// timer self-restores if nothing supersedes it (dropped reply → never stuck).
+// Returns the restore fn; idempotent. Generalizes latchArchiveBtn so every
+// up-front latch site shares one path. Leading whitespace of the original label
+// is preserved, so an icon + " Hide" becomes an icon + " Hiding…".
+function latchButton(btn, label) {
+  if (!btn || btn.dataset.latched === "true") return () => {}
+  const textNode = [...btn.childNodes].reverse().find((n) => n.nodeType === 3 && n.textContent.trim())
+  const prior = textNode ? textNode.textContent : null
+  const lead = prior ? (prior.match(/^\s*/) || [""])[0] : ""
+  btn.dataset.latched = "true"
+  btn.classList.add("animate-pulse", "opacity-60")
+  btn.setAttribute("aria-busy", "true")
+  if (textNode && label) textNode.textContent = lead + label
+  queueMicrotask(() => { btn.disabled = true })
+  let restored = false
+  const restore = () => {
+    if (restored) return
+    restored = true
+    clearTimeout(timer)
+    delete btn.dataset.latched
+    btn.disabled = false
+    btn.removeAttribute("aria-busy")
+    btn.classList.remove("animate-pulse", "opacity-60")
+    if (textNode && prior != null) textNode.textContent = prior
+  }
+  const timer = setTimeout(restore, 8000)
+  return restore
+}
+
+// Click-fired latches (type=button controls): the show-page Hide, plus the
+// Archived / Trash row actions (unhide, unarchive-restore, restore-from-trash).
+// Each carries data-latch="<in-flight label>". No preventDefault — the native
+// phx-click still runs (live) or is captured by 4.2 (dead window). Submit
+// buttons are left to the submit listener below.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-latch]")
+  if (!btn || btn.type === "submit") return
+  latchButton(btn, btn.getAttribute("data-latch"))
+})
+
+// Submit-fired latches: the connect-independent stand-in for phx-disable-with on
+// server-gated form submits (Create initiative, Add member, Save edited comment,
+// the account Profile / Username / Password / Preferences saves). The submit
+// button carries data-latch="<label>"; latch it as the form submits. NEVER
+// preventDefault / stopPropagation here — LiveView's own phx-submit must run
+// (live) and 4.2's capture-phase listener owns the dead window.
+document.addEventListener("submit", (e) => {
+  const form = e.target
+  if (!form || !form.querySelector) return
+  const btn =
+    (e.submitter && e.submitter.matches && e.submitter.matches("[data-latch]") && e.submitter) ||
+    form.querySelector("[type='submit'][data-latch]")
+  if (btn) latchButton(btn, btn.getAttribute("data-latch"))
 })
 
 // ---------------------------------------------------------------------------
