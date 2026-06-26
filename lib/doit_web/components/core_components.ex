@@ -296,8 +296,9 @@ defmodule DoItWeb.CoreComponents do
           <button
             type="button"
             id={"#{@id}-toggle"}
-            phx-hook="PasswordToggle"
+            data-password-toggle
             data-input-id={@id}
+            aria-pressed="false"
             aria-label="Show password"
             tabindex="-1"
             class="absolute inset-y-0 right-0 flex items-center pr-3 text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"

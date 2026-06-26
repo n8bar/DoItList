@@ -1380,6 +1380,26 @@ document.addEventListener("keydown", (e) => {
   DoitInitiativeEditor.show()
 })
 
+// Password peek toggle (WL6 6.1): a global delegated click so it works on the
+// dead controller views (login / register — no LiveView socket, so a phx-hook
+// never mounts) as well as any live page. Keys off data-password-toggle, looks
+// up the paired input via data-input-id, swaps its type, flips aria-pressed +
+// the accessible name, and toggles which icon (eye vs. eye-slash) shows.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-password-toggle]")
+  if (!btn) return
+  const input = document.getElementById(btn.dataset.inputId)
+  if (!input) return
+  const showing = input.type === "text"
+  input.type = showing ? "password" : "text"
+  const eye = btn.querySelector(".password-eye")
+  const eyeSlash = btn.querySelector(".password-eye-slash")
+  if (eye) eye.classList.toggle("hidden", !showing)
+  if (eyeSlash) eyeSlash.classList.toggle("hidden", showing)
+  btn.setAttribute("aria-pressed", showing ? "false" : "true")
+  btn.setAttribute("aria-label", showing ? "Show password" : "Hide password")
+})
+
 // Row clicks: selection toggles instantly client-side; the server event only
 // drives the Details pane. Pills (data-pill) keep their own phx-click (pane
 // data load) and never toggle the selection closed; their field focus is pure
@@ -3307,26 +3327,6 @@ Hooks.AutoDismissFlash = {
   },
   destroyed() {
     if (this.timer) clearTimeout(this.timer)
-  },
-}
-
-// Show/hide toggle for password inputs. Looks up the associated input by
-// data-input-id, swaps its `type` attribute, and toggles which icon is
-// visible (eye vs. eye-slash).
-Hooks.PasswordToggle = {
-  mounted() {
-    const inputId = this.el.dataset.inputId
-    const input = document.getElementById(inputId)
-    if (!input) return
-    const eye = this.el.querySelector(".password-eye")
-    const eyeSlash = this.el.querySelector(".password-eye-slash")
-    this.el.addEventListener("click", () => {
-      const showing = input.type === "text"
-      input.type = showing ? "password" : "text"
-      eye.classList.toggle("hidden", !showing)
-      eyeSlash.classList.toggle("hidden", showing)
-      this.el.setAttribute("aria-label", showing ? "Show password" : "Hide password")
-    })
   },
 }
 

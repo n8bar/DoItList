@@ -438,7 +438,7 @@ defmodule DoItWeb.AccountLive do
 
         <section
           id="account-danger"
-          class="rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 p-4"
+          class="rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 p-4 mb-4"
         >
           <h2 class="text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400 mb-3">
             Danger zone

@@ -822,18 +822,16 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
     case Initiatives.create_initiative(user, params) do
       {:ok, initiative} ->
-        # `members: [user]` seeds the rail avatar row (WL3.5) — the creator is the
-        # sole member until others are added.
-        initiative = %{initiative | my_role: "owner", members: [user]}
-
+        # Land straight inside the new initiative (WL6 6.3): push_patch — not
+        # push_navigate — keeps the single-module workspace mounted, so
+        # handle_params just enters detail mode (no remount). The list re-fetches
+        # on any return to index (assign_index_data), so no list-assign upkeep is
+        # needed here. close-details collapses the create form on the way out.
         {:noreply,
          socket
-         |> assign(:form, build_empty_form())
-         |> update(:initiative_count, &(&1 + 1))
-         |> update(:initiatives, &[initiative | &1])
          |> put_flash(:info, "Initiative created.")
          |> push_event("close-details", %{id: "new-initiative"})
-         |> restream_sorted()}
+         |> push_patch(to: ~p"/initiatives/#{initiative.id}")}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset))}
@@ -3290,7 +3288,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
 
                 <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
-                  No lists yet. Create one to start tracking work.
+                  <%= if @can_edit do %>
+                    No lists yet. Use the New List button above to start tracking work.
+                  <% else %>
+                    No lists yet.
+                  <% end %>
                 </div>
 
                 <ul

@@ -368,6 +368,25 @@ div.init-drop-placeholder {
   background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
 }
 
+/* Selection highlight survives the saving hue (WL6 6.2): a selected row that's
+   mid-save would otherwise read as unselected — the .is-saving pink is
+   !important and overrode the no-!important emerald selection paint (selection
+   itself never broke, only the paint). A higher-specificity rule (still
+   !important, since it must outrank an !important) restores the emerald while
+   saving, with hover + dark-mode variants mirroring the base selection colors. */
+li[data-selected] > [data-task-row].is-saving {
+  background-color: #d1fae5 !important;
+}
+li[data-selected] > [data-task-row].is-saving:hover {
+  background-color: #a7f3d0 !important;
+}
+[data-theme=dark] li[data-selected] > [data-task-row].is-saving {
+  background-color: #022c22 !important;
+}
+[data-theme=dark] li[data-selected] > [data-task-row].is-saving:hover {
+  background-color: #064e3b !important;
+}
+
 /* Saving hue on the small inline task-index labels (WL3 item 3.7): the faint
    pink background is nearly invisible on a tiny inline span, so the
    in-flight signifier there is a gentle pulse + dim instead, until the
