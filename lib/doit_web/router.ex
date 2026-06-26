@@ -40,6 +40,14 @@ defmodule DoItWeb.Router do
     pipe_through [:api, :api_ip_rate_limit, :api_auth, :api_rate_limit]
 
     get "/me", MeController, :show
+
+    # Read surface (m03.01 worklist 2). Every read is view-gated through
+    # DoItWeb.Api.Authz (unknown id → 404, can't-view → 403).
+    get "/initiatives", InitiativeController, :index
+    get "/initiatives/:id", InitiativeController, :show
+    get "/initiatives/:id/activity", InitiativeController, :activity
+    get "/initiatives/:id/members", InitiativeController, :members
+    get "/initiatives/:id/tasks/:task_id/comments", CommentController, :index
   end
 
   scope "/", DoItWeb do

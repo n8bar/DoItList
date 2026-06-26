@@ -90,6 +90,14 @@ defmodule DoItWeb.Api do
   @doc "Wrap a payload in the success envelope."
   def data(payload), do: %{data: payload}
 
+  @doc """
+  The success envelope plus a sibling `meta` object — used by the paginated
+  reads (worklist 2.2 activity rollup). `meta` carries the pagination cursor
+  (`limit`, `offset`, `has_more`, and `next_offset` when more remain) alongside
+  the scope. Additive over the bare `data/1` envelope.
+  """
+  def data(payload, meta) when is_map(meta), do: %{data: payload, meta: meta}
+
   @doc "Build the single-error body."
   def error_body(status, code, message) when is_integer(status) do
     %{error: %{status: status, code: to_string(code), message: message}}

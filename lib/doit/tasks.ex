@@ -2016,6 +2016,64 @@ defmodule DoIt.Tasks do
     |> Repo.all()
   end
 
+  @activity_default_limit 50
+  @activity_max_limit 200
+
+  @doc """
+  Initiative-level activity rollup for the HTTP API (m03.01 worklist 2.2) — a
+  paginated, reverse-chronological read over `activity_events`, optionally scoped
+  to a subtree.
+
+  This is a **read query only** — `activity_events` already carries both
+  `initiative_id` and `task_id`, so the rollup is just a scoped select; no schema
+  change. It mirrors the LiveView's `list_task_activity/2` ordering
+  (`desc: inserted_at, desc: id`) but rolls the whole Initiative (or a subtree)
+  up rather than a single task.
+
+  ## Options
+
+    * `:task_ids` — when given, restrict to events whose `task_id` is in this
+      list (the caller passes `subtree_ids(task_id)` for subtree scoping). `nil`
+      (default) rolls up the whole Initiative.
+    * `:limit` — page size, clamped to `1..#{@activity_max_limit}`
+      (default `#{@activity_default_limit}`).
+    * `:offset` — rows to skip (default `0`); the offset-based pagination cursor.
+
+  Returns `%{events: [%ActivityEvent{} (user preloaded)], limit: n, offset: n,
+  has_more: boolean}`. `has_more` is computed by fetching one extra row, so the
+  caller can offer a `next_offset = offset + limit` without a count query.
+  """
+  def list_initiative_activity(initiative_id, opts \\ []) do
+    limit =
+      opts |> Keyword.get(:limit, @activity_default_limit) |> clamp_limit()
+
+    offset = opts |> Keyword.get(:offset, 0) |> max(0)
+    task_ids = Keyword.get(opts, :task_ids)
+
+    base =
+      from(e in ActivityEvent,
+        where: e.initiative_id == ^initiative_id,
+        order_by: [desc: e.inserted_at, desc: e.id],
+        preload: [:user]
+      )
+
+    scoped = if is_list(task_ids), do: from(e in base, where: e.task_id in ^task_ids), else: base
+
+    rows =
+      from(e in scoped, limit: ^(limit + 1), offset: ^offset)
+      |> Repo.all()
+
+    has_more = length(rows) > limit
+    events = Enum.take(rows, limit)
+
+    %{events: events, limit: limit, offset: offset, has_more: has_more}
+  end
+
+  defp clamp_limit(n) when is_integer(n) and n < 1, do: 1
+  defp clamp_limit(n) when is_integer(n) and n > @activity_max_limit, do: @activity_max_limit
+  defp clamp_limit(n) when is_integer(n), do: n
+  defp clamp_limit(_), do: @activity_default_limit
+
   # --- Co-assignees (m02.05 item 12.1) --------------------------------------
 
   @doc "Ordered co-assignee links for a task, each with its `user` preloaded."
@@ -2026,6 +2084,26 @@ defmodule DoIt.Tasks do
       preload: [:user]
     )
     |> Repo.all()
+  end
+
+  @doc """
+  All co-assignee user ids for an Initiative's live tasks (m03.01 worklist 2.1),
+  as `%{task_id => [user_id, ...]}` in manual promotion order. ONE query over the
+  whole tree (no per-task fan-out), so the API tree read can carry a complete
+  `co_assignee_ids` list per node — unlike the row-chip's capped
+  `co_assignee_users` (8), this is uncapped. Tasks with no co-assignees are
+  absent from the map (the serializer defaults them to `[]`).
+  """
+  def co_assignee_ids_for_initiative(initiative_id) do
+    from(c in TaskCoAssignee,
+      join: t in Task,
+      on: t.id == c.task_id,
+      where: t.initiative_id == ^initiative_id and is_nil(t.deleted_at),
+      order_by: [asc: c.sort_order, asc: c.id],
+      select: {c.task_id, c.user_id}
+    )
+    |> Repo.all()
+    |> Enum.group_by(fn {task_id, _} -> task_id end, fn {_, user_id} -> user_id end)
   end
 
   @doc """

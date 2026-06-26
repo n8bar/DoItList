@@ -239,6 +239,23 @@ defmodule DoIt.Initiatives do
   end
 
   @doc """
+  The Initiative's header read-model for the API (m03.01 worklist 2.1): its
+  `subtitle` (root task title, blank → `""`) and its top-level rolled-up
+  `progress` (the root task's `computed_progress`, 0..100). One query on the
+  root task — mirrors the `subtitle`/`progress` virtuals
+  `list_visible_initiatives/1` loads for the list view.
+  """
+  def header(%Initiative{root_task_id: root_id}) do
+    case Repo.get(Task, root_id) do
+      %Task{title: title, computed_progress: progress} ->
+        %{subtitle: if(String.trim(title) == "", do: "", else: title), progress: progress}
+
+      _ ->
+        %{subtitle: "", progress: 0}
+    end
+  end
+
+  @doc """
   The Initiative's optional subtitle, stored in its root task's title. Blank
   reads as `""`; the underlying column holds a single space.
   """

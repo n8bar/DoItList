@@ -30,6 +30,43 @@ defmodule DoItWeb.Api.Authz do
     if permitted?(role, capability), do: :ok, else: {:error, :forbidden}
   end
 
+  @doc """
+  Load `id` and authorize `user` for `capability` in one step — the single place
+  the read controllers' **404-vs-403 policy** lives.
+
+    * A non-integer / unknown id → `{:error, :not_found}` (404). A garbage id
+      never raises an Ecto cast error — it's parsed defensively first.
+    * The Initiative exists but `user` lacks `capability` → `{:error, :forbidden}`
+      (403). A stranger hitting a real Initiative is denied at the role check,
+      not leaked a 404-vs-403 oracle beyond "you can't view this".
+    * Otherwise `{:ok, %Initiative{}}`.
+
+  `capability` defaults to `:view` — the whole read surface is view-gated.
+  """
+  def fetch_initiative(%User{} = user, id, capability \\ :view) do
+    case parse_id(id) do
+      nil ->
+        {:error, :not_found}
+
+      int_id ->
+        case Initiatives.get_initiative(int_id) do
+          nil -> {:error, :not_found}
+          %Initiative{} = initiative -> with :ok <- authorize(user, initiative, capability), do: {:ok, initiative}
+        end
+    end
+  end
+
+  defp parse_id(id) when is_integer(id), do: id
+
+  defp parse_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {n, ""} -> n
+      _ -> nil
+    end
+  end
+
+  defp parse_id(_), do: nil
+
   defp permitted?(role, :view), do: Initiatives.can_view?(role)
   defp permitted?(role, :edit), do: Initiatives.can_edit?(role)
   defp permitted?(role, :admin), do: Initiatives.can_admin?(role)
