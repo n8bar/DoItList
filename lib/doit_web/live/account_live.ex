@@ -462,7 +462,7 @@ defmodule DoItWeb.AccountLive do
                 type="button"
                 id="delete-account-button"
                 phx-click="delete_account"
-                phx-disable-with="Deleting..."
+                data-latch="Deleting…"
                 class="px-3 py-1.5 rounded bg-red-600 text-sm font-medium text-white hover:bg-red-700"
               >
                 Yes, delete my account

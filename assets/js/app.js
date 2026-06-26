@@ -1497,7 +1497,12 @@ document.addEventListener("change", (e) => {
   // markSaving's safety timer covers a dropped reply. No data-keep needed —
   // same lifecycle as every other saving-hue path.
   if (e.target.id === "index-style") {
-    markSaving([...document.querySelectorAll("#task-tree [data-task-index]")])
+    // Pink the index spans when they exist (style→style / style→none). In the
+    // none→style direction there are no spans yet (the server renders one only
+    // when the style isn't "none"), so fall back to the always-present task rows
+    // so the relabel still cues in flight. Either set is stripped by the patch.
+    const spans = [...document.querySelectorAll("#task-tree [data-task-index]")]
+    markSaving(spans.length ? spans : [...document.querySelectorAll("#task-tree [data-task-row]")])
     return
   }
   // Settings: progress calc (WL3 item 3.7, §6.1/§6.7). A whole-tree % recompute
