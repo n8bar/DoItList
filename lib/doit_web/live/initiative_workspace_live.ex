@@ -1,151 +1,346 @@
-defmodule DoItWeb.InitiativeShowLive do
+defmodule DoItWeb.InitiativeWorkspaceLive do
+  # M02.09 WL5.3/5.4: ONE kept-mounted shell LiveView serving both
+  # `/initiatives` (the index/list) and `/initiatives/:id` (the detail). mount
+  # runs once and owns the shell (global presence, the rail data, the dead-window
+  # livePush registration via the always-present .Workspace root hook). The
+  # list<->detail hop is a push_patch driving handle_params with NO remount, so
+  # the socket, PubSub subscriptions and presence stay intact and other viewers
+  # never flicker. Per-Initiative subscriptions + presence are torn down/entered
+  # EXPLICITLY on leave/switch (they no longer ride process death).
   use DoItWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  import DoItWeb.AssignedComponents
 
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
   alias DoIt.Tasks.Tree
+  alias DoItWeb.AssignedActions
+
+  # Sort modes the index understands. `nil` = the server's default order
+  # (owner-first, recently-updated); "manual" = the user's drag order, stored
+  # on their membership rows (m02.04 §2.6).
+  @sort_modes ~w(name progress created updated manual)
+
+  # Postgres `bigint` (int8) bounds. An id parsed from the URL that fits
+  # `Integer.parse/1`'s `{int, ""}` can still be too large for an int8 column —
+  # `Repo.get/2` then raises DBConnection.EncodeError BEFORE it can return nil,
+  # crashing the LiveView instead of routing into the not-found path. Range-guard
+  # every parsed id against these bounds so an out-of-range id resolves to nil.
+  @pg_bigint_min -9_223_372_036_854_775_808
+  @pg_bigint_max 9_223_372_036_854_775_807
 
   @impl true
-  def mount(%{"id" => id}, _session, socket) do
+  # The shell mount — runs ONCE for the kept-mounted workspace, regardless of
+  # which route was hit first. It sets up everything that persists across the
+  # list<->detail hops (global presence subscription, the rail/collaborator data,
+  # the list-mode assigns + streams) and seeds every detail-mode assign to a safe
+  # default so a list render never touches a stale detail value. handle_params/3
+  # is the mode switch that enters/leaves/switches the per-Initiative detail.
+  def mount(_params, _session, socket) do
     user = socket.assigns.current_user
-    initiative = Initiatives.get_initiative(id)
-    role = initiative && Initiatives.get_role(initiative.id, user.id)
 
-    cond do
-      is_nil(initiative) ->
-        {:ok,
-         socket
-         |> put_flash(:error, "Initiative not found.")
-         |> push_navigate(to: ~p"/initiatives")}
+    # Lazy retention sweep (m02.06 item 11): purge anything past the window on
+    # the way in, so the Trash never shows stale, already-expired entries.
+    Initiatives.purge_expired_trash()
 
-      is_nil(role) ->
-        {:ok,
-         socket
-         |> put_flash(:error, "You don't have access to that initiative.")
-         |> push_navigate(to: ~p"/initiatives")}
+    # Global presence (m02.05 item 8): light up Collaborators avatars for anyone
+    # connected to the app. on_mount already TRACKS us once per process; we just
+    # subscribe to learn when others come and go. Shell-level — one subscription
+    # for the life of the mount, never re-done on a hop.
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
+    end
 
-      true ->
-        if connected?(socket) do
-          Tasks.subscribe(initiative.id)
+    {:ok,
+     socket
+     |> assign(:page_title, "Initiatives")
+     |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+     |> assign(
+       :collaborator_online_ids,
+       if(connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new())
+     )
+     |> assign_display_prefs(Accounts.get_preferences(user))
+     |> assign(:confirm_skips, MapSet.new())
+     |> assign_index_data(user)
+     |> assign_detail_defaults()
+     |> restream_sorted()}
+  end
 
-          # Selection presence (.04.01.12): subscribe first, then track — our
-          # own join diff arrives as the initial push to this client, and it
-          # already includes everyone who was here before us.
-          Phoenix.PubSub.subscribe(DoIt.PubSub, presence_topic(initiative.id))
-
-          {:ok, _} =
-            DoItWeb.Presence.track(self(), presence_topic(initiative.id), to_string(user.id), %{
-              user_id: user.id,
-              task_id: nil,
-              name: user.name,
-              initials: initials(user),
-              bg: avatar_bg(user),
-              fg: avatar_fg(user)
-            })
-
-          # Global presence (m02.05 item 8): the Collaborators pane lights up
-          # avatars for anyone online anywhere. on_mount already tracks us;
-          # subscribe to follow others. Distinct from the per-initiative topic
-          # above — the presence_diff handler tells them apart by topic.
-          Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
-
-          # Live chat (m02.08 worklist 3 item 3.1): a per-Initiative topic for
-          # everyone currently viewing. Fully ephemeral — nothing persisted;
-          # messages live only in each viewer's socket (capped), so the chat
-          # clears for a fresh viewer and disappears once the last one leaves.
-          Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
-
-          # Defer the non-critical loads (undo/redo labels, the cross-Initiative
-          # Collaborators rail) off the mount critical path so the LiveView
-          # returns fast and the tree is interactive the instant it paints. They
-          # fill in a beat later via :after_mount. See handle_info(:after_mount).
-          send(self(), :after_mount)
-        end
-
-        {:ok,
-         socket
-         |> assign(:page_title, initiative.name)
-         |> assign(:initiative, initiative)
-         |> assign(:rail_initiatives, Initiatives.list_visible_initiatives(user))
-         # Deferred to :after_mount (the rail's people pane pops in a frame
-         # later); the Layouts.app `rail_collaborators` attr defaults to [].
-         |> assign(:rail_collaborators, [])
-         |> assign(:subtitle, Initiatives.subtitle(initiative))
-         |> assign(:role, role)
-         |> assign(:can_edit, Initiatives.can_edit?(role))
-         |> assign(:can_admin, Initiatives.can_admin?(role))
-         |> assign(:members, Initiatives.list_members(initiative.id))
-         |> assign(:selected_task_id, nil)
-         |> assign(:selected_task, nil)
-         |> assign(:selected_staff_pool, nil)
-         |> assign(:comments, [])
-         |> assign(:editing_comment_id, nil)
-         |> assign(:versions_comment_id, nil)
-         |> assign(:comment_versions, [])
-         |> assign(:activity, [])
-         |> assign(:chat_messages, [])
-         |> assign(:chat_log_id, 0)
-         |> assign_display_prefs(Accounts.get_preferences(user))
-         |> assign(
-           :online_ids,
-           if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
-         )
-         |> assign(
-           :collaborator_online_ids,
-           if(connected?(socket), do: DoItWeb.Presence.global_online_ids(), else: MapSet.new())
-         )
-         |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
-         |> assign_pending(nil)
-         |> assign(:pending_handoff, nil)
-         |> assign(:confirm_skips, MapSet.new())
-         # Archive-on-completion prompt (m02.08 item 4.1): a dismissible nudge
-         # when roll-up hits 100% — it NEVER auto-archives. We only prompt on the
-         # transition into 100, not for an Initiative already complete on entry,
-         # and only once per session (dismiss sets prompted? so it won't return).
-         |> assign(:show_archive_prompt, false)
-         |> assign(:prompted_archive?, false)
-         # Undo/redo labels start nil (buttons disabled) and are filled by
-         # :after_mount — keeps the undo/redo activity_events trio off the
-         # connected-mount critical path. A disconnected (dead) render has no
-         # :after_mount, so they stay nil there; that's fine — the first
-         # interactive render is the connected one.
-         |> assign(:undo_label, nil)
-         |> assign(:redo_label, nil)
-         |> load_tree(undo: false)}
+  @impl true
+  # The mode switch. :index tears any open detail down and shows the list;
+  # :show enters (from the list) or switches (from another Initiative) into a
+  # per-Initiative detail. Both run on the disconnected (static) render too.
+  def handle_params(params, _uri, socket) do
+    case socket.assigns.live_action do
+      :index -> {:noreply, enter_index(socket)}
+      :show -> {:noreply, enter_show(socket, params)}
     end
   end
 
-  @impl true
-  # Deep-link to a task (m02.08 item 1.7): the Assigned-to-Me list opens
-  # `/initiatives/:id?task=<id>`. Selection is client/DOM-owned, so on the
-  # connected mount we push the target plus its ancestor chain to the client,
-  # which expands any collapsed ancestors, selects the row, and scrolls it into
-  # view. Pure view state (UX_GUARDRAILS 6.5) — no round trip gates it. The
-  # param is honored once on entry; a missing/foreign task is ignored.
-  def handle_params(%{"task" => task_id}, _uri, socket) do
+  # --- Index (list) mode -----------------------------------------------------
+
+  # Land on the list. Leaving an open detail tears its per-Initiative
+  # subscriptions + presence down EXPLICITLY (they no longer ride process death)
+  # and refreshes the list so a change made while inside a detail shows here.
+  defp enter_index(socket) do
     socket =
-      with true <- connected?(socket),
-           %{initiative: %{id: initiative_id}} <- socket.assigns,
-           {id, ""} <- Integer.parse(task_id),
-           %Task{initiative_id: ^initiative_id, deleted_at: nil} <-
-             Tasks.get_task(id) do
-        # id crosses as a string: the client echoes it back through the
-        # "select_task" hook event, whose handler runs String.to_integer/1
-        # (matches the to_string convention the undo/redo "select-task" push uses).
-        push_event(socket, "deep-link-task", %{
-          id: to_string(id),
-          ancestors: Tasks.ancestor_ids(id)
-        })
+      if socket.assigns.initiative do
+        socket
+        |> teardown_detail()
+        |> clear_detail_assigns()
+        |> assign_index_data(socket.assigns.current_user)
       else
-        _ -> socket
+        socket
       end
 
-    {:noreply, socket}
+    socket
+    |> assign(:page_title, "Initiatives")
+    |> restream_sorted()
+    |> AssignedActions.restream(socket.assigns.current_user)
   end
 
-  def handle_params(_params, _uri, socket), do: {:noreply, socket}
+  # Seed / refresh the list-mode assigns (initiatives, sort, trash, archive,
+  # the Assigned-to-Me pane). Used by mount and on every return to the list.
+  defp assign_index_data(socket, user) do
+    initiatives = Initiatives.list_visible_initiatives(user)
+    prefs = Accounts.get_preferences(user)
+    mode = normalize_mode(prefs.index_sort_mode)
+    reverse_by_mode = prefs.index_sort_reverse_by_mode || %{}
+
+    sort_state = %{
+      mode: mode,
+      reverse: !!Map.get(reverse_by_mode, mode || ""),
+      order: stored_order(initiatives)
+    }
+
+    socket
+    |> assign(:initiative_count, length(initiatives))
+    |> assign(:initiatives, initiatives)
+    |> assign(:sort_state, sort_state)
+    |> assign(:reverse_by_mode, reverse_by_mode)
+    |> assign(:form, build_empty_form())
+    |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
+    # `show_hidden` is plain assign state — deliberately NON-persistent: it resets
+    # to false on every mount, so hidden Initiatives stay out of sight by default.
+    |> assign(:archived, Initiatives.list_archived_initiatives(user))
+    |> assign(:show_hidden, false)
+    |> AssignedActions.assign_initial(user)
+  end
+
+  # --- Detail (show) mode ----------------------------------------------------
+
+  # Enter or switch into an Initiative's detail. Guards a nil Initiative / nil
+  # role by ejecting to the list (push_navigate remounts, so no manual teardown
+  # is needed for the reject path). Re-entering the SAME Initiative (e.g. a
+  # ?task= deep-link patch) only honors the param — it never re-subscribes.
+  defp enter_show(socket, params) do
+    user = socket.assigns.current_user
+    initiative = fetch_initiative(params["id"])
+    role = initiative && Initiatives.get_role(initiative.id, user.id)
+    current = socket.assigns.initiative
+
+    cond do
+      is_nil(initiative) ->
+        socket
+        |> put_flash(:error, "Initiative not found.")
+        |> push_navigate(to: ~p"/initiatives")
+
+      is_nil(role) ->
+        socket
+        |> put_flash(:error, "You don't have access to that initiative.")
+        |> push_navigate(to: ~p"/initiatives")
+
+      current && current.id == initiative.id ->
+        honor_task_param(socket, params)
+
+      true ->
+        socket
+        |> teardown_detail()
+        |> clear_detail_assigns()
+        |> enter_initiative(initiative, role)
+        |> honor_task_param(params)
+    end
+  end
+
+  # Every id that reaches this module from the client — a URL/:id segment, an
+  # event payload, a form/phx-value param — arrives as an untrusted string (or,
+  # for a malformed payload, a non-string like a map or a repeated-param list).
+  # `Repo.get(_, "abc")` raises Ecto.Query.CastError, `String.to_integer("abc")`
+  # raises ArgumentError, `Integer.parse(%{})` raises FunctionClauseError, and a
+  # numeric id outside the signed-64-bit (int8) range parses cleanly yet raises
+  # DBConnection.EncodeError once Repo encodes it — each one crashes the LiveView
+  # instead of failing soft. parse_id/1 is the single gate: it returns the integer
+  # only for a binary that parses cleanly AND fits the int8 range, and nil for
+  # anything else (a non-binary, non-numeric text, trailing garbage, or an
+  # out-of-range value). Every client-supplied id parse routes through it and the
+  # handler no-ops on nil.
+  defp parse_id(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} when int >= @pg_bigint_min and int <= @pg_bigint_max -> int
+      _ -> nil
+    end
+  end
+
+  defp parse_id(_), do: nil
+
+  # The :id route segment matches any string, but the Initiative primary key is
+  # an integer; a malformed id resolves to nil and routes into the SAME not-found
+  # flash+eject as a valid-but-missing id (the guard's "never crash").
+  defp fetch_initiative(id) do
+    case parse_id(id) do
+      nil -> nil
+      iid -> Initiatives.get_initiative(iid)
+    end
+  end
+
+  # Subscribe + track for the entered Initiative and load its detail. Mirrors the
+  # old mount's connected-setup, but runs on every list->detail enter and
+  # initiative->initiative switch (no remount happens now).
+  defp enter_initiative(socket, initiative, role) do
+    user = socket.assigns.current_user
+
+    if connected?(socket) do
+      Tasks.subscribe(initiative.id)
+
+      # Selection presence (.04.01.12): subscribe first, then track — our own
+      # join diff arrives as the initial push and already includes everyone here.
+      Phoenix.PubSub.subscribe(DoIt.PubSub, presence_topic(initiative.id))
+
+      {:ok, _} =
+        DoItWeb.Presence.track(self(), presence_topic(initiative.id), to_string(user.id), %{
+          user_id: user.id,
+          task_id: nil,
+          name: user.name,
+          initials: initials(user),
+          bg: avatar_bg(user),
+          fg: avatar_fg(user)
+        })
+
+      # Live chat (m02.08 worklist 3 item 3.1): a per-Initiative ephemeral topic.
+      Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
+
+      # Defer the non-critical loads (undo/redo labels, the cross-Initiative
+      # Collaborators rail) off the enter critical path so the tree is interactive
+      # the instant it paints; they fill a beat later via :after_mount.
+      send(self(), :after_mount)
+    end
+
+    socket
+    |> assign(:page_title, initiative.name)
+    |> assign(:initiative, initiative)
+    # The rail shows the visible Initiatives in both modes; refresh on enter so a
+    # newly created/renamed Initiative is current.
+    |> assign(:initiatives, Initiatives.list_visible_initiatives(user))
+    |> assign(:subtitle, Initiatives.subtitle(initiative))
+    |> assign(:role, role)
+    |> assign(:can_edit, Initiatives.can_edit?(role))
+    |> assign(:can_admin, Initiatives.can_admin?(role))
+    |> assign(:members, Initiatives.list_members(initiative.id))
+    |> assign(:selected_task_id, nil)
+    |> assign(:selected_task, nil)
+    |> assign(:selected_staff_pool, nil)
+    |> assign(:comments, [])
+    |> assign(:activity, [])
+    |> assign(:chat_messages, [])
+    |> assign(:chat_log_id, 0)
+    |> assign(
+      :online_ids,
+      if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
+    )
+    |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
+    |> assign_pending(nil)
+    |> assign(:pending_handoff, nil)
+    |> assign(:show_archive_prompt, false)
+    |> assign(:prompted_archive?, false)
+    |> assign(:undo_label, nil)
+    |> assign(:redo_label, nil)
+    |> load_tree(undo: false)
+  end
+
+  # Deep-link to a task (m02.08 item 1.7): the Assigned-to-Me list opens
+  # `/initiatives/:id?task=<id>`. Selection is client/DOM-owned, so we push the
+  # target plus its ancestor chain to the client, which expands any collapsed
+  # ancestors, selects the row, and scrolls it into view. Pure view state
+  # (UX_GUARDRAILS 6.5) — no round trip gates it. A missing/foreign task is
+  # ignored; absent ?task= is a no-op.
+  defp honor_task_param(socket, %{"task" => task_id}) do
+    with true <- connected?(socket),
+         %{initiative: %{id: initiative_id}} when not is_nil(initiative_id) <- socket.assigns,
+         id when not is_nil(id) <- parse_id(task_id),
+         %Task{initiative_id: ^initiative_id, deleted_at: nil} <- Tasks.get_task(id) do
+      push_event(socket, "deep-link-task", %{id: to_string(id), ancestors: Tasks.ancestor_ids(id)})
+    else
+      _ -> socket
+    end
+  end
+
+  defp honor_task_param(socket, _params), do: socket
+
+  # Drop the per-Initiative subscriptions + presence for the currently-open
+  # detail. A no-op when no detail is open (list mount, or already torn down).
+  # A leaked subscription (a left Initiative's broadcasts still hitting this
+  # process) is the top bug this prevents, so be explicit.
+  defp teardown_detail(socket) do
+    initiative = socket.assigns[:initiative]
+
+    if initiative && connected?(socket) do
+      iid = initiative.id
+      Tasks.unsubscribe(iid)
+      Phoenix.PubSub.unsubscribe(DoIt.PubSub, presence_topic(iid))
+      Phoenix.PubSub.unsubscribe(DoIt.PubSub, chat_topic(iid))
+
+      DoItWeb.Presence.untrack(
+        self(),
+        presence_topic(iid),
+        to_string(socket.assigns.current_user.id)
+      )
+    end
+
+    socket
+  end
+
+  # Seed every detail-mode assign to a safe default so a list render never
+  # references a stale detail value, and a fresh enter starts clean. confirm_skips
+  # and the display prefs are user-level (not per-Initiative), so they live in
+  # mount and are deliberately NOT reset here.
+  defp assign_detail_defaults(socket) do
+    socket
+    |> assign(:initiative, nil)
+    |> assign(:subtitle, nil)
+    |> assign(:role, nil)
+    |> assign(:can_edit, false)
+    |> assign(:can_admin, false)
+    |> assign(:members, [])
+    |> assign(:selected_task_id, nil)
+    |> assign(:selected_task, nil)
+    |> assign(:selected_staff_pool, nil)
+    |> assign(:tree, [])
+    |> assign(:root_task, nil)
+    |> assign(:root_sort_mode, nil)
+    # nil (not 0) so the FIRST set_initiative_progress on a detail-enter sees no
+    # prior value and an already-complete Initiative does not raise the
+    # archive-on-completion nag (it only fires on a live crossing into 100).
+    |> assign(:initiative_progress, nil)
+    |> assign(:led_task_ids, MapSet.new())
+    |> assign(:direct_assignee_ids, MapSet.new())
+    |> assign(:comments, [])
+    |> assign(:activity, [])
+    |> assign(:chat_messages, [])
+    |> assign(:chat_log_id, 0)
+    |> assign(:online_ids, MapSet.new())
+    |> assign(:initiative_form, nil)
+    |> assign(:pending_handoff, nil)
+    |> assign(:show_archive_prompt, false)
+    |> assign(:prompted_archive?, false)
+    |> assign(:undo_label, nil)
+    |> assign(:redo_label, nil)
+    |> assign_pending(nil)
+  end
+
+  # clear_detail_assigns reuses the defaults; the name reads as intent at the
+  # call sites (leaving/switching a detail).
+  defp clear_detail_assigns(socket), do: assign_detail_defaults(socket)
 
   # The viewing user's Display elements preferences (m02.04 §2.4): the
   # activity-log toggle plus which task attributes render on rows.
@@ -436,7 +631,11 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp to_int(n) when is_integer(n), do: n
-  defp to_int(s) when is_binary(s), do: String.to_integer(s)
+  # A client-supplied uid string (params["assignee_id"] / a co-assignee uid):
+  # route through parse_id so a non-numeric / out-of-range value yields nil
+  # (MapSet.member?(pool, nil) is false → out of pool) instead of crashing.
+  defp to_int(s) when is_binary(s), do: parse_id(s)
+  defp to_int(_), do: nil
 
   defp assign_result(socket, task, {:ok, _}),
     do: {:reply, %{ok: true}, patch_task(socket, task.id)}
@@ -622,7 +821,122 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # --- Events ----------------------------------------------------------------
 
+  # --- Index (list) events ---------------------------------------------------
+
   @impl true
+  # The New Initiative form opens/closes client-side (UX_GUARDRAILS 6.5 — typing
+  # must never wait on a round trip): a <details> + data-keep="open". Only a
+  # successful create closes it from here.
+  def handle_event("create", %{"initiative" => params}, socket) do
+    user = socket.assigns.current_user
+
+    case Initiatives.create_initiative(user, params) do
+      {:ok, initiative} ->
+        # Land straight inside the new initiative (WL6 6.3): push_patch — not
+        # push_navigate — keeps the single-module workspace mounted, so
+        # handle_params just enters detail mode (no remount). The list re-fetches
+        # on any return to index (assign_index_data), so no list-assign upkeep is
+        # needed here. close-details collapses the create form on the way out.
+        {:noreply,
+         socket
+         |> put_flash(:info, "Initiative created.")
+         |> push_event("close-details", %{id: "new-initiative"})
+         |> push_patch(to: ~p"/initiatives/#{initiative.id}")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :form, to_form(changeset))}
+    end
+  end
+
+  # Sort changes persist server-side (m02.04 §2.6): mode + per-mode reverse onto
+  # the prefs record, a pushed manual order onto the membership rows. The control
+  # pushes no order; only a drag does — absent, the session's existing order stands.
+  def handle_event("apply_sort", params, socket) do
+    user = socket.assigns.current_user
+    mode = normalize_mode(params["mode"])
+    reverse = params["reverse"] in [true, "true"]
+    pushed_order = params["order"] || []
+
+    reverse_by_mode = Map.put(socket.assigns.reverse_by_mode, mode || "", reverse)
+
+    {:ok, _} =
+      Accounts.update_preferences(user, %{
+        "index_sort_mode" => mode,
+        "index_sort_reverse_by_mode" => reverse_by_mode
+      })
+
+    if pushed_order != [], do: Initiatives.set_index_order(user, pushed_order)
+
+    sort_state = %{
+      mode: mode,
+      reverse: reverse,
+      order: if(pushed_order == [], do: socket.assigns.sort_state.order, else: pushed_order)
+    }
+
+    # Reply ok so the drag's drop-time optimistic reorder (WL3.5 Fix A) can settle.
+    {:reply, %{ok: true},
+     socket
+     |> assign(:initiatives, reindex_order(socket.assigns.initiatives, pushed_order))
+     |> assign(:sort_state, sort_state)
+     |> assign(:reverse_by_mode, reverse_by_mode)
+     |> restream_sorted()}
+  end
+
+  # Prune a past collaborator from My Collaborators (m02.05 item 12.11).
+  # Trash (m02.06 item 10): owner-only restore / permanent delete.
+  def handle_event("restore_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_owned_trashed(socket, id, &Initiatives.restore_initiative/1, "Initiative restored.")}
+  end
+
+  def handle_event("purge_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_owned_trashed(
+       socket,
+       id,
+       &Initiatives.purge_initiative/1,
+       "Initiative permanently deleted."
+     )}
+  end
+
+  # Per-user Archived list (m02.08 worklist 4). Restore clears `archived_at`,
+  # unhide clears `hidden_at` — both on the caller's own membership row only.
+  def handle_event("unarchive_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_member_initiative(
+       socket,
+       id,
+       &Initiatives.unarchive_initiative/2,
+       "Initiative restored."
+     )}
+  end
+
+  def handle_event("unhide_initiative", %{"id" => id}, socket) do
+    {:noreply,
+     with_member_initiative(socket, id, &Initiatives.unhide_initiative/2, "Initiative unhidden.")}
+  end
+
+  # Show-hidden toggle: a plain, NON-persistent assign (m02.08 item 4.3).
+  def handle_event("toggle_show_hidden", _params, socket) do
+    {:noreply, assign(socket, :show_hidden, !socket.assigns.show_hidden)}
+  end
+
+  # Assigned-to-Me pane toggles (m02.08 item 1.3) — same handlers as the
+  # standalone /assigned page, via the shared AssignedActions helper.
+  def handle_event("assigned_toggle_completed", _params, socket) do
+    {:noreply, AssignedActions.toggle_completed(socket, socket.assigns.current_user)}
+  end
+
+  def handle_event("assigned_toggle_archived_hidden", _params, socket) do
+    {:noreply, AssignedActions.toggle_archived_hidden(socket, socket.assigns.current_user)}
+  end
+
+  def handle_event("assigned_toggle_group_by", _params, socket) do
+    {:noreply, AssignedActions.toggle_group_by(socket, socket.assigns.current_user)}
+  end
+
+  # --- Detail (show) events --------------------------------------------------
+
   # Confirmation suppression (.03.01.11): the ConfirmSkips hook reads the
   # per-class skip flags from localStorage on mount and pushes them here.
   def handle_event("confirm_skips_loaded", %{"classes" => classes}, socket) do
@@ -639,16 +953,12 @@ defmodule DoItWeb.InitiativeShowLive do
       # The form carries its own target (client-positioned, UX_GUARDRAILS
       # 6.5): empty parent_id = top level (a child of the system root);
       # after_id places the new task just after that sibling, else at top.
-      parent_id =
-        case params["parent_id"] do
-          id when is_binary(id) and id != "" -> String.to_integer(id)
-          _ -> initiative.root_task_id
-        end
+      parent_id = parse_id(params["parent_id"]) || initiative.root_task_id
 
       position =
-        case params["after_id"] do
-          id when is_binary(id) and id != "" -> sibling_after_position(String.to_integer(id))
-          _ -> 0
+        case parse_id(params["after_id"]) do
+          nil -> 0
+          id -> sibling_after_position(id)
         end
 
       attrs = %{
@@ -658,45 +968,18 @@ defmodule DoItWeb.InitiativeShowLive do
         "position" => position
       }
 
-      case Tasks.preview_create(user, attrs) do
-        {:ok, %{scenario: nil}} ->
+      # The client predicts the (only possible) create flip — a new incomplete
+      # leaf landing under a complete parent reopens it (scenario 2) — from the
+      # DOM and opens #move-flip-confirm itself (UX_GUARDRAILS 6.5), then re-sends
+      # with confirmed: true on Proceed. Suppressed commits the same way. Either
+      # path commits straight through; the preview_create gate below is the
+      # authoritative backstop for a flip the client did NOT predict (stale DOM).
+      cond do
+        Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") ->
           {:noreply, commit_create(socket, attrs)}
 
-        {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
-          if skip_confirm?(socket, "completion-flip") do
-            {:noreply, commit_create(socket, attrs)}
-          else
-            # Optimism (§8.20, parity with a held move): the task must SHOW UP
-            # before the confirm decides. Splice a preview row into the tree at
-            # the target, marked maybe-write (pink) via pending_saving_ids;
-            # confirm → real create + load_tree replaces it, cancel → reload
-            # drops it.
-            preview = preview_task(title)
-
-            {:noreply,
-             socket
-             |> assign(
-               :tree,
-               splice_preview(
-                 socket.assigns.tree,
-                 initiative.root_task_id,
-                 parent_id,
-                 position,
-                 preview
-               )
-             )
-             |> assign_pending(%{
-               kind: :create,
-               attrs: attrs,
-               scenario: scenario,
-               titles: titles,
-               flip_ids: flip_ids,
-               preview_id: preview.id
-             })}
-          end
-
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
+        true ->
+          create_with_flip_check(socket, user, attrs, title)
       end
     end
   end
@@ -706,30 +989,35 @@ defmodule DoItWeb.InitiativeShowLive do
   # Field focus (pill taps, Alt+P/W/A) is pure view state and happens
   # client-side — this event only loads pane data (.03.07.17).
   def handle_event("select_task", %{"id" => id}, socket) do
-    id = String.to_integer(id)
+    # Guard against a stray/foreign id: @initiative must be open (never the list),
+    # the id must parse to an in-range integer (a non-binary payload like a map, a
+    # non-numeric, or an overflow id would otherwise raise), and the fetched task
+    # must belong to THIS Initiative — a select replayed/queued against another
+    # tree is a no-op.
+    with %{id: iid} <- socket.assigns[:initiative],
+         tid when not is_nil(tid) <- parse_id(id) do
+      cond do
+        # Pane already shows this task — nothing to load.
+        socket.assigns.selected_task_id == tid ->
+          {:noreply, socket}
 
-    cond do
-      # Pane already shows this task — nothing to load.
-      socket.assigns.selected_task_id == id ->
-        {:noreply, socket}
+        true ->
+          case Tasks.get_task_with_relations(tid) do
+            %Task{initiative_id: ^iid} = task ->
+              {:noreply,
+               socket
+               |> assign(:selected_task_id, tid)
+               |> assign_selected(task)
+               |> assign(:comments, Tasks.list_comments(tid))
+               |> assign(:activity, Tasks.list_task_activity(tid))
+               |> update_presence(tid)}
 
-      true ->
-        case Tasks.get_task_with_relations(id) do
-          nil ->
-            {:noreply, socket}
-
-          task ->
-            {:noreply,
-             socket
-             |> assign(:selected_task_id, id)
-             |> assign_selected(task)
-             |> assign(:comments, Tasks.list_comments(id))
-             |> assign(:editing_comment_id, nil)
-             |> assign(:versions_comment_id, nil)
-             |> assign(:comment_versions, [])
-             |> assign(:activity, Tasks.list_task_activity(id))
-             |> update_presence(id)}
-        end
+            _ ->
+              {:noreply, socket}
+          end
+      end
+    else
+      _ -> {:noreply, socket}
     end
   end
 
@@ -755,7 +1043,13 @@ defmodule DoItWeb.InitiativeShowLive do
     else
       case Initiatives.update_subtitle(socket.assigns.initiative, subtitle) do
         {:ok, _root} ->
-          {:noreply, assign(socket, :subtitle, Initiatives.subtitle(socket.assigns.initiative))}
+          # The field already shows the typed text, so the SAVE is the invisible
+          # part (§6.7). Pulse a brief "Saved" tick beside the input so the
+          # debounced write is acknowledged, not silent.
+          {:noreply,
+           socket
+           |> assign(:subtitle, Initiatives.subtitle(socket.assigns.initiative))
+           |> push_event("subtitle-saved", %{})}
 
         {:error, _} ->
           {:noreply, socket}
@@ -788,7 +1082,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
     if Map.get(params, "confirmed") == true or
          not Initiatives.archive_needs_confirm?(user, initiative) do
-      {:noreply, commit_archive(socket)}
+      # Reply ok so the client can tell a commit-in-flight (latch + hold the
+      # archive button) from the needs_confirm probe (open the modal). The
+      # commit ends in push_navigate, which replaces the page and the latch.
+      {:reply, %{ok: true}, commit_archive(socket)}
     else
       {:reply, %{needs_confirm: true}, socket}
     end
@@ -872,11 +1169,17 @@ defmodule DoItWeb.InitiativeShowLive do
         {:ok, updated} ->
           Tasks.notify_tree_changed(updated.id, updated.root_task_id)
 
+          # Re-enable the checkbox + flash a "Saved" tick — the re-enable IS the
+          # success ack for the in-flight signifier armed client-side (§6.7).
+          # Sent via push_event because the box is inside a phx-change form (no
+          # reply callback), and carries the persisted state so the box's
+          # checked stays honest if the value was coerced.
           {:noreply,
            socket
            |> assign(:initiative, updated)
            |> load_tree()
-           |> refresh_selected()}
+           |> refresh_selected()
+           |> push_event("viewer-plus-saved", %{on: updated.viewer_plus})}
 
         {:error, cs} ->
           {:noreply,
@@ -929,9 +1232,15 @@ defmodule DoItWeb.InitiativeShowLive do
     with_co(socket, fn task, user ->
       # Viewer+ may only add from the handed pool (item 12.6.3); an out-of-pool
       # add fails so the optimistic row reverts. Editors place anyone.
-      if staff_pool_allows?(socket, uid),
-        do: Tasks.add_co_assignee(task, user, String.to_integer(uid)),
-        else: {:error, :not_in_pool}
+      case parse_id(uid) do
+        nil ->
+          {:error, :invalid}
+
+        id ->
+          if staff_pool_allows?(socket, uid),
+            do: Tasks.add_co_assignee(task, user, id),
+            else: {:error, :not_in_pool}
+      end
     end)
   end
 
@@ -939,15 +1248,24 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("remove_co_assignee", %{"user-id" => uid}, socket) do
     with_co(socket, fn task, user ->
-      Tasks.remove_co_assignee(task, user, String.to_integer(uid))
+      case parse_id(uid) do
+        nil -> {:error, :invalid}
+        id -> Tasks.remove_co_assignee(task, user, id)
+      end
     end)
   end
 
   def handle_event("move_co_assignee", %{"user-id" => uid, "dir" => dir}, socket)
       when dir in ~w(up down) do
     with_co(socket, fn task, user ->
-      ids = Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id)
-      Tasks.reorder_co_assignees(task, user, shift(ids, String.to_integer(uid), dir))
+      case parse_id(uid) do
+        nil ->
+          {:error, :invalid}
+
+        id ->
+          ids = Enum.map(Tasks.list_co_assignees(task.id), & &1.user_id)
+          Tasks.reorder_co_assignees(task, user, shift(ids, id, dir))
+      end
     end)
   end
 
@@ -957,12 +1275,18 @@ defmodule DoItWeb.InitiativeShowLive do
   # editor/owner anywhere; a viewer+ only within a led subtree, from its pool.
   # Replies ok:bool so the drag's optimistic row settles (item 12.5).
   def handle_event("assign_member", %{"user-id" => uid, "task-id" => tid}, socket) do
-    uid = String.to_integer(uid)
-    task = Tasks.get_task(String.to_integer(tid))
+    uid = parse_id(uid)
+
+    task =
+      case parse_id(tid) do
+        nil -> nil
+        id -> Tasks.get_task(id)
+      end
+
     user = socket.assigns.current_user
 
     cond do
-      is_nil(task) or task.initiative_id != socket.assigns.initiative.id ->
+      is_nil(uid) or is_nil(task) or task.initiative_id != socket.assigns.initiative.id ->
         {:reply, %{ok: false}, socket}
 
       not member_id?(socket, uid) ->
@@ -988,11 +1312,17 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("update_task", %{"task" => params}, socket) do
-    task = socket.assigns.selected_task
+  def handle_event("update_task", %{"task" => params} = payload, socket) do
+    task = update_task_target(socket, payload)
     user = socket.assigns.current_user
 
     cond do
+      # Stale captured id + no live selection (e.g. the target was deleted before
+      # the dead-window edit flushed) — nothing to apply to; a no-op is the honest
+      # outcome (no crash, and an edit to a real task always lands via its id).
+      is_nil(task) ->
+        {:noreply, socket}
+
       socket.assigns.can_edit ->
         case Tasks.update_task(task, user, params) do
           {:ok, _updated} ->
@@ -1032,18 +1362,28 @@ defmodule DoItWeb.InitiativeShowLive do
       {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       task = sort_target(socket, params)
-      branch_count = Tasks.count_descendant_branches(task.id)
 
-      if branch_count > 10 and not skip_confirm?(socket, "cascade-sort") do
-        {:noreply,
-         assign_pending(socket, %{
-           kind: :cascade_sort,
-           task_id: task.id,
-           branch_count: branch_count,
-           affected: Tasks.count_descendants(task.id)
-         })}
-      else
-        {:noreply, commit_cascade_sort(socket, task)}
+      cond do
+        # The client predicts the branch count from the DOM and opens the
+        # confirm itself (UX_GUARDRAILS 6.5 — a client-known confirm never waits
+        # on the network), then re-sends with confirmed: true on Proceed.
+        # Suppressed ("don't ask again") commits the same way. The count gate
+        # below is the authoritative backstop for a client that did NOT predict
+        # (modal missing, stale DOM).
+        Map.get(params, "confirmed") == true or skip_confirm?(socket, "cascade-sort") ->
+          {:noreply, commit_cascade_sort(socket, task)}
+
+        Tasks.count_descendant_branches(task.id) > 10 ->
+          {:noreply,
+           assign_pending(socket, %{
+             kind: :cascade_sort,
+             task_id: task.id,
+             branch_count: Tasks.count_descendant_branches(task.id),
+             affected: Tasks.count_descendants(task.id)
+           })}
+
+        true ->
+          {:noreply, commit_cascade_sort(socket, task)}
       end
     end
   end
@@ -1094,42 +1434,64 @@ defmodule DoItWeb.InitiativeShowLive do
   # Replies so the client's optimistic flip (.03.07.22) can settle: ok: false
   # reverts it, committed: true releases it to the patch.
   def handle_event("toggle_complete", %{"id" => id}, socket) do
-    if not can_progress?(socket, String.to_integer(id)) do
-      {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
-    else
-      task = Tasks.get_task!(String.to_integer(id))
-      user = socket.assigns.current_user
+    task_id = parse_id(id)
 
-      case Tasks.toggle_complete(task, user) do
-        {:ok, _} ->
-          {:reply, %{ok: true, committed: true}, patch_task(socket, task.id)}
+    cond do
+      # Bad/absent id (or a valid id whose task was just deleted by a collaborator)
+      # → reply ok:false so the client reverts its optimistic flip; never crash.
+      is_nil(task_id) ->
+        {:reply, %{ok: false}, socket}
 
-        {:error, cs} ->
-          {:reply, %{ok: false},
-           put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
-      end
+      not can_progress?(socket, task_id) ->
+        {:reply, %{ok: false},
+         socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+
+      true ->
+        case Tasks.get_task(task_id) do
+          nil ->
+            {:reply, %{ok: false}, socket}
+
+          task ->
+            case Tasks.toggle_complete(task, socket.assigns.current_user) do
+              {:ok, _} ->
+                {:reply, %{ok: true, committed: true}, patch_task(socket, task.id)}
+
+              {:error, cs} ->
+                {:reply, %{ok: false},
+                 put_flash(socket, :error, "Couldn't toggle: #{summarize_errors(cs)}.")}
+            end
+        end
     end
   end
 
   # Branch checkbox (.03.01.11): confirm via the styled modal unless the
   # "branch completion changes" class is suppressed, in which case cascade now.
   def handle_event("cascade_complete", %{"id" => id}, socket),
-    do: request_cascade(socket, String.to_integer(id), :cascade_complete)
+    do: request_cascade(socket, parse_id(id), :cascade_complete)
 
   def handle_event("cascade_incomplete", %{"id" => id}, socket),
-    do: request_cascade(socket, String.to_integer(id), :cascade_incomplete)
+    do: request_cascade(socket, parse_id(id), :cascade_incomplete)
 
-  def handle_event("add_comment", %{"comment" => %{"body" => body}}, socket) do
+  def handle_event("add_comment", params, socket) do
+    %{"comment" => %{"body" => body}} = params
+    echo_id = params["echo_id"]
     task = socket.assigns.selected_task
 
     if not (task && can_progress?(socket, task.id)) do
-      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+      # Reply ok:false so the client pulls its optimistic bubble — a rejected
+      # comment must not stand (MUST NOT LIE).
+      {:reply, %{ok: false, echo_id: echo_id},
+       socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
       user = socket.assigns.current_user
 
       case Tasks.add_comment(task, user, body) do
-        {:ok, _comment} -> {:noreply, refresh_selected(socket)}
-        {:error, _cs} -> {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+        {:ok, comment} ->
+          {:reply, %{ok: true, echo_id: echo_id, id: comment.id}, refresh_selected(socket)}
+
+        {:error, _cs} ->
+          {:reply, %{ok: false, echo_id: echo_id},
+           put_flash(socket, :error, "Comment cannot be empty.")}
       end
     end
   end
@@ -1138,65 +1500,49 @@ defmodule DoItWeb.InitiativeShowLive do
   # the context (Tasks.edit_comment / delete_comment) — these handlers map the
   # result to a flash; the view guards (author-only controls) are convenience.
 
-  # Open the inline editor for one's own comment. Pure pane state (the edited
-  # comment is already loaded); flipping the assign re-renders the row's form.
-  def handle_event("edit_comment", %{"id" => id}, socket) do
-    {:noreply, assign(socket, :editing_comment_id, String.to_integer(id))}
-  end
-
-  def handle_event("cancel_edit_comment", _params, socket) do
-    {:noreply, assign(socket, :editing_comment_id, nil)}
-  end
-
+  # Save acknowledges instantly via the Save button's up-front latch (data-latch,
+  # WL4.3 — fires at submit independent of connect, the connect-independent
+  # stand-in for phx-disable-with) — a server-gated edit. The editor's open/close is
+  # now client-owned (WL3 3.3, §6.5): the row statically renders BOTH the display
+  # block and the author's edit form, and DoitState.commentEditId toggles which
+  # shows at click. So the server no longer holds an `editing_comment_id` assign;
+  # on a granted save it pushes "comment-saved" (handled in the TaskKeys hook) to
+  # clear the client's open state, then refresh_selected re-renders the canonical
+  # body. We deliberately do NOT optimistically rewrite the body — a faithful
+  # rewrite would mean reconstructing markup, and the signifier already keeps the
+  # initiator un-stranded honestly. CRUCIALLY, only the server-granted branches
+  # ({:ok} / {:error, :not_found} — both terminal) push "comment-saved" to close
+  # the editor; an :unauthorized or invalid-body result leaves the editor open
+  # (no false success — §6 / optimistic-UI-must-not-lie).
   def handle_event("save_comment", %{"id" => id, "comment" => %{"body" => body}}, socket) do
-    user = socket.assigns.current_user
-
-    case Tasks.edit_comment(String.to_integer(id), user, body) do
-      {:ok, _comment} ->
-        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
-
-      {:error, :unauthorized} ->
-        {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
-
-      {:error, :not_found} ->
-        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
-
-      {:error, _cs} ->
-        {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+    case parse_id(id) do
+      # Bad/absent comment id — nothing to save; leave the editor open (no false
+      # close), no crash.
+      nil -> {:noreply, socket}
+      cid -> do_save_comment(socket, cid, id, body)
     end
   end
 
   def handle_event("delete_comment", %{"id" => id}, socket) do
     user = socket.assigns.current_user
 
-    case Tasks.delete_comment(String.to_integer(id), user) do
-      {:ok, _comment} ->
-        {:noreply, socket |> assign(:editing_comment_id, nil) |> refresh_selected()}
+    case parse_id(id) do
+      # Bad/absent comment id — nothing to delete; no-op, no crash.
+      nil ->
+        {:noreply, socket}
 
-      {:error, :unauthorized} ->
-        {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
+      cid ->
+        case Tasks.delete_comment(cid, user) do
+          {:ok, _comment} ->
+            {:noreply, refresh_selected(socket)}
 
-      {:error, :not_found} ->
-        {:noreply, refresh_selected(socket)}
+          {:error, :unauthorized} ->
+            {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
+
+          {:error, :not_found} ->
+            {:noreply, refresh_selected(socket)}
+        end
     end
-  end
-
-  # Show / hide the prior-versions popup for a comment (item 2.2). Loads the
-  # history on open; a missing/closed state clears it.
-  def handle_event("show_comment_versions", %{"id" => id}, socket) do
-    id = String.to_integer(id)
-
-    {:noreply,
-     socket
-     |> assign(:versions_comment_id, id)
-     |> assign(:comment_versions, Tasks.list_comment_versions(id))}
-  end
-
-  def handle_event("hide_comment_versions", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:versions_comment_id, nil)
-     |> assign(:comment_versions, [])}
   end
 
   # Live chat (m02.08 worklist 3 item 3.1): broadcast a message to everyone
@@ -1208,13 +1554,16 @@ defmodule DoItWeb.InitiativeShowLive do
   # reader: don't broadcast (nobody to receive). Instead sound the rejection
   # bonk and drop a dimmed "system" line into the sender's own log so the dead
   # end is visible IN the chat (not a toast) — operator was explicit on that.
-  def handle_event("send_chat", %{"body" => body}, socket) do
-    body = String.trim(body || "")
+  def handle_event("send_chat", params, socket) do
+    body = String.trim(params["body"] || "")
+    echo_id = params["echo_id"]
     user = socket.assigns.current_user
 
     cond do
       body == "" ->
-        {:noreply, socket}
+        # Backstop: the hook already trims + guards empty. Reply ok:false so a
+        # stray empty submit pulls any optimistic bubble (it must not stand).
+        {:reply, %{ok: false}, socket}
 
       alone?(socket) ->
         system_msg = %{
@@ -1223,16 +1572,26 @@ defmodule DoItWeb.InitiativeShowLive do
           body: "Nobody's here to read that yet — no one else is viewing this Initiative."
         }
 
-        {:noreply, socket |> append_chat(system_msg) |> bonk()}
+        # No reader got it — the server's own dimmed system line is the honest
+        # acknowledgement. Reply alone:true so the hook REMOVES its optimistic
+        # "sent" bubble (MUST NOT LIE: don't leave a faked-sent bubble standing).
+        {:reply, %{ok: false, alone: true}, socket |> append_chat(system_msg) |> bonk()}
 
       true ->
         msg = %{
+          # Stamp the source Initiative so a receiver can drop a stale cross-
+          # Initiative delivery (async PubSub can arrive after an A->B switch).
+          initiative_id: socket.assigns.initiative.id,
           system: false,
           user_id: user.id,
           name: user.name,
           initials: initials(user),
           bg: avatar_bg(user),
           fg: avatar_fg(user),
+          # Carry the sender's client nonce on the broadcast so the sender's own
+          # hook can match + dedupe its optimistic echo when the real line lands.
+          # Other viewers ignore echo_id.
+          echo_id: echo_id,
           body: String.slice(body, 0, 2000),
           at: System.system_time(:second)
         }
@@ -1243,7 +1602,7 @@ defmodule DoItWeb.InitiativeShowLive do
           {:chat_message, msg}
         )
 
-        {:noreply, socket}
+        {:reply, %{ok: true}, socket}
     end
   end
 
@@ -1255,73 +1614,30 @@ defmodule DoItWeb.InitiativeShowLive do
     if not socket.assigns.can_edit do
       {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
     else
-      {:noreply, commit_delete_task(socket, String.to_integer(id))}
+      {:noreply, commit_delete_task(socket, parse_id(id))}
     end
   end
 
   def handle_event("move_task", %{"task_id" => task_id} = params, socket) do
-    if not socket.assigns.can_edit do
-      {:reply, %{ok: false, error: "forbidden"},
-       socket |> put_flash(:error, "You don't have permission to move tasks.") |> bonk()}
-    else
-      task = Tasks.get_task!(task_id)
-      user = socket.assigns.current_user
+    cond do
+      not socket.assigns.can_edit ->
+        {:reply, %{ok: false, error: "forbidden"},
+         socket |> put_flash(:error, "You don't have permission to move tasks.") |> bonk()}
 
-      attrs = %{
-        # A root-zone drop (promotion) carries no parent → it lands under the
-        # Initiative's root task, the new meaning of "root level".
-        "parent_id" => Map.get(params, "parent_id") || socket.assigns.initiative.root_task_id,
-        "position" => Map.get(params, "position"),
-        "reorder" => Map.get(params, "reorder")
-      }
+      true ->
+        # Both the moved task id and the destination parent id are client-supplied;
+        # a bad/absent/just-deleted task replies ok:false (the drag reverts) instead
+        # of crashing.
+        case parse_id(task_id) do
+          nil ->
+            {:reply, %{ok: false, error: "not_found"}, socket}
 
-      case Tasks.preview_move(task, user, attrs) do
-        {:ok, %{scenario: nil}} ->
-          case commit_move(socket, task, attrs) do
-            {:ok, socket} ->
-              {:reply, %{ok: true, committed: true}, socket}
-
-            {:error, reason, socket} ->
-              {:reply, %{ok: false, error: format_move_error(reason)}, socket}
-          end
-
-        {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
-          # The client predicts the flip from the DOM and opens the confirm
-          # itself (UX_GUARDRAILS 6.5 — a client-known confirm never waits on the
-          # network), then re-sends with confirmed: true on Proceed. Suppressed
-          # ("don't ask again") commits the same way. Either path commits straight
-          # through; the gate below is the authoritative backstop for a move the
-          # client did NOT predict as a flip.
-          if Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") do
-            case commit_move(socket, task, attrs) do
-              {:ok, socket} ->
-                {:reply, %{ok: true, committed: true}, socket}
-
-              {:error, reason, socket} ->
-                {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+          tid ->
+            case Tasks.get_task(tid) do
+              nil -> {:reply, %{ok: false, error: "not_found"}, socket}
+              task -> do_move_task(socket, params, task)
             end
-          else
-            # A completion-flip confirmation is required: the move is NOT yet
-            # persisted, but the client KEEPS its optimistic placement while
-            # the modal decides (§8.20 — confirmations must not undo optimism).
-            # committed: false tells it to hold a revert handle: Cancel / a
-            # failed Proceed reverts via "confirm-cancelled"; a Proceed commit
-            # re-renders the same placement.
-            {:reply, %{ok: true, committed: false},
-             assign_pending(socket, %{
-               kind: :move,
-               task_id: task.id,
-               attrs: attrs,
-               scenario: scenario,
-               titles: titles,
-               flip_ids: flip_ids
-             })}
-          end
-
-        {:error, reason} ->
-          {:reply, %{ok: false, error: format_move_error(reason)},
-           put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
-      end
+        end
     end
   end
 
@@ -1332,16 +1648,27 @@ defmodule DoItWeb.InitiativeShowLive do
     socket =
       case pending do
         %{kind: :move, task_id: task_id, attrs: attrs} ->
-          case commit_move(socket, Tasks.get_task!(task_id), attrs) do
-            {:ok, socket} -> socket
-            {:error, _reason, socket} -> socket
+          # The held task may have been deleted by a collaborator while the confirm
+          # sat open — resolve the modal without crashing.
+          case Tasks.get_task(task_id) do
+            nil ->
+              assign_pending(socket, nil)
+
+            task ->
+              case commit_move(socket, task, attrs) do
+                {:ok, socket} -> socket
+                {:error, _reason, socket} -> socket
+              end
           end
 
         %{kind: :create, attrs: attrs} ->
           commit_create(socket, attrs)
 
         %{kind: :cascade_sort, task_id: task_id} ->
-          commit_cascade_sort(socket, Tasks.get_task!(task_id))
+          case Tasks.get_task(task_id) do
+            nil -> assign_pending(socket, nil)
+            task -> commit_cascade_sort(socket, task)
+          end
 
         _ ->
           socket
@@ -1386,7 +1713,9 @@ defmodule DoItWeb.InitiativeShowLive do
   # dialog stashed. Not suppressible — transferring ownership always asks.
   def handle_event("confirm_transfer", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
-    user_id = String.to_integer(user_id)
+    user_id = parse_id(user_id)
+    # A nil (malformed) id finds no member, so the `not is_nil(member)` guard below
+    # routes it to the ok:false reply — never a crash.
     member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
 
     with true <- socket.assigns.can_admin and not is_nil(member),
@@ -1441,23 +1770,37 @@ defmodule DoItWeb.InitiativeShowLive do
   # assignments still routes to the hand-off modal — its content (count + who to
   # reassign to) is server data, so that's a legitimate round trip — otherwise
   # commit the removal.
+  # The confirm already opened client-side (#remove-member-confirm — the name is
+  # client-known); only Proceed pushes here. Proceed holds a working state until
+  # this replies (UX_GUARDRAILS 6.7 — the round trip can't be optimistic because
+  # whether the member holds assignments is server-known). The reply releases
+  # that working state: ok:true on a plain commit / forbidden / owner-guard,
+  # ok:true + handoff:true when we escalate to the (server-data) hand-off modal,
+  # ok:false on a refusal so the client restores Proceed.
   def handle_event("remove_member", %{"user-id" => user_id}, socket) do
     initiative = socket.assigns.initiative
-    user_id = String.to_integer(user_id)
+    user_id = parse_id(user_id)
 
     cond do
+      is_nil(user_id) ->
+        {:reply, %{ok: false}, socket}
+
       not socket.assigns.can_admin ->
-        {:noreply, socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
+        {:reply, %{ok: false},
+         socket |> put_flash(:error, "Only the owner can remove members.") |> bonk()}
 
       user_id == initiative.owner_id ->
-        {:noreply,
+        {:reply, %{ok: false},
          socket |> put_flash(:error, "The Initiative's owner can't be removed.") |> bonk()}
 
       Tasks.member_assignment_count(initiative.id, user_id) > 0 ->
         member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
         name = (member && member.user.name) || "this member"
 
-        {:noreply,
+        # The hand-off modal's body (count + who to reassign to) is server data,
+        # so it renders server-side; the reply releases the client confirm the
+        # instant this modal is up.
+        {:reply, %{ok: true, handoff: true},
          assign(socket, :pending_handoff, %{
            user_id: user_id,
            name: name,
@@ -1466,7 +1809,7 @@ defmodule DoItWeb.InitiativeShowLive do
          })}
 
       true ->
-        {:noreply, commit_remove_member(socket, user_id)}
+        {:reply, %{ok: true}, commit_remove_member(socket, user_id)}
     end
   end
 
@@ -1478,11 +1821,7 @@ defmodule DoItWeb.InitiativeShowLive do
     initiative = socket.assigns.initiative
     pending = socket.assigns.pending_handoff
 
-    takeover_id =
-      case params["takeover"] do
-        id when is_binary(id) and id != "" -> String.to_integer(id)
-        _ -> nil
-      end
+    takeover_id = parse_id(params["takeover"])
 
     promote_co = params["promote_co"] in ["true", "on"]
 
@@ -1513,9 +1852,10 @@ defmodule DoItWeb.InitiativeShowLive do
 
   def handle_event("update_member_role", %{"user_id" => uid, "role" => role}, socket) do
     initiative = socket.assigns.initiative
-    uid = String.to_integer(uid)
+    uid = parse_id(uid)
 
-    if socket.assigns.can_admin and uid != initiative.owner_id and role in ~w(editor viewer) do
+    if not is_nil(uid) and socket.assigns.can_admin and uid != initiative.owner_id and
+         role in ~w(editor viewer) do
       {:ok, _} =
         Initiatives.update_member_role(initiative.id, uid, role, socket.assigns.current_user)
 
@@ -1564,32 +1904,14 @@ defmodule DoItWeb.InitiativeShowLive do
   # "remove_member" (with its hand-off flow).
   def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
     user = socket.assigns.current_user
-    iid = String.to_integer(iid)
-    uid = String.to_integer(uid)
 
-    socket =
-      case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
-        {:ok, added} ->
-          put_flash(socket, :info, "Added #{added.name} as a viewer.")
-
-        {:error, :already_member} ->
-          put_flash(socket, :info, "They're already a member there.")
-
-        {:error, :forbidden} ->
-          put_flash(socket, :error, "Only that Initiative's owner can add members.")
-
-        {:error, :failed} ->
-          put_flash(socket, :error, "Couldn't add them.")
-      end
-
-    socket = assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
-
-    socket =
-      if iid == socket.assigns.initiative.id,
-        do: assign(socket, :members, Initiatives.list_members(iid)),
-        else: socket
-
-    {:noreply, socket}
+    # Both ids are client-supplied; a malformed either-side no-ops with ok:false so
+    # the optimistic rail chip is pulled (MUST NOT LIE) rather than crashing.
+    case {parse_id(iid), parse_id(uid)} do
+      {nil, _} -> {:reply, %{ok: false}, socket}
+      {_, nil} -> {:reply, %{ok: false}, socket}
+      {iid, uid} -> do_add_collaborator_to(socket, user, iid, uid)
+    end
   end
 
   # Prune a past collaborator from My Collaborators (m02.05 item 12.11). Only
@@ -1598,19 +1920,193 @@ defmodule DoItWeb.InitiativeShowLive do
   def handle_event("remove_collaborator", %{"user-id" => uid}, socket) do
     user = socket.assigns.current_user
 
-    socket =
-      case Initiatives.remove_collaborator(user, String.to_integer(uid)) do
-        {:ok, _} ->
-          assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))
+    case parse_id(uid) do
+      # Malformed id — un-hide the optimistically-removed row (ok:false), no crash.
+      nil ->
+        {:reply, %{ok: false}, socket}
 
-        {:error, :still_collaborating} ->
-          put_flash(socket, :error, "You still share an Initiative with them.")
+      cid ->
+        {ok?, socket} =
+          case Initiatives.remove_collaborator(user, cid) do
+            {:ok, _} ->
+              {true, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
+
+            # Still sharing an Initiative → the row stays; ok:false un-hides the
+            # optimistically-removed rail row (MUST NOT LIE — they weren't pruned).
+            {:error, :still_collaborating} ->
+              {false, put_flash(socket, :error, "You still share an Initiative with them.")}
+          end
+
+        {:reply, %{ok: ok?}, socket}
+    end
+  end
+
+  # --- Detail-event helpers (kept out of the handle_event clause group) ------
+
+  defp do_save_comment(socket, cid, id, body) do
+    user = socket.assigns.current_user
+
+    case Tasks.edit_comment(cid, user, body) do
+      {:ok, _comment} ->
+        {:noreply, socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+
+      {:error, :unauthorized} ->
+        {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
+
+      {:error, :not_found} ->
+        {:noreply, socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+
+      {:error, _cs} ->
+        {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
+    end
+  end
+
+  defp do_move_task(socket, params, task) do
+    user = socket.assigns.current_user
+
+    attrs = %{
+      # A root-zone drop (promotion) carries no parent → it lands under the
+      # Initiative's root task, the new meaning of "root level". A malformed
+      # parent id falls back the same way rather than crashing the move.
+      "parent_id" =>
+        parse_id(Map.get(params, "parent_id")) || socket.assigns.initiative.root_task_id,
+      "position" => Map.get(params, "position"),
+      "reorder" => Map.get(params, "reorder")
+    }
+
+    case Tasks.preview_move(task, user, attrs) do
+      {:ok, %{scenario: nil}} ->
+        case commit_move(socket, task, attrs) do
+          {:ok, socket} ->
+            {:reply, %{ok: true, committed: true}, socket}
+
+          {:error, reason, socket} ->
+            {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+        end
+
+      {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
+        # The client predicts the flip from the DOM and opens the confirm itself
+        # (UX_GUARDRAILS 6.5 — a client-known confirm never waits on the network),
+        # then re-sends with confirmed: true on Proceed. Suppressed ("don't ask
+        # again") commits the same way. Either path commits straight through; the
+        # gate below is the authoritative backstop for a move the client did NOT
+        # predict as a flip.
+        if Map.get(params, "confirmed") == true or skip_confirm?(socket, "completion-flip") do
+          case commit_move(socket, task, attrs) do
+            {:ok, socket} ->
+              {:reply, %{ok: true, committed: true}, socket}
+
+            {:error, reason, socket} ->
+              {:reply, %{ok: false, error: format_move_error(reason)}, socket}
+          end
+        else
+          # A completion-flip confirmation is required: the move is NOT yet
+          # persisted, but the client KEEPS its optimistic placement while the
+          # modal decides (§8.20 — confirmations must not undo optimism).
+          # committed: false tells it to hold a revert handle: Cancel / a failed
+          # Proceed reverts via "confirm-cancelled"; a Proceed commit re-renders
+          # the same placement.
+          {:reply, %{ok: true, committed: false},
+           assign_pending(socket, %{
+             kind: :move,
+             task_id: task.id,
+             attrs: attrs,
+             scenario: scenario,
+             titles: titles,
+             flip_ids: flip_ids
+           })}
+        end
+
+      {:error, reason} ->
+        {:reply, %{ok: false, error: format_move_error(reason)},
+         put_flash(socket, :error, "Couldn't move task: #{format_move_error(reason)}.")}
+    end
+  end
+
+  defp do_add_collaborator_to(socket, user, iid, uid) do
+    {ok?, socket} =
+      case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
+        {:ok, added} ->
+          {true, put_flash(socket, :info, "Added #{added.name} as a viewer.")}
+
+        # Already a member → the real row is already present; treat the optimistic
+        # chip as not-needed (ok:false pulls the dimmed stand-in; the flash is
+        # informational, no lie left behind).
+        {:error, :already_member} ->
+          {false, put_flash(socket, :info, "They're already a member there.")}
+
+        {:error, :forbidden} ->
+          {false, put_flash(socket, :error, "Only that Initiative's owner can add members.")}
+
+        {:error, :failed} ->
+          {false, put_flash(socket, :error, "Couldn't add them.")}
       end
 
-    {:noreply, socket}
+    # Refresh the collaborators pane AND the rail initiatives (their member-
+    # avatar rows) so the server render carries the real avatar after the add —
+    # otherwise the optimistic rail chip (WL3.5 Fix B) would be pulled on the
+    # reply with nothing to replace it (a lie). The rail uses @initiatives in
+    # both list and detail modes.
+    socket =
+      socket
+      |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+      |> assign(:initiatives, Initiatives.list_visible_initiatives(user))
+
+    # Only refresh members when the add landed on the currently-open Initiative
+    # (detail mode). In list mode @initiative is nil, so guard it.
+    socket =
+      if socket.assigns.initiative && iid == socket.assigns.initiative.id,
+        do: assign(socket, :members, Initiatives.list_members(iid)),
+        else: socket
+
+    {:reply, %{ok: ok?}, socket}
   end
 
   # --- Pending-action commits -----------------------------------------------
+
+  # The authoritative completion-flip backstop for create: only reached when the
+  # client did NOT predict the flip (or the modal was missing). No flip → commit
+  # straight through; a flip the client missed → splice the preview row and raise
+  # the server @pending_action confirm (#completion-confirm).
+  defp create_with_flip_check(socket, user, attrs, title) do
+    initiative = socket.assigns.initiative
+
+    case Tasks.preview_create(user, attrs) do
+      {:ok, %{scenario: nil}} ->
+        {:noreply, commit_create(socket, attrs)}
+
+      {:ok, %{scenario: scenario, titles: titles, ids: flip_ids}} ->
+        # Optimism (§8.20, parity with a held move): the task must SHOW UP before
+        # the confirm decides. Splice a preview row into the tree at the target,
+        # marked maybe-write (pink) via pending_saving_ids; confirm → real create
+        # + load_tree replaces it, cancel → reload drops it.
+        preview = preview_task(title)
+
+        {:noreply,
+         socket
+         |> assign(
+           :tree,
+           splice_preview(
+             socket.assigns.tree,
+             initiative.root_task_id,
+             attrs["parent_id"],
+             attrs["position"],
+             preview
+           )
+         )
+         |> assign_pending(%{
+           kind: :create,
+           attrs: attrs,
+           scenario: scenario,
+           titles: titles,
+           flip_ids: flip_ids,
+           preview_id: preview.id
+         })}
+
+      {:error, cs} ->
+        {:noreply, put_flash(socket, :error, "Couldn't create task: #{summarize_errors(cs)}.")}
+    end
+  end
 
   defp commit_create(socket, attrs) do
     case Tasks.create_task(socket.assigns.current_user, attrs) do
@@ -1689,6 +2185,10 @@ defmodule DoItWeb.InitiativeShowLive do
   # suppressed, or the user Proceeded); we just write it. Permission is the
   # authoritative backstop. Reply mirrors move_task: ok:true + committed:true
   # releases the held flip; ok:false reverts it.
+  # `id` is nil for a bad/absent client id (parse_id rejected it) — reply ok:false
+  # so the held optimistic flip reverts, never crash.
+  defp request_cascade(socket, nil, _kind), do: {:reply, %{ok: false}, socket}
+
   defp request_cascade(socket, id, kind) do
     if not can_progress?(socket, id) do
       {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
@@ -1701,16 +2201,20 @@ defmodule DoItWeb.InitiativeShowLive do
   end
 
   defp commit_cascade(socket, id, kind) do
-    task = Tasks.get_task!(id)
     user = socket.assigns.current_user
 
     result =
-      case kind do
-        :cascade_complete -> Tasks.cascade_complete(task, user)
-        :cascade_incomplete -> Tasks.cascade_incomplete(task, user)
+      case Tasks.get_task(id) do
+        # Just-deleted under us (real-time collab) — nothing to cascade.
+        nil -> {:error, :not_found}
+        task when kind == :cascade_complete -> Tasks.cascade_complete(task, user)
+        task -> Tasks.cascade_incomplete(task, user)
       end
 
     case result do
+      {:error, :not_found} ->
+        {:error, assign_pending(socket, nil)}
+
       {:ok, _} ->
         {:ok, socket |> assign_pending(nil) |> load_tree() |> refresh_selected()}
 
@@ -1724,20 +2228,30 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  defp commit_delete_task(socket, id) do
-    case Tasks.delete_task(Tasks.get_task!(id), socket.assigns.current_user) do
-      {:ok, _} ->
-        socket
-        |> assign_pending(nil)
-        |> assign(:selected_task_id, nil)
-        |> assign(:selected_task, nil)
-        |> put_flash(:info, "Task deleted.")
-        |> load_tree()
+  # A bad/absent id, or one whose task a collaborator already deleted, is a no-op
+  # (the row was optimistically removed client-side; the tree reload reconciles).
+  defp commit_delete_task(socket, nil), do: socket
 
-      {:error, cs} ->
+  defp commit_delete_task(socket, id) do
+    case Tasks.get_task(id) do
+      nil ->
         socket
-        |> assign_pending(nil)
-        |> put_flash(:error, "Couldn't delete task: #{summarize_errors(cs)}.")
+
+      task ->
+        case Tasks.delete_task(task, socket.assigns.current_user) do
+          {:ok, _} ->
+            socket
+            |> assign_pending(nil)
+            |> assign(:selected_task_id, nil)
+            |> assign(:selected_task, nil)
+            |> put_flash(:info, "Task deleted.")
+            |> load_tree()
+
+          {:error, cs} ->
+            socket
+            |> assign_pending(nil)
+            |> put_flash(:error, "Couldn't delete task: #{summarize_errors(cs)}.")
+        end
     end
   end
 
@@ -1820,10 +2334,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # never the tree or the client-owned selection / editor view state.
   @impl true
   def handle_info(:after_mount, socket) do
+    # Guard the undo/redo labels on still being in a detail: the user may have
+    # patched back to the list (clearing @initiative) before this deferred load
+    # ran. The collaborators rail is shell-level, so always refresh it.
+    socket = if socket.assigns.initiative, do: assign_undo_state(socket), else: socket
+
     {:noreply,
-     socket
-     |> assign_undo_state()
-     |> assign(:rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
+     assign(
+       socket,
+       :rail_collaborators,
+       Initiatives.list_collaborators(socket.assigns.current_user)
+     )}
   end
 
   # A global presence join/leave (item 8): just refresh the Collaborators
@@ -1839,50 +2360,81 @@ defmodule DoItWeb.InitiativeShowLive do
 
   # A presence join/leave/move anywhere in the initiative: push the full
   # selection list to this client (the PresenceBadges hook redraws rows) and
-  # refresh who's-here for the server-rendered online dots.
+  # refresh who's-here for the server-rendered online dots. Guarded against a
+  # stray in-flight diff arriving after we left the detail (@initiative nil).
   def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    {:noreply,
-     socket
-     |> assign(:online_ids, online_ids(socket.assigns.initiative.id))
-     |> push_presence()}
+    if socket.assigns.initiative do
+      {:noreply,
+       socket
+       |> assign(:online_ids, online_ids(socket.assigns.initiative.id))
+       |> push_presence()}
+    else
+      {:noreply, socket}
+    end
   end
 
   # Membership changed somewhere in this initiative: re-check OUR role —
   # removed means ejected on the spot, not at the next refresh; a role change
-  # (e.g. an ownership transfer) re-renders the right controls live.
+  # (e.g. an ownership transfer) re-renders the right controls live. A stray
+  # in-flight message after leaving the detail (@initiative nil) is ignored.
   def handle_info({:members_changed, _initiative_id}, socket) do
-    initiative = Initiatives.get_initiative(socket.assigns.initiative.id)
-    role = initiative && Initiatives.get_role(initiative.id, socket.assigns.current_user.id)
+    cond do
+      is_nil(socket.assigns.initiative) ->
+        {:noreply, socket}
 
-    if role do
-      {:noreply,
-       socket
-       |> assign(:initiative, initiative)
-       |> assign(:role, role)
-       |> assign(:can_edit, Initiatives.can_edit?(role))
-       |> assign(:can_admin, Initiatives.can_admin?(role))
-       |> assign(:members, Initiatives.list_members(initiative.id))
-       # A removal here may drop the last Initiative shared with someone, so
-       # refresh the Collaborators pane too (item 9).
-       |> assign(:rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
-    else
-      {:noreply,
-       socket
-       |> put_flash(:info, "You're no longer a member of that Initiative.")
-       |> push_navigate(to: ~p"/initiatives")}
+      true ->
+        initiative = Initiatives.get_initiative(socket.assigns.initiative.id)
+        role = initiative && Initiatives.get_role(initiative.id, socket.assigns.current_user.id)
+
+        if role do
+          {:noreply,
+           socket
+           |> assign(:initiative, initiative)
+           |> assign(:role, role)
+           |> assign(:can_edit, Initiatives.can_edit?(role))
+           |> assign(:can_admin, Initiatives.can_admin?(role))
+           |> assign(:members, Initiatives.list_members(initiative.id))
+           # A removal here may drop the last Initiative shared with someone, so
+           # refresh the Collaborators pane too (item 9).
+           |> assign(
+             :rail_collaborators,
+             Initiatives.list_collaborators(socket.assigns.current_user)
+           )}
+        else
+          {:noreply,
+           socket
+           |> put_flash(:info, "You're no longer a member of that Initiative.")
+           |> push_navigate(to: ~p"/initiatives")}
+        end
     end
   end
 
-  def handle_info({:task_created, _id}, socket), do: {:noreply, load_tree(socket)}
+  # Task-tree broadcasts are guarded against a stray in-flight delivery after we
+  # unsubscribed on leave/switch: @initiative nil → ignore (the list isn't a
+  # tree), AND a message whose task belongs to a DIFFERENT Initiative is dropped.
+  # PubSub delivery is async, so a broadcast for the just-left Initiative A can
+  # already be enqueued before teardown_detail unsubscribed and still arrive after
+  # we switched to B — patching A's lineage into B's tree. own_task_broadcast?/2
+  # confirms the task is ours before we touch the tree (see its note for why a
+  # gone task falls through to the harmless reload path).
+  def handle_info({:task_created, id}, socket),
+    do: {:noreply, if(own_task_broadcast?(socket, id), do: load_tree(socket), else: socket)}
 
-  def handle_info({:task_updated, id}, socket), do: {:noreply, patch_task(socket, id)}
+  def handle_info({:task_updated, id}, socket),
+    do: {:noreply, if(own_task_broadcast?(socket, id), do: patch_task(socket, id), else: socket)}
 
-  def handle_info({:task_deleted, _id}, socket),
-    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+  def handle_info({:task_deleted, id}, socket),
+    do:
+      {:noreply,
+       if(own_task_broadcast?(socket, id),
+         do: socket |> load_tree() |> refresh_selected(),
+         else: socket
+       )}
 
   # A comment landed in the Initiative (item 14.3): refresh the pane only for a
   # viewer who has that task open, so the comment appears live for them without
-  # every other viewer needlessly reloading their own selected pane.
+  # every other viewer needlessly reloading their own selected pane. In list mode
+  # selected_task_id is nil, so this is a safe no-op there.
   def handle_info({:comment_added, task_id}, socket) do
     if socket.assigns.selected_task_id == task_id,
       do: {:noreply, refresh_selected(socket)},
@@ -1901,13 +2453,52 @@ defmodule DoItWeb.InitiativeShowLive do
   # Live chat (item 3.1): a message arrived for this Initiative. Append to the
   # capped in-socket list (oldest dropped past @chat_cap) and bump a monotonic
   # id the template uses as a stable key + autoscroll trigger. Ephemeral — only
-  # ever held here, never written.
+  # ever held here, never written. Ignored when not in a detail (stray delivery).
   def handle_info({:chat_message, msg}, socket) do
-    {:noreply, append_chat(socket, msg)}
+    case socket.assigns[:initiative] do
+      %{id: iid} ->
+        # PubSub delivery is async: a chat broadcast for the just-left Initiative A
+        # can already be enqueued before teardown_detail unsubscribed and still
+        # arrive after we switched to B (own_task_broadcast?/2 covers the task
+        # topics; this is the chat-topic equivalent). Drop a message not stamped for
+        # the open Initiative — and any message while in list mode (@initiative nil)
+        # — so A's chat can't leak into B.
+        if Map.get(msg, :initiative_id) == iid,
+          do: {:noreply, append_chat(socket, msg)},
+          else: {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
-  def handle_info({:task_moved, _id}, socket),
-    do: {:noreply, socket |> load_tree() |> refresh_selected()}
+  def handle_info({:task_moved, id}, socket),
+    do:
+      {:noreply,
+       if(own_task_broadcast?(socket, id),
+         do: socket |> load_tree() |> refresh_selected(),
+         else: socket
+       )}
+
+  # True only when a task-tree broadcast's task belongs to the Initiative now
+  # open. @initiative nil (list mode) is always false. A task that POSITIVELY
+  # belongs to another Initiative is dropped; a task we can't find (nil — e.g. a
+  # create immediately undone) falls through to true so the existing reload path
+  # still runs, which is harmless (load_tree always loads the CURRENT tree). The
+  # task row is fetched even when soft-deleted (Repo.get ignores deleted_at), so
+  # a {:task_deleted} for a foreign Initiative is still correctly rejected.
+  defp own_task_broadcast?(socket, task_id) do
+    case socket.assigns[:initiative] do
+      %{id: iid} ->
+        case Tasks.get_task(task_id) do
+          %Task{initiative_id: other} when other != iid -> false
+          _ -> true
+        end
+
+      _ ->
+        false
+    end
+  end
 
   # Whether the sender is the only viewer of this Initiative right now. The
   # per-Initiative presence set (@online_ids, kept fresh on every presence_diff)
@@ -1928,6 +2519,127 @@ defmodule DoItWeb.InitiativeShowLive do
     |> assign(:chat_log_id, next_id)
   end
 
+  # --- Index (list) helpers --------------------------------------------------
+
+  # The saved manual order as an id list, derived from the membership rows'
+  # sort_order — feeds the same order-list sorting the drag push uses.
+  defp stored_order(initiatives) do
+    initiatives
+    |> Enum.filter(& &1.my_sort_order)
+    |> Enum.sort_by(& &1.my_sort_order)
+    |> Enum.map(&to_string(&1.id))
+  end
+
+  # Keep the in-memory my_sort_order in step with a freshly pushed order, so
+  # re-renders (and the cards' data-my-order) reflect what was just saved.
+  defp reindex_order(initiatives, []), do: initiatives
+
+  defp reindex_order(initiatives, order) do
+    idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
+
+    Enum.map(initiatives, fn it ->
+      %{it | my_sort_order: Map.get(idx, to_string(it.id), it.my_sort_order)}
+    end)
+  end
+
+  defp restream_sorted(socket) do
+    sorted = sort_initiatives(socket.assigns.initiatives, socket.assigns.sort_state)
+    stream(socket, :initiatives, sorted, reset: true)
+  end
+
+  defp normalize_mode(mode) when mode in @sort_modes, do: mode
+  defp normalize_mode(_), do: nil
+
+  defp sort_initiatives(list, %{mode: nil, reverse: reverse}), do: maybe_reverse(list, reverse)
+
+  defp sort_initiatives(list, %{mode: "manual", order: order, reverse: reverse}) do
+    idx = order |> Enum.with_index() |> Map.new(fn {id, i} -> {to_string(id), i} end)
+
+    list
+    |> Enum.sort_by(fn it -> Map.get(idx, to_string(it.id), length(order)) end)
+    |> maybe_reverse(reverse)
+  end
+
+  defp sort_initiatives(list, %{mode: mode, reverse: reverse}) do
+    list |> Enum.sort_by(&index_sort_key(&1, mode), index_sorter(mode)) |> maybe_reverse(reverse)
+  end
+
+  defp index_sort_key(i, "name"), do: String.downcase(i.name || "")
+  defp index_sort_key(i, "progress"), do: i.progress || 0
+  defp index_sort_key(i, "created"), do: i.inserted_at
+  defp index_sort_key(i, "updated"), do: i.updated_at
+
+  defp index_sorter(mode) when mode in ~w(created updated), do: DateTime
+  defp index_sorter(_), do: :asc
+
+  defp maybe_reverse(list, true), do: Enum.reverse(list)
+  defp maybe_reverse(list, _), do: list
+
+  # The Initiative's subtitle (root task title) for the card, or nil when blank
+  # (stored as a single space). nil hides the row via `:if`.
+  defp subtitle_text(%{subtitle: s}) when is_binary(s) do
+    case String.trim(s) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp subtitle_text(_), do: nil
+
+  defp build_empty_form do
+    to_form(Initiatives.change_initiative(%DoIt.Initiatives.Initiative{}))
+  end
+
+  # The Archived-list rows to show (m02.08 item 4.3): archived items always; a
+  # purely-hidden item only when Show-hidden is checked.
+  defp visible_archived(archived, show_hidden) do
+    Enum.filter(archived, fn a -> a.archived? or (a.hidden? and show_hidden) end)
+  end
+
+  # Owner-gated Trash action (m02.06 item 10): apply `fun` to the named trashed
+  # Initiative the current user owns, then refresh both the Trash list and the
+  # live index stream (a restore reappears there).
+  defp with_owned_trashed(socket, id, fun, msg) do
+    user = socket.assigns.current_user
+    initiative = fetch_initiative(id)
+
+    if initiative && initiative.owner_id == user.id && initiative.trashed_at do
+      {:ok, _} = fun.(initiative)
+      visible = Initiatives.list_visible_initiatives(user)
+
+      socket
+      |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
+      |> assign(:initiatives, visible)
+      |> assign(:initiative_count, length(visible))
+      |> stream(:initiatives, sort_initiatives(visible, socket.assigns.sort_state), reset: true)
+      |> put_flash(:info, msg)
+    else
+      put_flash(socket, :error, "Couldn't find that Initiative in your Trash.")
+    end
+  end
+
+  # Per-user restore/unhide (m02.08 worklist 4): apply `fun` to the named
+  # Initiative the current user is a member of, then refresh the active index
+  # stream and the Archived list. Scoped to the caller's own membership row.
+  defp with_member_initiative(socket, id, fun, msg) do
+    user = socket.assigns.current_user
+    initiative = fetch_initiative(id)
+
+    if initiative && Initiatives.get_role(initiative.id, user.id) do
+      {:ok, _} = fun.(user, initiative)
+      visible = Initiatives.list_visible_initiatives(user)
+
+      socket
+      |> assign(:initiatives, visible)
+      |> assign(:initiative_count, length(visible))
+      |> assign(:archived, Initiatives.list_archived_initiatives(user))
+      |> stream(:initiatives, sort_initiatives(visible, socket.assigns.sort_state), reset: true)
+      |> put_flash(:info, msg)
+    else
+      put_flash(socket, :error, "Couldn't find that Initiative.")
+    end
+  end
+
   # --- Render ---------------------------------------------------------------
 
   @impl true
@@ -1937,374 +2649,534 @@ defmodule DoItWeb.InitiativeShowLive do
       flash={@flash}
       current_user={@current_user}
       width={:wide}
-      rail_initiatives={@rail_initiatives}
-      rail_current_id={@initiative.id}
-      rail_current_name={@initiative.name}
+      rail_initiatives={@initiatives}
+      rail_current_id={@initiative && @initiative.id}
+      rail_current_name={@initiative && @initiative.name}
       rail_collaborators={@rail_collaborators}
       rail_online_ids={@collaborator_online_ids}
       rail_member_ids={MapSet.new(@members, & &1.user_id)}
     >
-      <div id="initiative-show-root" phx-hook=".TaskKeys">
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
+      <%!-- Shell root hook (M02.09 WL5.4): ALWAYS present in both list and detail
+           modes. It owns the §6.8 dead-window livePush registration — registered
+           once at first connect and NEVER unregistered on a list<->detail hop, so
+           the dead window exists only at first connect (today's per-hop
+           registration/presence churn is gone). The detail-specific .TaskKeys
+           duties live on a hook mounted only in detail mode (below). --%>
+      <div id="workspace-root" phx-hook=".Workspace">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".Workspace">
           export default {
             mounted() {
-              this._h = (e) => this.handle(e);
-              window.addEventListener("keydown", this._h);
-              // Row clicks are handled by a delegated listener in app.js (no
-              // hook of its own) — give it a push channel into this LiveView.
-              window.DoitPush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
-              // Expose the bonk so delegated listeners in app.js (e.g. the
-              // transfer-confirm in-flight latch, item 15.16) can sound it too.
-              window.DoitBonk = () => this.bonk();
-              // Server-pushed bonk: a permission denial (a viewer / viewer+
-              // attempting a disallowed action) sounds the same rejection thud,
-              // however the attempt arrived — key, form, click, or drop.
-              this.handleEvent("bonk", () => this.bonk());
-              // A selection can land before we connect (DoitSelection is
-              // client-only; slow longpoll connect). Replay it now so the server
-              // loads the pane's comments / activity / co-assignees for it.
-              if (window.DoitSelection && window.DoitSelection.id) {
-                this.pushEvent("select_task", {id: window.DoitSelection.id});
-              }
-              // After an undo/redo, select + scroll the affected task into view
-              // (m02.06 item 13). Guarded: an undone create removes the task, so
-              // there's nothing to show — skip rather than stall the pane.
-              this.handleEvent("select-task", ({id}) => {
-                if (!document.getElementById("task-" + id)) return;
-                if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
-                if (window.DoitPush) window.DoitPush("select_task", {id});
-              });
-              // Deep-link from Assigned-to-Me (m02.08 item 1.7): expand any
-              // collapsed ancestors so the target is visible, then select +
-              // scroll it into view. Expansion clears each ancestor's collapse
-              // state the same way the toggle does (localStorage + class +
-              // aria), so it sticks across the post-load collapse-guard pass.
-              this.handleEvent("deep-link-task", ({id, ancestors}) => {
-                (ancestors || []).forEach((aid) => {
-                  // The children <ul> + toggle button carry the initiative id;
-                  // mirror the toggle's localStorage key off it so the expand
-                  // survives the post-load collapse-guard re-apply.
-                  const ul = document.getElementById("children-" + aid);
-                  const btn = document.getElementById("collapse-" + aid);
-                  const init = (ul && ul.dataset.initiativeId) ||
-                               (btn && btn.dataset.initiativeId);
-                  if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0");
-                  if (ul) ul.classList.remove("collapsed-peek");
-                  if (btn) btn.setAttribute("aria-expanded", "true");
-                });
-                // Defer the select/scroll a frame so the just-expanded rows are
-                // laid out before scrollIntoView measures (no layout jank).
-                requestAnimationFrame(() => {
-                  if (!document.getElementById("task-" + id)) return;
-                  if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
-                  if (window.DoitPush) window.DoitPush("select_task", {id});
-                });
-              });
-              // Toolbar Undo/Redo clicks route through the same latch + feedback
-              // as the keyboard (item 15.9), so a repeat while one's in flight is
-              // dropped (with a bonk), never queued.
-              this._undoBtn = (e) => {
-                const b = e.target.closest("#undo-button, #redo-button");
-                if (!b || b.disabled) return;
-                e.preventDefault();
-                this.triggerUndoRedo(b.id === "redo-button" ? "redo" : "undo");
-              };
-              window.addEventListener("click", this._undoBtn);
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
             },
             destroyed() {
-              window.removeEventListener("keydown", this._h);
-              window.removeEventListener("click", this._undoBtn);
-              if (window.DoitPush) delete window.DoitPush;
-              clearTimeout(this._paneT);
-            },
-            inField() {
-              const a = document.activeElement;
-              return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" ||
-                              a.tagName === "SELECT" || a.isContentEditable));
-            },
-            selectedId() {
-              const S = window.DoitSelection;
-              return S ? S.id : null;
-            },
-            // The pane load trails rapid keyboard navigation: the highlight is
-            // client-instant, the server round-trip settles after the pause.
-            schedulePaneLoad(id) {
-              clearTimeout(this._paneT);
-              this._paneT = setTimeout(() => this.pushEvent("select_task", {id: id}), 150);
-            },
-            handle(e) {
-              // Suppression: a text-accepting element has focus — fall through
-              // (so native field-level undo still works).
-              if (this.inField()) return;
-              // Undo / redo (m02.06 item 4): Ctrl/Cmd+Z = undo; +Shift or Ctrl+Y
-              // = redo. Handled before the idclip letter-buffer so "z" isn't
-              // swallowed. No selection required.
-              if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
-                e.preventDefault();
-                const redo = /^y$/i.test(e.key) || e.shiftKey;
-                this.triggerUndoRedo(redo ? "redo" : "undo");
-                return;
-              }
-              const k = e.key;
-              // Easter egg (idclip — Doom's noclip): "see through" to each row's
-              // task/parent IDs as a debug pill. Type the code outside any field.
-              if (k.length === 1 && /[a-z]/i.test(k)) {
-                this._idbuf = ((this._idbuf || "") + k.toLowerCase()).slice(-6);
-                if (this._idbuf === "idclip") {
-                  this._idbuf = "";
-                  document.documentElement.classList.toggle("debug-task-ids");
-                  return;
-                }
-              }
-              if (k === "?") {
-                e.preventDefault();
-                const o = document.getElementById("shortcuts-overlay");
-                if (o) o.dispatchEvent(new CustomEvent("doit:shortcuts-toggle"));
-                return;
-              }
-              if (k === "Enter") {
-                e.preventDefault();
-                const S = window.DoitSelection;
-                if (!S) return;
-                if (S.id) {
-                  S.clear();
-                  this.pushEvent("close_task", {});
-                } else {
-                  const first = document.querySelector("li[data-task-id]");
-                  const id = S.lastId || (first && first.dataset.taskId);
-                  if (id) { S.set(id, {scroll: true}); this.pushEvent("select_task", {id: id}); }
-                }
-                return;
-              }
-              const sel = this.selectedId();
-              if (!sel) return; // every other shortcut needs a selected task
-              if (k === " ") {
-                e.preventDefault();
-                const btn = document.getElementById("collapse-" + sel);
-                if (btn) btn.click();
-                return;
-              }
-              if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
-                e.preventDefault();
-                if (e.altKey) {
-                  const li = document.querySelector(`li[data-task-id="${sel}"]`);
-                  if (li && this.blockedMove(li, k)) { this.bonk(); return; }
-                  const S = window.DoitSaving;
-                  if (S && li) {
-                    const rows = this.movePinkRows(S, li, k);
-                    S.markSaving(rows);
-                    // Reparents move the row between parents — both parents'
-                    // % is in flight (.03.07.23): indeterminate bars.
-                    if (k === "ArrowLeft" || k === "ArrowRight") S.markRecomputing(rows.slice(1));
-                  }
-                  this.pushEvent("kbd_move", {key: k, altKey: true, id: sel});
-                  return;
-                }
-                const id = this.navTarget(sel, k);
-                if (id) {
-                  window.DoitSelection.set(id, {scroll: true});
-                  this.schedulePaneLoad(id);
-                }
-                return;
-              }
-              if (k === "n" || k === "N") { e.preventDefault(); window.DoitAddForm.openChild(sel); return; }
-              if (k === "s" || k === "S") { e.preventDefault(); window.DoitAddForm.openSibling(sel); return; }
-              // Del clicks the delete button so its confirm dialog still fires.
-              if (k === "Delete") {
-                e.preventDefault();
-                const btn = document.getElementById("delete-task-btn");
-                if (btn) btn.click();
-                return;
-              }
-              // P / A: Alt focuses the field for precise editing; plain steps
-              // the value up, Shift steps it down.
-              const field = k.length === 1 && {p: "priority", a: "assignee"}[k.toLowerCase()];
-              if (field) {
-                e.preventDefault();
-                // Alt+P/A: focusing a pane field is pure view state — no
-                // server (.03.07.17). The field exists whenever a task is
-                // selected (persistent pane) and is disabled for viewers.
-                if (e.altKey) {
-                  const el = document.getElementById("task-field-" + field);
-                  if (el && !el.disabled) { el.focus(); el.scrollIntoView({block: "nearest"}); }
-                  return;
-                }
-                const S = window.DoitSaving, li = S && S.selectedLi();
-                if (li) S.markSaving([S.savingRowOf(li)]);
-                this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
-                return;
-              }
-            },
-            visibleRows() {
-              return [...document.querySelectorAll("li[data-task-id]")]
-                .filter((li) => !li.closest("ul.collapsed-peek"));
-            },
-            navTarget(sel, key) {
-              const cur = document.querySelector(`li[data-task-id="${sel}"]`);
-              if (!cur) return null;
-              if (key === "ArrowUp" || key === "ArrowDown") {
-                const rows = this.visibleRows();
-                const j = rows.indexOf(cur) + (key === "ArrowUp" ? -1 : 1);
-                return rows[j] ? rows[j].dataset.taskId : null;
-              }
-              if (key === "ArrowLeft") {
-                const p = cur.parentElement && cur.parentElement.closest("li[data-task-id]");
-                return p ? p.dataset.taskId : null;
-              }
-              const ul = cur.querySelector(":scope > ul[id^='children-']");
-              if (!ul || ul.classList.contains("collapsed-peek")) return null;
-              const first = ul.querySelector(":scope > li[data-task-id]");
-              return first ? first.dataset.taskId : null;
-            },
-            taskSibling(li, dir) {
-              let el = dir < 0 ? li.previousElementSibling : li.nextElementSibling;
-              while (el && !el.matches("li[data-task-id]")) {
-                el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
-              }
-              return el;
-            },
-            // The four impossible reorgs (.03.07.02.12): first child up, last
-            // child down, top-level dedent, indent with no previous sibling.
-            blockedMove(li, key) {
-              if (key === "ArrowUp" || key === "ArrowRight") return !this.taskSibling(li, -1);
-              if (key === "ArrowDown") return !this.taskSibling(li, 1);
-              return !li.parentElement.closest("li[data-task-id]");
-            },
-            // Pink only rows that certainly get a DB write. Moves write the
-            // moved row (parent_id / sort_order), the swapped sibling, and the
-            // parent when the reorder flips it from auto-sort to manual.
-            // Reparents (dedent / indent) also pink BOTH immediate parents —
-            // their % moves in almost every case. Chains above stay quiet:
-            // value-dependent.
-            movePinkRows(S, li, key) {
-              if (key === "ArrowLeft" || key === "ArrowRight") {
-                const rows = [S.savingRowOf(li)];
-                const parentLi = li.parentElement.closest("li[data-task-id]");
-                if (parentLi) rows.push(S.savingRowOf(parentLi));
-                const dest = key === "ArrowRight"
-                  ? this.taskSibling(li, -1)
-                  : parentLi && parentLi.parentElement.closest("li[data-task-id]");
-                if (dest) rows.push(S.savingRowOf(dest));
-                return rows;
-              }
-              const swap = this.taskSibling(li, key === "ArrowUp" ? -1 : 1);
-              const rows = [S.savingRowOf(li), S.savingRowOf(swap)];
-              const parentLi = li.parentElement.closest("li[data-task-id]");
-              if (parentLi && li.parentElement.dataset.sortMode !== "manual") {
-                rows.push(S.savingRowOf(parentLi));
-              }
-              return rows;
-            },
-            // Short descending thud for a rejected move. Audio is a nicety —
-            // never let it break the keyboard path.
-            bonk() {
-              try {
-                const Ctx = window.AudioContext || window.webkitAudioContext;
-                this._audio = this._audio || new Ctx();
-                const ctx = this._audio;
-                if (ctx.state === "suspended") ctx.resume();
-                const osc = ctx.createOscillator(), gain = ctx.createGain();
-                // Triangle + ~220 Hz: pure sine below ~100 Hz is inaudible on
-                // laptop speakers (tab showed the speaker icon, nobody heard it).
-                osc.type = "triangle";
-                osc.frequency.setValueAtTime(220, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.2);
-                gain.gain.setValueAtTime(0.3, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-                osc.connect(gain).connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.3);
-              } catch (_e) { /* no audio, no problem */ }
-            },
-            // In-flight undo/redo feedback (item 15.9): the first trigger latches
-            // and shows a working state instantly (no round trip); a repeat while
-            // it's in flight is DROPPED with a bonk, not queued. The server reply
-            // (handlers return {:reply,…}) clears the latch + working state.
-            triggerUndoRedo(dir) {
-              if (this._undoInFlight) { this.bonk(); return; }
-              this._undoInFlight = dir;
-              this.setUndoBusy(dir, true);
-              this.pushEvent(dir, {}, () => {
-                this._undoInFlight = null;
-                this.setUndoBusy(dir, false);
-              });
-            },
-            setUndoBusy(dir, on) {
-              const btn = document.getElementById(dir === "redo" ? "redo-button" : "undo-button");
-              if (btn) {
-                btn.classList.toggle("animate-pulse", on);
-                btn.classList.toggle("pointer-events-none", on);
-              }
-              const toast = document.getElementById("undo-toast");
-              if (toast) {
-                if (on) {
-                  toast.textContent = dir === "redo" ? "Redoing…" : "Undoing…";
-                  toast.hidden = false;
-                } else {
-                  toast.hidden = true;
-                }
-              }
+              window.DoitUnregisterLivePush(this._livePush);
             },
           }
         </script>
-        <%!-- Instant "we heard you" toast for undo/redo (item 15.9), shown
+      </div>
+
+      <%= if @live_action == :show do %>
+        <div id={"initiative-detail-#{@initiative.id}"}>
+          <div
+            id={"initiative-show-root-#{@initiative.id}"}
+            data-initiative-id={@initiative.id}
+            phx-hook=".TaskKeys"
+          >
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
+              export default {
+                mounted() {
+                  this._h = (e) => this.handle(e);
+                  window.addEventListener("keydown", this._h);
+                  // M02.09 WL5 defect fix: this hook's element now carries the
+                  // per-Initiative id, so an A->B rail switch truly DESTROYS this hook
+                  // and MOUNTS a fresh one (morphdom can no longer move a static-id
+                  // node into the new wrapper). But LiveView fires destroyed() in its
+                  // post-patch removal pass — AFTER the new Initiative's subtree is
+                  // morphed and this mounted() runs — so the leaving hook's cleanup is
+                  // too late to stop B painting with A's client state. Detect the
+                  // switch HERE (the prior Initiative still owns DoitDetailInitiativeId,
+                  // since its destroyed() hasn't run yet) and clear the leaked
+                  // detail-scoped state BEFORE B's data-keep appliers settle. Re-assert
+                  // the keeps on the moved stable-id elements (editor pane, mobile rail,
+                  // edit signifiers) that morphdom relocated with A's DoitState still
+                  // set — all synchronous, so the corrected state is what the browser
+                  // paints (no flash of A's editor/flyout on B). The query is scoped to
+                  // the per-Initiative detail WRAPPER (#initiative-detail-<id>), NOT this
+                  // hook's own element (#initiative-show-root-<id>): show-root holds only
+                  // the tree column (#tree-scroll, the mobile members panel and the
+                  // archive-prompt banner), while the right-rail flyout (#details-rail,
+                  // carrying the initiative/task editor panes and the desktop members
+                  // panel) is a SIBLING of show-root inside the wrapper. A this.el-scoped
+                  // (show-root) query would skip those rail/editor keeps and leave A's
+                  // editor/flyout state stuck on B, so we scope to the wrapper to
+                  // re-assert every detail keep.
+                  this._iid = this.el.dataset.initiativeId;
+                  if (window.DoitDetailInitiativeId &&
+                      window.DoitDetailInitiativeId !== this._iid) {
+                    this.clearDetailState();
+                    const detail =
+                      document.getElementById("initiative-detail-" + this._iid) || this.el;
+                    detail.querySelectorAll("[data-keep]").forEach((el) => {
+                      if (window.DoitApplyKeep) window.DoitApplyKeep(el);
+                    });
+                  }
+                  window.DoitDetailInitiativeId = this._iid;
+                  // M02.09 WL5.4: the dead-window livePush registration moved to the
+                  // always-present .Workspace shell hook, so a list<->detail hop never
+                  // unregisters it (the dead window exists only at first connect). This
+                  // detail hook mounts on detail-enter and is destroyed on leave/switch
+                  // (its element rides the per-Initiative keyed wrapper), so it owns the
+                  // detail-only duties: the keydown handler, undo/redo clicks, the
+                  // selection replay, and the deep-link / comment-saved / viewer-plus /
+                  // bonk handleEvents.
+                  // Expose the bonk so delegated listeners in app.js (e.g. the
+                  // transfer-confirm in-flight latch, item 15.16) can sound it too.
+                  window.DoitBonk = () => this.bonk();
+                  // Server-pushed bonk: a permission denial (a viewer / viewer+
+                  // attempting a disallowed action) sounds the same rejection thud,
+                  // however the attempt arrived — key, form, click, or drop.
+                  this.handleEvent("bonk", () => this.bonk());
+                  // Saved-tick acks (WL3 item 3.7, §6.7): a debounced subtitle write
+                  // and the viewer+ flip have no reply callback (they ride phx-change
+                  // forms), so the server pushes these one-shot events; reveal the
+                  // brief "✓ Saved" span. viewer-plus additionally re-enables its
+                  // checkbox here (the in-flight signifier disabled it client-side) —
+                  // that re-enable IS the success ack.
+                  this.handleEvent("subtitle-saved", () => {
+                    if (window.DoitSavedTick) window.DoitSavedTick("subtitle-saved-tick");
+                  });
+                  this.handleEvent("viewer-plus-saved", () => {
+                    const box = document.querySelector("input[name='viewer_plus']");
+                    if (box) { clearTimeout(box._vpTimer); box.disabled = false; }
+                    if (window.DoitSavedTick) window.DoitSavedTick("viewer-plus-saved-tick");
+                  });
+                  // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
+                  // client-owned (DoitState.commentEditId), but SAVE is server-gated.
+                  // The server pushes this ONLY on a granted save (an :ok, or a
+                  // :not_found that's already terminal) — never on a refusal — so it
+                  // can clear the client open state honestly. Re-apply the row's
+                  // "comment-edit" keep at once so the editor closes immediately,
+                  // ahead of the reconciling patch.
+                  this.handleEvent("comment-saved", ({id}) => {
+                    if (String(window.DoitState.commentEditId) === String(id)) {
+                      window.DoitState.commentEditId = null;
+                    }
+                    const li = document.getElementById("comment-" + id);
+                    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li);
+                  });
+                  // A selection can land before we connect (DoitSelection is
+                  // client-only; slow longpoll connect). Replay it now so the server
+                  // loads the pane's comments / activity / co-assignees for it. This
+                  // is ALSO the §6.8 de-confliction (WL4.2.2): the dead-window queue
+                  // deliberately SKIPS select_task/close_task, leaving this one push
+                  // of the FINAL selection (DoitSelection.id is the selection slot's
+                  // single source of truth — it captures pill-click selections that
+                  // never call DoitPush, which the queue would miss). One push, no
+                  // double-fire.
+                  if (window.DoitSelection && window.DoitSelection.id) {
+                    this.pushEvent("select_task", {id: window.DoitSelection.id});
+                  }
+                  // After an undo/redo, select + scroll the affected task into view
+                  // (m02.06 item 13). Guarded: an undone create removes the task, so
+                  // there's nothing to show — skip rather than stall the pane.
+                  this.handleEvent("select-task", ({id}) => {
+                    if (!document.getElementById("task-" + id)) return;
+                    if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                    if (window.DoitPush) window.DoitPush("select_task", {id});
+                  });
+                  // Deep-link from Assigned-to-Me (m02.08 item 1.7): expand any
+                  // collapsed ancestors so the target is visible, then select +
+                  // scroll it into view. Expansion clears each ancestor's collapse
+                  // state the same way the toggle does (localStorage + class +
+                  // aria), so it sticks across the post-load collapse-guard pass.
+                  this.handleEvent("deep-link-task", ({id, ancestors}) => {
+                    (ancestors || []).forEach((aid) => {
+                      // The children <ul> + toggle button carry the initiative id;
+                      // mirror the toggle's localStorage key off it so the expand
+                      // survives the post-load collapse-guard re-apply.
+                      const ul = document.getElementById("children-" + aid);
+                      const btn = document.getElementById("collapse-" + aid);
+                      const init = (ul && ul.dataset.initiativeId) ||
+                                   (btn && btn.dataset.initiativeId);
+                      if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0");
+                      if (ul) ul.classList.remove("collapsed-peek");
+                      if (btn) btn.setAttribute("aria-expanded", "true");
+                    });
+                    // Defer the select/scroll a frame so the just-expanded rows are
+                    // laid out before scrollIntoView measures (no layout jank).
+                    requestAnimationFrame(() => {
+                      if (!document.getElementById("task-" + id)) return;
+                      if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                      if (window.DoitPush) window.DoitPush("select_task", {id});
+                    });
+                  });
+                  // Toolbar Undo/Redo clicks route through the same latch + feedback
+                  // as the keyboard (item 15.9), so a repeat while one's in flight is
+                  // dropped (with a bonk), never queued.
+                  this._undoBtn = (e) => {
+                    const b = e.target.closest("#undo-button, #redo-button");
+                    if (!b || b.disabled) return;
+                    e.preventDefault();
+                    this.triggerUndoRedo(b.id === "redo-button" ? "redo" : "undo");
+                  };
+                  window.addEventListener("click", this._undoBtn);
+                },
+                destroyed() {
+                  window.removeEventListener("keydown", this._h);
+                  window.removeEventListener("click", this._undoBtn);
+                  clearTimeout(this._paneT);
+                  // M02.09 WL5.4 + defect fix: leaving the detail (patch to the list)
+                  // must clear ALL detail-scoped client state, or it leaks into the
+                  // next detail — e.g. a stale selection replayed against another
+                  // Initiative's tree, or an editor/comment editor re-opening. On an
+                  // Initiative SWITCH this destroyed() runs AFTER the next
+                  // Initiative's hook has already mounted and reset the state
+                  // (LiveView mounts on add, destroys on the later removal pass), so
+                  // guard on the tracked id: only clear when WE are still the active
+                  // detail (the leave-to-list case). On a switch the newer mount owns
+                  // DoitDetailInitiativeId — skip, or we'd wipe B's freshly-set state
+                  // and break detection of the next switch. The livePush stays
+                  // registered (owned by the always-present .Workspace shell hook), so
+                  // the dead-window funnel is untouched here.
+                  if (window.DoitDetailInitiativeId === this._iid) {
+                    window.DoitDetailInitiativeId = null;
+                    this.clearDetailState();
+                  }
+                },
+                // Reset every detail-scoped client store to its default. Shared by the
+                // leave path (destroyed) and the switch path (mounted) so the two stay
+                // in lock-step.
+                clearDetailState() {
+                  // editorOpen must be cleared BEFORE the selection: DoitSelection.clear()
+                  // runs syncRail (via apply -> syncPaneSkeleton), and syncRail computes
+                  // the mobile rail/backdrop open state from BOTH the selection AND
+                  // DoitInitiativeEditor.open. Clearing the editor flag first means that
+                  // syncRail pass already sees the editor closed, so a switch-with-editor-
+                  // open doesn't leave the rail/backdrop stuck open (nothing re-runs
+                  // syncRail after clear()).
+                  if (window.DoitState) {
+                    window.DoitState.editorOpen = false;
+                    window.DoitState.commentEditId = null;
+                    window.DoitState.commentVersionsId = null;
+                    window.DoitState.pending = {toggle: null, move: null, initiativeOrder: null};
+                    window.DoitState.presence = {selections: [], online: []};
+                    // Tree scroll is detail-scoped: the only data-keep="scroll" box is
+                    // the per-Initiative #tree-scroll, so reset it wholesale — B's tree
+                    // must open at the top, not inherit A's scrollTop.
+                    window.DoitState.scroll = {};
+                    // <details data-keep="open"> open-state is keyed by STABLE element
+                    // id, and the detail disclosures (initiative-settings, task-activity,
+                    // members-*-form) reuse the same ids across Initiatives — so A's open
+                    // state would re-assert on B. Clear every detailsOpen entry EXCEPT the
+                    // genuinely non-detail ones: the app-shell menus (notif/account/mobile
+                    // -menu, cross-page) and the index-mode disclosures (new-initiative,
+                    // archived, list-scoped). Everything else is a detail disclosure and
+                    // must reset to its server default. (Keeping this an allow-list of the
+                    // few stable non-detail ids means a NEW detail disclosure is cleared by
+                    // default — failing safe against the very leak this closes.)
+                    const KEEP_OPEN = new Set([
+                      "notif-menu", "account-menu", "mobile-menu", "new-initiative", "archived"
+                    ]);
+                    Object.keys(window.DoitState.detailsOpen).forEach((id) => {
+                      if (!KEEP_OPEN.has(id)) delete window.DoitState.detailsOpen[id];
+                    });
+                    // The archive-on-completion banner dismissal is detail-scoped
+                    // (#archive-prompt renders per-Initiative); clear it so a fresh detail
+                    // re-evaluates from the server's show_archive_prompt instead of
+                    // inheriting A's dismissal.
+                    window.DoitState.archivePromptDismissed = false;
+                  }
+                  if (window.DoitSelection) window.DoitSelection.clear();
+                },
+                inField() {
+                  const a = document.activeElement;
+                  return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" ||
+                                  a.tagName === "SELECT" || a.isContentEditable));
+                },
+                selectedId() {
+                  const S = window.DoitSelection;
+                  return S ? S.id : null;
+                },
+                // The pane load trails rapid keyboard navigation: the highlight is
+                // client-instant, the server round-trip settles after the pause.
+                schedulePaneLoad(id) {
+                  clearTimeout(this._paneT);
+                  this._paneT = setTimeout(() => this.pushEvent("select_task", {id: id}), 150);
+                },
+                handle(e) {
+                  // Suppression: a text-accepting element has focus — fall through
+                  // (so native field-level undo still works).
+                  if (this.inField()) return;
+                  // Undo / redo (m02.06 item 4): Ctrl/Cmd+Z = undo; +Shift or Ctrl+Y
+                  // = redo. Handled before the idclip letter-buffer so "z" isn't
+                  // swallowed. No selection required.
+                  if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
+                    e.preventDefault();
+                    const redo = /^y$/i.test(e.key) || e.shiftKey;
+                    this.triggerUndoRedo(redo ? "redo" : "undo");
+                    return;
+                  }
+                  const k = e.key;
+                  // Easter egg (idclip — Doom's noclip): "see through" to each row's
+                  // task/parent IDs as a debug pill. Type the code outside any field.
+                  if (k.length === 1 && /[a-z]/i.test(k)) {
+                    this._idbuf = ((this._idbuf || "") + k.toLowerCase()).slice(-6);
+                    if (this._idbuf === "idclip") {
+                      this._idbuf = "";
+                      document.documentElement.classList.toggle("debug-task-ids");
+                      return;
+                    }
+                  }
+                  if (k === "?") {
+                    e.preventDefault();
+                    const o = document.getElementById("shortcuts-overlay");
+                    if (o) o.dispatchEvent(new CustomEvent("doit:shortcuts-toggle"));
+                    return;
+                  }
+                  if (k === "Enter") {
+                    e.preventDefault();
+                    const S = window.DoitSelection;
+                    if (!S) return;
+                    if (S.id) {
+                      S.clear();
+                      this.pushEvent("close_task", {});
+                    } else {
+                      const first = document.querySelector("li[data-task-id]");
+                      const id = S.lastId || (first && first.dataset.taskId);
+                      if (id) { S.set(id, {scroll: true}); this.pushEvent("select_task", {id: id}); }
+                    }
+                    return;
+                  }
+                  const sel = this.selectedId();
+                  if (!sel) return; // every other shortcut needs a selected task
+                  if (k === " ") {
+                    e.preventDefault();
+                    const btn = document.getElementById("collapse-" + sel);
+                    if (btn) btn.click();
+                    return;
+                  }
+                  if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
+                    e.preventDefault();
+                    if (e.altKey) {
+                      const li = document.querySelector(`li[data-task-id="${sel}"]`);
+                      if (li && this.blockedMove(li, k)) { this.bonk(); return; }
+                      const S = window.DoitSaving;
+                      if (S && li) {
+                        const rows = this.movePinkRows(S, li, k);
+                        S.markSaving(rows);
+                        // Reparents move the row between parents — both parents'
+                        // % is in flight (.03.07.23): indeterminate bars.
+                        if (k === "ArrowLeft" || k === "ArrowRight") S.markRecomputing(rows.slice(1));
+                      }
+                      this.pushEvent("kbd_move", {key: k, altKey: true, id: sel});
+                      return;
+                    }
+                    const id = this.navTarget(sel, k);
+                    if (id) {
+                      window.DoitSelection.set(id, {scroll: true});
+                      this.schedulePaneLoad(id);
+                    }
+                    return;
+                  }
+                  if (k === "n" || k === "N") { e.preventDefault(); window.DoitAddForm.openChild(sel); return; }
+                  if (k === "s" || k === "S") { e.preventDefault(); window.DoitAddForm.openSibling(sel); return; }
+                  // Del clicks the delete button so its confirm dialog still fires.
+                  if (k === "Delete") {
+                    e.preventDefault();
+                    const btn = document.getElementById("delete-task-btn");
+                    if (btn) btn.click();
+                    return;
+                  }
+                  // P / A: Alt focuses the field for precise editing; plain steps
+                  // the value up, Shift steps it down.
+                  const field = k.length === 1 && {p: "priority", a: "assignee"}[k.toLowerCase()];
+                  if (field) {
+                    e.preventDefault();
+                    // Alt+P/A: focusing a pane field is pure view state — no
+                    // server (.03.07.17). The field exists whenever a task is
+                    // selected (persistent pane) and is disabled for viewers.
+                    if (e.altKey) {
+                      const el = document.getElementById("task-field-" + field);
+                      if (el && !el.disabled) { el.focus(); el.scrollIntoView({block: "nearest"}); }
+                      return;
+                    }
+                    const S = window.DoitSaving, li = S && S.selectedLi();
+                    if (li) S.markSaving([S.savingRowOf(li)]);
+                    this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
+                    return;
+                  }
+                },
+                visibleRows() {
+                  return [...document.querySelectorAll("li[data-task-id]")]
+                    .filter((li) => !li.closest("ul.collapsed-peek"));
+                },
+                navTarget(sel, key) {
+                  const cur = document.querySelector(`li[data-task-id="${sel}"]`);
+                  if (!cur) return null;
+                  if (key === "ArrowUp" || key === "ArrowDown") {
+                    const rows = this.visibleRows();
+                    const j = rows.indexOf(cur) + (key === "ArrowUp" ? -1 : 1);
+                    return rows[j] ? rows[j].dataset.taskId : null;
+                  }
+                  if (key === "ArrowLeft") {
+                    const p = cur.parentElement && cur.parentElement.closest("li[data-task-id]");
+                    return p ? p.dataset.taskId : null;
+                  }
+                  const ul = cur.querySelector(":scope > ul[id^='children-']");
+                  if (!ul || ul.classList.contains("collapsed-peek")) return null;
+                  const first = ul.querySelector(":scope > li[data-task-id]");
+                  return first ? first.dataset.taskId : null;
+                },
+                taskSibling(li, dir) {
+                  let el = dir < 0 ? li.previousElementSibling : li.nextElementSibling;
+                  while (el && !el.matches("li[data-task-id]")) {
+                    el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+                  }
+                  return el;
+                },
+                // The four impossible reorgs (.03.07.02.12): first child up, last
+                // child down, top-level dedent, indent with no previous sibling.
+                blockedMove(li, key) {
+                  if (key === "ArrowUp" || key === "ArrowRight") return !this.taskSibling(li, -1);
+                  if (key === "ArrowDown") return !this.taskSibling(li, 1);
+                  return !li.parentElement.closest("li[data-task-id]");
+                },
+                // Pink only rows that certainly get a DB write. Moves write the
+                // moved row (parent_id / sort_order), the swapped sibling, and the
+                // parent when the reorder flips it from auto-sort to manual.
+                // Reparents (dedent / indent) also pink BOTH immediate parents —
+                // their % moves in almost every case. Chains above stay quiet:
+                // value-dependent.
+                movePinkRows(S, li, key) {
+                  if (key === "ArrowLeft" || key === "ArrowRight") {
+                    const rows = [S.savingRowOf(li)];
+                    const parentLi = li.parentElement.closest("li[data-task-id]");
+                    if (parentLi) rows.push(S.savingRowOf(parentLi));
+                    const dest = key === "ArrowRight"
+                      ? this.taskSibling(li, -1)
+                      : parentLi && parentLi.parentElement.closest("li[data-task-id]");
+                    if (dest) rows.push(S.savingRowOf(dest));
+                    return rows;
+                  }
+                  const swap = this.taskSibling(li, key === "ArrowUp" ? -1 : 1);
+                  const rows = [S.savingRowOf(li), S.savingRowOf(swap)];
+                  const parentLi = li.parentElement.closest("li[data-task-id]");
+                  if (parentLi && li.parentElement.dataset.sortMode !== "manual") {
+                    rows.push(S.savingRowOf(parentLi));
+                  }
+                  return rows;
+                },
+                // Short descending thud for a rejected move. Audio is a nicety —
+                // never let it break the keyboard path.
+                bonk() {
+                  try {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    this._audio = this._audio || new Ctx();
+                    const ctx = this._audio;
+                    if (ctx.state === "suspended") ctx.resume();
+                    const osc = ctx.createOscillator(), gain = ctx.createGain();
+                    // Triangle + ~220 Hz: pure sine below ~100 Hz is inaudible on
+                    // laptop speakers (tab showed the speaker icon, nobody heard it).
+                    osc.type = "triangle";
+                    osc.frequency.setValueAtTime(220, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.2);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+                    osc.connect(gain).connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.3);
+                  } catch (_e) { /* no audio, no problem */ }
+                },
+                // In-flight undo/redo feedback (item 15.9): the first trigger latches
+                // and shows a working state instantly (no round trip); a repeat while
+                // it's in flight is DROPPED with a bonk, not queued. The server reply
+                // (handlers return {:reply,…}) clears the latch + working state.
+                triggerUndoRedo(dir) {
+                  if (this._undoInFlight) { this.bonk(); return; }
+                  this._undoInFlight = dir;
+                  this.setUndoBusy(dir, true);
+                  this.pushEvent(dir, {}, () => {
+                    this._undoInFlight = null;
+                    this.setUndoBusy(dir, false);
+                  });
+                },
+                setUndoBusy(dir, on) {
+                  const btn = document.getElementById(dir === "redo" ? "redo-button" : "undo-button");
+                  if (btn) {
+                    btn.classList.toggle("animate-pulse", on);
+                    btn.classList.toggle("pointer-events-none", on);
+                  }
+                  const toast = document.getElementById("undo-toast");
+                  if (toast) {
+                    if (on) {
+                      toast.textContent = dir === "redo" ? "Redoing…" : "Undoing…";
+                      toast.hidden = false;
+                    } else {
+                      toast.hidden = true;
+                    }
+                  }
+                },
+              }
+            </script>
+            <%!-- Instant "we heard you" toast for undo/redo (item 15.9), shown
              client-side before the round trip and hidden when the server reply
              settles the latch; the result then shows as the normal flash. --%>
-        <div
-          id="undo-toast"
-          hidden
-          aria-live="polite"
-          class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
-        >
-        </div>
-        <%!-- Below lg: New List + a Show/Hide Members toggle, kept together as
+            <div
+              id="undo-toast"
+              hidden
+              aria-live="polite"
+              class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
+            >
+            </div>
+            <%!-- Below lg: New List + a Show/Hide Members toggle, kept together as
              one row (the pinned Members panel is lg:+ only, so the toggle is
              needed up to lg). The title-row New List takes over at lg:+, so it's
              hidden below lg and this pair carries New List everywhere else. --%>
-        <div class="lg:hidden mb-6">
-          <div class="flex justify-center items-center gap-2">
-            <button
-              :if={@can_edit}
-              type="button"
-              data-add-root
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-              aria-label="New list"
-              title="New list"
-            >
-              <.icon name="hero-plus" class="w-4 h-4" />
-              <span>New List</span>
-            </button>
-            <button
-              type="button"
-              phx-click={
-                Phoenix.LiveView.JS.toggle(to: "#mobile-members")
-                |> Phoenix.LiveView.JS.toggle(to: "#members-show-label")
-                |> Phoenix.LiveView.JS.toggle(to: "#members-hide-label")
-              }
-              aria-controls="mobile-members"
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-            >
-              <.icon name="hero-users" class="w-4 h-4" />
-              <span id="members-show-label">Show Members</span>
-              <span id="members-hide-label" class="hidden">Hide Members</span>
-            </button>
-          </div>
-          <div id="mobile-members" class="hidden mt-2">
-            <.members_panel
-              id="members-mobile"
-              members={@members}
-              can_admin={@can_admin}
-              online_ids={@online_ids}
-              owner_id={@initiative.owner_id}
-              me={@current_user.id}
-              assignee_ids={@direct_assignee_ids}
-              viewer_plus_on={@initiative.viewer_plus}
-              can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
-            />
-          </div>
-        </div>
+            <div class="lg:hidden mb-6">
+              <div class="flex justify-center items-center gap-2">
+                <button
+                  :if={@can_edit}
+                  type="button"
+                  data-add-root
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                  aria-label="New list"
+                  title="New list"
+                >
+                  <.icon name="hero-plus" class="w-4 h-4" />
+                  <span>New List</span>
+                </button>
+                <button
+                  type="button"
+                  phx-click={
+                    Phoenix.LiveView.JS.toggle(to: "#mobile-members")
+                    |> Phoenix.LiveView.JS.toggle(to: "#members-show-label")
+                    |> Phoenix.LiveView.JS.toggle(to: "#members-hide-label")
+                  }
+                  aria-controls="mobile-members"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  <.icon name="hero-users" class="w-4 h-4" />
+                  <span id="members-show-label">Show Members</span>
+                  <span id="members-hide-label" class="hidden">Hide Members</span>
+                </button>
+              </div>
+              <div id="mobile-members" class="hidden mt-2">
+                <.members_panel
+                  id="members-mobile"
+                  members={@members}
+                  can_admin={@can_admin}
+                  online_ids={@online_ids}
+                  owner_id={@initiative.owner_id}
+                  me={@current_user.id}
+                  assignee_ids={@direct_assignee_ids}
+                  viewer_plus_on={@initiative.viewer_plus}
+                  can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
+                />
+              </div>
+            </div>
 
-        <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
+            <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
              shell — the page stops scrolling and each column owns its own
              vertical scroll. Below lg: it's a plain grid and the page scrolls,
              unchanged. The calc trims the top header (~2.8rem) and the
@@ -2312,187 +3184,199 @@ defmodule DoItWeb.InitiativeShowLive do
              lg: (lg:pb-0), so the shell fits flush to the viewport bottom. The
              close/role row now lives inside the center column (it used to sit
              full-width above the shell), so it no longer subtracts here. --%>
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-5rem)] lg:items-stretch lg:overflow-hidden">
-          <%!-- Center column. At lg:+ it's a flex column: the close/role row and
+            <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-5rem)] lg:items-stretch lg:overflow-hidden">
+              <%!-- Center column. At lg:+ it's a flex column: the close/role row and
                header are flex-none siblings above the tree's own scroll box
                (item 1.2), so the tree scrolls beneath chrome that never moves.
                Below lg: it's a normal block and the page scrolls. min-w-0 keeps
                the column from expanding to fit deep rows. --%>
-          <div class="min-w-0 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden">
-            <%!-- Close (back to the index) + role on the same row, scoped to the
+              <div class="min-w-0 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden">
+                <%!-- Close (back to the index) + role on the same row, scoped to the
                  center column so it aligns with the header beneath it rather
                  than spanning the right pane. The little red X (item 12.7) reads
                  as "close this Initiative" rather than a plain back arrow —
                  matching the task pane's close affordance. --%>
-            <div class="mb-4 flex items-center justify-between gap-2">
-              <.link
-                navigate={~p"/initiatives"}
-                title="Close this Initiative — back to all Initiatives"
-                class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
-              >
-                <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
-                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
-                </span>
-                Close Initiative
-              </.link>
-              <div class="flex items-center gap-3">
-                <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
+                <div class="mb-4 flex items-center justify-between gap-2">
+                  <.link
+                    patch={~p"/initiatives"}
+                    title="Close this Initiative — back to all Initiatives"
+                    class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
+                  >
+                    <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
+                      <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+                    </span>
+                    Close Initiative
+                  </.link>
+                  <div class="flex items-center gap-3">
+                    <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
                      that way; the tooltip names the action. Ctrl+Z / Ctrl+Shift+Z
                      drive the same handlers (KbdNav hook). --%>
-                <div class="flex items-center gap-1">
-                  <button
-                    type="button"
-                    id="undo-button"
-                    disabled={is_nil(@undo_label)}
-                    title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
-                    aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
-                    class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
-                  >
-                    <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    id="redo-button"
-                    disabled={is_nil(@redo_label)}
-                    title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
-                    aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
-                    class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
-                  >
-                    <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
-                  </button>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        id="undo-button"
+                        disabled={is_nil(@undo_label)}
+                        title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
+                        aria-label={
+                          (@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"
+                        }
+                        class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                      >
+                        <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        id="redo-button"
+                        disabled={is_nil(@redo_label)}
+                        title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
+                        aria-label={
+                          (@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"
+                        }
+                        class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                      >
+                        <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+                      Your role:
+                      <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+                    </div>
+                  </div>
                 </div>
-                <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
-                  Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
-                </div>
-              </div>
-            </div>
 
-            <.initiative_header
-              initiative={@initiative}
-              subtitle={@subtitle}
-              initiative_progress={@initiative_progress}
-              can_edit={@can_edit}
-            />
+                <.initiative_header
+                  initiative={@initiative}
+                  subtitle={@subtitle}
+                  initiative_progress={@initiative_progress}
+                  can_edit={@can_edit}
+                />
 
-            <%!-- Archive-on-completion prompt (m02.08 item 4.1): a dismissible
+                <%!-- Archive-on-completion prompt (m02.08 item 4.1): a dismissible
                  nudge when the roll-up hits 100%. It only OFFERS to archive —
                  Archive runs the same per-user archive (with its own 4.2
                  confirm); Dismiss just closes the banner. Never auto-archives. --%>
-            <div
-              :if={@show_archive_prompt}
-              id="archive-prompt"
-              class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2.5"
-            >
-              <p class="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
-                <.icon name="hero-check-circle" class="w-5 h-5 flex-none" />
-                All done! Archive this Initiative to clear it from your active list?
-              </p>
-              <div class="flex items-center gap-2 flex-none">
-                <button
-                  type="button"
-                  data-archive-btn
-                  data-am-owner={to_string(@current_user.id == @initiative.owner_id)}
-                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition"
+                <div
+                  :if={@show_archive_prompt}
+                  id="archive-prompt"
+                  data-keep="archive-prompt"
+                  class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2.5"
                 >
-                  <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
-                </button>
-                <button
-                  type="button"
-                  phx-click="dismiss_archive_prompt"
-                  aria-label="Dismiss"
-                  class="inline-flex items-center justify-center w-6 h-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
-                >
-                  <.icon name="hero-x-mark" class="w-4 h-4" />
-                </button>
-              </div>
-            </div>
+                  <p class="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
+                    <.icon name="hero-check-circle" class="w-5 h-5 flex-none" />
+                    All done! Archive this Initiative to clear it from your active list?
+                  </p>
+                  <div class="flex items-center gap-2 flex-none">
+                    <button
+                      type="button"
+                      data-archive-btn
+                      data-am-owner={to_string(@current_user.id == @initiative.owner_id)}
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition"
+                    >
+                      <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="dismiss_archive_prompt"
+                      data-archive-dismiss
+                      aria-label="Dismiss"
+                      class="inline-flex items-center justify-center w-6 h-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+                    >
+                      <.icon name="hero-x-mark" class="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
 
-            <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
+                <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
                  tree's own scroll box plus two theme-matched gradient overlays
                  at its top/bottom edges. The TreeScrollFade hook flips
                  data-scrolled / data-at-end on the scroll box; the overlays
                  show/hide off those. lg:+ only — below it the page scrolls so
                  there's nothing to fade. --%>
-            <div class="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
-              <%!-- min-w-0 + overflow-x-auto: deep indentation scrolls
+                <div class="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
+                  <%!-- min-w-0 + overflow-x-auto: deep indentation scrolls
                    horizontally inside the column. At lg:+ overflow-y-auto adds
                    the column's own vertical scroll; below lg: the page scrolls.
                    The hook lives on this scroll box but flips data-scrolled /
                    data-at-end on its parent frame, so the sibling fade overlays
                    can read them as group-data-* variants. --%>
-              <div
-                id="tree-scroll"
-                phx-hook="TreeScrollFade"
-                class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
-              >
-                <%!-- The one add-task form (parked in #add-task-home below) gets
+                  <div
+                    id="tree-scroll"
+                    phx-hook="TreeScrollFade"
+                    data-keep="scroll"
+                    class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
+                  >
+                    <%!-- The one add-task form (parked in #add-task-home below) gets
                      client-teleported into these phx-update="ignore" slots —
                      opening a form never phones home (UX_GUARDRAILS 6.5). --%>
-                <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
+                    <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
 
-                <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
-                  No lists yet. Create one to start tracking work.
-                </div>
+                    <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
+                      <%= if @can_edit do %>
+                        No lists yet. Use the New List button above to start tracking work.
+                      <% else %>
+                        No lists yet.
+                      <% end %>
+                    </div>
 
-                <ul
-                  id="task-tree"
-                  phx-hook="TreeWidth"
-                  data-sort-mode={@root_sort_mode}
-                  class="space-y-2"
-                >
-                  <%= for {t, i} <- Enum.with_index(@tree) do %>
-                    <.task_node
-                      task={t}
-                      depth={0}
-                      index_positions={[i]}
-                      index_style={@initiative.index_style}
-                      can_edit={@can_edit}
-                      initiative_id={@initiative.id}
-                      saving_ids={@pending_saving_ids}
-                      recompute_ids={@pending_recompute_ids}
-                      inherited_sort={@root_sort_mode}
-                      progress_calc={@initiative.progress_calc}
-                      display={@display}
-                      member_ids={MapSet.new(@members, & &1.user_id)}
-                      led_ids={@led_task_ids}
-                    />
-                    <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
-                  <% end %>
-                </ul>
-              </div>
+                    <ul
+                      id="task-tree"
+                      phx-hook="TreeWidth"
+                      data-sort-mode={@root_sort_mode}
+                      class="space-y-2"
+                    >
+                      <%= for {t, i} <- Enum.with_index(@tree) do %>
+                        <.task_node
+                          task={t}
+                          depth={0}
+                          index_positions={[i]}
+                          index_style={@initiative.index_style}
+                          can_edit={@can_edit}
+                          initiative_id={@initiative.id}
+                          saving_ids={@pending_saving_ids}
+                          recompute_ids={@pending_recompute_ids}
+                          inherited_sort={@root_sort_mode}
+                          progress_calc={@initiative.progress_calc}
+                          display={@display}
+                          member_ids={MapSet.new(@members, & &1.user_id)}
+                          led_ids={@led_task_ids}
+                        />
+                        <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
+                      <% end %>
+                    </ul>
+                  </div>
 
-              <%!-- Top fade: visible only while scrolled down (data-scrolled).
+                  <%!-- Top fade: visible only while scrolled down (data-scrolled).
                    pointer-events-none so it never intercepts a click/drag on
                    the rows beneath (item 1.3 hard requirement); aria-hidden as
                    it's purely decorative. The gradient stop is the column's
                    exact bg token (white / zinc-950), with a dark-mode variant. --%>
-              <div
-                aria-hidden="true"
-                class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
-              >
-              </div>
-              <%!-- Bottom fade: visible while more content sits below (i.e. NOT
+                  <div
+                    aria-hidden="true"
+                    class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
+                  >
+                  </div>
+                  <%!-- Bottom fade: visible while more content sits below (i.e. NOT
                    at the end). Same click-through + theme-match rules. --%>
+                  <div
+                    aria-hidden="true"
+                    class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
+                  >
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Backdrop on mobile when right-rail flyout is open. Always
+               rendered; the client flips `hidden` with the rail (.03.07.20). --%>
               <div
+                id="pane-backdrop"
+                hidden={is_nil(@selected_task_id)}
+                class="lg:hidden fixed inset-0 z-20 bg-black/50"
+                data-close-panel
                 aria-hidden="true"
-                class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
               >
               </div>
-            </div>
-          </div>
 
-          <%!-- Backdrop on mobile when right-rail flyout is open. Always
-               rendered; the client flips `hidden` with the rail (.03.07.20). --%>
-          <div
-            id="pane-backdrop"
-            hidden={is_nil(@selected_task_id)}
-            class="lg:hidden fixed inset-0 z-20 bg-black/50"
-            data-close-panel
-            aria-hidden="true"
-          >
-          </div>
-
-          <%!-- Right pane (m02.07 item 1.4). At lg:+ it's a persistent column —
+              <%!-- Right pane (m02.07 item 1.4). At lg:+ it's a persistent column —
                always shown, full grid-cell height, a flex column whose Members
                panel is pinned at the top (flex-none, own capped overflow) while
                the Details / initiative-editor content scrolls independently
@@ -2504,78 +3388,80 @@ defmodule DoItWeb.InitiativeShowLive do
                (.03.07.20): client flips data-open at the tap and the variants
                make it a fixed overlay over the backdrop. The shell layout
                (flex column, pinned Members) is lg:+ only. --%>
-          <aside
-            id="details-rail"
-            data-open={@selected_task_id && "true"}
-            class={[
-              "not-data-open:hidden lg:not-data-open:block",
-              "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
-              "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
-              "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
-              "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
-              "data-open:overflow-y-auto lg:data-open:overflow-hidden data-open:[scrollbar-gutter:stable]",
-              "space-y-4 lg:space-y-0 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:overflow-hidden"
-            ]}
-          >
-            <div class="lg:hidden flex justify-end">
-              <button
-                type="button"
-                data-close-panel
-                aria-label="Close details panel"
-                title="Close"
-                class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+              <aside
+                id="details-rail"
+                data-open={@selected_task_id && "true"}
+                data-keep="rail"
+                class={[
+                  "not-data-open:hidden lg:not-data-open:block",
+                  "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
+                  "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
+                  "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
+                  "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
+                  "data-open:overflow-y-auto lg:data-open:overflow-hidden data-open:[scrollbar-gutter:stable]",
+                  "space-y-4 lg:space-y-0 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:overflow-hidden"
+                ]}
               >
-                <.icon name="hero-x-mark" class="w-5 h-5" />
-              </button>
-            </div>
-            <%!-- Members — pinned at the top of the pane (lg:flex-none) with its
+                <div class="lg:hidden flex justify-end">
+                  <button
+                    type="button"
+                    data-close-panel
+                    aria-label="Close details panel"
+                    title="Close"
+                    class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+                  >
+                    <.icon name="hero-x-mark" class="w-5 h-5" />
+                  </button>
+                </div>
+                <%!-- Members — pinned at the top of the pane (lg:flex-none) with its
                  own capped height + overflow when the list is long (item 1.4),
                  so it never scrolls away beneath the Details content. On phone
                  it's hidden in favor of the header's collapsible toggle
                  (.05.04.1). --%>
-            <div class="hidden sm:block lg:flex-none lg:max-h-[45%] lg:overflow-y-auto lg:[scrollbar-gutter:stable] lg:mb-4">
-              <.members_panel
-                id="members-desktop"
-                members={@members}
-                can_admin={@can_admin}
-                online_ids={@online_ids}
-                owner_id={@initiative.owner_id}
-                me={@current_user.id}
-                assignee_ids={@direct_assignee_ids}
-                viewer_plus_on={@initiative.viewer_plus}
-                can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
-              />
-            </div>
+                <div class="hidden sm:block lg:flex-none lg:max-h-[45%] lg:overflow-y-auto lg:[scrollbar-gutter:stable] lg:mb-4">
+                  <.members_panel
+                    id="members-desktop"
+                    members={@members}
+                    can_admin={@can_admin}
+                    online_ids={@online_ids}
+                    owner_id={@initiative.owner_id}
+                    me={@current_user.id}
+                    assignee_ids={@direct_assignee_ids}
+                    viewer_plus_on={@initiative.viewer_plus}
+                    can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
+                  />
+                </div>
 
-            <%!-- Content region: Details / initiative-editor, scrolling
+                <%!-- Content region: Details / initiative-editor, scrolling
                  independently beneath the pinned Members (item 1.4). At lg:+
                  it's flex-1 with its own overflow; below lg: a normal block
                  (the whole flyout scrolls). space-y restores the gap the
                  aside-level one drops at lg. --%>
-            <div class="space-y-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
-              <%!-- Persistent like the task pane (.03.07.08): always rendered,
+                <div class="space-y-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
+                  <%!-- Persistent like the task pane (.03.07.08): always rendered,
                    the editor's #initiative-form pre-populated from the
                    initiative. Visibility is CLIENT-OWNED view state (UX_GUARDRAILS
                    6.5): always rendered `hidden` here, and DoitInitiativeEditor
                    reveals it instantly on the title click — no round trip. The
                    guard observer re-asserts the open flag across patches. --%>
-              <div
-                id="initiative-editor-pane"
-                hidden
-                class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-              >
-                <.initiative_editor
-                  form={@initiative_form}
-                  can_edit={@can_edit}
-                  can_admin={@can_admin}
-                  initiative={@initiative}
-                  root_task={@root_task}
-                  subtitle={@subtitle}
-                  am_owner={@current_user.id == @initiative.owner_id}
-                />
-              </div>
+                  <div
+                    id="initiative-editor-pane"
+                    data-keep="editor"
+                    hidden
+                    class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+                  >
+                    <.initiative_editor
+                      form={@initiative_form}
+                      can_edit={@can_edit}
+                      can_admin={@can_admin}
+                      initiative={@initiative}
+                      root_task={@root_task}
+                      subtitle={@subtitle}
+                      am_owner={@current_user.id == @initiative.owner_id}
+                    />
+                  </div>
 
-              <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
+                  <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
                    the shell renders from the start — a blank task when nothing is
                    selected — so the FIRST selection fills client-side with no
                    round trip, exactly like every later switch. Deselecting hides
@@ -2586,444 +3472,888 @@ defmodule DoItWeb.InitiativeShowLive do
                    reconciles the same elements in place (and fills the editable
                    co-assignee list, comments, activity) — LiveView never clobbers
                    the focused field, so in-progress typing survives the patch. --%>
-              <div
-                id="task-editor-pane"
-                data-task-id={@selected_task_id}
-                hidden={is_nil(@selected_task_id)}
-                class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-              >
-                <.task_editor
-                  task={@selected_task || blank_task()}
-                  comments={@comments}
-                  current_user={@current_user}
-                  editing_comment_id={@editing_comment_id}
-                  versions_comment_id={@versions_comment_id}
-                  comment_versions={@comment_versions}
-                  activity={@activity}
-                  members={@members}
-                  can_edit={@can_edit}
-                  can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
-                  can_staff={@selected_staff_pool != nil}
-                  staff_pool={@selected_staff_pool}
-                  show_activity={@show_task_activity}
-                  online_ids={@online_ids}
-                />
-              </div>
+                  <div
+                    id="task-editor-pane"
+                    data-task-id={@selected_task_id}
+                    hidden={is_nil(@selected_task_id)}
+                    class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+                  >
+                    <.task_editor
+                      task={@selected_task || blank_task()}
+                      comments={@comments}
+                      current_user={@current_user}
+                      activity={@activity}
+                      members={@members}
+                      can_edit={@can_edit}
+                      can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
+                      can_staff={@selected_staff_pool != nil}
+                      staff_pool={@selected_staff_pool}
+                      show_activity={@show_task_activity}
+                      online_ids={@online_ids}
+                    />
+                  </div>
+                </div>
+              </aside>
             </div>
-          </aside>
-        </div>
-      </div>
+          </div>
 
-      <div id="confirm-skips" phx-hook="ConfirmSkips" hidden></div>
+          <div id="confirm-skips" phx-hook="ConfirmSkips" hidden></div>
 
-      <%!-- The single add-task form. Lives here (hidden) until the client
+          <%!-- The single add-task form. Lives here (hidden) until the client
            teleports it into a slot; all containers are phx-update="ignore",
            so no patch can disturb it mid-typing. create_task reads the two
            hidden inputs — opening/closing never touches the server. --%>
-      <div id="add-task-home" phx-update="ignore" hidden>
-        <form
-          id="add-task-form"
-          phx-submit="create_task"
-          class="flex items-center gap-2 rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2"
-        >
-          <input type="hidden" name="parent_id" value="" />
-          <input type="hidden" name="after_id" value="" />
-          <input
-            type="text"
-            name="title"
-            required
-            placeholder="New task..."
-            class="flex-1 input input-bordered input-sm"
-          />
-          <button
-            type="submit"
-            phx-disable-with="Adding..."
-            class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition"
-          >
-            Add
-          </button>
-          <%!-- "Done", not "Cancel": the adder stays open across submits so
+          <div id="add-task-home" phx-update="ignore" hidden>
+            <form
+              id="add-task-form"
+              phx-submit="create_task"
+              class="flex items-center gap-2 rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2"
+            >
+              <input type="hidden" name="parent_id" value="" />
+              <input type="hidden" name="after_id" value="" />
+              <input
+                type="text"
+                name="title"
+                required
+                placeholder="New task..."
+                class="flex-1 input input-bordered input-sm"
+              />
+              <button
+                type="submit"
+                phx-disable-with="Adding..."
+                class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition"
+              >
+                Add
+              </button>
+              <%!-- "Done", not "Cancel": the adder stays open across submits so
                you can add several tasks; this button just closes it and
                discards nothing already added. --%>
-          <button
-            type="button"
-            data-add-cancel
-            class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
-          >
-            Done
-          </button>
-        </form>
-      </div>
-      <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
-      <.move_flip_confirm :if={@can_edit} />
-      <.cascade_confirm />
-      <.delete_task_confirm :if={@can_edit} />
-      <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
-      <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
-      <.archive_confirm />
-      <.remove_member_confirm :if={@can_admin} />
-      <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
-      <div
-        :if={@pending_handoff}
-        id="handoff-confirm"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-      >
-        <form
-          :if={@pending_handoff}
-          id="handoff-form"
-          phx-submit="confirm_handoff"
-          phx-click-away="cancel_handoff"
-          class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
-        >
-          <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
-            Remove {@pending_handoff.name}
-          </h3>
-          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            They hold {@pending_handoff.count} assignment(s) here. Choose what happens to those,
-            then they'll be removed.
-          </p>
-
-          <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
-            <input
-              type="checkbox"
-              name="promote_co"
-              value="true"
-              checked={@pending_handoff.promote_default}
-              class="checkbox checkbox-sm"
-            /> Promote the next co-assignee in line where one exists
-          </label>
-
-          <label class="mt-3 block text-xs text-zinc-500 dark:text-zinc-400">
-            Otherwise hand their tasks to
-          </label>
-          <select name="takeover" class="mt-1 w-full select select-bordered select-sm">
-            <option value="">No one — leave those tasks unassigned</option>
-            <option
-              :for={m <- @members}
-              :if={m.user_id != @pending_handoff.user_id}
-              value={m.user_id}
-            >
-              {m.user.name} (@{m.user.username})
-            </option>
-          </select>
-
-          <div class="mt-5 flex justify-end gap-2">
-            <button
-              type="button"
-              phx-click="cancel_handoff"
-              class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              phx-disable-with="Removing..."
-              class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700"
-            >
-              Remove &amp; hand off
-            </button>
+              <button
+                type="button"
+                data-add-cancel
+                class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
+              >
+                Done
+              </button>
+            </form>
           </div>
-        </form>
-      </div>
-      <%!-- Transfer-ownership confirm is client-side (UX_GUARDRAILS 6.5, like
+          <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
+          <.move_flip_confirm :if={@can_edit} />
+          <.cascade_confirm />
+          <.cascade_sort_confirm :if={@can_edit} />
+          <.delete_task_confirm :if={@can_edit} />
+          <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
+          <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
+          <.archive_confirm />
+          <.remove_member_confirm :if={@can_admin} />
+          <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
+          <div
+            :if={@pending_handoff}
+            id="handoff-confirm"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          >
+            <form
+              :if={@pending_handoff}
+              id="handoff-form"
+              phx-submit="confirm_handoff"
+              class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
+            >
+              <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+                Remove {@pending_handoff.name}
+              </h3>
+              <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+                They hold {@pending_handoff.count} assignment(s) here. Choose what happens to those,
+                then they'll be removed.
+              </p>
+
+              <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
+                <input
+                  type="checkbox"
+                  name="promote_co"
+                  value="true"
+                  checked={@pending_handoff.promote_default}
+                  class="checkbox checkbox-sm"
+                /> Promote the next co-assignee in line where one exists
+              </label>
+
+              <label class="mt-3 block text-xs text-zinc-500 dark:text-zinc-400">
+                Otherwise hand their tasks to
+              </label>
+              <select name="takeover" class="mt-1 w-full select select-bordered select-sm">
+                <option value="">No one — leave those tasks unassigned</option>
+                <option
+                  :for={m <- @members}
+                  :if={m.user_id != @pending_handoff.user_id}
+                  value={m.user_id}
+                >
+                  {m.user.name} (@{m.user.username})
+                </option>
+              </select>
+
+              <div class="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-handoff-cancel
+                  class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  phx-disable-with="Removing..."
+                  class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700"
+                >
+                  Remove &amp; hand off
+                </button>
+              </div>
+            </form>
+          </div>
+          <%!-- Transfer-ownership confirm is client-side (UX_GUARDRAILS 6.5, like
            the delete confirms): everything it shows — the target's name, the
            demotion copy — is client-known, so it opens at the click with no
            round trip. app.js fills [data-transfer-name] + stashes the user-id;
            only Proceed touches the server (confirm_transfer). phx-update="ignore"
            keeps the server out of it (a rename mid-session leaves the initiative
            name stale — display-only and rare). --%>
-      <div
-        id="transfer-confirm"
-        hidden
-        phx-update="ignore"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-      >
-        <div class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl">
-          <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
-            Transfer ownership
-          </h3>
-          <p data-transfer-body class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Make <span class="font-semibold" data-transfer-name></span>
-            the owner of <span class="font-semibold">{@initiative.name}</span>?
-            This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
-            and lose owner controls.
-          </p>
-          <div class="mt-5 flex justify-end gap-2">
-            <button
-              type="button"
-              data-transfer-cancel
-              class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              id="transfer-confirm-proceed"
-              data-transfer-proceed
-              class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
-            >
-              Transfer ownership
-            </button>
+          <div
+            id="transfer-confirm"
+            hidden
+            phx-update="ignore"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          >
+            <div class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl">
+              <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+                Transfer ownership
+              </h3>
+              <p data-transfer-body class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+                Make <span class="font-semibold" data-transfer-name></span>
+                the owner of <span class="font-semibold">{@initiative.name}</span>?
+                This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
+                and lose owner controls.
+              </p>
+              <div class="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-transfer-cancel
+                  class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="transfer-confirm-proceed"
+                  data-transfer-proceed
+                  class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
+                >
+                  Transfer ownership
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-      <.shortcuts_overlay />
-      <%!-- Anchor for the selection-presence channel (.04.01.12): receives
+          <.shortcuts_overlay />
+          <%!-- Anchor for the selection-presence channel (.04.01.12): receives
            presence-selections pushes and paints row badges client-side. --%>
-      <div id="presence-badges" phx-hook="PresenceBadges" phx-update="ignore" hidden></div>
+          <div
+            id="presence-badges"
+            phx-hook="PresenceBadges"
+            data-keep="presence"
+            phx-update="ignore"
+            hidden
+          >
+          </div>
 
-      <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
+          <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
            for everyone currently viewing this Initiative. Fully ephemeral —
            the message log lives only in socket assigns (broadcast, never
            persisted), so a fresh viewer sees no history and it clears once the
            last viewer leaves. Open/closed is client view state (the .Chat hook,
            localStorage), so toggling never round-trips. The input sits in a
            phx-update="ignore" wrapper so typing survives a message arriving. --%>
-      <div
-        id="initiative-chat"
-        phx-hook=".Chat"
-        data-chat-log-id={@chat_log_id}
-        data-me={@current_user.id}
-        class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
-      >
-        <button
-          type="button"
-          data-chat-toggle
-          class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
-        >
-          <span class="flex flex-none items-center gap-1.5">
-            <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
-          </span>
-          <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
+          <div
+            id="initiative-chat"
+            phx-hook=".Chat"
+            data-chat-log-id={@chat_log_id}
+            data-me={@current_user.id}
+            data-my-name={@current_user.name}
+            data-my-initials={initials(@current_user)}
+            data-my-bg={avatar_bg(@current_user)}
+            data-my-fg={avatar_fg(@current_user)}
+            class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
+          >
+            <button
+              type="button"
+              data-chat-toggle
+              class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
+            >
+              <span class="flex flex-none items-center gap-1.5">
+                <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
+              </span>
+              <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
                .Chat hook fills + shows this on a new message while closed, and
                clears it on open. Dimmed italic, single-line ellipsis. --%>
-          <span
-            data-chat-preview
-            hidden
-            class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
-          >
-          </span>
-          <span data-chat-chevron class="inline-flex flex-none transition-transform">
-            <.icon name="hero-chevron-up" class="w-4 h-4" />
-          </span>
-        </button>
+              <span
+                data-chat-preview
+                hidden
+                class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
+              >
+              </span>
+              <span data-chat-chevron class="inline-flex flex-none transition-transform">
+                <.icon name="hero-chevron-up" class="w-4 h-4" />
+              </span>
+            </button>
 
-        <div
-          data-chat-panel
-          hidden
-          class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
-        >
-          <div
-            id="chat-log"
-            data-chat-log
-            class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
-          >
-            <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
-              No messages yet — say hello to anyone else viewing this Initiative.
-            </p>
-            <%!-- A system line (e.g. "nobody's here to read that") is the
+            <div
+              data-chat-panel
+              hidden
+              class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
+            >
+              <div
+                id="chat-log"
+                data-chat-log
+                class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
+              >
+                <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
+                  No messages yet — say hello to anyone else viewing this Initiative.
+                </p>
+                <%!-- A system line (e.g. "nobody's here to read that") is the
                  sender's own local notice: dimmed italic, no avatar, and
                  marked data-chat-system so the .Chat hook never treats it as a
                  message from another viewer (no pop / flash / preview). It has
                  no user_id, so no data-chat-uid. --%>
-            <%= for m <- Enum.reverse(@chat_messages) do %>
-              <%= if Map.get(m, :system) do %>
-                <div
-                  id={"chat-msg-#{m.id}"}
-                  data-chat-system
-                  class="text-xs italic text-zinc-400 dark:text-zinc-500"
-                >
-                  {m.body}
-                </div>
-              <% else %>
-                <div id={"chat-msg-#{m.id}"} data-chat-uid={m.user_id} class="flex gap-2">
-                  <span
-                    class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
-                    style={"background-image: #{m.bg}; color: #{m.fg};"}
-                  >
-                    {m.initials}
-                  </span>
-                  <div class="min-w-0">
-                    <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                <%= for m <- Enum.reverse(@chat_messages) do %>
+                  <%= if Map.get(m, :system) do %>
                     <div
-                      data-chat-body
-                      class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                      id={"chat-msg-#{m.id}"}
+                      data-chat-system
+                      class="text-xs italic text-zinc-400 dark:text-zinc-500"
                     >
                       {m.body}
                     </div>
-                  </div>
-                </div>
-              <% end %>
-            <% end %>
-          </div>
+                  <% else %>
+                    <div
+                      id={"chat-msg-#{m.id}"}
+                      data-chat-uid={m.user_id}
+                      data-chat-echo={Map.get(m, :echo_id)}
+                      class="flex gap-2"
+                    >
+                      <span
+                        class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+                        style={"background-image: #{m.bg}; color: #{m.fg};"}
+                      >
+                        {m.initials}
+                      </span>
+                      <div class="min-w-0">
+                        <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                        <div
+                          data-chat-body
+                          class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                        >
+                          {m.body}
+                        </div>
+                      </div>
+                    </div>
+                  <% end %>
+                <% end %>
+              </div>
 
-          <div
-            id="chat-input-wrap"
-            phx-update="ignore"
-            class="border-t border-zinc-200 dark:border-zinc-700 p-2"
-          >
-            <form data-chat-form class="flex gap-2">
-              <input
-                type="text"
-                data-chat-input
-                maxlength="2000"
-                placeholder="Message viewers…"
-                aria-label="Chat message"
-                autocomplete="off"
-                class="flex-1 input input-bordered input-sm"
-              />
-              <button
-                type="submit"
-                class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+              <div
+                id="chat-input-wrap"
+                phx-update="ignore"
+                class="border-t border-zinc-200 dark:border-zinc-700 p-2"
               >
-                Send
-              </button>
-            </form>
+                <form data-chat-form class="flex gap-2">
+                  <input
+                    type="text"
+                    data-chat-input
+                    maxlength="2000"
+                    placeholder="Message viewers…"
+                    aria-label="Chat message"
+                    autocomplete="off"
+                    class="flex-1 input input-bordered input-sm"
+                  />
+                  <button
+                    type="submit"
+                    class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+                  >
+                    Send
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
+              export default {
+                mounted() {
+                  this.toggle = this.el.querySelector("[data-chat-toggle]");
+                  this.panel = this.el.querySelector("[data-chat-panel]");
+                  this.chevron = this.el.querySelector("[data-chat-chevron]");
+                  this.preview = this.el.querySelector("[data-chat-preview]");
+                  this.log = this.el.querySelector("[data-chat-log]");
+                  this.form = this.el.querySelector("[data-chat-form]");
+                  this.input = this.el.querySelector("[data-chat-input]");
+                  // Track the server's monotonic chat counter to spot NEW messages
+                  // in updated() (vs. unrelated re-renders).
+                  this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
+
+                  // Open/closed is in-memory view state, default CLOSED on every
+                  // mount (refresh / initiative open) — not persisted, so the chat
+                  // never greets you open.
+                  this._open = false;
+                  this.setOpen(false);
+
+                  this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
+
+                  this.form.addEventListener("submit", (e) => {
+                    e.preventDefault();
+                    const body = this.input.value.trim();
+                    if (!body) return;
+                    // Optimistic own-line echo (§6.7): show the sent bubble at submit
+                    // instead of waiting for the PubSub broadcast to round-trip back.
+                    // A client nonce ties the pending node to the real line so we can
+                    // dedupe it in updated() (and pull it on alone/empty/failure — a
+                    // sent bubble must never stand if no reader got it).
+                    const echoId = "e" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+                    this.appendEcho(echoId, body);
+                    this.pushEvent("send_chat", { body, echo_id: echoId }, (reply) => {
+                      if (!reply || reply.ok === false) {
+                        const n = this.log && this.log.querySelector(`[data-chat-echo="${echoId}"][data-chat-pending]`);
+                        if (n) n.remove();
+                      }
+                    });
+                    this.input.value = "";
+                    this.input.focus();
+                  });
+                },
+                // Build + append a pending own-message node matching the server's
+                // own-message markup (avatar from data-my-*), dimmed while pending.
+                // Lives in the morphdom-owned log; updated() reconciles it once the
+                // real (broadcast) line arrives carrying the same echo id.
+                appendEcho(echoId, body) {
+                  if (!this.log) return;
+                  const d = this.el.dataset;
+                  const row = document.createElement("div");
+                  row.className = "flex gap-2 opacity-60";
+                  row.setAttribute("data-chat-uid", d.me || "");
+                  row.setAttribute("data-chat-echo", echoId);
+                  row.setAttribute("data-chat-pending", "");
+                  const av = document.createElement("span");
+                  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]";
+                  av.style.backgroundImage = d.myBg || "";
+                  av.style.color = d.myFg || "";
+                  av.textContent = d.myInitials || "";
+                  const wrap = document.createElement("div");
+                  wrap.className = "min-w-0";
+                  const name = document.createElement("div");
+                  name.className = "text-xs text-zinc-500 dark:text-zinc-400";
+                  name.textContent = d.myName || "";
+                  const bodyEl = document.createElement("div");
+                  bodyEl.setAttribute("data-chat-body", "");
+                  bodyEl.className = "break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100";
+                  bodyEl.textContent = body;
+                  wrap.appendChild(name);
+                  wrap.appendChild(bodyEl);
+                  row.appendChild(av);
+                  row.appendChild(wrap);
+                  this.log.appendChild(row);
+                  this.scrollToBottom();
+                },
+                // Remove any pending echo whose nonce now appears on a real
+                // (server-rendered, non-pending) message node — the broadcast line
+                // has landed and supersedes the optimistic bubble.
+                reconcileEchoes() {
+                  if (!this.log) return;
+                  const pending = this.log.querySelectorAll("[data-chat-pending][data-chat-echo]");
+                  pending.forEach((p) => {
+                    const id = p.getAttribute("data-chat-echo");
+                    if (!id) return;
+                    const real = this.log.querySelector(`[data-chat-echo="${id}"]:not([data-chat-pending])`);
+                    if (real) p.remove();
+                  });
+                },
+                setOpen(open) {
+                  this.panel.hidden = !open;
+                  // Bottom-docked panel opens upward: chevron points up when closed
+                  // ("open me"), down when open ("minimize"). Base icon is up, so
+                  // rotate only when open.
+                  if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
+                  this._open = open;
+                  if (open) {
+                    this.hidePreview(); // reading them now — clear the collapsed peek
+                    this.scrollToBottom();
+                    this.input.focus();
+                  }
+                },
+                hidePreview() {
+                  if (this.preview) {
+                    this.preview.hidden = true;
+                    this.preview.textContent = "";
+                  }
+                },
+                showLatestPreview() {
+                  if (!this.preview || !this.log) return;
+                  const bodies = this.log.querySelectorAll("[data-chat-body]");
+                  const last = bodies[bodies.length - 1];
+                  if (!last) return;
+                  this.preview.textContent = last.textContent.trim();
+                  this.preview.hidden = false;
+                },
+                scrollToBottom() {
+                  if (this.log) this.log.scrollTop = this.log.scrollHeight;
+                },
+                updated() {
+                  // A server re-render (e.g. your own sent message broadcasting
+                  // back) re-applies the template's `hidden` on the panel via
+                  // morphdom, which would snap an open chat shut. Re-assert the open
+                  // state from localStorage (the source of truth) before anything
+                  // else, so sending never closes the window.
+                  const reopen = this._open;
+                  this.panel.hidden = !reopen;
+                  if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
+                  // Reconcile optimistic echoes: when the real (broadcast) own-line
+                  // arrives it carries the same client nonce on a NON-pending node.
+                  // Drop the dimmed pending bubble so the canonical line supersedes
+                  // it — no duplicate, and the dimmed "pending" look clears.
+                  this.reconcileEchoes();
+                  // A new message bumps the server's monotonic chat-log id. A
+                  // system line (the alone-case "nobody's here" notice) also bumps
+                  // it, but it's the sender's own local notice — never pop / flash /
+                  // preview for it (the rejection bonk already fired server-side).
+                  const id = parseInt(this.el.dataset.chatLogId || "0", 10);
+                  if (id > this._lastLogId) {
+                    this._lastLogId = id;
+                    if (!this.latestIsSystem() && this.fromOther()) {
+                      this.pop(); // a quick blip — distinct from the rejection bonk
+                      if (this.panel.hidden) {
+                        this.showLatestPreview();
+                        this.flash();
+                      }
+                    }
+                  }
+                  if (this.panel && !this.panel.hidden) this.scrollToBottom();
+                },
+                // Is the newest log entry a system notice (data-chat-system)?
+                latestIsSystem() {
+                  if (!this.log) return false;
+                  const last = this.log.lastElementChild;
+                  return !!last && last.hasAttribute("data-chat-system");
+                },
+                // Was the latest message from someone else? No pop / flash for your
+                // own message echoing back over the broadcast.
+                fromOther() {
+                  if (!this.log) return false;
+                  const msgs = this.log.querySelectorAll("[data-chat-uid]");
+                  const last = msgs[msgs.length - 1];
+                  return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
+                },
+                // Brief green pulse on the collapsed bar (reflow to retrigger on
+                // rapid messages).
+                flash() {
+                  const t = this.toggle;
+                  if (!t) return;
+                  t.classList.remove("chat-flash");
+                  void t.offsetWidth;
+                  t.classList.add("chat-flash");
+                },
+                // A short rising blip — deliberately unlike the descending bonk thud.
+                pop() {
+                  try {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    this._ac = this._ac || new Ctx();
+                    const ctx = this._ac;
+                    if (ctx.state === "suspended") ctx.resume();
+                    const osc = ctx.createOscillator(), gain = ctx.createGain();
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(420, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
+                    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
+                    osc.connect(gain).connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.14);
+                  } catch (_e) {}
+                },
+              }
+            </script>
+          </div>
+        </div>
+      <% else %>
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+          <div>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">My Initiatives</h1>
+            <p class="text-sm text-zinc-500 dark:text-zinc-400">
+              An Initiative holds multiple Lists. Each List is a tree of nested tasks.
+            </p>
+          </div>
+          <button
+            type="button"
+            data-details-toggle="new-initiative"
+            class="w-fit self-center inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+          >
+            <.icon name="hero-plus" class="w-4 h-4" />
+            <span>New Initiative</span>
+          </button>
+        </div>
+
+        <%!-- Client-toggled (no round trip before typing); data-keep="open"
+             preserves the open state across patches, e.g. a validation error re-render. --%>
+        <details id="new-initiative" data-keep="open" class="mb-6">
+          <summary class="hidden"></summary>
+          <div class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+            <.form :let={f} for={@form} phx-submit="create" class="space-y-3">
+              <.input field={f[:name]} type="text" label="Name" required />
+              <.input field={f[:description]} type="textarea" label="Description (optional)" />
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-details-close="new-initiative"
+                  class="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+                <.button type="submit" data-latch="Creating…">Create initiative</.button>
+              </div>
+            </.form>
+          </div>
+        </details>
+
+        <%!-- Sort control (.06.2, server-persisted by m02.04 §2.6). The server
+             renders the saved state (initial values survive phx-update="ignore");
+             the hook owns it from there and pushes apply_sort on change. --%>
+        <form
+          :if={@initiative_count > 0}
+          id="initiative-sort"
+          phx-hook="InitiativeSort"
+          phx-update="ignore"
+          data-reverse-by-mode={Jason.encode!(@reverse_by_mode)}
+          class="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300 3xl:hidden"
+        >
+          <label for="initiative-sort-mode" class="text-xs">Sort</label>
+          <select id="initiative-sort-mode" name="mode" class="select select-bordered select-sm">
+            <option value="" selected={is_nil(@sort_state.mode)}>Recent</option>
+            <option value="manual" selected={@sort_state.mode == "manual"}>Manual</option>
+            <option value="name" selected={@sort_state.mode == "name"}>Name</option>
+            <option value="progress" selected={@sort_state.mode == "progress"}>Progress</option>
+            <option value="created" selected={@sort_state.mode == "created"}>Created</option>
+            <option value="updated" selected={@sort_state.mode == "updated"}>Updated</option>
+          </select>
+          <label class="flex items-center gap-1 text-xs select-none">
+            <input
+              type="checkbox"
+              name="reverse"
+              value="true"
+              checked={@sort_state.reverse}
+              class="checkbox checkbox-xs"
+            /> Reverse
+          </label>
+        </form>
+
+        <%!-- Card list: full-width below 3xl. At 3xl the left rail (Layouts
+             chrome) covers it, so it hides and the center shows a "pick an
+             Initiative" prompt; the "Assigned to Me" pane rides the layout's
+             right pane (a sibling of the left rail, via <:rail_right> below). --%>
+        <div id="initiatives" phx-update="stream" class="space-y-2 3xl:hidden">
+          <div
+            :for={{dom_id, initiative} <- @streams.initiatives}
+            id={dom_id}
+            data-initiative-id={initiative.id}
+            data-name={initiative.name}
+            data-progress={initiative.progress || 0}
+            data-created={to_string(initiative.inserted_at)}
+            data-updated={to_string(initiative.updated_at)}
+            data-my-order={initiative.my_sort_order}
+            class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
+          >
+            <%!-- list<->detail is a same-module push_patch (no remount): use
+                 patch, not navigate, so the kept-mounted shell stays intact. --%>
+            <.link patch={~p"/initiatives/#{initiative.id}"} draggable="false" class="block p-4">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
+                <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
+                  <span
+                    id={"init-drag-#{initiative.id}"}
+                    phx-hook="InitiativeDrag"
+                    data-id={initiative.id}
+                    aria-hidden="true"
+                    title="Drag to reorder"
+                    class="flex-none inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 cursor-grab active:cursor-grabbing touch-none select-none"
+                  >
+                    <.icon
+                      name="hero-ellipsis-vertical"
+                      class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
+                    />
+                    <.botanical_icon kind={:grove} class="w-5 h-5" />
+                    <.icon
+                      name="hero-ellipsis-vertical"
+                      class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
+                    />
+                  </span>
+                  <span class="truncate">{initiative.name}</span>
+                </span>
+                <div class="flex items-center gap-2 flex-none">
+                  <span
+                    :if={initiative.my_role}
+                    class={[
+                      "text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded",
+                      role_badge_class(initiative.my_role)
+                    ]}
+                    title={"Your role: #{initiative.my_role}"}
+                  >
+                    {initiative.my_role}
+                  </span>
+                  <span class="text-xs text-zinc-500 dark:text-zinc-400">
+                    Updated {Calendar.strftime(initiative.updated_at, "%b %-d, %Y")}
+                  </span>
+                </div>
+              </div>
+              <p
+                :if={subtitle_text(initiative)}
+                class="mt-1 text-sm text-zinc-600 dark:text-zinc-300 line-clamp-1"
+              >
+                {subtitle_text(initiative)}
+              </p>
+              <p
+                :if={initiative.description}
+                class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2"
+              >
+                {initiative.description}
+              </p>
+
+              <div
+                class="relative mt-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+                role="progressbar"
+                aria-valuenow={initiative.progress || 0}
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-label={"Progress: #{initiative.progress || 0}%"}
+                style={"--progress: #{initiative.progress || 0}%"}
+              >
+                <div
+                  class="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+                  style="width: var(--progress)"
+                >
+                </div>
+                <span class="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+                  {initiative.progress || 0}%
+                </span>
+              </div>
+            </.link>
           </div>
         </div>
 
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
-          export default {
-            mounted() {
-              this.toggle = this.el.querySelector("[data-chat-toggle]");
-              this.panel = this.el.querySelector("[data-chat-panel]");
-              this.chevron = this.el.querySelector("[data-chat-chevron]");
-              this.preview = this.el.querySelector("[data-chat-preview]");
-              this.log = this.el.querySelector("[data-chat-log]");
-              this.form = this.el.querySelector("[data-chat-form]");
-              this.input = this.el.querySelector("[data-chat-input]");
-              // Track the server's monotonic chat counter to spot NEW messages
-              // in updated() (vs. unrelated re-renders).
-              this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
+        <%!-- Center prompt at 3xl: the rail covers the list, so this column
+             just asks the user to pick one. --%>
+        <div class="hidden 3xl:flex flex-col items-center justify-center text-center py-24 text-zinc-500 dark:text-zinc-400">
+          <.botanical_icon kind={:grove} class="w-12 h-12 mb-3 text-zinc-300 dark:text-zinc-600" />
+          <p class="text-lg font-medium text-zinc-600 dark:text-zinc-300">Pick an Initiative</p>
+          <p class="text-sm">Choose one from the list on the left to open it.</p>
+        </div>
 
-              // Open/closed is in-memory view state, default CLOSED on every
-              // mount (refresh / initiative open) — not persisted, so the chat
-              // never greets you open.
-              this._open = false;
-              this.setOpen(false);
+        <p :if={@initiative_count == 0} class="text-zinc-500 dark:text-zinc-400 mt-4">
+          No initiatives yet. Create one to get started.
+        </p>
 
-              this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
+        <%!-- Trash (m02.06 item 10): the owner's soft-deleted Initiatives. --%>
+        <section
+          :if={@trashed != []}
+          id="trash"
+          class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4"
+        >
+          <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
+            <.icon name="hero-trash" class="w-4 h-4" /> Trash
+            <span class="font-normal text-xs text-zinc-400 dark:text-zinc-500">
+              · auto-deletes after {Initiatives.trash_retention_days()} days
+            </span>
+          </h2>
+          <ul class="mt-2 space-y-1">
+            <li
+              :for={t <- @trashed}
+              id={"trashed-#{t.id}"}
+              class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+            >
+              <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+                <span class="truncate">{t.name}</span>
+                <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
+                  trashed {Calendar.strftime(t.trashed_at, "%b %-d")}
+                </span>
+              </span>
+              <span class="flex items-center gap-1 flex-none">
+                <button
+                  type="button"
+                  phx-click="restore_initiative"
+                  phx-value-id={t.id}
+                  data-latch="Restoring…"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                >
+                  <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                </button>
+                <button
+                  type="button"
+                  phx-click="purge_initiative"
+                  phx-value-id={t.id}
+                  phx-disable-with="Deleting…"
+                  data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                >
+                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
+                </button>
+              </span>
+            </li>
+          </ul>
+        </section>
 
-              this.form.addEventListener("submit", (e) => {
-                e.preventDefault();
-                const body = this.input.value.trim();
-                if (!body) return;
-                this.pushEvent("send_chat", { body });
-                this.input.value = "";
-                this.input.focus();
-              });
-            },
-            setOpen(open) {
-              this.panel.hidden = !open;
-              // Bottom-docked panel opens upward: chevron points up when closed
-              // ("open me"), down when open ("minimize"). Base icon is up, so
-              // rotate only when open.
-              if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
-              this._open = open;
-              if (open) {
-                this.hidePreview(); // reading them now — clear the collapsed peek
-                this.scrollToBottom();
-                this.input.focus();
-              }
-            },
-            hidePreview() {
-              if (this.preview) {
-                this.preview.hidden = true;
-                this.preview.textContent = "";
-              }
-            },
-            showLatestPreview() {
-              if (!this.preview || !this.log) return;
-              const bodies = this.log.querySelectorAll("[data-chat-body]");
-              const last = bodies[bodies.length - 1];
-              if (!last) return;
-              this.preview.textContent = last.textContent.trim();
-              this.preview.hidden = false;
-            },
-            scrollToBottom() {
-              if (this.log) this.log.scrollTop = this.log.scrollHeight;
-            },
-            updated() {
-              // A server re-render (e.g. your own sent message broadcasting
-              // back) re-applies the template's `hidden` on the panel via
-              // morphdom, which would snap an open chat shut. Re-assert the open
-              // state from localStorage (the source of truth) before anything
-              // else, so sending never closes the window.
-              const reopen = this._open;
-              this.panel.hidden = !reopen;
-              if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
-              // A new message bumps the server's monotonic chat-log id. A
-              // system line (the alone-case "nobody's here" notice) also bumps
-              // it, but it's the sender's own local notice — never pop / flash /
-              // preview for it (the rejection bonk already fired server-side).
-              const id = parseInt(this.el.dataset.chatLogId || "0", 10);
-              if (id > this._lastLogId) {
-                this._lastLogId = id;
-                if (!this.latestIsSystem() && this.fromOther()) {
-                  this.pop(); // a quick blip — distinct from the rejection bonk
-                  if (this.panel.hidden) {
-                    this.showLatestPreview();
-                    this.flash();
-                  }
-                }
-              }
-              if (this.panel && !this.panel.hidden) this.scrollToBottom();
-            },
-            // Is the newest log entry a system notice (data-chat-system)?
-            latestIsSystem() {
-              if (!this.log) return false;
-              const last = this.log.lastElementChild;
-              return !!last && last.hasAttribute("data-chat-system");
-            },
-            // Was the latest message from someone else? No pop / flash for your
-            // own message echoing back over the broadcast.
-            fromOther() {
-              if (!this.log) return false;
-              const msgs = this.log.querySelectorAll("[data-chat-uid]");
-              const last = msgs[msgs.length - 1];
-              return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
-            },
-            // Brief green pulse on the collapsed bar (reflow to retrigger on
-            // rapid messages).
-            flash() {
-              const t = this.toggle;
-              if (!t) return;
-              t.classList.remove("chat-flash");
-              void t.offsetWidth;
-              t.classList.add("chat-flash");
-            },
-            // A short rising blip — deliberately unlike the descending bonk thud.
-            pop() {
-              try {
-                const Ctx = window.AudioContext || window.webkitAudioContext;
-                this._ac = this._ac || new Ctx();
-                const ctx = this._ac;
-                if (ctx.state === "suspended") ctx.resume();
-                const osc = ctx.createOscillator(), gain = ctx.createGain();
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(420, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
-                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
-                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
-                osc.connect(gain).connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.14);
-              } catch (_e) {}
-            },
-          }
-        </script>
-      </div>
+        <%!-- Desktop-only entry to the keyboard-shortcuts help (.07.2.1). --%>
+        <div class="hidden sm:flex justify-center mt-10 mb-16">
+          <button
+            type="button"
+            phx-click={
+              Phoenix.LiveView.JS.dispatch("doit:shortcuts-toggle", to: "#shortcuts-overlay")
+            }
+            class="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
+          >
+            <.icon name="hero-command-line" class="w-4 h-4" /> Keyboard shortcuts
+          </button>
+        </div>
+
+        <.shortcuts_overlay />
+
+        <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
+             distinct from the owner-level Trash above. data-keep="open" pins the
+             open state across LiveView patches. --%>
+        <details
+          :if={@archived != []}
+          id="archived"
+          data-keep="open"
+          class="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
+        >
+          <summary class="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 3xl:px-3 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <.icon name="hero-archive-box" class="w-4 h-4 flex-none" />
+            <span>Archived ({length(visible_archived(@archived, @show_hidden))})</span>
+            <.icon
+              name="hero-chevron-up"
+              class="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 sm:px-6 3xl:px-3 pb-3">
+            <div class="flex items-center justify-end gap-2">
+              <label
+                :if={Enum.any?(@archived, & &1.hidden?)}
+                class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none"
+              >
+                <input
+                  type="checkbox"
+                  id="show-hidden"
+                  phx-click="toggle_show_hidden"
+                  checked={@show_hidden}
+                  data-keep="reveal-toggle"
+                  class="checkbox checkbox-xs"
+                /> Show hidden
+                <span
+                  class="doit-reveal-slot inline-flex w-3.5 flex-none items-center justify-center"
+                  aria-hidden="true"
+                >
+                  <.icon
+                    name="hero-arrow-path"
+                    class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+                  />
+                </span>
+              </label>
+            </div>
+            <ul class="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
+              <%= for a <- visible_archived(@archived, @show_hidden) do %>
+                <li
+                  id={"archived-#{a.id}"}
+                  class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+                >
+                  <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                    <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
+                    <span class="truncate">{a.name}</span>
+                    <span
+                      :if={a.hidden? and not a.archived?}
+                      class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
+                    >
+                      hidden
+                    </span>
+                  </span>
+                  <span class="flex items-center gap-1 flex-none">
+                    <button
+                      :if={a.archived?}
+                      type="button"
+                      phx-click="unarchive_initiative"
+                      phx-value-id={a.id}
+                      data-latch="Restoring…"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                    >
+                      <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                    </button>
+                    <button
+                      :if={a.hidden?}
+                      type="button"
+                      phx-click="unhide_initiative"
+                      phx-value-id={a.id}
+                      data-latch="Unhiding…"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
+                    </button>
+                  </span>
+                </li>
+              <% end %>
+            </ul>
+          </div>
+        </details>
+      <% end %>
+
+      <%!-- Right (third) pane (item 6): the "Assigned to Me" home, list mode
+           only — a sibling of the left rail at 3xl. --%>
+      <:rail_right :if={@live_action == :index}>
+        <div class="min-h-[calc(100dvh-9rem)]">
+          <h2 class="mb-3 flex items-center gap-1.5 text-lg font-semibold text-zinc-700 dark:text-zinc-200">
+            <.botanical_icon
+              kind={:leaf}
+              class="w-5 h-5 text-emerald-500/70 dark:text-emerald-400/70"
+            /> Assigned to Me
+          </h2>
+          <.assigned_list
+            id="assigned-pane"
+            rows={@streams.assigned_tasks}
+            empty?={@assigned_empty?}
+            show_completed={@show_completed}
+            show_archived_hidden={@show_archived_hidden}
+            group_by_initiative={@group_by_initiative}
+            variant={:pane}
+          />
+        </div>
+      </:rail_right>
     </Layouts.app>
     """
+  end
+
+  # The pane's update_task forms carry no task id, so natively the server applies
+  # them to the loaded selection (selected_task). A dead-window edit (WL4.2.2),
+  # though, flushes on connect BEFORE the selection replay lands — so the client
+  # captures the task the edit was made against (DoitState.selectedId) into the
+  # payload. Honor an explicit id when present so the edit ALWAYS lands on its own
+  # task (never the wrong one, never a silent drop); guard it to this initiative's
+  # tree and fall back to the current selection for a stale/absent id.
+  defp update_task_target(socket, payload) do
+    with id when not is_nil(id) <- parse_id(payload["id"]),
+         %Task{} = task <- Tasks.get_task(id),
+         true <- task.initiative_id == socket.assigns.initiative.id do
+      task
+    else
+      _ -> socket.assigns.selected_task
+    end
   end
 
   # The sort controls name their own target (the form's hidden task_id /
   # the cascade button's phx-value-id); fall back to the pane task.
   defp sort_target(socket, params) do
-    case params["task_id"] || params["id"] do
-      id when is_binary(id) -> Tasks.get_task!(String.to_integer(id))
-      _ -> socket.assigns.selected_task
+    case parse_id(params["task_id"] || params["id"]) do
+      # No / malformed named target → the pane task; a valid-but-just-deleted id
+      # also falls back to the pane task instead of crashing.
+      nil -> socket.assigns.selected_task
+      id -> Tasks.get_task(id) || socket.assigns.selected_task
     end
   end
 
@@ -3031,10 +4361,12 @@ defmodule DoItWeb.InitiativeShowLive do
   # (the DOM-owned selection); fall back to the server's pane task. Guarded
   # to this initiative and to editors.
   defp kbd_target(socket, params) do
+    # An explicit (but malformed) id no-ops via the is_nil check below rather than
+    # falling back to the selection; an absent id targets the pane task.
     id =
       case params["id"] do
-        id when is_binary(id) -> String.to_integer(id)
-        _ -> socket.assigns.selected_task_id
+        nil -> socket.assigns.selected_task_id
+        raw -> parse_id(raw)
       end
 
     with true <- socket.assigns.can_edit,
@@ -3240,6 +4572,54 @@ defmodule DoItWeb.InitiativeShowLive do
           <button
             type="button"
             data-cascade-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Large-branch-reorg confirm — client-opened (app.js #cascade-sort-confirm,
+  # UX_GUARDRAILS 6.5). "Make descendants inherit" predicts the descendant-branch
+  # count from the DOM (the whole tree is rendered regardless of collapse); when
+  # it exceeds 10 and isn't suppressed, app.js opens THIS dialog instantly (the
+  # count is client-derivable) while holding the maybe-write hue on the subtree.
+  # app.js fills the body's affected count, Proceed commits (cascade_sort with
+  # confirmed: true, optionally persisting the "don't ask again" skip), and
+  # Cancel / backdrop / Esc strip the hue with no server touch. phx-update="ignore":
+  # the server never patches it. The server count gate (handle_event) stays as the
+  # authoritative backstop for a client that didn't predict.
+  defp cascade_sort_confirm(assigns) do
+    ~H"""
+    <div
+      id="cascade-sort-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Large branch reorg
+        </h2>
+        <p data-cascade-sort-body class="mt-2 text-sm text-zinc-700 dark:text-zinc-300"></p>
+        <label class="mt-4 flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 select-none">
+          <input type="checkbox" data-cascade-sort-dont-show class="checkbox checkbox-sm" />
+          Don't show this again for large branch reorgs
+        </label>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-cascade-sort-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-cascade-sort-proceed
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
           >
             Proceed
@@ -3569,16 +4949,39 @@ defmodule DoItWeb.InitiativeShowLive do
     <div class="relative pb-6">
       <%!-- Title row (dedicated): grove icon + name. New List inline on desktop only. --%>
       <div class="flex items-start gap-2">
-        <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
-          <.botanical_icon kind={:grove} class="w-6 h-6" />
-        </span>
-        <h1
-          data-edit-initiative
-          title="Click to edit"
-          class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 cursor-pointer hover:text-zinc-900 dark:hover:text-white underline decoration-dotted decoration-2 underline-offset-4 decoration-zinc-400 dark:decoration-zinc-500"
-        >
-          {@initiative.name}
-        </h1>
+        <%!-- The grove icon + title are one click/tap-to-edit affordance, styled as a
+             subtle button (persistent soft border, hover tint, pressed state) so the
+             edit cue reads without hover (mobile). An <h1> can't live in a real
+             <button>, so this is a role="button" wrapper with keyboard support; the
+             delegated [data-edit-initiative] click + the editor-signifier preserve
+             path ride on the wrapper. Gated on @can_edit — viewers see a plain title. --%>
+        <%= if @can_edit do %>
+          <span
+            data-edit-initiative
+            data-keep="editor-signifier"
+            role="button"
+            tabindex="0"
+            aria-label="Edit initiative name"
+            title="Edit name"
+            class="group flex items-start gap-2 px-2 py-1 -ml-2 rounded-lg cursor-pointer border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:bg-zinc-200 dark:active:bg-zinc-700 transition-colors"
+          >
+            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+              <.botanical_icon kind={:grove} class="w-6 h-6" />
+            </span>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-zinc-900 dark:group-hover:text-white">
+              {@initiative.name}
+            </h1>
+          </span>
+        <% else %>
+          <span class="flex items-start gap-2">
+            <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
+              <.botanical_icon kind={:grove} class="w-6 h-6" />
+            </span>
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">
+              {@initiative.name}
+            </h1>
+          </span>
+        <% end %>
         <button
           :if={@can_edit}
           type="button"
@@ -3595,6 +4998,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <p
         :if={@subtitle != ""}
         data-edit-initiative
+        data-keep="editor-signifier"
         title="Click to edit"
         class="text-sm text-zinc-500 dark:text-zinc-400 mt-0.5 cursor-pointer hover:text-zinc-700 dark:hover:text-zinc-200"
       >
@@ -3671,6 +5075,7 @@ defmodule DoItWeb.InitiativeShowLive do
     <li
       id={"task-#{@task.id}"}
       data-task-id={@task.id}
+      data-keep="selected"
       data-depth={@depth}
       data-sort={@task.sort_mode || ""}
       data-sort-reverse={to_string(@task.sort_reverse)}
@@ -3681,6 +5086,7 @@ defmodule DoItWeb.InitiativeShowLive do
            flips one attribute; group/row scopes it. --%>
       <div
         data-task-row
+        data-keep="pending-toggle"
         data-done={@task.status == "done"}
         data-task-progress={progress_value(@task)}
         data-can-progress={to_string(@can_progress)}
@@ -4045,7 +5451,7 @@ defmodule DoItWeb.InitiativeShowLive do
       <ul
         :if={@task.children != []}
         id={"children-#{@task.id}"}
-        phx-hook="CollapseChildren"
+        data-keep="collapse"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}
         data-sort-mode={@resolved_sort}
@@ -4121,9 +5527,23 @@ defmodule DoItWeb.InitiativeShowLive do
         <%!-- Subtitle is stored in the root task's title (.05.03), so it has its
              own write path rather than riding the Initiative changeset. --%>
         <div>
-          <label for="initiative-subtitle" class="text-xs text-zinc-500 dark:text-zinc-400">
-            Subtitle
-          </label>
+          <div class="flex items-center gap-2">
+            <label for="initiative-subtitle" class="text-xs text-zinc-500 dark:text-zinc-400">
+              Subtitle
+            </label>
+            <%!-- Saved-tick (WL3 item 3.7, §6.7): server-rendered hidden, revealed
+                 for ~1.2s by the TaskKeys hook on the "subtitle-saved" push_event,
+                 then re-hidden. Transient + self-clearing like flashCopied, so it
+                 rides the preserve path with no data-keep (the server always
+                 renders it hidden, so any patch can only re-hide it). --%>
+            <span
+              id="subtitle-saved-tick"
+              hidden
+              class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+            >
+              <.icon name="hero-check" class="w-3 h-3" /> Saved
+            </span>
+          </div>
           <input
             id="initiative-subtitle"
             type="text"
@@ -4166,6 +5586,7 @@ defmodule DoItWeb.InitiativeShowLive do
           type="button"
           id="hide-initiative-btn"
           phx-click="hide_initiative"
+          data-latch="Hiding…"
           title="Hide from your dashboard — unhide from your Archived list"
           class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:scale-95 transition"
         >
@@ -4183,11 +5604,11 @@ defmodule DoItWeb.InitiativeShowLive do
       <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" scope="init" />
 
       <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
-           behavior that isn't day-to-day editing. KeepOpen preserves the
-           open/closed state across LiveView patches. --%>
+           behavior that isn't day-to-day editing. data-keep="open" preserves
+           the open/closed state across LiveView patches. --%>
       <details
         id="initiative-settings"
-        phx-hook="KeepOpen"
+        data-keep="open"
         class="border-t border-zinc-200 dark:border-zinc-700 pt-3"
       >
         <summary class="cursor-pointer select-none font-medium text-zinc-800 dark:text-zinc-100">
@@ -4303,6 +5724,16 @@ defmodule DoItWeb.InitiativeShowLive do
                   checked={@initiative.viewer_plus}
                   class="checkbox checkbox-sm"
                 /> Viewer+ — an assigned viewer leads their subtree
+                <%!-- Saved-tick (WL3 item 3.7, §6.7): the success ack for the
+                     in-flight signifier; revealed for ~1.2s by the TaskKeys hook
+                     on "viewer-plus-saved", then re-hidden (same as subtitle). --%>
+                <span
+                  id="viewer-plus-saved-tick"
+                  hidden
+                  class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+                >
+                  <.icon name="hero-check" class="w-3 h-3" /> Saved
+                </span>
               </label>
               <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
                 A viewer who is a task's assignee can update its progress and comments (and
@@ -4351,8 +5782,8 @@ defmodule DoItWeb.InitiativeShowLive do
   @doc """
   The Initiative's Members list + add-member form. Shared by the aside panel
   (desktop/tablet) and the mobile header collapsible (.05.04.1). The form
-  opens client-side (native <details>, UX_GUARDRAILS 6.5); KeepOpen carries
-  its state across patches.
+  opens client-side (native <details>, UX_GUARDRAILS 6.5); data-keep="open"
+  carries its state across patches.
   """
   def members_panel(assigns) do
     ~H"""
@@ -4374,8 +5805,8 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <%!-- Client-opened (UX_GUARDRAILS 6.5): the button flips this <details>
-           and KeepOpen carries the state across patches. --%>
-      <details :if={@can_admin} id={"#{@id}-form"} phx-hook="KeepOpen" class="mb-3">
+           and data-keep="open" carries the state across patches. --%>
+      <details :if={@can_admin} id={"#{@id}-form"} data-keep="open" class="mb-3">
         <summary class="hidden"></summary>
         <div>
           <form phx-submit="add_member" class="flex flex-col gap-2">
@@ -4407,7 +5838,7 @@ defmodule DoItWeb.InitiativeShowLive do
               </button>
               <button
                 type="submit"
-                phx-disable-with="Adding..."
+                data-latch="Adding…"
                 class="text-xs px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700"
               >
                 Add
@@ -4417,8 +5848,13 @@ defmodule DoItWeb.InitiativeShowLive do
         </div>
       </details>
 
-      <ul class="space-y-1 text-sm">
-        <li :for={m <- @members} class="flex items-center justify-between">
+      <ul data-members-list class="space-y-1 text-sm">
+        <li
+          :for={m <- @members}
+          data-member-row
+          data-user-id={m.user_id}
+          class="flex items-center justify-between"
+        >
           <span class="flex items-center gap-1 min-w-0 text-zinc-700 dark:text-zinc-200">
             <%!-- Drag handle (item 12.8.1): grab a member and drop them on a
                  task to assign. Shown only when this user can assign; desktop
@@ -4604,8 +6040,8 @@ defmodule DoItWeb.InitiativeShowLive do
       <button
         :if={@can_edit}
         type="button"
-        phx-click="cascade_sort"
-        phx-value-id={@task.id}
+        data-cascade-sort
+        data-task-id={@task.id}
         data-saving-subtree
         class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition"
         title="Force every descendant branch to inherit this branch's sort"
@@ -4624,11 +6060,12 @@ defmodule DoItWeb.InitiativeShowLive do
   attr :task, :map, required: true
   attr :comments, :list, required: true
   attr :current_user, :map, required: true
-  # Comment lifecycle (m02.08 worklist 3 item 2): which comment is in inline-edit
-  # mode, which has its prior-versions popup open, and that popup's contents.
-  attr :editing_comment_id, :any, default: nil
-  attr :versions_comment_id, :any, default: nil
-  attr :comment_versions, :list, default: []
+  # Comment lifecycle (m02.08 worklist 3 item 2): the inline edit editor and the
+  # prior-versions popup are now CLIENT-OWNED (m02.09 WL3 3.3, §6.5) — both render
+  # statically (hidden by default) and DoitState.commentEditId / commentVersionsId
+  # toggle visibility at click on the client; the server no longer holds an
+  # editing/versions assign. Versions render inline from the preloaded
+  # `c.versions` association (ordered newest-first in list_comments/1).
   attr :activity, :list, required: true
   attr :show_activity, :boolean, default: true
   attr :online_ids, :any, required: true
@@ -4702,18 +6139,17 @@ defmodule DoItWeb.InitiativeShowLive do
             <label for="task-field-progress" class="text-xs text-zinc-500 dark:text-zinc-400">
               Manual progress: <span data-progress-readout>{if leaf?(@task), do: @task.manual_progress, else: @task.computed_progress}</span>%
             </label>
-            <.info_hint
-              :if={not leaf?(@task)}
-              id={"mp-hint-#{@task.id}"}
-              label="Why is this disabled?"
-            >
-              Progress on a task with subtasks is calculated from its subtasks instead of
-              being set manually. Your manual value is kept and will start being used again
-              if you remove all subtasks.
-            </.info_hint>
+            <span data-mp-hint class={["inline-flex", leaf?(@task) && "invisible"]}>
+              <.info_hint id={"mp-hint-#{@task.id}"} label="Why is this disabled?">
+                Progress on a task with subtasks is calculated from its subtasks instead of
+                being set manually. Your manual value is kept and will start being used again
+                if you remove all subtasks.
+              </.info_hint>
+            </span>
           </div>
           <input
             id="task-field-progress"
+            data-keep="pending-toggle-slider"
             type="range"
             name="task[manual_progress]"
             min="0"
@@ -4959,8 +6395,19 @@ defmodule DoItWeb.InitiativeShowLive do
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mb-2">
           Loading…
         </p>
-        <ul data-async-list class="space-y-2 mb-2">
-          <li :for={c <- @comments} id={"comment-#{c.id}"} class="group/comment text-sm">
+        <ul data-async-list data-comment-list class="space-y-2 mb-2">
+          <%!-- Open/close of the inline editor is CLIENT-OWNED (m02.09 WL3 3.3,
+               §6.5): the <li> carries data-keep="comment-edit" so a list-refresh
+               patch can't snap an open editor shut, and the "comment-edit"
+               applier reads DoitState.commentEditId to show the display block or
+               the author's form. Both render statically; the form is hidden by
+               default and revealed at click with no round trip. --%>
+          <li
+            :for={c <- @comments}
+            id={"comment-#{c.id}"}
+            data-keep="comment-edit"
+            class="group/comment text-sm"
+          >
             <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
               <.avatar
                 :if={c.user}
@@ -4976,11 +6423,54 @@ defmodule DoItWeb.InitiativeShowLive do
                 <%!-- Tombstone (item 2.3): the row survives so thread shape +
                      references hold, shown as deleted. --%>
                 <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
-              <% @editing_comment_id == c.id -> %>
-                <%!-- Inline editor (item 2.2): author-only; the context
-                     re-checks authorship on save. --%>
+              <% true -> %>
+                <%!-- Display block — shown when NOT editing (the applier toggles
+                     `hidden` against DoitState.commentEditId). --%>
+                <div data-comment-display>
+                  <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
+                  <div class="mt-0.5 flex items-center gap-2 text-xs">
+                    <button
+                      :if={c.versions != []}
+                      type="button"
+                      data-comment-versions-open
+                      phx-value-id={c.id}
+                      class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
+                    >
+                      edited · history
+                    </button>
+                    <%= if comment_author?(c, @current_user) do %>
+                      <button
+                        type="button"
+                        id={"edit-comment-btn-#{c.id}"}
+                        data-comment-edit-open
+                        phx-value-id={c.id}
+                        class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        id={"delete-comment-btn-#{c.id}"}
+                        phx-click="delete_comment"
+                        phx-value-id={c.id}
+                        data-confirm="Delete this comment? It will be marked as deleted."
+                        class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
+                      >
+                        Delete
+                      </button>
+                    <% end %>
+                  </div>
+                </div>
+                <%!-- Inline editor (item 2.2) — author-only, rendered hidden;
+                     the "comment-edit" applier reveals it when this comment is
+                     the client-owned commentEditId. Save stays server-owned; the
+                     context re-checks authorship. The Edit button seeds + focuses
+                     the textarea at click (app.js), so a stale value never shows. --%>
                 <form
+                  :if={comment_author?(c, @current_user)}
                   id={"edit-comment-form-#{c.id}"}
+                  data-comment-edit-form
+                  hidden
                   phx-submit="save_comment"
                   phx-value-id={c.id}
                   class="mt-1 flex flex-col gap-1"
@@ -4994,61 +6484,34 @@ defmodule DoItWeb.InitiativeShowLive do
                   <div class="flex items-center gap-2">
                     <button
                       type="submit"
-                      phx-disable-with="Saving..."
+                      data-latch="Saving…"
                       class="text-xs px-2.5 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
                     >
                       Save
                     </button>
                     <button
                       type="button"
-                      phx-click="cancel_edit_comment"
+                      data-comment-edit-cancel
                       class="text-xs px-2.5 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                     >
                       Cancel
                     </button>
                   </div>
                 </form>
-              <% true -> %>
-                <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
-                <div class="mt-0.5 flex items-center gap-2 text-xs">
-                  <button
-                    :if={c.versions != []}
-                    type="button"
-                    phx-click="show_comment_versions"
-                    phx-value-id={c.id}
-                    class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
-                  >
-                    edited · history
-                  </button>
-                  <%= if comment_author?(c, @current_user) do %>
-                    <button
-                      type="button"
-                      id={"edit-comment-btn-#{c.id}"}
-                      phx-click="edit_comment"
-                      phx-value-id={c.id}
-                      class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      id={"delete-comment-btn-#{c.id}"}
-                      phx-click="delete_comment"
-                      phx-value-id={c.id}
-                      data-confirm="Delete this comment? It will be marked as deleted."
-                      class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
-                    >
-                      Delete
-                    </button>
-                  <% end %>
-                </div>
             <% end %>
 
             <%!-- Prior-versions popup (item 2.2): a minimal inline panel listing
-                 earlier bodies, newest first. Opens via show_comment_versions. --%>
+                 earlier bodies, NEWEST FIRST (the `versions` preload is ordered
+                 desc in list_comments/1). Open/close is CLIENT-OWNED (m02.09 WL3
+                 3.3, §6.5): rendered statically + hidden, carries
+                 data-keep="comment-versions" so a patch can't snap it shut, and
+                 the "comment-versions" applier reveals it when this comment is the
+                 client-owned commentVersionsId — no round trip on open or close. --%>
             <div
-              :if={@versions_comment_id == c.id}
+              :if={not Tasks.comment_deleted?(c) and c.versions != []}
               id={"comment-versions-#{c.id}"}
+              data-keep="comment-versions"
+              hidden
               class="mt-1 rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 p-2"
             >
               <div class="flex items-center justify-between mb-1">
@@ -5057,7 +6520,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 </span>
                 <button
                   type="button"
-                  phx-click="hide_comment_versions"
+                  data-comment-versions-cancel
                   aria-label="Close history"
                   class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
                 >
@@ -5065,11 +6528,18 @@ defmodule DoItWeb.InitiativeShowLive do
                 </button>
               </div>
               <ul class="space-y-1">
-                <li class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
-                  No earlier versions.
+                <%!-- Forward-compatible lazy-load hook: a future fetch-on-open
+                     can reveal this while versions stream in. Hidden today —
+                     versions render inline from the preload. --%>
+                <li
+                  data-versions-loading
+                  hidden
+                  class="text-xs italic text-zinc-400 dark:text-zinc-500"
+                >
+                  Loading…
                 </li>
                 <li
-                  :for={v <- @comment_versions}
+                  :for={v <- c.versions}
                   class="text-xs text-zinc-600 dark:text-zinc-300"
                 >
                   <span class="text-zinc-400 dark:text-zinc-500">
@@ -5081,7 +6551,16 @@ defmodule DoItWeb.InitiativeShowLive do
             </div>
           </li>
         </ul>
-        <form :if={@can_progress} phx-submit="add_comment" class="flex gap-2">
+        <form
+          :if={@can_progress}
+          phx-submit="add_comment"
+          data-add-comment-form
+          data-my-name={@current_user.name}
+          data-my-initials={initials(@current_user)}
+          data-my-bg={avatar_bg(@current_user)}
+          data-my-fg={avatar_fg(@current_user)}
+          class="flex gap-2"
+        >
           <input
             type="text"
             name="comment[body]"
@@ -5100,12 +6579,12 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
 
       <%!-- Hideable per user preference (m02.04 §2.4); collapsed by default,
-           expandable. KeepOpen persists the user's open/closed choice across
-           pane patches. --%>
+           expandable. data-keep="open" persists the user's open/closed choice
+           across pane patches. --%>
       <details
         :if={@show_activity}
         id="task-activity"
-        phx-hook="KeepOpen"
+        data-keep="open"
         class="group border-t border-zinc-100 dark:border-zinc-700 pt-3"
       >
         <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden flex items-center gap-1 text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">
@@ -5382,12 +6861,17 @@ defmodule DoItWeb.InitiativeShowLive do
   # created task lands there. Root/child "add" forms render at the top of
   # their list → index 0; an "add sibling after X" form → just after X. For an
   defp sibling_after_position(after_id) do
-    anchor = Tasks.get_task!(after_id)
-    sibs = sibling_ids(anchor)
+    # after_id is a client-supplied anchor; if it was just deleted, fall back to
+    # the top (nil position) instead of crashing.
+    case Tasks.get_task(after_id) do
+      nil ->
+        nil
 
-    case Enum.find_index(sibs, &(&1 == anchor.id)) do
-      nil -> nil
-      idx -> idx + 1
+      anchor ->
+        case Enum.find_index(sibling_ids(anchor), &(&1 == anchor.id)) do
+          nil -> nil
+          idx -> idx + 1
+        end
     end
   end
 

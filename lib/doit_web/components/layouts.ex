@@ -117,12 +117,15 @@ defmodule DoItWeb.Layouts do
                  (NOT collapsed into the hamburger), so notifications are one tap
                  away on mobile too. Native <details> like the other menus, so
                  root.html.heex's data-menu light-dismiss closes it on an outside
-                 click / Escape; KeepOpen pins it open across LiveView patches
-                 (a notification arriving over PubSub must not close it). --%>
+                 click / Escape; data-keep="open" pins it open across LiveView
+                 patches (a notification arriving over PubSub must not close it). --%>
             <%!-- Desktop: inline nav links. --%>
             <div class="hidden sm:flex items-center gap-3">
+              <%!-- Inside the kept-mounted workspace (rail_initiatives set) the
+                   list is a same-module push_patch; elsewhere it's a full nav. --%>
               <.link
-                navigate={~p"/initiatives"}
+                patch={if(@rail_initiatives, do: ~p"/initiatives")}
+                navigate={if(@rail_initiatives, do: nil, else: ~p"/initiatives")}
                 class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
               >
                 Initiatives
@@ -140,10 +143,10 @@ defmodule DoItWeb.Layouts do
             <%!-- Bell sits immediately LEFT of the avatar at every breakpoint:
                  a standalone item just before the account menu (sm:+) and the
                  hamburger (<sm), which are mutually exclusive. Native <details>
-                 + KeepOpen like the others; root.html.heex's data-menu handles
-                 the outside-click / Escape. Opening marks notifications read
-                 (worklist 2.3) — the summary click toggles + pushes mark-read. --%>
-            <details id="notif-menu" phx-hook="KeepOpen" class="relative" data-menu>
+                 + data-keep="open" like the others; root.html.heex's data-menu
+                 handles the outside-click / Escape. Opening marks notifications
+                 read (worklist 2.3) — the summary click toggles + pushes mark-read. --%>
+            <details id="notif-menu" data-keep="open" class="relative" data-menu>
               <summary
                 title="Notifications"
                 aria-label="Notifications"
@@ -161,8 +164,8 @@ defmodule DoItWeb.Layouts do
             </details>
 
             <%!-- Account menu (sm:+) — pulled out of the links wrapper so the
-                 bell sits to its left. KeepOpen pins it open across patches. --%>
-            <details id="account-menu" phx-hook="KeepOpen" class="relative hidden sm:block" data-menu>
+                 bell sits to its left. data-keep="open" pins it open across patches. --%>
+            <details id="account-menu" data-keep="open" class="relative hidden sm:block" data-menu>
               <summary
                 title="Account menu"
                 class="inline-flex items-center gap-1.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
@@ -202,9 +205,9 @@ defmodule DoItWeb.Layouts do
 
             <%!-- Mobile: hamburger (JS-free details/summary — works on dead views too).
                  Notifications no longer live here — they own the bell, which is a
-                 top-level nav item visible on mobile. KeepOpen pins it open
-                 across patches like the other menus. --%>
-            <details id="mobile-menu" phx-hook="KeepOpen" class="relative sm:hidden" data-menu>
+                 top-level nav item visible on mobile. data-keep="open" pins it
+                 open across patches like the other menus. --%>
+            <details id="mobile-menu" data-keep="open" class="relative sm:hidden" data-menu>
               <summary
                 class="btn btn-sm btn-ghost cursor-pointer list-none [&::-webkit-details-marker]:hidden"
                 aria-label="Menu"
@@ -231,7 +234,8 @@ defmodule DoItWeb.Layouts do
                 </li>
                 <li>
                   <.link
-                    navigate={~p"/initiatives"}
+                    patch={if(@rail_initiatives, do: ~p"/initiatives")}
+                    navigate={if(@rail_initiatives, do: nil, else: ~p"/initiatives")}
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     Initiatives
@@ -351,7 +355,48 @@ defmodule DoItWeb.Layouts do
       </div>
     </main>
 
+    <.connecting_signifier />
     <.flash_group flash={@flash} />
+    """
+  end
+
+  @doc """
+  Connecting / reconnecting signifier (m02.09 WL4.1 — UX_GUARDRAILS §6.8 +
+  §6.9).
+
+  Surfaces the **dead window** this arc exists to close: a LiveView page paints
+  in ~0.1s but isn't *live* until the socket connects and the channel joins
+  (~2.9s) — a span where the page looks fully interactive but nothing the user
+  does takes. This badge says, plainly, that it isn't ready yet — and on either
+  transport (WebSocket *or* the LongPoll fallback, §6.9), since app.js drives it
+  off the socket lifecycle, not a WS-specific signal.
+
+  Rendered hidden and inert; the topbar block in `app.js` reveals it during the
+  pre-connect window and any later reconnect, and clears it once the view is
+  live. It is **distinct** from the topbar progress bar, which signifies the
+  *ordinary* in-flight flashes (a live navigate / patch / form submit on an
+  already-live page) — this badge is the connecting/reconnecting dead window
+  only. On dead views (no LiveView, hence no socket) JS never reveals it (it only
+  shows on a `[data-phx-main]` page), so it stays hidden there.
+
+  a11y: `role="status"` + `aria-live="polite"` announces each state change to
+  screen readers via the text (so the cue is *not* color-only); the icon is a
+  shape cue and its spin is `motion-safe` (reduced-motion users get a static,
+  still-legible badge). Both themes.
+  """
+  def connecting_signifier(assigns) do
+    ~H"""
+    <div
+      id="conn-status"
+      role="status"
+      aria-live="polite"
+      data-conn-state="connecting"
+      hidden
+      class="fixed bottom-4 left-4 z-50 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium shadow-lg border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/90 dark:text-amber-100"
+    >
+      <.icon name="hero-arrow-path" class="w-4 h-4 flex-none motion-safe:animate-spin" />
+      <span data-conn-text>Connecting…</span>
+    </div>
     """
   end
 
@@ -482,11 +527,11 @@ defmodule DoItWeb.Layouts do
         Initiatives
       </h2>
       <nav id="rail-initiatives" class="space-y-0.5">
+        <%!-- The rail only renders inside the kept-mounted workspace LiveView, so
+             list<->detail here is a same-module push_patch (no remount). --%>
         <.link
           :for={init <- @initiatives}
-          navigate={
-            if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")
-          }
+          patch={if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")}
           aria-current={(init.id == @current_id && "page") || nil}
           data-rail-initiative-id={init.id}
           class={[
@@ -525,6 +570,43 @@ defmodule DoItWeb.Layouts do
           <div class="mt-1 h-1 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden">
             <div class="h-full bg-emerald-400" style={"width: #{init.progress || 0}%"}></div>
           </div>
+          <%!-- Member avatar row (m02.09 WL3.5): a width-filling, capped stack of
+               member avatars with a "+N" overflow. It is also the optimistic
+               target for drag-collaborator-onto-initiative (Fix B) —
+               CollaboratorDrag inserts a dimmed pending chip into the group at
+               drop and the add_collaborator_to reply reconciles it (the server's
+               rail refresh renders the real avatar). The preserve path's
+               `rail-avatars` KeepRegistry applier re-inserts the pending chip
+               across any mid-flight patch (e.g. a presence diff repainting the
+               rail) so it can't be stomped before the reply. Always rendered
+               (an Initiative always has ≥1 member) so the drop target exists.
+               a11y: the row carries the member count as its label and the
+               avatars are decorative (aria-hidden) — not the only signal. --%>
+          <div
+            :if={init.members != []}
+            id={"rail-avatars-#{init.id}"}
+            data-keep="rail-avatars"
+            data-rail-avatars-initiative-id={init.id}
+            class="mt-1.5 flex items-center"
+            aria-label={member_count_label(length(init.members))}
+          >
+            <span data-rail-avatar-group class="flex -space-x-1">
+              <.avatar
+                :for={u <- Enum.take(init.members, rail_avatar_cap())}
+                user={u}
+                online={MapSet.member?(@online_ids, u.id)}
+                data-member-id={u.id}
+                aria-hidden="true"
+                class="w-5 h-5 text-[9px] ring-1 ring-white dark:ring-zinc-900"
+              />
+            </span>
+            <span
+              :if={length(init.members) > rail_avatar_cap()}
+              class="ml-1 flex-none text-[10px] font-medium tabular-nums text-zinc-400 dark:text-zinc-500"
+            >
+              +{length(init.members) - rail_avatar_cap()}
+            </span>
+          </div>
         </.link>
       </nav>
 
@@ -544,6 +626,10 @@ defmodule DoItWeb.Layouts do
             id={"collabrow-#{collab.user.id}"}
             phx-hook="CollaboratorDrag"
             data-user-id={collab.user.id}
+            data-user-name={collab.user.name}
+            data-initials={initials(collab.user)}
+            data-avatar-bg={avatar_bg(collab.user)}
+            data-avatar-fg={avatar_fg(collab.user)}
             class="min-w-0"
           >
             <%!-- The menu opens when there's an action to offer: a current
@@ -591,29 +677,41 @@ defmodule DoItWeb.Layouts do
                 class="w-56 rounded-lg border border-zinc-200 bg-white p-1 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
               >
                 <div id={"collab-menu-#{collab.user.id}"} data-menu-step>
+                  <%!-- Route through the EXISTING client-opened remove-member
+                       confirm (#remove-member-confirm, app.js) instead of a bare
+                       round-trip (WL3 item 3.6): carry the same data-remove-member
+                       attributes the members-panel X uses, so the click opens the
+                       confirm client-side (§6.5) — Proceed then commits or
+                       escalates to the server hand-off modal. The popover still
+                       closes natively. --%>
                   <button
                     :if={@current_id && MapSet.member?(@member_ids, collab.user.id)}
                     type="button"
-                    phx-click={
-                      JS.push("remove_member", value: %{"user-id" => to_string(collab.user.id)})
-                    }
+                    data-remove-member
+                    data-user-id={collab.user.id}
+                    data-user-name={collab.user.name}
                     popovertarget={"collab-pop-#{collab.user.id}"}
                     popovertargetaction="hide"
                     class="block w-full rounded px-2 py-1.5 text-left text-sm text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/30"
                   >
                     Remove from {@current_name}
                   </button>
+                  <%!-- Optimistic add (WL3 item 3.6, §6.7): app.js intercepts the
+                       click, inserts a dimmed pending member row into the members
+                       panel at once, then pushes add_collaborator_to and pulls the
+                       stand-in on the reply (ok:false reverts — MUST NOT LIE). The
+                       button still closes the popover natively. --%>
                   <button
                     :if={@current_id && not MapSet.member?(@member_ids, collab.user.id)}
                     type="button"
-                    phx-click={
-                      JS.push("add_collaborator_to",
-                        value: %{
-                          "user-id" => to_string(collab.user.id),
-                          "initiative-id" => to_string(@current_id)
-                        }
-                      )
-                    }
+                    data-add-collaborator
+                    data-user-id={collab.user.id}
+                    data-initiative-id={@current_id}
+                    data-user-name={collab.user.name}
+                    data-username={collab.user.username}
+                    data-initials={initials(collab.user)}
+                    data-avatar-bg={avatar_bg(collab.user)}
+                    data-avatar-fg={avatar_fg(collab.user)}
                     popovertarget={"collab-pop-#{collab.user.id}"}
                     popovertargetaction="hide"
                     class="block w-full rounded px-2 py-1.5 text-left text-sm text-emerald-700 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/30"
@@ -640,13 +738,14 @@ defmodule DoItWeb.Layouts do
                     Remove {collab.user.name} from your collaborators?
                   </p>
                   <div class="flex gap-1 p-1">
+                    <%!-- Optimistic prune (WL3 item 3.6, §6.7): app.js hides the
+                         rail row at once, then pushes remove_collaborator and
+                         un-hides on ok:false (still sharing — MUST NOT LIE). The
+                         popover still closes natively. --%>
                     <button
                       type="button"
-                      phx-click={
-                        JS.push("remove_collaborator",
-                          value: %{"user-id" => to_string(collab.user.id)}
-                        )
-                      }
+                      data-prune-collaborator
+                      data-user-id={collab.user.id}
                       popovertarget={"collab-pop-#{collab.user.id}"}
                       popovertargetaction="hide"
                       class="flex-1 rounded px-2 py-1 text-sm font-medium text-white bg-red-600 hover:bg-red-700"
@@ -702,6 +801,14 @@ defmodule DoItWeb.Layouts do
   # "Initiative" / "Initiatives" for the Collaborators shared-count tooltip.
   defp ngettext_initiative(1), do: "Initiative"
   defp ngettext_initiative(_), do: "Initiatives"
+
+  # How many member avatars the rail entry shows before collapsing the rest
+  # into a "+N" overflow (m02.09 WL3.5). Sized for the 17rem rail width.
+  defp rail_avatar_cap, do: 6
+
+  # a11y label for the rail member-avatar row — avatars aren't the only signal.
+  defp member_count_label(1), do: "1 member"
+  defp member_count_label(n), do: "#{n} members"
 
   @doc """
   Three-state theme toggle (System / Light / Dark). Each button dispatches

@@ -25,7 +25,15 @@ defmodule DoIt.Tasks.ActivityEvent do
 
   def changeset(event, attrs) do
     event
-    |> cast(attrs, [:task_id, :initiative_id, :user_id, :kind, :data, :inverse_payload, :undone_at])
+    |> cast(attrs, [
+      :task_id,
+      :initiative_id,
+      :user_id,
+      :kind,
+      :data,
+      :inverse_payload,
+      :undone_at
+    ])
     |> validate_required([:task_id, :initiative_id, :kind])
     |> validate_length(:kind, min: 1, max: 60)
   end

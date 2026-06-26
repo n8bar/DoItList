@@ -33,6 +33,11 @@ defmodule DoIt.Initiatives.Initiative do
     # loaded for the Archived list so it can split archived from hidden rows.
     field :archived?, :boolean, virtual: true
     field :hidden?, :boolean, virtual: true
+    # The Initiative's members as `%User{}`s (owner-first, then by name), loaded
+    # for the left-rail avatar chip row (m02.09 WL3.5). Batch-attached by
+    # `Initiatives.list_visible_initiatives/1`; defaults empty so a struct built
+    # without the attach renders no row.
+    field :members, :any, virtual: true, default: []
 
     belongs_to :owner, User
     # The system-managed root task: the Initiative IS this task (its title is the

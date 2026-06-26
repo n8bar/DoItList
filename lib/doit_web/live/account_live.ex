@@ -127,6 +127,26 @@ defmodule DoItWeb.AccountLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
+      <%!-- §6.8 dead-window flush (WL4.2.2): EVERY LiveView in the authenticated
+           live_session must register a livePush backend, so the global
+           capture-phase interceptor (app.js) goes inert the moment THIS page is
+           live, this page flushes its OWN dead-window queue on mount, and nothing
+           survives a live <.link navigate> into another view (Defect #1).
+           Mirrors .IndexLive / .TaskKeys. --%>
+      <div id="account-root" phx-hook=".AccountLive">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".AccountLive">
+          export default {
+            mounted() {
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
+            },
+            destroyed() {
+              window.DoitUnregisterLivePush(this._livePush);
+            },
+          }
+        </script>
+      </div>
+
       <div class="mx-auto max-w-2xl">
         <div class="mb-6 flex items-center gap-3">
           <.avatar user={@current_user} class="w-12 h-12 text-lg" />
@@ -183,7 +203,7 @@ defmodule DoItWeb.AccountLive do
               autocomplete="email"
             />
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save profile</.button>
+              <.button type="submit" data-latch="Saving…">Save profile</.button>
             </div>
           </.form>
 
@@ -205,7 +225,7 @@ defmodule DoItWeb.AccountLive do
               3–30 characters: letters, numbers, _ and -. Your login and @handle across the app.
             </p>
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save username</.button>
+              <.button type="submit" data-latch="Saving…">Save username</.button>
             </div>
           </.form>
         </section>
@@ -246,7 +266,7 @@ defmodule DoItWeb.AccountLive do
               autocomplete="new-password"
             />
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Change password</.button>
+              <.button type="submit" data-latch="Saving…">Change password</.button>
             </div>
           </.form>
         </section>
@@ -375,7 +395,7 @@ defmodule DoItWeb.AccountLive do
             </fieldset>
 
             <div class="flex justify-end">
-              <.button type="submit" phx-disable-with="Saving...">Save preferences</.button>
+              <.button type="submit" data-latch="Saving…">Save preferences</.button>
             </div>
           </.form>
 
@@ -418,7 +438,7 @@ defmodule DoItWeb.AccountLive do
 
         <section
           id="account-danger"
-          class="rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 p-4"
+          class="rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 p-4 mb-4"
         >
           <h2 class="text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400 mb-3">
             Danger zone
@@ -428,9 +448,9 @@ defmodule DoItWeb.AccountLive do
             with other members are handed to another member, so their work isn't lost.
           </p>
 
-          <%!-- Two-step confirm, client-side (no round trip to open); KeepOpen
-               holds it open across any patch while the user decides. --%>
-          <details id="delete-account-confirm" phx-hook="KeepOpen">
+          <%!-- Two-step confirm, client-side (no round trip to open);
+               data-keep="open" holds it open across any patch while the user decides. --%>
+          <details id="delete-account-confirm" data-keep="open">
             <summary class="w-fit cursor-pointer list-none [&::-webkit-details-marker]:hidden px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm font-medium text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40">
               Delete account…
             </summary>
@@ -442,7 +462,7 @@ defmodule DoItWeb.AccountLive do
                 type="button"
                 id="delete-account-button"
                 phx-click="delete_account"
-                phx-disable-with="Deleting..."
+                data-latch="Deleting…"
                 class="px-3 py-1.5 rounded bg-red-600 text-sm font-medium text-white hover:bg-red-700"
               >
                 Yes, delete my account

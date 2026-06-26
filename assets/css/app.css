@@ -235,13 +235,18 @@ li[data-selected] > [data-task-row] .kbd-key {
   text-decoration: underline;
 }
 
-/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): the title /
-   subtitle carry a "click to edit" dotted-underline signifier that drops while
-   the editor is open. The pane's visibility is client-driven now (the server no
-   longer flips @editing_initiative?), so the signifier keys off the .editor-open
-   class DoitInitiativeEditor.apply() toggles, not a server assign. */
-[data-edit-initiative].editor-open {
-  text-decoration: none;
+/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): the title is a
+   button-styled click/tap-to-edit affordance ([data-edit-initiative]). While its
+   editor is open the affordance reads as pressed/active. The pane's visibility is
+   client-driven now (the server no longer flips @editing_initiative?), so this
+   keys off the .editor-open class DoitInitiativeEditor.apply() toggles, not a
+   server assign. The pressed tint matches the Tailwind active: states in both
+   themes (zinc-200 light / zinc-700 dark). */
+[data-edit-initiative][role="button"].editor-open {
+  background-color: var(--color-zinc-200);
+}
+.dark [data-edit-initiative][role="button"].editor-open {
+  background-color: var(--color-zinc-700);
 }
 
 /* Drag-reorder visuals (Hooks.DragReorder).
@@ -363,6 +368,35 @@ div.init-drop-placeholder {
   background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
 }
 
+/* Selection highlight survives the saving hue (WL6 6.2): a selected row that's
+   mid-save would otherwise read as unselected — the .is-saving pink is
+   !important and overrode the no-!important emerald selection paint (selection
+   itself never broke, only the paint). A higher-specificity rule (still
+   !important, since it must outrank an !important) restores the emerald while
+   saving, with hover + dark-mode variants mirroring the base selection colors. */
+li[data-selected] > [data-task-row].is-saving {
+  background-color: #d1fae5 !important;
+}
+li[data-selected] > [data-task-row].is-saving:hover {
+  background-color: #a7f3d0 !important;
+}
+[data-theme=dark] li[data-selected] > [data-task-row].is-saving {
+  background-color: #022c22 !important;
+}
+[data-theme=dark] li[data-selected] > [data-task-row].is-saving:hover {
+  background-color: #064e3b !important;
+}
+
+/* Saving hue on the small inline task-index labels (WL3 item 3.7): the faint
+   pink background is nearly invisible on a tiny inline span, so the
+   in-flight signifier there is a gentle pulse + dim instead, until the
+   re-label patch strips is-saving. */
+[data-task-index].is-saving {
+  background-color: transparent !important;
+  opacity: 0.45;
+  animation: doit-recompute-pulse 2s ease-in-out infinite;
+}
+
 /* Indeterminate progress (.03.07.23): rows whose % is genuinely in flight
    (progress-pinked, but not the operated row) stop claiming a number — the
    fill becomes a full-width left-to-right fade from the progress color into
@@ -465,5 +499,79 @@ div.init-drop-placeholder {
 .chat-flash {
   animation: chat-flash 0.9s ease-out;
 }
+
+/* Chat input — iOS Safari caret fix (M02.09).
+   daisyUI v5's `.input` is meant to wrap an input, so it forces the element
+   to `display: inline-flex` with `gap` + `align-items: center` (see the
+   compiled `.input { display: inline-flex } &:where(input) { ... }` rules).
+   We apply `.input` directly to a bare `<input>`, so iOS Safari renders a
+   text field as an inline-flex container: the native caret then sits ~8px
+   (the flex `gap`) to the RIGHT of the typed glyphs. Desktop WebKit/Blink/
+   Gecko position the caret correctly regardless, which is why it's iOS-only.
+   Restore a normal text-input box model (block flow, no flex gap). This does
+   NOT touch daisyUI's border/padding/radius/font-size, so the desktop look is
+   unchanged; it only undoes the inline-flex container behavior the caret trips
+   on. Scoped to the chat input alone via [data-chat-input]. */
+input[data-chat-input].input {
+  display: block;
+  gap: 0;
+}
+
+/* iOS Safari zoom-on-focus fix (M02.09).
+   Mobile Safari auto-zooms the whole page when a text field with a computed
+   font-size < 16px is focused, and never zooms back — pushing fixed/edge UI
+   off-screen. Our form controls render at 14px (daisyUI's `.input`/`.select`/
+   `.textarea` default `font-size: var(--fontsize, 0.875rem)`), 12px (`*-sm`) or
+   11px (`*-xs`), so every one of them trips it.
+
+   Fix: floor every text-entry control to 16px ON MOBILE ONLY. The `@media
+   (max-width: 767px)` query means desktop (>= 768px, Tailwind's `md`) keeps the
+   exact daisyUI sizes — the desktop look is untouched. Checkbox/radio are
+   excluded (no text caret; they size via `--size`, not font-size).
+
+   This rule is intentionally UNLAYERED. daisyUI ships inside
+   `@layer components`, and any unlayered rule beats every layered rule
+   regardless of selector specificity — the same mechanism the chat-input caret
+   fix above relies on. So `var(--fontsize, …)` on `.input`/`.select`/`.textarea`
+   (12–14px) loses to this 16px floor on mobile, no `!important` needed. */
+@media (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Group-by-Initiative reflow (WL3 3.2, §6.5). Grouped vs ungrouped is pure
+   arrangement: the Assigned list always renders BOTH the per-Initiative group
+   headers and the per-row Initiative subtitles, and the list wrapper's
+   data-grouped decides which set shows. The toggle flips data-grouped
+   client-side at the click (instant, no round trip; the pref only persists on
+   the server reply), so the reflow never waits on the network. Intentionally
+   UNLAYERED, so these beat the Tailwind display utilities (block / flex)
+   without !important — the same mechanism the .task-id-pill rules above use. */
+.assigned-group-header { display: none; }
+[data-grouped="true"] .assigned-group-header { display: flex; }
+[data-grouped="true"] .assigned-row-subtitle { display: none; }
+
+/* In-flight signifier for the server-gated reveal toggles (WL3 3.2, §6.7):
+   Show completed / Show archived & hidden / Show hidden filter their rows out
+   of the DOM server-side, so the client genuinely can't reveal them — the
+   round-trip stays. The click is acknowledged with an optimistic tick (held by
+   the "reveal-toggle" preserve-path applier) plus this trailing spinner. It
+   lives in a fixed-width reserved slot, toggling visibility only, so revealing
+   it never shifts the control or its neighbors (1.1). Driven by LiveView's own
+   phx-click-loading class — added at the click, removed at settle — so it
+   tracks the real in-flight window on either transport (6.9). Motion is opt-in
+   via motion-safe (1.2); shape + motion (not color) keeps the cue perceivable
+   to colorblind users (4), and aria-busy on the control announces it. */
+.doit-reveal-spinner { visibility: hidden; }
+input.phx-click-loading ~ .doit-reveal-slot .doit-reveal-spinner { visibility: visible; }
+/* Connect-independent twin (WL4.3, §6.7): phx-click-loading is only added once
+   the view is live, so it never shows in the pre-connect dead window. The
+   delegated `change` listener sets doit-reveal-busy on the box at the click
+   (cleared by the "reveal-toggle" applier alongside aria-busy), so the same
+   spinner fires at the gesture regardless of connect state. */
+input.doit-reveal-busy ~ .doit-reveal-slot .doit-reveal-spinner { visibility: visible; }
 
 /* This file is for your main application CSS */

@@ -54,8 +54,21 @@ defmodule DoItWeb.InitiativeShowMoveConfirmTest do
     {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Alpha"})
 
     root_a = new_task(owner, ini, %{"title" => "A-root"})
-    _done = new_task(owner, ini, %{"title" => "done-child", "parent_id" => root_a.id, "status" => "done"})
-    incomplete = new_task(owner, ini, %{"title" => "incomplete-child", "parent_id" => root_a.id, "manual_progress" => 50})
+
+    _done =
+      new_task(owner, ini, %{
+        "title" => "done-child",
+        "parent_id" => root_a.id,
+        "status" => "done"
+      })
+
+    incomplete =
+      new_task(owner, ini, %{
+        "title" => "incomplete-child",
+        "parent_id" => root_a.id,
+        "manual_progress" => 50
+      })
+
     root_b = new_task(owner, ini, %{"title" => "B-root"})
 
     # Sanity: root_a is still open (it has the incomplete child).
@@ -73,7 +86,10 @@ defmodule DoItWeb.InitiativeShowMoveConfirmTest do
   } do
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}")
 
-    render_hook(view, "move_task", %{"task_id" => to_string(incomplete.id), "parent_id" => to_string(root_b.id)})
+    render_hook(view, "move_task", %{
+      "task_id" => to_string(incomplete.id),
+      "parent_id" => to_string(root_b.id)
+    })
 
     # The authoritative backstop fired: the modal is up and nothing committed.
     assert has_element?(view, "#completion-confirm")

@@ -1867,7 +1867,16 @@ defmodule DoIt.Tasks do
         c.task_id == ^task_id and
           (is_nil(c.deleted_at) or not is_nil(c.deleted_by_id)),
       order_by: [asc: c.inserted_at],
-      preload: [:user, :deleted_by, :versions]
+      # Order the `versions` preload newest-first so the inline edit-history
+      # popup (rendered straight off this association — m02.09 WL3 3.3) honors
+      # the same newest-first contract list_comment_versions/1 asserts. The
+      # `has_many :versions` carries no order_by, so without this the popup
+      # would show oldest-first and contradict the docstrings.
+      preload: [
+        :user,
+        :deleted_by,
+        versions: ^from(v in CommentVersion, order_by: [desc: v.inserted_at, desc: v.id])
+      ]
     )
     |> Repo.all()
   end
@@ -2436,6 +2445,14 @@ defmodule DoIt.Tasks do
 
   def subscribe(initiative_id) do
     Phoenix.PubSub.subscribe(DoIt.PubSub, topic(initiative_id))
+  end
+
+  # Explicit teardown for the kept-mounted workspace LiveView (M02.09 WL5.3/5.4):
+  # leaving or switching an Initiative no longer rides process death, so the
+  # per-Initiative task topic must be dropped by hand or its broadcasts keep
+  # hitting a process that has moved on (a leaked subscription).
+  def unsubscribe(initiative_id) do
+    Phoenix.PubSub.unsubscribe(DoIt.PubSub, topic(initiative_id))
   end
 
   @pending_broadcasts :doit_pending_broadcasts

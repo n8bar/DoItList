@@ -40,8 +40,10 @@ defmodule DoItWeb.Router do
     live_session :authenticated, on_mount: [{DoItWeb.UserAuth, :require_authenticated}] do
       live "/account", AccountLive, :show
       live "/assigned", AssignedLive, :index
-      live "/initiatives", InitiativeIndexLive, :index
-      live "/initiatives/:id", InitiativeShowLive, :show
+      # M02.09 WL5.3/5.4: ONE kept-mounted shell LiveView serves both the list
+      # and the detail, so list<->detail is a same-module push_patch (no remount).
+      live "/initiatives", InitiativeWorkspaceLive, :index
+      live "/initiatives/:id", InitiativeWorkspaceLive, :show
     end
   end
 

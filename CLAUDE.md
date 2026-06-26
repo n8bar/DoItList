@@ -25,6 +25,7 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 - Boring, understandable code; small, reviewable changes.
 - Business logic in domain/service modules with tests, not views. Progress math stays in pure modules with unit tests.
 - State lives where its lifetime is: ephemeral UI state (selection, expand/collapse, focus) stays client-side; the server owns durable data. Writes get optimistic feedback (UX_GUARDRAILS §6); renders and broadcasts update incrementally — cost proportional to the change, not the tree.
+- **§6 adherence is a release gate for every feature.** Every user-initiated action acknowledges the user *instantly* — optimistic when the client can complete it, an in-flight signifier when it's server-gated; a round-trip never delays *acknowledgement*. Never leave the initiator hanging (UX_GUARDRAILS §6 — esp. 6.7 — and §7.3/7.4). Each arc's Testing worklist carries the §6 check; no feature ships violating it, and none backslides into the bad-attitude baseline.
 
 ## Dev Environment
 - Everything runs through Docker — `docker compose up --build`. No host installs beyond Docker + Compose.
@@ -47,5 +48,5 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 ## Terminal Ownership
 Claude drives Docker, git, and `mix` (via the container) — assume the user has no shell open unless they say otherwise.
 
-## Subagents
-Use only for independent, path-scoped tasks that materially shorten cycle time. The primary agent owns integration and the user-facing summary.
+## Subagents & workflows
+Use workflows and subagents wherever feasible — delegate independent investigation, review, and path-scoped implementation to them by default. The primary agent owns diagnosis, decisions, integration, and the user-facing summary.

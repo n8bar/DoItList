@@ -143,12 +143,524 @@ window.DoitSaving = {
   savingRowOf,
 }
 
+// The single source of client-owned truth (worklist 2). One unified store that
+// survives every server re-render, reconnect, and initial connect — read by the
+// `dom:` callbacks below so the right value is reconciled INSIDE the morphdom
+// patch (never painted wrong, no post-hoc race). It supersedes the fragmented
+// `window.Doit*` objects; features migrate onto it slice by slice. This slice
+// activates `selectedId` only — the other fields are declared so the shape is
+// fixed for the slices that follow (open editor/details, optimistic flips,
+// collaborator presence, keyboard focus/caret).
+const DoitState = {
+  selectedId: null, // string|null — the client-owned task selection (active)
+  editorOpen: false, // initiative editor visibility — slice 2.3
+  detailsOpen: {}, // {[elId]: bool} — open/closed of data-keep="open" <details> (active)
+  // Comment editors & popups are client-owned (WL3 3.3, §6.5): which comment's
+  // inline edit form is open, and which comment's edit-history popup is open.
+  // string|null comment ids; the "comment-edit" / "comment-versions" appliers
+  // read these so a list-refresh patch can't snap an open editor/popup shut.
+  commentEditId: null, // string|null — the comment whose inline editor is open
+  commentVersionsId: null, // string|null — the comment whose history popup is open
+  // Confirm-held / drop-held optimistic structural holds. `toggle`/`move` are
+  // slice 2.3; `initiativeOrder` (WL3.5 Fix A) holds a drag-reordered Initiatives
+  // card order {wrapId, order:[ids], prior:[ids]} at drop until the apply_sort
+  // reply settles (release on ok, revert to prior on failure) — re-asserted by
+  // applyPendingInitiativeOrder from onPatchEnd, mirroring applyPendingMove.
+  pending: {toggle: null, move: null, initiativeOrder: null},
+  // Optimistic rail member-avatar chips (WL3.5 Fix B), keyed by echo id →
+  // {iid, uid, name, initials, bg, fg}. A drag-collaborator-onto-initiative drop
+  // inserts the dropped user's avatar into that rail entry's avatar row at once;
+  // the `rail-avatars` KeepRegistry applier re-inserts it across mid-flight
+  // patches until the add_collaborator_to reply clears the entry (ok → the
+  // server's rail refresh renders the real avatar; failure → pulled, MUST NOT LIE).
+  railAvatarAdds: {}, // {[echoId]: {iid, uid, name, initials, bg, fg}}
+  presence: {selections: [], online: []}, // collaborator presence badges — slice 2.3
+  // Inner scroll-container offsets, keyed by element id (slice 2.3.8). LiveView
+  // preserves window scroll on navigate and, because we keep every scroll box at
+  // a stable id, its scrollTop survives an in-place morph for free — but NOT the
+  // remove-and-re-add path (initial-join replace / a future stream reset), which
+  // re-creates the node at scrollTop 0. This store is the truth the "scroll"
+  // KeepRegistry applier restores onto the re-added node. (Focus + caret are
+  // fully covered by LiveView for this app — every focusable lives at a stable
+  // id, so node identity + LV's restoreFocus carry them; nothing to keep here.)
+  scroll: {}, // {[elId]: number} — captured scrollTop of data-keep="scroll" boxes
+  // Group-by-Initiative reflow (WL3 3.2, §6.5): client-owned arrangement, keyed
+  // by the Assigned-list wrapper id → the optimistic grouped? value. The pref
+  // persists on the round-trip; this bridges the click until the server render
+  // agrees, then the "assigned-group" applier releases the hold.
+  assignedGrouped: {}, // {[wrapperId]: bool}
+  // Server-gated reveal toggles (WL3 3.2, §6.7), keyed by checkbox id → the
+  // optimistic checked value. The rows are server-FILTERED, so the client can't
+  // reveal them — this only holds the CONTROL's own tick + aria-busy until the
+  // server's re-render agrees. It never paints phantom rows.
+  revealInflight: {}, // {[checkboxId]: bool}
+  // Archive-on-completion banner dismissal (WL3 3.2, §6.5): hidden instantly at
+  // the click; the flag holds it hidden across any mid-flight patch until the
+  // server's dismiss reply removes the element (onPatchEnd then clears it).
+  archivePromptDismissed: false,
+  // §6.8 dead-window capture queue (WL4.2.2/4.2.3): server-gated writes taken
+  // before the LiveView is live are captured here as ordered {key, ev, payload,
+  // cb} entries and flushed, in order, on connect (see DoitPush below). In-memory
+  // only — never persisted (entries hold reply callbacks).
+  preconnectQueue: [],
+}
+window.DoitState = DoitState
+
+// --- §6.8 dead-window capture-and-replay (WL4.2.2 / 4.2.3) ------------------
+//
+// A LiveView page paints ~2.8s before it's live (the dead window). Server-gated
+// writes funnel through window.DoitPush; until 4.2.2 that funnel existed only
+// AFTER the root hook mounted (post-connect), so a dead-window call hit
+// `undefined` and vanished. Here DoitPush exists from module load: when live it
+// dispatches immediately through the mounted root hook's pushEvent; in the dead
+// window it CAPTURES the call onto DoitState.preconnectQueue (deduped per the
+// policy below), and the root hook flushes the queue, in order, the instant it
+// mounts (= channel join = "now live"). The caller's optimistic / in-flight ack
+// already stood at the click, so nothing is lost, and the server stays
+// authoritative on flush — the preserved reply cbs + KeepRegistry appliers
+// reconcile exactly as in steady state, and a refusal bonks/reverts through the
+// existing paths (MUST NOT LIE — never an unsent success).
+//
+// The live backend is a root hook's bound pushEvent: null in the dead window
+// and during a navigate teardown→remount gap; set for the life of a mounted
+// view. It is NOT re-set on reconnect (the hook isn't re-mounted), so the queue
+// is a FIRST-connect mechanism only — a reconnect re-joins on its own and never
+// re-flushes committed work (the queue is already empty by then).
+let livePush = null
+
+// Coalesce policy: return a stable key when re-enqueuing this event should
+// REPLACE the prior queued entry (last-write-wins, kept at its original
+// position), or null to APPEND (every distinct act preserved, in order).
+// Default (event absent here) = append — safe: never silently drops a distinct
+// intent (§6 / [[feedback_optimistic_ui_must_not_lie]]).
+function preconnectCoalesceKey(ev, payload) {
+  const p = payload || {}
+  switch (ev) {
+    // Singleton view prefs — only the FINAL choice matters, so each collapses to
+    // one entry (last-write-wins, kept at its original queue position). As of
+    // WL4.2.2 these reach the queue for real: they ride native phx-change /
+    // phx-click and are captured by the live-gated interceptor below.
+    case "set_index_style":
+    case "set_progress_calc":
+    case "set_viewer_plus":
+    case "update_subtitle":
+    case "update_initiative": // editor form — change (validate) + submit (save)
+    case "assigned_toggle_group_by":
+    case "assigned_toggle_completed":
+    case "assigned_toggle_archived_hidden":
+    case "validate_profile":
+    case "validate_username":
+    case "validate_password":
+    case "validate_preferences":
+      return ev
+    // Sort lives on ONE reused form that is re-pointed at the selected branch
+    // (its hidden task_id follows the selection), so coalesce PER BRANCH — a
+    // later branch's sort must not overwrite an earlier branch's queued change.
+    case "set_sort":
+      return "set_sort:" + (p.task_id || "")
+    // One role form per member (hidden user_id) — coalesce per member so two
+    // members' role changes both replay; repeats on one member last-write-win.
+    case "update_member_role":
+      return "update_member_role:" + (p.user_id || "")
+    // Inline pane edits: keyed per (TARGET TASK, form). p.id is the task the
+    // edit was made against (preconnectSelfTarget captures DoitState.selectedId),
+    // so cross-task dead-window edits don't collide. The field SET distinguishes
+    // the TWO split update_task forms (form 1 title/description/manual_progress vs
+    // form 2 priority/assignee), so neither partial overwrites the other; each
+    // form's keystrokes still coalesce last-write-wins.
+    case "update_task":
+      return "update_task:" + (p.id || "") + ":" + (p.task ? Object.keys(p.task).sort().join(",") : "")
+    // Structural move / cascade: latest intent per target wins (these carry a
+    // single latest intent in DoitState.pending.*). move_task is a hook gesture
+    // (post-connect), so it won't reach the queue — declared for completeness; a
+    // directional branch cascade is idempotent per (event, row).
+    case "move_task":
+      return "move_task:" + p.task_id
+    case "cascade_complete":
+    case "cascade_incomplete":
+      return ev + ":" + p.id
+    // APPEND (default, key null) — every distinct act preserved, in order:
+    //   • create_task / add_comment / save_comment / add_member / create /
+    //     confirm_handoff — distinct creates / submits, never merged.
+    //   • toggle_complete / toggle_show_hidden and the archived row actions
+    //     (hide / unhide / unarchive / restore_initiative) are server-side FLIPS
+    //     or per-row acts: two flips must BOTH replay (a coalesced single flip
+    //     would desync the optimistic net from the server).
+    //   • select_task / close_task never reach the queue — see PRECONNECT_SKIP /
+    //     DOITPUSH_OWNED (selection is replayed from the final DoitSelection).
+    default:
+      return null
+  }
+}
+
+// Selection is replayed separately by the .TaskKeys mount, which pushes the
+// FINAL selection from DoitSelection.id (the selection slot's single source of
+// truth — it also captures pill-click selections, which never call DoitPush). So
+// don't ALSO queue select_task/close_task: that would double-push the selection.
+const PRECONNECT_SKIP = new Set(["select_task", "close_task"])
+
+function enqueuePreconnect(ev, payload, cb) {
+  const key = preconnectCoalesceKey(ev, payload)
+  const q = DoitState.preconnectQueue
+  const entry = {key, ev, payload, cb}
+  if (key != null) {
+    const at = q.findIndex((e) => e.key === key)
+    if (at !== -1) { q[at] = entry; return } // last-write-wins at a stable position
+  }
+  q.push(entry)
+}
+
+// THE single server-gated write funnel (every delegated listener calls it).
+// Live → dispatch now (cb receives the reply, exactly as before). Dead window →
+// capture for the flush. No call site changed: callers that guarded on
+// `window.DoitPush` being defined now always proceed, so their dead-window
+// action is captured instead of dropped — which is the whole point of §6.8.
+window.DoitPush = (ev, payload = {}, cb) => {
+  if (livePush) return livePush(ev, payload, cb)
+  if (PRECONNECT_SKIP.has(ev)) return // owned by the .TaskKeys selection replay
+  enqueuePreconnect(ev, payload, cb)
+}
+
+// Flush every captured entry, in original order, through the now-live backend,
+// then clear. Cleared BEFORE dispatch so a flushed event's synchronous re-entry
+// (now live) sends immediately rather than re-queuing or re-flushing.
+function flushPreconnect() {
+  if (!livePush || DoitState.preconnectQueue.length === 0) return
+  const batch = DoitState.preconnectQueue
+  DoitState.preconnectQueue = []
+  for (const {ev, payload, cb} of batch) livePush(ev, payload, cb)
+}
+
+// A root hook calls these from mounted()/destroyed(): registering its bound
+// pushEvent IS the "now live" signal (the hook mounts only after the channel
+// joins) and triggers the flush; unregister is keyed on the fn so a navigate
+// where the next view mounts before the old is destroyed can't null a live
+// backend. As of M02.09 WL5.4 the index and detail are ONE kept-mounted
+// workspace LiveView, so a single always-present .Workspace shell hook registers
+// (and never unregisters on a list<->detail patch) — the dead window exists only
+// at first connect, not on every hop.
+window.DoitRegisterLivePush = (fn) => { livePush = fn; flushPreconnect() }
+window.DoitUnregisterLivePush = (fn) => { if (livePush === fn) livePush = null }
+
+// `data-keep="<kind>"` registry. Each client-owned element carries a
+// server-rendered `data-keep` marker naming its kind; the entry's `apply(el,
+// state)` reconciles that one element to the store's truth, idempotently
+// (writes only when the DOM disagrees, removes the attribute when it shouldn't
+// be there). The `dom:` callbacks dispatch into this by `el.dataset.keep`, so a
+// new client-owned element joins the preserve path by rendering the marker — no
+// per-feature observer. This slice registers `"selected"`; later slices add the
+// editor/pane, optimistic-flip, presence, and focus kinds.
+const KeepRegistry = {
+  selected: {
+    // Match the task-row <li>'s data-selected to state.selectedId. Set when this
+    // li IS the selection (and isn't already marked); remove otherwise.
+    apply(el, state) {
+      const id = el.dataset.taskId
+      const want = state.selectedId != null && id === String(state.selectedId)
+      if (want) {
+        if (el.getAttribute("data-selected") !== id) el.setAttribute("data-selected", id)
+      } else if (el.hasAttribute("data-selected")) {
+        el.removeAttribute("data-selected")
+      }
+    },
+  },
+  editor: {
+    // The initiative-editor pane (#initiative-editor-pane). Visibility is client
+    // truth (state.editorOpen); the server always renders it hidden. Reconcile
+    // the `hidden` attribute: open => not hidden, closed => hidden.
+    apply(el, state) {
+      const wantHidden = !state.editorOpen
+      if (el.hidden !== wantHidden) el.hidden = wantHidden
+    },
+  },
+  "editor-signifier": {
+    // The title/subtitle "click to edit" affordance ([data-edit-initiative]). The
+    // `.editor-open` class marks the affordance as pressed/active while its editor
+    // is open; the server can no longer toggle it, so the client owns it via state.
+    apply(el, state) {
+      if (el.classList.contains("editor-open") !== state.editorOpen) {
+        el.classList.toggle("editor-open", state.editorOpen)
+      }
+    },
+  },
+  rail: {
+    // The mobile right-rail flyout (#details-rail). Its `data-open` AND the
+    // sibling #pane-backdrop's `hidden` are pure VIEW STATE (.03.07.20): open
+    // when a task is selected OR the initiative editor is showing — both client
+    // truth. The server renders both SOLELY from @selected_task_id, so the
+    // editor-open case (selectedId null) leaves them unmanaged and a patch
+    // strips/resets them. This kind owns BOTH elements (the backdrop carries no
+    // marker of its own) and mirrors syncRail's computation, idempotently (no-op
+    // when already matched). `el` is #details-rail (where the marker renders).
+    apply(el, state) {
+      const open = !!(state.selectedId || state.editorOpen)
+      if (el.hasAttribute("data-open") !== open) el.toggleAttribute("data-open", open)
+      const backdrop = document.getElementById("pane-backdrop")
+      if (backdrop && backdrop.hidden !== !open) backdrop.hidden = !open
+    },
+  },
+  presence: {
+    // The presence anchor (#presence-badges, phx-update="ignore"). Truth lives in
+    // state.presence (written by the PresenceBadges handleEvent). Painting is
+    // document-wide and idempotent (per-slot signature guard, no-op class
+    // toggles), so reconciling on this one element repaints every row badge /
+    // online dot to match the store after any patch re-adds or touches it.
+    apply(_el, _state) {
+      applyPresenceBadges()
+    },
+  },
+  collapse: {
+    // A children <ul> (ul[id^='children-']). Truth stays in localStorage (keyed
+    // by initiative+task); reconcile the `.collapsed-peek` class to it. The
+    // server never renders the class, so this is purely additive — set when the
+    // stored state is collapsed, removed otherwise. No-op toggle when matched.
+    apply(el, _state) {
+      const key = `phx:collapse:${el.dataset.initiativeId}:${el.dataset.taskId}`
+      const collapsed = localStorage.getItem(key) === "1"
+      if (el.classList.contains("collapsed-peek") !== collapsed) {
+        el.classList.toggle("collapsed-peek", collapsed)
+      }
+    },
+  },
+  open: {
+    // A preserved <details> (details[data-keep="open"]). Its expanded/collapsed
+    // state is client truth (state.detailsOpen[el.id], written by the delegated
+    // `toggle` listener below); the server re-renders it at its default, so a
+    // patch would otherwise snap it shut. Reconcile `el.open` to the stored
+    // value when an entry exists, idempotently (write only when it differs).
+    // No entry → the user hasn't touched it; leave the server default alone.
+    apply(el, state) {
+      if (!(el.id in state.detailsOpen)) return
+      const want = !!state.detailsOpen[el.id]
+      if (el.open !== want) el.open = want
+    },
+  },
+  "comment-edit": {
+    // A comment <li> (li[data-keep="comment-edit"]). Its inline editor's
+    // open/close is client truth (state.commentEditId, written by the delegated
+    // click listener below); the server renders BOTH the display block and the
+    // author's form (form hidden by default) and never knows which is open, so a
+    // patch would otherwise snap the editor shut. Reconcile by toggling `hidden`
+    // on this row's [data-comment-display] and [data-comment-edit-form] to match
+    // whether THIS comment is the open one. Idempotent (no-op when matched). A
+    // tombstoned/non-author row has neither child — the lookups are null-safe.
+    apply(el, state) {
+      const editing = state.commentEditId != null && el.id === `comment-${state.commentEditId}`
+      const display = el.querySelector("[data-comment-display]")
+      const form = el.querySelector("[data-comment-edit-form]")
+      if (display && display.hidden !== editing) display.hidden = editing
+      if (form && form.hidden === editing) form.hidden = !editing
+    },
+  },
+  "comment-versions": {
+    // A comment's edit-history popup (div[data-keep="comment-versions"], id
+    // `comment-versions-<id>`). Its visibility is client truth
+    // (state.commentVersionsId); the server renders it hidden and never knows
+    // it's open, so a patch would snap it shut. Reconcile `hidden` to whether
+    // THIS popup's comment is the open one. Idempotent.
+    apply(el, state) {
+      const want =
+        state.commentVersionsId != null &&
+        el.id === `comment-versions-${state.commentVersionsId}`
+      if (el.hidden !== !want) el.hidden = !want
+    },
+  },
+  "pending-toggle": {
+    // The operated task row ([data-task-row], the <li>'s child — the <li>
+    // itself already carries data-keep="selected", and an element can hold only
+    // one data-keep, so the pending-toggle marker rides the child). While
+    // state.pending.toggle holds a flip for THIS row, re-apply the optimistic
+    // aria-pressed / data-done / bar onto the incoming node so a patch landing
+    // mid-flight can't revert it. Once the incoming SERVER render already shows
+    // the flip (data-done matches), release the hold — the server owns the row
+    // from there. When no hold targets this row, leave the server value alone.
+    apply(el, state) {
+      const p = state.pending.toggle
+      const li = el.closest("li[data-task-id]")
+      if (!p || !li || li.id !== p.liId) return
+      const toggle = el.querySelector("[data-complete-toggle]")
+      if (!toggle) return
+      // The server has committed (reply landed) AND this incoming render already
+      // agrees with the optimistic flip → settled; drop the hold so we stop
+      // overriding the authoritative value. Before commit, or before the render
+      // catches up, keep holding so the gap can't revert the flip.
+      if (p.committed && el.hasAttribute("data-done") === p.value) {
+        state.pending.toggle = null
+        return
+      }
+      const want = String(p.value)
+      if (toggle.getAttribute("aria-pressed") !== want) {
+        toggle.setAttribute("aria-pressed", want)
+        toggle.setAttribute("aria-label", p.value ? "Reopen task" : "Mark task completed")
+      }
+      if (el.hasAttribute("data-done") !== p.value) el.toggleAttribute("data-done", p.value)
+      if (p.barValue != null) setRowBar(el, p.barValue)
+    },
+  },
+  "pending-toggle-slider": {
+    // The pane's manual-progress slider (#task-field-progress). Held to the
+    // pending toggle's optimistic value (100 on complete, 0 on reopen) while the
+    // flip is in flight FOR THE TASK THE PANE IS SHOWING, so a patch can't snap
+    // it back before the reconciling render. Yields to the server value once the
+    // hold is released (the row applier clears it on match).
+    apply(el, state) {
+      const p = state.pending.toggle
+      if (!p || p.sliderValue == null || el === document.activeElement) return
+      const pane = document.getElementById("task-editor-pane")
+      const li = document.getElementById(p.liId)
+      if (!pane || !li || pane.dataset.taskId !== li.dataset.taskId) return
+      const v = String(p.sliderValue)
+      if (el.value !== v) el.value = v
+      const readout = pane.querySelector("[data-progress-readout]")
+      if (readout && readout.textContent !== v) readout.textContent = v
+    },
+  },
+  scroll: {
+    // An inner scroll container (e.g. #tree-scroll). Its scrollTop is client
+    // truth (state.scroll[el.id], written by the capturing `scroll` listener
+    // below). On an in-place morph the live node keeps its identity so scrollTop
+    // survives untouched — but morphdom can remove-and-re-add the node (the
+    // initial-join replace, a future stream reset), which re-creates it at 0.
+    // Restore the captured offset when an entry exists and the node disagrees;
+    // no entry → the user hasn't scrolled it, leave it alone. Idempotent: a
+    // matching scrollTop is a no-op, so this is safe on every patch path.
+    apply(el, state) {
+      if (!(el.id in state.scroll)) return
+      const want = state.scroll[el.id]
+      if (el.scrollTop !== want) el.scrollTop = want
+    },
+  },
+  "assigned-group": {
+    // The Assigned-to-Me list wrapper (div[data-keep="assigned-group"]).
+    // Group-by is pure arrangement (WL3 3.2, §6.5): data-grouped decides which
+    // of the always-rendered group headers / row subtitles the CSS shows. The
+    // value flips instantly at the click; hold the optimistic value until the
+    // server's persisted pref renders the same, then release so the server owns
+    // it. No entry → the user hasn't toggled; leave the server-rendered value.
+    apply(el, state) {
+      if (!(el.id in state.assignedGrouped)) return
+      const want = !!state.assignedGrouped[el.id]
+      const incoming = el.getAttribute("data-grouped") === "true"
+      if (incoming === want) {
+        delete state.assignedGrouped[el.id]
+        return
+      }
+      el.setAttribute("data-grouped", String(want))
+    },
+  },
+  "assigned-group-box": {
+    // The Group-by checkbox. Held to the wrapper's optimistic grouped? value so
+    // a mid-flight patch can't revert the tick before the pref reply lands.
+    // Yields to the server value once the wrapper applier releases the hold
+    // (entry gone) — they render from the same assign, so they settle together.
+    apply(el, state) {
+      const wrapId = el.dataset.groupWrap
+      if (!(wrapId in state.assignedGrouped)) return
+      const want = !!state.assignedGrouped[wrapId]
+      if (el.checked !== want) el.checked = want
+    },
+  },
+  "reveal-toggle": {
+    // A server-gated reveal checkbox (show-completed / show-archived-hidden /
+    // show-hidden, WL3 3.2, §6.7). Its rows are server-FILTERED, so the client
+    // can't reveal them alone: the round-trip stays, and this only holds the
+    // CONTROL's own optimistic tick + aria-busy until the server's re-render
+    // agrees — it NEVER paints phantom rows. agree → release; disagree while
+    // still in flight (the live node keeps phx-click-loading) → hold the tick;
+    // disagree once settled (class gone) → the server rejected the flip, so
+    // revert honestly by releasing and letting the server value stand.
+    apply(el, state) {
+      // doit-reveal-busy is the connect-independent twin of phx-click-loading
+      // that drives the spinner (WL4.3) — cleared/held in lockstep with aria-busy.
+      const clearBusy = () => {
+        if (el.getAttribute("aria-busy") === "true") el.removeAttribute("aria-busy")
+        el.classList.remove("doit-reveal-busy")
+      }
+      const want = state.revealInflight[el.id]
+      if (want === undefined) {
+        clearBusy()
+        return
+      }
+      if (el.checked === want) {
+        delete state.revealInflight[el.id]
+        clearBusy()
+        return
+      }
+      const live = document.getElementById(el.id)
+      const inFlight = live && live.classList.contains("phx-click-loading")
+      if (!inFlight) {
+        delete state.revealInflight[el.id]
+        clearBusy()
+        return
+      }
+      el.checked = want
+      el.setAttribute("aria-busy", "true")
+      el.classList.add("doit-reveal-busy")
+    },
+  },
+  "archive-prompt": {
+    // The archive-on-completion banner (#archive-prompt). Dismissal is client-
+    // owned view state (WL3 3.2, §6.5): hidden at the click. The server's
+    // dismiss reply removes the element, but until it lands the banner is still
+    // rendered (show_archive_prompt true), so a mid-flight collaborator patch
+    // would otherwise re-show it — hold it hidden while the dismissed flag
+    // stands. onPatchEnd clears the flag once the server has removed the
+    // element, so a later re-raise (a fresh 100% crossing) shows normally.
+    apply(el, state) {
+      if (state.archivePromptDismissed && !el.hidden) el.hidden = true
+    },
+  },
+  "rail-avatars": {
+    // A rail Initiative entry's member-avatar row (#rail-avatars-<iid>). A
+    // drag-collaborator-onto-initiative drop (WL3.5 Fix B, §6.2) optimistically
+    // inserts the dropped user's avatar chip into this row's group at once; the
+    // add is server-gated (owner-only, may already be a member), so the chip is
+    // held by a railAvatarAdds entry until the add_collaborator_to reply lands.
+    // Re-insert any pending chip for THIS Initiative the incoming render doesn't
+    // already carry (deduped by data-member-id) so a mid-flight patch — e.g. a
+    // presence diff repainting the rail — can't strip it before the reply. The
+    // reply (or its 8s safety timeout) clears the entry; once cleared this is a
+    // no-op and the server-rendered members stand (MUST NOT LIE on failure).
+    apply(el, state) {
+      const iid = el.dataset.railAvatarsInitiativeId
+      const group = el.querySelector("[data-rail-avatar-group]")
+      if (!group) return
+      for (const echoId of Object.keys(state.railAvatarAdds)) {
+        const a = state.railAvatarAdds[echoId]
+        if (String(a.iid) !== String(iid)) continue
+        if (group.querySelector(`[data-member-id="${a.uid}"]`)) continue
+        group.appendChild(buildRailAvatarChip(echoId, a))
+      }
+    },
+  },
+}
+
+// Reconcile one keep-marked element to the store. Shared by both `dom:`
+// callbacks. On update we operate on `toEl` (the incoming node) so the truth is
+// in place BEFORE morphdom copies it onto the live element — the wrong value
+// never paints. On re-add we operate on the freshly inserted node.
+function applyKeep(el, state) {
+  if (!el || !el.dataset) return
+  const entry = KeepRegistry[el.dataset.keep]
+  if (entry) entry.apply(el, state)
+}
+
+// Exposed for the colocated TaskKeys hook (can't import): after a client-owned
+// open/close flip, re-apply one keep element immediately so the view reflects
+// the new state without waiting for the next patch (e.g. the "comment-saved"
+// push closes the editor — re-run the row's "comment-edit" applier at once).
+window.DoitApplyKeep = (el) => applyKeep(el, DoitState)
+
 // Client-owned selection (UX_GUARDRAILS 6.5): the highlight is a DOM attribute
 // + CSS, applied instantly and re-applied across re-renders by the guard
 // observer below — the server only ever hears about it to load the Details
 // pane. `lastId` backs the Enter toggle's "reselect what I had" behavior.
+// `id` is a getter/setter backed by DoitState.selectedId so selection has a
+// single source of truth: the preserve-path `dom:` callbacks and this object's
+// immediate apply() both read the same value and stay consistent.
 const DoitSelection = {
-  id: null,
+  get id() { return DoitState.selectedId },
+  set id(v) { DoitState.selectedId = v },
   lastId: null,
   li() { return this.id ? document.getElementById("task-" + this.id) : null },
   set(id, opts = {}) {
@@ -167,7 +679,7 @@ const DoitSelection = {
     this.apply()
   },
   // Idempotent: setting an attribute to its current value doesn't mutate, so
-  // the guard observer converges instead of looping.
+  // re-applying from the preserve-path callbacks is a safe no-op when matched.
   apply() {
     document.querySelectorAll("li[data-selected]").forEach((li) => {
       if (!this.id || li.id !== "task-" + this.id) li.removeAttribute("data-selected")
@@ -183,11 +695,11 @@ const DoitSelection = {
   // match the client selection yet), the row-known values are written into
   // the REAL fields immediately and the server-only sections dim; the server
   // patch reconciles the same elements in place. Value writes are properties
-  // (not attributes) and skip the focused element, so the guard observer
-  // converges and in-progress typing survives.
+  // (not attributes) and skip the focused element, so re-applying converges
+  // and in-progress typing survives.
   syncPaneSkeleton() {
     // Selecting a task always leaves the initiative editor (.03.07.08) — close
-    // it through the client-owned flag so the guard observer keeps it closed.
+    // it through the client-owned flag so the preserve path keeps it closed.
     if (this.id) DoitInitiativeEditor.close({skipSelectionClear: true})
     const pane = document.getElementById("task-editor-pane")
     if (pane) {
@@ -271,6 +783,8 @@ const DoitSelection = {
       const cr = computedNote.querySelector("[data-computed-readout]")
       if (cr && cp !== null) cr.textContent = cp
     }
+    const mpHint = pane.querySelector("[data-mp-hint]")
+    if (mpHint) mpHint.classList.toggle("invisible", !isBranch)
 
     // The title attr always carries the priority ("Priority: high"). Either
     // pill may be display-pref-hidden (m02.04 §2.4) — skip its sync then,
@@ -354,12 +868,17 @@ window.DoitSelection = DoitSelection
 // editor is pure VIEW STATE: the pane (#initiative-editor-pane) is already
 // server-rendered with #initiative-form pre-populated from the initiative, so
 // revealing it loads nothing — no round trip. Mirrors DoitSelection: the flag
-// lives on the client and the guard observer re-asserts it across every patch
-// (the server now always renders the pane hidden, since @editing_initiative?
+// lives on the client and the preserve-path `dom:` callbacks re-assert it across
+// every patch (the server now always renders the pane hidden, since @editing_initiative?
 // stays false). The form SUBMIT (update_initiative) and subtitle change
 // (update_subtitle) remain real server writes — only open/close is client-side.
 const DoitInitiativeEditor = {
-  open: false,
+  // `open` is a getter/setter backed by DoitState.editorOpen so editor
+  // visibility has a single source of truth: the preserve-path `dom:` callbacks
+  // (KeepRegistry.editor / "editor-signifier") and the immediate apply() below
+  // both read the same value and stay consistent.
+  get open() { return DoitState.editorOpen },
+  set open(v) { DoitState.editorOpen = v },
   // Reveal the editor. Opening it deselects any task (the rail shows the editor
   // OR a task's Details OR Members — never editor + Details together).
   show() {
@@ -375,8 +894,8 @@ const DoitInitiativeEditor = {
     if (!opts.skipSelectionClear && window.DoitSelection) window.DoitSelection.clear()
     this.apply()
   },
-  // Idempotent: only writes when the DOM disagrees, so the guard observer
-  // converges instead of looping. Drives the pane's `hidden`, the rail flyout
+  // Idempotent: only writes when the DOM disagrees, so re-applying converges
+  // instead of looping. Drives the pane's `hidden`, the rail flyout
   // (via syncRail), and the title's dotted-underline signifier (shown only when
   // the editor is closed — the server can no longer toggle it).
   apply() {
@@ -541,7 +1060,8 @@ document.addEventListener("click", (e) => {
   if (sibling) return DoitAddForm.openSibling(sibling.dataset.addSibling)
   if (e.target.closest("[data-add-cancel]")) DoitAddForm.close()
 
-  // Generic client-side <details> drivers (KeepOpen records the state).
+  // Generic client-side <details> drivers (the data-keep="open" toggle
+  // listener records the state into DoitState.detailsOpen).
   const toggle = e.target.closest("[data-details-toggle]")
   if (toggle) {
     const d = document.getElementById(toggle.dataset.detailsToggle)
@@ -571,6 +1091,36 @@ document.addEventListener("click", (e) => {
   }
 })
 
+// Client-owned <details> open/closed (worklist 2 slice 2.3). A preserved
+// <details> renders `data-keep="open"`; its expanded state is client truth in
+// DoitState.detailsOpen (keyed by element id), re-asserted across patches by the
+// KeepRegistry "open" applier. This delegated listener records every change —
+// the sole recorder now that the KeepOpen hook is retired (worklist 2.4).
+// `toggle` doesn't bubble, so it can't be caught in the normal (bubbling) phase
+// from the document — but the CAPTURE phase reaches the target on the way down
+// regardless of bubbling, so one capturing listener covers every such element,
+// including ones re-added by a later patch.
+document.addEventListener("toggle", (e) => {
+  const d = e.target
+  if (d && d.matches && d.matches("details[data-keep='open']") && d.id) {
+    DoitState.detailsOpen[d.id] = d.open
+  }
+}, true)
+
+// Client-owned inner scroll position (worklist 2 slice 2.3.8). A scroll box
+// renders `data-keep="scroll"`; its scrollTop is client truth in
+// DoitState.scroll (keyed by element id), restored across a remove-and-re-add
+// patch by the KeepRegistry "scroll" applier. Like `toggle`, the `scroll` event
+// doesn't bubble, so a single CAPTURE-phase listener reaches every such target —
+// including ones a later patch re-adds. We only record (cheap, idempotent
+// store); the actual reconcile happens in the dom callbacks.
+document.addEventListener("scroll", (e) => {
+  const el = e.target
+  if (el && el.matches && el.matches("[data-keep='scroll']") && el.id) {
+    DoitState.scroll[el.id] = el.scrollTop
+  }
+}, true)
+
 function copyToClipboard(text) {
   if (navigator.clipboard && window.isSecureContext) {
     navigator.clipboard.writeText(text).catch(() => fallbackCopy(text))
@@ -590,6 +1140,21 @@ function fallbackCopy(text) {
   try { document.execCommand("copy") } catch (_) {}
   document.body.removeChild(ta)
 }
+
+// Briefly reveal a server-rendered-hidden "✓ Saved" span, then re-hide it
+// (WL3 item 3.7, §6.7). The success ack where the effect is otherwise invisible
+// (a debounced subtitle write, the viewer+ flip). Self-clearing on a fixed
+// timeout, exactly like flashCopied — transient, rides the preserve path with
+// no data-keep (the server always renders the span hidden). Reused by the
+// subtitle-saved and viewer-plus-saved push_events routed through TaskKeys.
+function showSavedTick(spanId) {
+  const span = document.getElementById(spanId)
+  if (!span) return
+  span.hidden = false
+  clearTimeout(span._tickTimer)
+  span._tickTimer = setTimeout(() => { span.hidden = true }, 1200)
+}
+window.DoitSavedTick = showSavedTick
 
 // Briefly swap the clipboard icon for a check to confirm the copy, then revert.
 function flashCopied(btn) {
@@ -672,25 +1237,106 @@ function insertPendingRow(parentId, afterId, title) {
   }
 }
 
-// Rapid entry: clear the title after LiveView serializes the submit and stay
-// focused, so consecutive adds need no clicks at all.
-document.addEventListener("submit", (e) => {
-  if (e.target.id !== "add-task-form") return
-  const form = e.target
-  const input = form.querySelector("[name='title']")
-  const title = input.value.trim()
-  if (title) {
-    insertPendingRow(
-      form.querySelector("[name='parent_id']").value,
-      form.querySelector("[name='after_id']").value,
-      title
-    )
+// A brand-new leaf is always a 0% incomplete task, so the only completion flip
+// it can cause is scenario 2: it lands under a parent that's currently complete
+// (done), reopening that ancestor. That's client-derivable — the target parent's
+// done state is in its rendered row (data-done) — so we predict it and open the
+// instant #move-flip-confirm client-side (UX_GUARDRAILS 6.5), reusing the move's
+// modal. The server's preview_create / @pending_action path stays the
+// authoritative backstop for any flip the client didn't predict (stale DOM).
+// A top-level create (no parent_id) can't reopen any visible ancestor, so it
+// never predicts a flip.
+function predictCreateFlip(parentId) {
+  if (!parentId) return false
+  const parentLi = document.getElementById("task-" + parentId)
+  const row = parentLi && parentLi.querySelector(":scope > [data-task-row]")
+  return !!(row && row.hasAttribute("data-done"))
+}
+
+// Push create_task ourselves (so we can carry confirmed:true). On success/flip
+// the server's load_tree re-render reconciles the preview row away; on failure
+// it surfaces a flash and the 8s preview-row timer self-heals.
+function pushCreateTask(title, parentId, afterId, confirmed) {
+  if (!window.DoitPush) return
+  const payload = {title, parent_id: parentId || "", after_id: afterId || ""}
+  if (confirmed) payload.confirmed = true
+  window.DoitPush("create_task", payload)
+}
+
+// Rapid entry: clear the title after the submit is handled and stay focused, so
+// consecutive adds need no clicks at all.
+document.addEventListener(
+  "submit",
+  (e) => {
+    if (e.target.id !== "add-task-form") return
+    const form = e.target
+    const input = form.querySelector("[name='title']")
+    const title = input.value.trim()
+    const parentId = form.querySelector("[name='parent_id']").value
+    const afterId = form.querySelector("[name='after_id']").value
+    const resetInput = () =>
+      setTimeout(() => {
+        input.value = ""
+        input.focus()
+      }, 0)
+
+    if (!title) {
+      resetInput()
+      return
+    }
+
+    // Predicted completion flip (scenario 2): intercept the native phx-submit,
+    // open the client confirm, and push ourselves only on Proceed. The preview
+    // row still goes in immediately (the task SHOWS UP while the modal decides,
+    // §8.20 parity with a held move/cascade). Suppressed → commit straight
+    // through without the modal.
+    if (predictCreateFlip(parentId) && !createFlipSuppressed()) {
+      e.preventDefault()
+      e.stopImmediatePropagation() // stop LiveView's own phx-submit push
+      insertPendingRow(parentId, afterId, title)
+      openCreateFlipConfirm({title, parentId, afterId})
+      resetInput()
+      return
+    }
+
+    // No predicted flip: let the native phx-submit fire; splice the preview row.
+    insertPendingRow(parentId, afterId, title)
+    resetInput()
+  },
+  true // capture phase: run before LiveView's bubble-phase phx-submit handler
+)
+
+// Completion-flip suppression shares the move's localStorage key + ConfirmSkips
+// class ("completion-flip"), so "don't ask again" set from a move also silences
+// the create flip (and vice-versa) — they're the same confirm class.
+const CREATE_FLIP_SKIP_KEY = "doit:confirm-skip:completion-flip"
+const createFlipSuppressed = () => {
+  try { return localStorage.getItem(CREATE_FLIP_SKIP_KEY) === "1" } catch (_e) { return false }
+}
+
+// Reuse #move-flip-confirm for the create flip: same scenario-2 copy, same
+// modal. Stash the create params on the modal so the Proceed handler (below)
+// can re-submit with confirmed:true. Cancel drops the optimistic preview row.
+function openCreateFlipConfirm(params) {
+  const modal = document.getElementById("move-flip-confirm")
+  if (!modal) {
+    // No modal — fall back to the server path: push unconfirmed and let the
+    // server raise its backstop confirm.
+    pushCreateTask(params.title, params.parentId, params.afterId, false)
+    return
   }
-  setTimeout(() => {
-    input.value = ""
-    input.focus()
-  }, 0)
-})
+  modal.dataset.createFlip = "1"
+  modal.dataset.createTitle = params.title
+  modal.dataset.createParentId = params.parentId || ""
+  modal.dataset.createAfterId = params.afterId || ""
+  openMoveFlipConfirm({scenario: 2, titles: []})
+}
+
+// Drop the optimistic preview row(s) — the create the modal was deciding never
+// committed. (They also self-expire at 8s; remove now for an instant response.)
+function dropPendingRows() {
+  document.querySelectorAll("[data-pending-row]").forEach((el) => el.remove())
+}
 
 // Pane visibility is pure VIEW STATE, fully client-side (.03.07.08,
 // UX_GUARDRAILS 6.5) — no round trip gates open or close. The editor pane is
@@ -720,6 +1366,38 @@ document.addEventListener("click", (e) => {
     DoitInitiativeEditor.close()
     if (hadSelection && window.DoitPush) window.DoitPush("close_task", {})
   }
+})
+
+// The title affordance is a role="button" wrapper (an <h1> can't live in a real
+// <button>), so it needs explicit keyboard activation: Enter / Space reveal the
+// editor, mirroring the click path above. preventDefault on Space stops the page
+// from scrolling.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return
+  const trigger = e.target.closest("[data-edit-initiative][role='button']")
+  if (!trigger) return
+  e.preventDefault()
+  DoitInitiativeEditor.show()
+})
+
+// Password peek toggle (WL6 6.1): a global delegated click so it works on the
+// dead controller views (login / register — no LiveView socket, so a phx-hook
+// never mounts) as well as any live page. Keys off data-password-toggle, looks
+// up the paired input via data-input-id, swaps its type, flips aria-pressed +
+// the accessible name, and toggles which icon (eye vs. eye-slash) shows.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-password-toggle]")
+  if (!btn) return
+  const input = document.getElementById(btn.dataset.inputId)
+  if (!input) return
+  const showing = input.type === "text"
+  input.type = showing ? "password" : "text"
+  const eye = btn.querySelector(".password-eye")
+  const eyeSlash = btn.querySelector(".password-eye-slash")
+  if (eye) eye.classList.toggle("hidden", !showing)
+  if (eyeSlash) eyeSlash.classList.toggle("hidden", showing)
+  btn.setAttribute("aria-pressed", showing ? "false" : "true")
+  btn.setAttribute("aria-label", showing ? "Show password" : "Hide password")
 })
 
 // Row clicks: selection toggles instantly client-side; the server event only
@@ -812,6 +1490,45 @@ document.addEventListener("click", (e) => {
 })
 
 document.addEventListener("change", (e) => {
+  // Settings: task-numbering style (WL3 item 3.7, §6.7). Re-deriving every
+  // node's positional label in JS would duplicate Tasks.Index, so instead of a
+  // true optimistic relabel we show a transient "saving" hue across the index
+  // spans; the re-label patch strips it (the server never emits is-saving) and
+  // markSaving's safety timer covers a dropped reply. No data-keep needed —
+  // same lifecycle as every other saving-hue path.
+  if (e.target.id === "index-style") {
+    // Pink the index spans when they exist (style→style / style→none). In the
+    // none→style direction there are no spans yet (the server renders one only
+    // when the style isn't "none"), so fall back to the always-present task rows
+    // so the relabel still cues in flight. Either set is stripped by the patch.
+    const spans = [...document.querySelectorAll("#task-tree [data-task-index]")]
+    markSaving(spans.length ? spans : [...document.querySelectorAll("#task-tree [data-task-row]")])
+    return
+  }
+  // Settings: progress calc (WL3 item 3.7, §6.1/§6.7). A whole-tree % recompute
+  // round trips before any bar changes — acknowledge it's in flight by pinking
+  // + setting every row's bar indeterminate (the same "% genuinely in flight"
+  // treatment), cleared by the authoritative recompute patch. Don't fake a
+  // number — markRecomputing shows the gradient + "…" until the real %s land.
+  if (e.target.id === "progress-calc") {
+    const rows = [...document.querySelectorAll("#task-tree li[data-task-id]")].map(savingRowOf)
+    markSaving(rows)
+    markRecomputing(rows)
+    return
+  }
+  // Settings: viewer+ toggle (WL3 item 3.7, §6.7). Flipping it re-evaluates
+  // edit-ability across the tree on the round trip. In-flight signifier: disable
+  // the checkbox + pink the tree rows whose edit affordances change; the server
+  // replies with a "viewer-plus-saved" push_event (handled in the TaskKeys hook)
+  // that re-enables the box and flashes a saved tick — that re-enable IS the
+  // success ack. A safety timer re-enables on a dropped reply so it never sticks.
+  if (e.target.name === "viewer_plus") {
+    e.target.disabled = true
+    markSaving([...document.querySelectorAll("#task-tree li[data-task-id]")].map(savingRowOf))
+    clearTimeout(e.target._vpTimer)
+    e.target._vpTimer = setTimeout(() => { e.target.disabled = false }, 8000)
+    return
+  }
   // Sort menu — pink the resorted children of the selected branch.
   if (e.target.closest("[data-saving-children]")) {
     const li = selectedLi()
@@ -840,6 +1557,60 @@ document.addEventListener("change", (e) => {
       markSaving([savingRowOf(li)])
     }
   }
+})
+
+// Client-side view-state reveals (WL3 3.2, §6.5/§6.7). Two checkbox buckets,
+// both riding the preserve path so the optimistic state survives patches and
+// reconnect:
+//
+//  - Group-by-Initiative (Assigned view) is pure arrangement — flip the
+//    wrapper's data-grouped at the click for an instant client-side reflow (the
+//    CSS shows/hides the always-rendered group headers + row subtitles); the
+//    phx-click round-trip only persists the pref and reconciles.
+//  - The reveal toggles (show-completed / show-archived-hidden / show-hidden)
+//    are server-gated (rows filtered out of the DOM) — keep the round-trip but
+//    acknowledge at the click: record the optimistic tick and raise aria-busy +
+//    the trailing spinner, held until the server's re-render agrees. We never
+//    reveal rows ourselves (no phantom rows).
+//
+// `change` (not `click`) so a click on the <label> — which toggles the box
+// natively without an input-targeted click — is caught too; it fires once,
+// after the checked state has settled, so box.checked is the optimistic value.
+// The phx-click on each box still fires (the server gets the event); this only
+// adds the client-owned acknowledgement on top.
+document.addEventListener("change", (e) => {
+  const box = e.target
+  if (!box || !box.matches) return
+  if (box.matches("input[data-group-wrap]")) {
+    const wrapId = box.dataset.groupWrap
+    DoitState.assignedGrouped[wrapId] = box.checked
+    const wrap = document.getElementById(wrapId)
+    if (wrap) wrap.setAttribute("data-grouped", String(box.checked))
+    return
+  }
+  if (box.matches("input[data-keep='reveal-toggle']")) {
+    DoitState.revealInflight[box.id] = box.checked
+    box.setAttribute("aria-busy", "true")
+    // Connect-independent spinner (WL4.3, §6.7): the server-rendered spinner CSS
+    // keys off LiveView's phx-click-loading, which isn't added pre-connect (or in
+    // the dead window). This client class — set here at the click, cleared by the
+    // "reveal-toggle" applier alongside aria-busy — drives the same spinner so it
+    // shows at the gesture too. Mirrors the phx-click-loading rule (app.css).
+    box.classList.add("doit-reveal-busy")
+    return
+  }
+})
+
+// Archive-on-completion banner dismiss (WL3 3.2, §6.5): hide it the instant the
+// X is clicked — pure view state — and let the existing phx-click reconcile
+// (the server drops show_archive_prompt, removing the element). The flag keeps
+// it hidden across any patch that lands before that reply; onPatchEnd clears the
+// flag once the element is gone.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-archive-dismiss]")) return
+  DoitState.archivePromptDismissed = true
+  const banner = document.getElementById("archive-prompt")
+  if (banner) banner.hidden = true
 })
 
 // Optimistic row echo (UX_GUARDRAILS 6.2): a pane edit tells us exactly what
@@ -1040,17 +1811,160 @@ document.addEventListener("keydown", (e) => {
   if (modal && !modal.hidden && modal.dataset.leaving !== "true") modal.hidden = true
 })
 
+// Comment inline editor + edit-history popup — open/close is CLIENT-OWNED (WL3
+// 3.3, §6.5). Both the display block and the author's form render statically;
+// these toggles flip DoitState and re-run the row's keep applier at once, so the
+// reveal is instant with zero round trip. The comment id comes from the row's
+// `id="comment-<id>"`. SAVE stays server-owned (the form's phx-submit); the
+// server closes the editor by pushing "comment-saved" (TaskKeys hook) — these
+// listeners never fake a save.
+function commentIdOf(el) {
+  const li = el.closest("li[id^='comment-']")
+  return li ? li.id.slice("comment-".length) : null
+}
+document.addEventListener("click", (e) => {
+  const editOpen = e.target.closest("[data-comment-edit-open]")
+  if (editOpen) {
+    const id = commentIdOf(editOpen)
+    if (!id) return
+    DoitState.commentEditId = id
+    const li = document.getElementById(`comment-${id}`)
+    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li)
+    // Seed + focus the textarea so the editor opens on the current body with the
+    // caret at the end — no stale value, ready to type.
+    const form = li && li.querySelector("[data-comment-edit-form]")
+    const ta = form && form.querySelector("textarea")
+    if (ta) {
+      ta.focus()
+      ta.setSelectionRange(ta.value.length, ta.value.length)
+    }
+    return
+  }
+  const editCancel = e.target.closest("[data-comment-edit-cancel]")
+  if (editCancel) {
+    const id = commentIdOf(editCancel)
+    DoitState.commentEditId = null
+    const li = id && document.getElementById(`comment-${id}`)
+    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li)
+    return
+  }
+  const versOpen = e.target.closest("[data-comment-versions-open]")
+  if (versOpen) {
+    const id = commentIdOf(versOpen)
+    if (!id) return
+    DoitState.commentVersionsId = id
+    const popup = document.getElementById(`comment-versions-${id}`)
+    if (popup && window.DoitApplyKeep) window.DoitApplyKeep(popup)
+    return
+  }
+  const versCancel = e.target.closest("[data-comment-versions-cancel]")
+  if (versCancel) {
+    const id = commentIdOf(versCancel)
+    DoitState.commentVersionsId = null
+    const popup = id && document.getElementById(`comment-versions-${id}`)
+    if (popup && window.DoitApplyKeep) window.DoitApplyKeep(popup)
+    return
+  }
+})
+// True when a full-screen overlay modal (leave / handoff / archive / delete /
+// transfer — all `fixed inset-0`, none `hidden`) is currently open. The comment
+// editor + history popup live in the always-rendered Details pane BEHIND such an
+// overlay, so when one is up Escape belongs to it — not the editor underneath.
+// Without this, one Escape would dismiss the overlay AND silently discard the
+// editor's unsaved text.
+function overlayModalOpen() {
+  return Array.from(document.querySelectorAll(".fixed.inset-0")).some(
+    (el) => !el.hidden && el.offsetParent !== null
+  )
+}
+// Escape closes an open comment editor / history popup (closest one first), the
+// same client-owned dismissal the Cancel buttons do — unless an overlay modal is
+// up, which owns the Escape.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || overlayModalOpen()) return
+  if (DoitState.commentEditId != null) {
+    const li = document.getElementById(`comment-${DoitState.commentEditId}`)
+    DoitState.commentEditId = null
+    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li)
+    return
+  }
+  if (DoitState.commentVersionsId != null) {
+    const popup = document.getElementById(`comment-versions-${DoitState.commentVersionsId}`)
+    DoitState.commentVersionsId = null
+    if (popup && window.DoitApplyKeep) window.DoitApplyKeep(popup)
+  }
+})
+
+// Hand-off-cancel modal close — the dismissal is CLIENT-OWNED (WL3 3.3, §6.5),
+// mirroring the leave-confirm convention. The OPEN still round-trips (the body
+// needs the server's assignment count), so the modal renders from @pending_handoff
+// and confirm_handoff (the real write) is untouched. Cancel / backdrop / Escape
+// hide the modal INSTANTLY, then push cancel_handoff reconciliatorily so the
+// server clears its pending_handoff assign (the next patch re-hides it idempotently).
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("handoff-confirm")
+  if (!modal || modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-handoff-cancel]")) {
+    modal.hidden = true
+    if (window.DoitPush) window.DoitPush("cancel_handoff", {})
+  }
+})
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("handoff-confirm")
+  if (!modal || modal.hidden) return
+  modal.hidden = true
+  if (window.DoitPush) window.DoitPush("cancel_handoff", {})
+})
+
 // Archive confirm — the gate is decided WITHOUT a round trip (UX_GUARDRAILS
 // 6.5): the owner case predicts from the DOM (any incomplete task in the tree);
 // the member case defers to the server backstop, which replies needs_confirm
 // only when there's actually unfinished work. Proceed commits with confirmed.
-function pushArchive(confirmed) {
+//
+// In-flight signifier (WL3 item 3.7, §6.7): the originating control latches —
+// disabled + "Archiving…" + pulse — so the wait on the push_navigate isn't
+// dead air. A non-committing reply (needs_confirm probe) or a refusal / dropped
+// reply restores it; an ok commit stays latched because the navigation
+// replaces the whole page. Mirrors the leave_initiative latch above.
+function latchArchiveBtn(ctl) {
+  if (!ctl) return () => {}
+  // The archive button holds an icon + a trailing text node (" Archive"); the
+  // modal Proceed is text-only. Replace JUST the last text node so an icon (if
+  // present) survives, and restore() can put the original label back — keeping
+  // morphdom out of it for the phx-update="ignore" modal Proceed too.
+  const textNode = [...ctl.childNodes].reverse().find((n) => n.nodeType === 3 && n.textContent.trim())
+  const label = textNode ? textNode.textContent : null
+  ctl.disabled = true
+  ctl.classList.add("animate-pulse", "opacity-60")
+  if (textNode) textNode.textContent = " Archiving…"
+  return () => {
+    ctl.disabled = false
+    ctl.classList.remove("animate-pulse", "opacity-60")
+    if (textNode && label != null) textNode.textContent = label
+  }
+}
+
+function pushArchive(confirmed, ctl, onRestore) {
   if (!window.DoitPush) return
+  // Latch the originating control now — the client can't know in advance
+  // whether the server will commit or reply needs_confirm (the member case
+  // only the server decides), so we latch optimistically and release on a
+  // non-commit reply. A commit ends in push_navigate (stays latched); a
+  // needs_confirm probe / refusal / dropped reply restores it.
+  const latch = latchArchiveBtn(ctl)
+  const restore = () => { latch(); if (onRestore) onRestore() }
+  const t = setTimeout(restore, 8000) // dropped reply → never hang
   window.DoitPush("archive_initiative", confirmed ? {confirmed: true} : {}, (reply) => {
+    clearTimeout(t)
     if (reply && reply.needs_confirm) {
+      restore() // the probe came back asking — release and open the modal
       const m = document.getElementById("archive-confirm")
       if (m) m.hidden = false
+    } else if (!reply || reply.ok === false) {
+      restore() // refusal / dropped reply → let them retry
     }
+    // ok:true → stay latched; the push_navigate replaces this page.
   })
 }
 
@@ -1068,32 +1982,294 @@ document.addEventListener("click", (e) => {
     if (needsConfirm && modal) {
       modal.hidden = false
     } else {
-      pushArchive(false)
+      // Committing straight away — latch the archive button (member case may
+      // still probe needs_confirm, which releases it and opens the modal).
+      pushArchive(false, btn)
     }
     return
   }
   if (!modal || modal.hidden) return
+  // Mid-commit ("Archiving…") — backdrop / Cancel can't dismiss it.
+  if (modal.dataset.archiving === "true") return
   if (e.target === modal || e.target.closest("[data-archive-cancel]")) {
     modal.hidden = true
     return
   }
-  if (e.target.closest("[data-archive-proceed]")) {
-    modal.hidden = true
-    pushArchive(true)
+  const proceed = e.target.closest("[data-archive-proceed]")
+  if (proceed) {
+    // Don't hide — Proceed commits; latch it through the navigate (the page
+    // replacement tears down the modal). A refusal / dropped reply restores it.
+    modal.dataset.archiving = "true"
+    pushArchive(true, proceed, () => { delete modal.dataset.archiving })
   }
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const m = document.getElementById("archive-confirm")
-  if (m && !m.hidden) m.hidden = true
+  if (m && !m.hidden && m.dataset.archiving !== "true") m.hidden = true
+})
+
+// ---------------------------------------------------------------------------
+// Up-front in-flight latches for server-gated controls (WL4.3, §6.7).
+//
+// Several not-immediate actions today acknowledge ONLY through LiveView-applied
+// phx-disable-with / phx-click-loading — neither of which is attached until the
+// view is live, so they signal NOTHING in the pre-connect dead window (and the
+// show-page Hide button signalled nothing even when live). These delegated
+// listeners, registered at module load, set the in-flight cue at the gesture
+// itself — connect-independent, exactly like the leave_initiative / archive
+// latches above. They are in-flight signifiers ONLY, never success: the action
+// rides its own native phx-click / phx-submit, captured + replayed across the
+// dead window by the §6.8 interceptor (4.2) and reconciled by the server's
+// render; the 8s safety timer only restores a control if no patch / navigation
+// already has (MUST NOT LIE — never an unearned "done"). The phx-disable-with
+// that used to label these is DROPPED wherever a latch replaces it, so the
+// label never swaps twice.
+
+// Latch one button to its in-flight state: swap the trailing text label, pulse,
+// and announce via aria-busy AT ONCE; disable on the next microtask. The defer
+// matters: LiveView's closestPhxBinding skips a `disabled` control and a disabled
+// submitter drops from the serialized form, so a synchronous disable would
+// suppress the very LIVE phx-click / phx-submit we're acknowledging — the
+// microtask lets that handler run first, then locks the control. An ~8s safety
+// timer self-restores if nothing supersedes it (dropped reply → never stuck).
+// Returns the restore fn; idempotent. Generalizes latchArchiveBtn so every
+// up-front latch site shares one path. Leading whitespace of the original label
+// is preserved, so an icon + " Hide" becomes an icon + " Hiding…".
+function latchButton(btn, label) {
+  if (!btn || btn.dataset.latched === "true") return () => {}
+  const textNode = [...btn.childNodes].reverse().find((n) => n.nodeType === 3 && n.textContent.trim())
+  const prior = textNode ? textNode.textContent : null
+  const lead = prior ? (prior.match(/^\s*/) || [""])[0] : ""
+  btn.dataset.latched = "true"
+  btn.classList.add("animate-pulse", "opacity-60")
+  btn.setAttribute("aria-busy", "true")
+  if (textNode && label) textNode.textContent = lead + label
+  queueMicrotask(() => { btn.disabled = true })
+  let restored = false
+  const restore = () => {
+    if (restored) return
+    restored = true
+    clearTimeout(timer)
+    delete btn.dataset.latched
+    btn.disabled = false
+    btn.removeAttribute("aria-busy")
+    btn.classList.remove("animate-pulse", "opacity-60")
+    if (textNode && prior != null) textNode.textContent = prior
+  }
+  const timer = setTimeout(restore, 8000)
+  return restore
+}
+
+// Click-fired latches (type=button controls): the show-page Hide, plus the
+// Archived / Trash row actions (unhide, unarchive-restore, restore-from-trash).
+// Each carries data-latch="<in-flight label>". No preventDefault — the native
+// phx-click still runs (live) or is captured by 4.2 (dead window). Submit
+// buttons are left to the submit listener below.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-latch]")
+  if (!btn || btn.type === "submit") return
+  latchButton(btn, btn.getAttribute("data-latch"))
+})
+
+// Submit-fired latches: the connect-independent stand-in for phx-disable-with on
+// server-gated form submits (Create initiative, Add member, Save edited comment,
+// the account Profile / Username / Password / Preferences saves). The submit
+// button carries data-latch="<label>"; latch it as the form submits. NEVER
+// preventDefault / stopPropagation here — LiveView's own phx-submit must run
+// (live) and 4.2's capture-phase listener owns the dead window.
+document.addEventListener("submit", (e) => {
+  const form = e.target
+  if (!form || !form.querySelector) return
+  const btn =
+    (e.submitter && e.submitter.matches && e.submitter.matches("[data-latch]") && e.submitter) ||
+    form.querySelector("[type='submit'][data-latch]")
+  if (btn) latchButton(btn, btn.getAttribute("data-latch"))
+})
+
+// ---------------------------------------------------------------------------
+// Optimistic echoes for server-gated comment writes (WL3 item 3.6, §6.7).
+// add_comment / save_comment are phx-submit (server-driven), but the result
+// shows in the same pane — so we acknowledge instantly at submit and let the
+// reply (or the reconciling refresh_selected render) settle it. MUST NOT LIE:
+// a rejected add pulls its bubble; a rejected edit reverts to the saved text.
+// ---------------------------------------------------------------------------
+
+// ADD-COMMENT: intercept the submit, insert a dimmed pending <li>, and push via
+// DoitPush so we get the reply callback (the same contract used everywhere
+// else). On ok the refresh_selected render carries the real comment and we pull
+// the pending one; on !ok the bubble must not stand (MUST NOT LIE). Registered
+// in capture phase (like #add-task-form) and stopImmediatePropagation() so
+// LiveView's bubble-phase phx-submit never double-posts.
+document.addEventListener(
+  "submit",
+  (e) => {
+    const form = e.target.closest("[data-add-comment-form]")
+    if (!form) return
+    const input = form.querySelector("[name='comment[body]']")
+    const body = input ? input.value.trim() : ""
+    if (!window.DoitPush) return // no push channel → let the native phx-submit run
+    e.preventDefault()
+    e.stopImmediatePropagation() // stop LiveView's own phx-submit push
+    if (!body) return // empty → nothing to send (the server would just reject it)
+    const list = document.querySelector("[data-comment-list]")
+    const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+    if (list) list.appendChild(buildPendingComment(echoId, body, form.dataset))
+    if (input) input.value = ""
+    window.DoitPush(
+      "add_comment",
+      {comment: {body}, echo_id: echoId},
+      (reply) => {
+        // ok → the refresh carries the real li; pull the pending stand-in.
+        // !ok → the comment was refused (permission / empty); pull it too.
+        removePendingComment((reply && reply.echo_id) || echoId)
+      }
+    )
+  },
+  true // capture phase: run before LiveView's bubble-phase phx-submit handler
+)
+
+// Build a dimmed pending comment <li> mirroring the rendered row (avatar +
+// header + body). Keyed by nonce so the reply can pull exactly this node.
+function buildPendingComment(echoId, body, d) {
+  const li = document.createElement("li")
+  li.id = "comment-echo-" + echoId
+  li.setAttribute("data-comment-echo", echoId)
+  li.setAttribute("data-comment-pending", "")
+  li.className = "group/comment text-sm opacity-60"
+  const head = document.createElement("div")
+  head.className = "text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1"
+  const av = document.createElement("span")
+  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-4 h-4 text-[8px]"
+  av.style.backgroundImage = (d && d.myBg) || ""
+  av.style.color = (d && d.myFg) || ""
+  av.textContent = (d && d.myInitials) || ""
+  const meta = document.createElement("span")
+  meta.textContent = ((d && d.myName) || "") + " · now"
+  head.appendChild(av)
+  head.appendChild(meta)
+  const bodyEl = document.createElement("div")
+  bodyEl.className = "text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap"
+  bodyEl.textContent = body
+  li.appendChild(head)
+  li.appendChild(bodyEl)
+  return li
+}
+
+// Remove a pending comment bubble by nonce (reply-callback reconcile point).
+function removePendingComment(echoId) {
+  const n = document.getElementById("comment-echo-" + echoId)
+  if (n) n.remove()
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic collaborator add (WL3 item 3.6, §6.7). The rail-menu "Add to
+// {current}" is server-gated (only the Initiative's owner may add; the server
+// can also report already-a-member / forbidden). We acknowledge instantly by
+// inserting a dimmed pending member row, then push and reconcile on the reply:
+// ok:true → the @members refresh renders the canonical row (the patch
+// supersedes the stand-in); ok:false → pull the stand-in (MUST NOT LIE — they
+// weren't added). Deduped by user-id so we never double a real row.
+// ---------------------------------------------------------------------------
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-add-collaborator]")
+  if (!btn) return
+  const uid = btn.dataset.userId
+  const iid = btn.dataset.initiativeId
+  if (!uid || !iid) return
+  // Insert a pending stand-in into every visible members list lacking a real
+  // row for this user. Keyed by echo so the reply pulls exactly these.
+  const echoId = "m" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+  document.querySelectorAll("[data-members-list]").forEach((list) => {
+    if (list.offsetParent === null) return // not visible — skip
+    if (list.querySelector(`[data-member-row][data-user-id="${uid}"]`)) return // already there
+    list.appendChild(buildPendingMemberRow(echoId, btn.dataset))
+  })
+  const pull = () => document.querySelectorAll(`[data-member-echo="${echoId}"]`).forEach((n) => n.remove())
+  if (!window.DoitPush) { pull(); return }
+  window.DoitPush("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+    // On ok the server refresh carries the real row; pull the stand-in either
+    // way (success → superseded; failure → must not stand).
+    pull()
+    if (!reply || reply.ok === false) { if (window.DoitBonk) window.DoitBonk() }
+  })
+})
+
+// A dimmed pending member row: avatar + name + @username only. Deliberately
+// minimal — it never claims a role or owner-controls the server didn't grant.
+function buildPendingMemberRow(echoId, d) {
+  const li = document.createElement("li")
+  li.setAttribute("data-member-echo", echoId)
+  li.className = "flex items-center justify-between opacity-60"
+  const left = document.createElement("span")
+  left.className = "flex items-center gap-1 min-w-0 text-zinc-700 dark:text-zinc-200"
+  const av = document.createElement("span")
+  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-6 h-6 text-xs"
+  av.style.backgroundImage = (d && d.avatarBg) || ""
+  av.style.color = (d && d.avatarFg) || ""
+  av.textContent = (d && d.initials) || ""
+  const name = document.createElement("span")
+  name.className = "truncate"
+  name.textContent = (d && d.userName) || ""
+  const handle = document.createElement("span")
+  handle.className = "text-xs text-zinc-400 dark:text-zinc-500 truncate"
+  handle.textContent = "@" + ((d && d.username) || "")
+  left.appendChild(av)
+  left.appendChild(name)
+  left.appendChild(handle)
+  li.appendChild(left)
+  return li
+}
+
+// ---------------------------------------------------------------------------
+// Optimistic past-collaborator prune (WL3 item 3.6, §6.7). "Remove from My
+// Collaborators" (the inline confirm's Proceed) is server-gated — the server
+// can refuse with :still_collaborating. We hide the rail row at once, then push
+// and reconcile: ok:true → the server's rail refresh drops the row for good;
+// ok:false → un-hide it (MUST NOT LIE — they weren't pruned). We hide (not
+// remove) so the revert is a clean restore that survives a no-op patch.
+// ---------------------------------------------------------------------------
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-prune-collaborator]")
+  if (!btn) return
+  const uid = btn.dataset.userId
+  if (!uid) return
+  const row = document.getElementById("collabrow-" + uid)
+  if (row) row.hidden = true
+  if (!window.DoitPush) { if (row) row.hidden = false; return }
+  window.DoitPush("remove_collaborator", {"user-id": uid}, (reply) => {
+    if (!reply || reply.ok === false) {
+      const r = document.getElementById("collabrow-" + uid)
+      if (r) r.hidden = false
+    }
+  })
 })
 
 // Remove-member confirm — opens client-side (the name is client-known,
-// UX_GUARDRAILS 6.5). Proceed pushes remove_member; the server commits or, for
-// a member holding assignments, returns the (server-data) hand-off modal.
-function pushRemoveMember(userId) {
-  if (window.DoitPush && userId) window.DoitPush("remove_member", {"user-id": userId})
+// UX_GUARDRAILS 6.5). The removal itself can't be optimistic: whether the
+// member holds assignments (→ a server-data hand-off modal) is server-known, so
+// Proceed is a true round trip. Rather than leave the initiator hanging
+// (UX_GUARDRAILS 6.7), Proceed enters a working state and the confirm stays open
+// until the reply settles: {ok:true, handoff:false} or a plain commit closes it;
+// {ok:true, handoff:true} closes it because the server hand-off modal has taken
+// over; {ok:false} restores Proceed and surfaces the flash.
+const REMOVE_MEMBER_TIMEOUT_MS = 8000
+let removeMemberInFlight = false
+
+function resetRemoveMemberModal(modal) {
+  const proceed = modal && modal.querySelector("[data-remove-proceed]")
+  const cancel = modal && modal.querySelector("[data-remove-cancel]")
+  if (proceed) {
+    proceed.classList.remove("animate-pulse", "opacity-60")
+    proceed.textContent = "Remove"
+  }
+  if (cancel) cancel.classList.remove("pointer-events-none", "opacity-50")
+  removeMemberInFlight = false
+}
+
+function pushRemoveMember(userId, onReply) {
+  if (window.DoitPush && userId) window.DoitPush("remove_member", {"user-id": userId}, onReply)
 }
 
 document.addEventListener("click", (e) => {
@@ -1101,10 +2277,19 @@ document.addEventListener("click", (e) => {
   const btn = e.target.closest("[data-remove-member]")
   if (btn) {
     e.preventDefault()
+    // When invoked from the rail-menu popover, preventDefault cancels the
+    // button's native popover-hide — close the popover explicitly so the menu
+    // doesn't linger behind the confirm.
+    const pt = btn.getAttribute("popovertarget")
+    if (pt) {
+      const pop = document.getElementById(pt)
+      if (pop && pop.matches(":popover-open")) pop.hidePopover()
+    }
     if (!modal) {
       pushRemoveMember(btn.dataset.userId)
       return
     }
+    resetRemoveMemberModal(modal)
     modal.dataset.userId = btn.dataset.userId
     const nameEl = modal.querySelector("[data-remove-name]")
     if (nameEl) nameEl.textContent = btn.dataset.userName || "this member"
@@ -1112,20 +2297,52 @@ document.addEventListener("click", (e) => {
     return
   }
   if (!modal || modal.hidden) return
-  if (e.target === modal || e.target.closest("[data-remove-cancel]")) {
+  // Cancel / backdrop — only when not mid-flight (Cancel is disabled then).
+  if (!removeMemberInFlight && (e.target === modal || e.target.closest("[data-remove-cancel]"))) {
     modal.hidden = true
     return
   }
   if (e.target.closest("[data-remove-proceed]")) {
-    modal.hidden = true
-    pushRemoveMember(modal.dataset.userId)
+    if (removeMemberInFlight) return
+    const proceed = modal.querySelector("[data-remove-proceed]")
+    const cancel = modal.querySelector("[data-remove-cancel]")
+    removeMemberInFlight = true
+    // Acknowledge the click instantly: the confirm stays open showing a working
+    // Proceed, so nothing leaves the initiator hanging across the round trip.
+    if (proceed) {
+      proceed.classList.add("animate-pulse", "opacity-60")
+      proceed.textContent = "Removing…"
+    }
+    if (cancel) cancel.classList.add("pointer-events-none", "opacity-50")
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resetRemoveMemberModal(modal) // restore Proceed; the flash (if any) covers the error
+    }, REMOVE_MEMBER_TIMEOUT_MS)
+    const finish = (reply) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (reply && reply.ok) {
+        // Committed, or the server hand-off modal has taken over — either way
+        // release this confirm; the next view (roster or hand-off modal) owns it.
+        modal.hidden = true
+        removeMemberInFlight = false
+      } else {
+        // The server refused — restore Proceed; the flash carries the reason.
+        resetRemoveMemberModal(modal)
+      }
+    }
+    pushRemoveMember(modal.dataset.userId, finish)
+    if (!window.DoitPush) finish({ok: false})
   }
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const m = document.getElementById("remove-member-confirm")
-  if (m && !m.hidden) m.hidden = true
+  if (m && !m.hidden && !removeMemberInFlight) m.hidden = true
 })
 
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
@@ -1246,11 +2463,22 @@ document.addEventListener("keydown", (e) => {
 
 // Fully-optimistic operated row (.03.07.22): a completion toggle flips the
 // row's checkbox (aria-pressed), done styling (data-done), and progress bar
-// at the click. The hold handle survives patches via the guard observer (the
-// confirm's pending-hue render resets the attributes to server truth) and
-// settles exactly like a held drag: revert on cancel/failure, release on
-// commit/resolve.
-window.DoitPendingToggle = null
+// at the click. The hold handle survives patches via the preserve-path `dom:`
+// callbacks (the confirm's pending-hue render resets the attributes to server
+// truth) and settles exactly like a held drag: revert on cancel/failure,
+// release on commit/resolve.
+//
+// `window.DoitPendingToggle` is now a getter/setter shim backed by
+// DoitState.pending.toggle (slice 2.3) so the held flip has a single source of
+// truth: the immediate applyPendingToggle (called at click) and the
+// KeepRegistry "pending-toggle" appliers read the same store and stay
+// consistent. The shape is {liId, value, barValue, prevBarValue, sliderValue,
+// prevSliderValue} — sliderValue/prevSliderValue carry the selected task's pane
+// manual-slider so a leaf checkoff jumps it to 100 (or 0 on reopen) optimistically.
+Object.defineProperty(window, "DoitPendingToggle", {
+  get() { return DoitState.pending.toggle },
+  set(v) { DoitState.pending.toggle = v },
+})
 
 function setRowBar(row, value) {
   const bar = row && row.querySelector("[role='progressbar']")
@@ -1263,10 +2491,26 @@ function setRowBar(row, value) {
   if (txt) txt.textContent = v + "%"
 }
 
+// The selected task's pane manual-slider, when it belongs to the given li and
+// is an active leaf slider (not disabled, not a branch). Returns {slider,
+// readout} or null. The pane is a singleton (#task-editor-pane); the slider is
+// only "this row's" when the pane is showing this task.
+function paneSliderFor(li) {
+  const pane = document.getElementById("task-editor-pane")
+  if (!pane || pane.dataset.taskId !== li.dataset.taskId) return null
+  const slider = pane.querySelector("#task-field-progress")
+  if (!slider || slider.disabled) return null
+  return {slider, readout: pane.querySelector("[data-progress-readout]")}
+}
+
 function applyToggleOptimism(li, toggle) {
   const row = li.querySelector(":scope > [data-task-row]")
   const bar = row && row.querySelector("[role='progressbar']")
   const done = !(toggle.getAttribute("aria-pressed") === "true")
+  // The selected leaf's pane slider mirrors the bar (finding 1): the row bar
+  // already jumps optimistically, but the pane's separate manual-slider control
+  // did not — sync it too so checkoff feels instant in the open pane.
+  const paneSlider = paneSliderFor(li)
   window.DoitPendingToggle = {
     liId: li.id,
     value: done,
@@ -1275,6 +2519,10 @@ function applyToggleOptimism(li, toggle) {
     // branch, and cascade alike; see maybe_set_done_progress).
     barValue: done ? "100" : "0",
     prevBarValue: bar && bar.getAttribute("aria-valuenow"),
+    // The pane slider follows the same 100/0 rule. prevSliderValue restores it
+    // on a revert (cancel / failed write).
+    sliderValue: paneSlider ? (done ? "100" : "0") : null,
+    prevSliderValue: paneSlider ? paneSlider.slider.value : null,
   }
   applyPendingToggle()
 }
@@ -1286,11 +2534,33 @@ function pendingToggleParts(p) {
   return toggle ? {row, toggle} : null
 }
 
+// Write a value onto the selected task's pane manual-slider + its readout,
+// idempotently (skip a focused/dragging slider so the user's own drag isn't
+// stomped; skip when the value already matches so the guard converges).
+function setPaneSlider(li, value) {
+  if (value == null) return
+  const parts = paneSliderFor(li)
+  if (!parts || parts.slider === document.activeElement) return
+  const v = String(value)
+  if (parts.slider.value !== v) parts.slider.value = v
+  if (parts.readout && parts.readout.textContent !== v) parts.readout.textContent = v
+}
+
 function applyPendingToggle() {
   const p = window.DoitPendingToggle
   if (!p) return
   const parts = pendingToggleParts(p)
   if (!parts) return
+  // Self-release once the server has BOTH committed (reply landed) AND rendered
+  // the flip (live DOM shows data-done == the flip). We can't release on the
+  // DOM value alone — our own optimistic write set it — so the committed flag
+  // disambiguates "server confirmed" from "we faked it". This closes the
+  // reply→render gap: the hold persists from the reply until the reconciling
+  // render actually lands, so an interleaved patch can't revert the bar/slider.
+  if (p.committed && parts.row.hasAttribute("data-done") === p.value) {
+    window.DoitPendingToggle = null
+    return
+  }
   const want = String(p.value)
   if (parts.toggle.getAttribute("aria-pressed") !== want) {
     parts.toggle.setAttribute("aria-pressed", want)
@@ -1300,6 +2570,10 @@ function applyPendingToggle() {
     parts.row.toggleAttribute("data-done", p.value)
   }
   if (p.barValue != null) setRowBar(parts.row, p.barValue)
+  // Hold the pane slider on the optimistic value too (finding 1) so a patch
+  // landing between the click and the reconciling render can't revert it.
+  const li = document.getElementById(p.liId)
+  if (li && p.sliderValue != null) setPaneSlider(li, p.sliderValue)
 }
 
 function revertPendingToggle() {
@@ -1312,17 +2586,30 @@ function revertPendingToggle() {
   parts.toggle.setAttribute("aria-label", !p.value ? "Reopen task" : "Mark task completed")
   parts.row.toggleAttribute("data-done", !p.value)
   if (p.prevBarValue != null) setRowBar(parts.row, p.prevBarValue)
+  // Restore the pane slider to what it showed before the optimistic flip.
+  const li = document.getElementById(p.liId)
+  if (li && p.prevSliderValue != null) setPaneSlider(li, p.prevSliderValue)
 }
 
 // Commit a completion toggle: push the event with the move_task-style reply
-// contract — ok:false reverts the held optimistic flip, committed:true (or any
-// non-false committed) releases the handle (the patch owns the row from there).
+// contract — ok:false reverts the held optimistic flip. On a commit we DON'T
+// null the handle here: the reconciling render can land a beat after the reply,
+// so nulling now would let an interleaved patch revert the optimistic bar /
+// slider in the gap. Instead the "pending-toggle" keep-applier releases the
+// hold the moment the server-rendered data-done matches the flip (and the
+// preserve-path `dom:` callbacks re-hold it on any patch until then).
+// committed:false (a confirm modal is deciding) keeps holding via the same path,
+// settled later by phx:confirm-cancelled/-resolved.
 function pushToggleCommit(ev, li) {
   if (!window.DoitPush) return
   window.DoitPush(ev, {id: li.dataset.taskId}, (reply) => {
-    const failed = !reply || reply.ok === false
-    if (failed) revertPendingToggle()
-    else if (reply.committed !== false) window.DoitPendingToggle = null
+    if (!reply || reply.ok === false) { revertPendingToggle(); return }
+    // committed:false → a confirm modal is deciding; keep holding (settled later
+    // by phx:confirm-cancelled/-resolved). Otherwise mark committed so the keep-
+    // appliers release the hold the moment the reconciling render lands.
+    if (reply.committed !== false && window.DoitPendingToggle) {
+      window.DoitPendingToggle = {...window.DoitPendingToggle, committed: true}
+    }
   })
 }
 
@@ -1398,13 +2685,121 @@ document.addEventListener("keydown", (e) => {
   }
 })
 
+// Large-branch-reorg confirm (UX_GUARDRAILS 6.5): "Make descendants inherit"
+// predicts the descendant-branch count straight from the DOM — the whole task
+// tree is rendered regardless of collapse (collapse is CSS-only) — so the
+// confirm opens client-side with no round trip. Below the threshold (or
+// suppressed) the cascade pushes immediately; above it, the static modal opens
+// instantly while the operated subtree holds the maybe-write hue. Proceed
+// commits (cascade_sort with confirmed:true, optionally persisting the skip);
+// Cancel / backdrop / Esc strip the hue with no server touch. The server count
+// gate stays as the authoritative backstop for a client that didn't predict.
+const CASCADE_SORT_SKIP_KEY = "doit:confirm-skip:cascade-sort"
+const cascadeSortSuppressed = () => {
+  try { return localStorage.getItem(CASCADE_SORT_SKIP_KEY) === "1" } catch (_e) { return false }
+}
+
+// A "branch" matches the server's count_descendant_branches: a descendant that
+// itself has children. In the DOM that's an li[data-task-id] containing its own
+// children list (:scope > ul[id^="children-"]).
+function countDescendantBranches(li) {
+  return [...li.querySelectorAll('li[data-task-id]')].filter(
+    (d) => d.querySelector(':scope > ul[id^="children-"]')
+  ).length
+}
+
+function stripCascadeSortHue() {
+  document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
+    el.classList.remove("is-saving", "is-recomputing")
+  })
+}
+
+document.addEventListener("click", (e) => {
+  const trigger = e.target.closest("[data-cascade-sort]")
+  if (trigger) {
+    e.preventDefault()
+    const id = trigger.dataset.taskId
+    if (!id) return
+    const li = document.querySelector(`li[data-task-id="${CSS.escape(id)}"]`)
+    const modal = document.getElementById("cascade-sort-confirm")
+    const branches = li ? countDescendantBranches(li) : 0
+    // Below threshold or suppressed → commit straight through. (Modal missing
+    // also pushes — the server count gate is the backstop.)
+    if (!modal || branches <= 10 || cascadeSortSuppressed()) {
+      if (window.DoitPush) window.DoitPush("cascade_sort", {id})
+      return
+    }
+    // Predicted large reorg: hold the maybe-write hue on the subtree (sticky —
+    // the dialog clears it) and open the confirm instantly.
+    if (li) markSaving(savingSubtree(li), {sticky: true})
+    const body = modal.querySelector("[data-cascade-sort-body]")
+    if (body) {
+      const affected = li ? li.querySelectorAll('li[data-task-id]').length : 0
+      body.textContent =
+        `This is a large branch reorg affecting ${affected} task(s). Every descendant ` +
+        `branch switches to Inherit — their own sort settings are overwritten and they ` +
+        `follow this branch from now on; reversible only via Undo (Arc 5).`
+    }
+    const dont = modal.querySelector("[data-cascade-sort-dont-show]")
+    if (dont) dont.checked = false
+    modal.dataset.taskId = id
+    modal.hidden = false
+    const proceed = modal.querySelector("[data-cascade-sort-proceed]")
+    if (proceed) proceed.focus()
+    return
+  }
+  const modal = document.getElementById("cascade-sort-confirm")
+  if (!modal || modal.hidden) return
+  // Cancel / backdrop — strip the hue, close, no server touch.
+  if (e.target === modal || e.target.closest("[data-cascade-sort-cancel]")) {
+    modal.hidden = true
+    stripCascadeSortHue()
+    return
+  }
+  if (e.target.closest("[data-cascade-sort-proceed]")) {
+    const dont = modal.querySelector("[data-cascade-sort-dont-show]")
+    if (dont && dont.checked) {
+      try { localStorage.setItem(CASCADE_SORT_SKIP_KEY, "1") } catch (_e) {}
+    }
+    const id = modal.dataset.taskId
+    modal.hidden = true
+    if (id && window.DoitPush) {
+      // The server's load_tree re-render owns the subtree from here; the hue is
+      // cleared by that patch (the class is client-added, morphdom strips it),
+      // but clear it explicitly so a dropped reply can't strand it.
+      window.DoitPush("cascade_sort", {id, confirmed: true}, () => stripCascadeSortHue())
+    } else {
+      stripCascadeSortHue()
+    }
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const modal = document.getElementById("cascade-sort-confirm")
+  if (modal && !modal.hidden) {
+    modal.hidden = true
+    stripCascadeSortHue()
+  }
+})
+
 // Confirm-held optimism (§8.20): while a completion-flip confirm decides a
 // drag, the optimistic placement holds. The server announces the outcome:
 // "confirm-cancelled" (Cancel, click-away, or a failed Proceed) reverts the
 // row to where it came from; "confirm-resolved" (modal closed via Proceed)
 // releases the handle — the commit's re-render owns the row from there. A
 // failed Proceed pushes both, cancelled first, so the revert still runs.
-window.DoitPendingMove = null
+// `window.DoitPendingMove` is now a getter/setter shim backed by
+// DoitState.pending.move (slice 2.3, mirroring DoitPendingToggle) so the held
+// drag placement has a single source of truth: applyPendingMove reads the same
+// store. Unlike the attribute-level kinds, this hold is STRUCTURAL (a subtree
+// moved to a different parent), so it doesn't get a `data-keep` kind — instead
+// applyPendingMove is re-run from onPatchEnd (the preserve path's post-patch
+// global re-assert) after every morphdom patch.
+Object.defineProperty(window, "DoitPendingMove", {
+  get() { return DoitState.pending.move },
+  set(v) { DoitState.pending.move = v },
+})
 
 // While a row is held away from its server-side parent, any patch touching
 // that parent's list re-creates the row there (LiveView reconciles a list
@@ -1449,7 +2844,7 @@ document.addEventListener("click", (e) => {
 
 // Re-assert the held placement: server-side the row still belongs to its old
 // parent, so every patch that touches either child list moves it back. Runs
-// from the guard observer; insert-only-when-different, so it converges.
+// from onPatchEnd; insert-only-when-different, so it converges.
 function applyPendingMove() {
   const p = window.DoitPendingMove
   if (!p || !p.destContainer) return
@@ -1655,11 +3050,27 @@ function openMoveFlipConfirm(prediction) {
   return true
 }
 
-// Cancel / backdrop / Esc: revert the held placement and strip the saving hue.
+// Clear the create-flip markers stashed on the reused #move-flip-confirm.
+function clearCreateFlipMarkers(modal) {
+  if (!modal) return
+  delete modal.dataset.createFlip
+  delete modal.dataset.createTitle
+  delete modal.dataset.createParentId
+  delete modal.dataset.createAfterId
+}
+
+// Cancel / backdrop / Esc: revert the held placement (move) or drop the preview
+// row (create) and strip the saving hue.
 function closeMoveFlipConfirmCancel() {
   const modal = document.getElementById("move-flip-confirm")
   if (modal) modal.hidden = true
-  revertPendingMove()
+  if (modal && modal.dataset.createFlip) {
+    // Create flip cancelled: the task never gets created — drop its preview row.
+    dropPendingRows()
+    clearCreateFlipMarkers(modal)
+  } else {
+    revertPendingMove()
+  }
   document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
     el.classList.remove("is-saving", "is-recomputing")
   })
@@ -1676,11 +3087,24 @@ document.addEventListener("click", (e) => {
   }
   if (e.target.closest("[data-flip-proceed]")) {
     modal.hidden = true
-    const handle = window.DoitPendingMove
     const stripHue = () =>
       document.querySelectorAll(".is-saving, .is-recomputing").forEach((el) => {
         el.classList.remove("is-saving", "is-recomputing")
       })
+    // Create flip: re-submit the create, now confirmed — the server commits
+    // straight through and its load_tree re-render reconciles the preview row.
+    if (modal.dataset.createFlip) {
+      pushCreateTask(
+        modal.dataset.createTitle,
+        modal.dataset.createParentId,
+        modal.dataset.createAfterId,
+        true
+      )
+      clearCreateFlipMarkers(modal)
+      stripHue()
+      return
+    }
+    const handle = window.DoitPendingMove
     // Re-send the move, now confirmed — the server commits straight through.
     if (window.DoitPush && handle && handle.moveParams) {
       const params = {...handle.moveParams, confirmed: true}
@@ -1707,6 +3131,179 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   if (moveFlipModal()) closeMoveFlipConfirmCancel()
 })
+
+// --- §6.8 dead-window capture: native phx-* interceptor (WL4.2.2) -----------
+//
+// The queue above captures only server-gated writes that funnel through
+// window.DoitPush. Many server-gated actions never touch DoitPush — they ride
+// NATIVE phx-click / phx-submit / phx-change and LiveView pushes them itself
+// (inline update_task + the progress slider, branch set_sort, the Assigned
+// reveal / group-by prefs, Archived toggle_show_hidden + hide/unhide/restore,
+// set_index_style, settings subtitle / progress-calc / viewer+, the common
+// add-task submit, save-comment, member-role, …). Before the view is live those
+// native pushes are silently dropped — the §6.8 dead window. This document-level
+// CAPTURE-phase interceptor closes that gap: while the view is dead
+// (livePush === null) it serializes the LiveView event INTENT off the gesture
+// and routes it through the SAME queue (enqueuePreconnect), so it flushes in
+// order on connect through the existing funnel. Once live it is a pure no-op —
+// the early `if (livePush) return` bails before any work, so LiveView handles
+// everything natively with zero steady-state effect.
+//
+// We SERIALIZE, we do NOT re-dispatch: on connect the queued intents flush via
+// pushEvent (a "hook"-type push whose payload is the literal object), NOT by
+// re-firing click / submit — the optimistic client handlers already ran at the
+// real gesture, so re-dispatching would double-apply them. We capture only the
+// server event NAME + PAYLOAD at the moment of the gesture and replay that.
+//
+// De-confliction (never double-send): an action already delivered by DoitPush
+// must not also be captured here. DOITPUSH_OWNED lists every DoitPush event
+// name; the interceptor skips them. create_task is intentionally NOT in that set
+// — see the submit handler. Registration ORDER matters: this block installs
+// AFTER the #add-task-form (create) and #add-comment capture listeners, so their
+// stopImmediatePropagation() — fired only on the paths where DoitPush takes
+// over — suppresses this interceptor for those gestures, leaving the no-flip
+// add-task submit (which has no DoitPush) for us to capture.
+
+// Event names DoitPush already delivers (so the dead window already captures
+// them) — derived from the DoitPush(...) call sites. Skipped here to avoid a
+// double send. toggle_complete / the cascades have no phx-* of their own (they
+// ride data-toggle-event) but are listed for completeness / future-proofing.
+const DOITPUSH_OWNED = new Set([
+  "select_task", "close_task",
+  "delete_task", "delete_initiative", "leave_initiative",
+  "cancel_handoff", "archive_initiative", "confirm_transfer",
+  "add_comment", "add_collaborator_to", "remove_collaborator", "remove_member",
+  "cascade_sort", "move_task",
+  "toggle_complete", "cascade_complete", "cascade_incomplete",
+])
+
+// Irreversible actions whose confirmation lives OUTSIDE this capture, so they
+// must never be auto-replayed across the dead window: a `data-confirm` click
+// (its LiveView confirm dialog can't run while dead — caught inline below) and
+// account deletion (gated by a details-expand, but too destructive to fire on
+// connect without a live re-confirm). The user simply re-acts once the badge
+// clears — a dropped re-confirmable click is the safe failure here.
+const PRECONNECT_DESTRUCTIVE = new Set(["delete_account"])
+
+// LiveView nested-form params, replicated (WL4.2.2). A native phx-change /
+// phx-submit serializes the whole form to a urlencoded string the server decodes
+// (Plug.Conn.Query) into a NESTED map: name="task[title]" => %{"task" =>
+// %{"title" => v}}. Because we replay through pushEvent (payload = literal
+// object) rather than the native "form" event, the object built HERE must equal
+// what the server would have decoded, or the handler sees the wrong shape. This
+// walks new FormData(form) and rebuilds that object from bracket notation,
+// matching Plug.Conn.Query: `name[]` => list append, duplicate flat key => last
+// wins, and DISABLED / unchecked controls are simply absent (FormData omits
+// them, exactly like the wire form — so an off viewer_plus sends no key, a
+// branch task's disabled slider sends none, same as native).
+function preconnectParseName(name) {
+  // "task[title]" -> ["task","title"]; "a[b][]" -> ["a","b",""]; "mode" -> ["mode"].
+  const i = name.indexOf("[")
+  if (i === -1) return [name]
+  const parts = [...name.slice(i).matchAll(/\[([^\]]*)\]/g)].map((m) => m[1])
+  return [name.slice(0, i), ...parts]
+}
+function preconnectSetPath(root, path, value) {
+  let node = root
+  for (let k = 0; k < path.length - 1; k++) {
+    const seg = path[k] === "" ? node.length : path[k]
+    if (node[seg] == null || typeof node[seg] !== "object") {
+      node[seg] = path[k + 1] === "" ? [] : {}
+    }
+    node = node[seg]
+  }
+  const last = path[path.length - 1]
+  if (last === "") node.push(value) // `name[]` -> array append
+  else node[last] = value // last-wins for a duplicate flat / nested key
+}
+function preconnectSerializeForm(form) {
+  const out = {}
+  for (const [name, value] of new FormData(form).entries()) {
+    preconnectSetPath(out, preconnectParseName(name), value)
+  }
+  return out
+}
+// The pane's two update_task forms carry NO task id — natively the server
+// applies them to its loaded selection. A dead-window edit, though, flushes on
+// connect BEFORE the .TaskKeys selection replay lands (DoitRegisterLivePush runs
+// ahead of the select_task push), so "current selection" is stale/nil at flush.
+// Capture the task this edit was made against (DoitState.selectedId) into the
+// payload so it ALWAYS lands on its own task — the server honors payload.id when
+// present and falls back to selected_task otherwise (WL4.2.2 Defect 2). The
+// coalesce key folds the id in, so cross-task dead-window edits never collide.
+function preconnectSelfTarget(ev, payload) {
+  if (ev === "update_task" && DoitState.selectedId != null) {
+    payload.id = String(DoitState.selectedId)
+  }
+  return payload
+}
+// phx-value-* attributes -> payload (strip the prefix), mirroring LiveView's
+// phx-click value serialization (phx-value-id="3" => {id: "3"}).
+function preconnectClickPayload(el) {
+  const payload = {}
+  for (const a of el.attributes) {
+    if (a.name.startsWith("phx-value-")) payload[a.name.slice("phx-value-".length)] = a.value
+  }
+  return payload
+}
+// True for a JS-command binding (e.g. phx-click={JS.toggle(...)} or JS.push(...)):
+// the attribute is a serialized command array ("[[...]]"), not a plain server
+// event name, so it can't be replayed as one. Skipped (and logged) — see report.
+function preconnectIsJsCommand(raw) {
+  return !raw || raw[0] === "["
+}
+
+// phx-click: event name = the attribute; payload = the phx-value-* map.
+document.addEventListener("click", (e) => {
+  if (livePush) return
+  const el = e.target.closest("[phx-click]")
+  if (!el) return
+  const ev = el.getAttribute("phx-click")
+  if (preconnectIsJsCommand(ev)) {
+    if (ev) console.debug("[preconnect] skipping JS-command phx-click:", ev)
+    return
+  }
+  if (DOITPUSH_OWNED.has(ev) || PRECONNECT_DESTRUCTIVE.has(ev)) return
+  if (el.hasAttribute("data-confirm")) return // confirm can't run while dead — don't auto-fire
+  enqueuePreconnect(ev, preconnectClickPayload(el))
+}, true)
+
+// phx-submit: event name = the form's binding; payload = the serialized form
+// (plus the submitter's name/value, which LiveView includes). preventDefault so
+// a dead-window submit can't trigger a native full-page POST / navigation.
+document.addEventListener("submit", (e) => {
+  if (livePush) return
+  const form = e.target
+  const ev = form && form.getAttribute && form.getAttribute("phx-submit")
+  if (!ev || preconnectIsJsCommand(ev) || DOITPUSH_OWNED.has(ev)) return
+  e.preventDefault()
+  const payload = preconnectSerializeForm(form)
+  if (e.submitter && e.submitter.name) {
+    preconnectSetPath(payload, preconnectParseName(e.submitter.name), e.submitter.value || "")
+  }
+  enqueuePreconnect(ev, preconnectSelfTarget(ev, payload))
+}, true)
+
+// phx-change: event name = the input's binding or its form's (mirrors LiveView,
+// which honors an input-level phx-change over the form's); payload = the
+// serialized form plus _target = the changed field's name (LiveView sends it to
+// scope validation; no handler here reads it, included for parity). Bound on
+// BOTH input and change (LiveView listens to both); coalescing per form means
+// the duplicate is harmless — the latest full-form snapshot wins.
+function preconnectCapturePhxChange(e) {
+  if (livePush) return
+  const input = e.target
+  if (!input || !input.getAttribute) return
+  const ev = input.getAttribute("phx-change") || (input.form && input.form.getAttribute("phx-change"))
+  if (!ev || preconnectIsJsCommand(ev) || DOITPUSH_OWNED.has(ev)) return
+  const form = input.form
+  if (!form) return
+  const payload = preconnectSerializeForm(form)
+  payload._target = input.name || ""
+  enqueuePreconnect(ev, preconnectSelfTarget(ev, payload))
+}
+document.addEventListener("input", preconnectCapturePhxChange, true)
+document.addEventListener("change", preconnectCapturePhxChange, true)
 
 // Confirmation suppression (.03.01.11): read the per-class skip flags from
 // localStorage on mount and push them to the LiveView; persist a flag when the
@@ -1735,26 +3332,6 @@ Hooks.AutoDismissFlash = {
   },
   destroyed() {
     if (this.timer) clearTimeout(this.timer)
-  },
-}
-
-// Show/hide toggle for password inputs. Looks up the associated input by
-// data-input-id, swaps its `type` attribute, and toggles which icon is
-// visible (eye vs. eye-slash).
-Hooks.PasswordToggle = {
-  mounted() {
-    const inputId = this.el.dataset.inputId
-    const input = document.getElementById(inputId)
-    if (!input) return
-    const eye = this.el.querySelector(".password-eye")
-    const eyeSlash = this.el.querySelector(".password-eye-slash")
-    this.el.addEventListener("click", () => {
-      const showing = input.type === "text"
-      input.type = showing ? "password" : "text"
-      eye.classList.toggle("hidden", !showing)
-      eyeSlash.classList.toggle("hidden", showing)
-      this.el.setAttribute("aria-label", showing ? "Show password" : "Hide password")
-    })
   },
 }
 
@@ -2283,7 +3860,7 @@ Hooks.DragReorder = {
     this.cleanup()
     // The hold is registered BEFORE the reply can race it: any patch landing
     // first (the confirm's pending-hue render) re-creates the row under its
-    // server-side parent, and the guard observer needs the handle to fix that
+    // server-side parent, and onPatchEnd needs the handle to fix that
     // (incl. removing the re-created clone — see applyPendingMove). Captured
     // after cleanup so the drop placeholder doesn't pollute the held position.
     // moveParams rides along so a predicted-flip Proceed can re-send the same
@@ -2691,18 +4268,6 @@ Hooks.Popover = {
   },
 }
 
-// Native <details> whose open state survives LiveView patches — the server
-// renders it closed, so morphdom would otherwise slam it shut on every patch.
-Hooks.KeepOpen = {
-  mounted() {
-    this._open = this.el.open
-    this.el.addEventListener("toggle", () => { this._open = this.el.open })
-  },
-  updated() {
-    if (this.el.open !== this._open) this.el.open = this._open
-  },
-}
-
 Hooks.CollapseToggle = {
   mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.bind(); this.apply() },
   updated() { this.apply() },
@@ -2728,20 +4293,6 @@ Hooks.CollapseToggle = {
   },
 }
 
-// Re-applies the persisted collapsed-peek class to a children <ul> whenever
-// LiveView re-renders it. The toggle button (CollapseToggle) carries
-// phx-update="ignore", so its updated() never fires after a tree refresh —
-// without this hook, morphdom strips the JS-added class on every diff.
-Hooks.CollapseChildren = {
-  mounted() { ensureStorageVersion("phx:collapse", 1, { grandfather: true }); this.apply() },
-  updated() { this.apply() },
-  apply() {
-    const key = `phx:collapse:${this.el.dataset.initiativeId}:${this.el.dataset.taskId}`
-    const collapsed = localStorage.getItem(key) === "1"
-    this.el.classList.toggle("collapsed-peek", collapsed)
-  },
-}
-
 // Selection-presence badges (m02.04 §1.12). The server pushes the full
 // "who has what selected" list (other members only); this hook stores it
 // window-level and paints [data-presence-slot] spans. Like collapse state,
@@ -2749,17 +4300,29 @@ Hooks.CollapseChildren = {
 // after any morphdom pass wipes a slot.
 Hooks.PresenceBadges = {
   mounted() {
-    window.DoitPresence = { selections: [], online: [] }
     this.handleEvent("presence-selections", ({ selections, online }) => {
-      window.DoitPresence.selections = selections
-      window.DoitPresence.online = online || []
+      DoitState.presence.selections = selections
+      DoitState.presence.online = online || []
       applyPresenceBadges()
     })
   },
   destroyed() {
-    window.DoitPresence = { selections: [], online: [] }
+    DoitState.presence.selections = []
+    DoitState.presence.online = []
   },
 }
+
+// `window.DoitPresence` is now backed by DoitState.presence so presence has a
+// single source of truth: applyPresenceBadges (reads .selections/.online), the
+// hook's handleEvent, and the preserve-path KeepRegistry.presence applier all
+// read the same store and stay consistent.
+const DoitPresence = {
+  get selections() { return DoitState.presence.selections },
+  set selections(v) { DoitState.presence.selections = v },
+  get online() { return DoitState.presence.online },
+  set online(v) { DoitState.presence.online = v },
+}
+window.DoitPresence = DoitPresence
 
 function applyPresenceBadges() {
   const sels = (window.DoitPresence && window.DoitPresence.selections) || []
@@ -2798,87 +4361,6 @@ function applyPresenceBadges() {
   document.querySelectorAll("[data-pill-avatar]").forEach((el) => {
     el.classList.toggle("chip-online", !!el.dataset.assigneeId && online.has(el.dataset.assigneeId))
   })
-}
-
-// The net under the hooks above: collapse state's source of truth is
-// localStorage and the server never renders collapsed-peek, but per-hook
-// updated() callbacks miss some patch paths (nodes moved optimistically by
-// DragReorder then reconciled by morphdom, replaced subtrees) — which
-// expanded collapsed branches on sort/reorder. After ANY class/childList
-// change in the document, re-apply every collapse state. classList.toggle
-// with a no-op force doesn't write the attribute, so this converges instead
-// of looping.
-function applyCollapseStates() {
-  document.querySelectorAll("ul[id^='children-']").forEach((ul) => {
-    const key = `phx:collapse:${ul.dataset.initiativeId}:${ul.dataset.taskId}`
-    const collapsed = localStorage.getItem(key) === "1"
-    ul.classList.toggle("collapsed-peek", collapsed)
-    const btn = document.getElementById(`collapse-${ul.dataset.taskId}`)
-    if (btn) btn.setAttribute("aria-expanded", String(!collapsed))
-  })
-}
-// Re-assert ALL client-owned view state. Every step is idempotent (writes only
-// when the DOM disagrees), so it's safe to call from many triggers without
-// looping. This is the single source of truth for "make the DOM match what the
-// client owns" — the mutation guard below runs it on incremental patches, and
-// the connect/reconnect lifecycle hooks (see installConnectGuards) run it again
-// at the join boundary, where LiveView's first morphdom can replace the
-// pane/selection/rail elements wholesale against the dead-render HTML.
-function reassertClientState() {
-  applyCollapseStates()
-  // Selection is client-owned too — re-assert it across the same patch paths.
-  window.DoitSelection.apply()
-  // Editor visibility is client-owned (UX_GUARDRAILS 6.5): the server always
-  // renders the pane hidden now, so re-assert the open flag the same way.
-  window.DoitInitiativeEditor.apply()
-  // Confirm-held optimism (§8.20 / .03.07.22) survives the same way.
-  applyPendingMove()
-  applyPendingToggle()
-  // Presence badges are client-painted (m02.04 §1.12) — same guard.
-  applyPresenceBadges()
-  // While a confirm modal is up, its maybe-write hue is server-held —
-  // disarm the client's safety timer so it can't strip it mid-decision.
-  if (document.getElementById("completion-confirm")) releaseSavingHue()
-}
-window.DoitReassertClientState = reassertClientState
-
-let collapseGuardRaf = null
-new MutationObserver(() => {
-  if (collapseGuardRaf) return
-  collapseGuardRaf = requestAnimationFrame(() => {
-    collapseGuardRaf = null
-    reassertClientState()
-  })
-}).observe(document.body, {
-  subtree: true,
-  childList: true,
-  attributes: true,
-  // data-selected: morphdom strips the client-set attr on patch; both
-  // re-applies are idempotent (no write when correct), so no loops.
-  attributeFilter: ["class", "data-selected"],
-})
-
-// The mutation guard above catches incremental patches, but the LiveView
-// CONNECT/RECONNECT join is special: its first morphdom runs against the dead
-// (static) DOM and can replace the pane/selection/rail elements wholesale. On a
-// slow LongPoll connect that "major reload" lands seconds after the page looks
-// ready — right while the user is mid-action — and the mutation guard's
-// rAF-debounced callback can race LiveView's own focus/DOM restore on that big
-// batch, leaving the pane the user opened during the pre-connect window hidden
-// again. So we ALSO re-assert explicitly at the join boundary, not just from the
-// observer. `installConnectGuards` wires the LiveView connect lifecycle:
-//   - socket.onOpen: fires on the initial transport open and every reconnect.
-//   - phx:page-loading-stop with kind "initial": LiveView dispatches this when
-//     the join render has been applied to the DOM — the exact moment after the
-//     "major reload" patch. We re-run on the next frame so we win after morphdom
-//     has finished writing the batch.
-// Both are idempotent via reassertClientState, so double-firing is harmless.
-function installConnectGuards(socket) {
-  const reassertSoon = () => requestAnimationFrame(reassertClientState)
-  socket.onOpen(reassertSoon)
-  // Every loading-stop is safe to re-run on (reassertClientState is idempotent);
-  // the one that matters is the initial join's "major reload" patch.
-  window.addEventListener("phx:page-loading-stop", reassertSoon)
 }
 
 // Sizes the whole task tree to one width so every row — roots included —
@@ -3055,11 +4537,74 @@ window.addEventListener("phx:close-details", (e) => {
   if (form) form.reset()
 })
 
+// ---- Drop-time optimism for the Initiatives card reorder (WL3.5 Fix A) -----
+//
+// A drag-reorder of the workspace Initiative cards (#initiatives) used to wait
+// on the server re-stream — no drop-time feedback (§6.2 violation). We now apply
+// the new order to the DOM AT DROP, snapshot the prior order, and hold it on the
+// preserve path until the apply_sort reply settles. This mirrors the structural
+// applyPendingMove hold: it's a child reorder, so it gets no per-element
+// data-keep kind — applyPendingInitiativeOrder re-asserts it from onPatchEnd
+// (covering any unrelated mid-flight patch), and the reply releases it (ok) or
+// reverts to the prior snapshot (failure — MUST NOT LIE). A dropped reply
+// self-heals on the 8s safety timer by releasing (the server stays
+// authoritative; the next re-stream reconciles the order honestly).
+
+// Re-sequence #initiatives' card children to `order` (an id list) by appending
+// in order — idempotent, so re-running from onPatchEnd converges.
+function reorderInitiativeCards(wrap, order) {
+  const byId = new Map(
+    [...wrap.querySelectorAll(":scope > [data-initiative-id]")].map((c) => [
+      c.dataset.initiativeId,
+      c,
+    ]),
+  )
+  order.forEach((id) => {
+    const card = byId.get(String(id))
+    if (card) wrap.appendChild(card)
+  })
+}
+
+// Re-assert the held optimistic order after every patch (onPatchEnd). While a
+// hold stands, the cards stay in the dropped order even if an unrelated patch
+// re-touches the stream container.
+function applyPendingInitiativeOrder() {
+  const p = DoitState.pending.initiativeOrder
+  if (!p) return
+  const wrap = document.getElementById(p.wrapId)
+  if (wrap) reorderInitiativeCards(wrap, p.order)
+}
+
+// Settle the hold on the apply_sort reply. ok → release (the server persisted
+// the order and re-streamed it; it now stands). failure → revert to the prior
+// snapshot + bonk (the order didn't take — don't leave a phantom reorder).
+function settlePendingInitiativeOrder(reply) {
+  const p = DoitState.pending.initiativeOrder
+  if (!p) return
+  if (p.timer) clearTimeout(p.timer)
+  if (reply && reply.ok === false) {
+    revertPendingInitiativeOrder()
+    if (window.DoitBonk) window.DoitBonk()
+  } else {
+    DoitState.pending.initiativeOrder = null
+  }
+}
+
+function revertPendingInitiativeOrder() {
+  const p = DoitState.pending.initiativeOrder
+  DoitState.pending.initiativeOrder = null
+  if (!p) return
+  if (p.timer) clearTimeout(p.timer)
+  const wrap = document.getElementById(p.wrapId)
+  if (wrap) reorderInitiativeCards(wrap, p.prior)
+}
+
 // Drag-to-reorder the Initiatives index (.06.3). The grove icon is the handle;
 // dropping inserts the card before/after another (no reparent / center drop).
-// The new order is pushed as apply_sort (mode "manual") and the server
-// persists it onto the membership rows (m02.04 §2.6). Reuses the
-// pointer-event pattern from DragReorder, in a simpler reorder-only form.
+// The new order is applied at drop (WL3.5 Fix A) and pushed as apply_sort (mode
+// "manual"); the server persists it onto the membership rows (m02.04 §2.6).
+// Reuses the pointer-event pattern from DragReorder, in a simpler reorder-only
+// form.
 const INIT_DRAG_THRESHOLD_PX = 4
 const INIT_DRAG_LONG_PRESS_MS = 400
 const INIT_DRAG_TOUCH_TOLERANCE_PX = 8
@@ -3164,18 +4709,18 @@ Hooks.InitiativeDrag = {
     this.clearPlaceholder()
 
     if (target) {
-      const ids = [...this.container.querySelectorAll(":scope > [data-initiative-id]")].map(
+      const prior = [...this.container.querySelectorAll(":scope > [data-initiative-id]")].map(
         (c) => c.dataset.initiativeId,
       )
       const dragged = this.card.dataset.initiativeId
-      const order = ids.filter((id) => id !== dragged)
+      const order = prior.filter((id) => id !== dragged)
       const ti = order.indexOf(target.dataset.initiativeId)
       order.splice(after ? ti + 1 : ti, 0, dragged)
-      this.persistAndPush(order)
+      this.persistAndPush(order, prior)
     }
     this.cleanup()
   },
-  persistAndPush(order) {
+  persistAndPush(order, prior) {
     // A drop lands you in manual mode; the server persists the order onto
     // the membership rows (m02.04 §2.6). Per-mode reverse memory comes from
     // the sort form's data attribute (kept fresh by InitiativeSort).
@@ -3184,7 +4729,24 @@ Hooks.InitiativeDrag = {
     const rev = document.querySelector("#initiative-sort input[name=reverse]")
     if (sel) sel.value = "manual"
     if (rev) rev.checked = reverse
-    this.pushEvent("apply_sort", {mode: "manual", reverse, order})
+    // Apply the new order at drop (§6.2) and hold it on the preserve path until
+    // the reply settles. Snapshot `prior` for an honest revert on failure.
+    if (this.container && this.container.id) {
+      DoitState.pending.initiativeOrder = {
+        wrapId: this.container.id,
+        order,
+        prior,
+        timer: setTimeout(() => {
+          // Dropped reply: release the hold (don't revert — the server is
+          // authoritative; the next re-stream reconciles the order).
+          if (DoitState.pending.initiativeOrder) DoitState.pending.initiativeOrder = null
+        }, 8000),
+      }
+      reorderInitiativeCards(this.container, order)
+    }
+    this.pushEvent("apply_sort", {mode: "manual", reverse, order}, (reply) => {
+      settlePendingInitiativeOrder(reply)
+    })
   },
   abort() {
     this.cleanup()
@@ -3217,6 +4779,25 @@ Hooks.InitiativeDrag = {
     this.dragging = false
     this.target = null
   },
+}
+
+// A dimmed pending avatar chip for the optimistic rail add (WL3.5 Fix B),
+// mirroring the rendered <.avatar> span (avatar-emboss + the rail's size/ring
+// classes). data-member-id dedupes it against the server-rendered avatar;
+// data-rail-avatar-echo keys it for the reply-callback pull. opacity-60 signals
+// pending — the same dimmed treatment the comment/member echoes use.
+function buildRailAvatarChip(echoId, a) {
+  const span = document.createElement("span")
+  span.className =
+    "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[9px] ring-1 ring-white dark:ring-zinc-900 opacity-60"
+  span.style.backgroundImage = a.bg || ""
+  span.style.color = a.fg || ""
+  span.setAttribute("data-member-id", a.uid)
+  span.setAttribute("data-rail-avatar-echo", echoId)
+  span.setAttribute("aria-hidden", "true")
+  span.title = a.name || ""
+  span.textContent = a.initials || ""
+  return span
 }
 
 // Drag a Collaborator (left-rail pane) onto an Initiative rail entry to add
@@ -3285,14 +4866,47 @@ Hooks.CollaboratorDrag = {
     if (this.pid !== undefined && e.pointerId !== this.pid) return
     if (this.dragging) {
       this.suppressClick()
-      if (this.target) {
-        this.pushEvent("add_collaborator_to", {
-          "user-id": this.userId,
-          "initiative-id": this.target.dataset.railInitiativeId,
-        })
-      }
+      if (this.target) this.optimisticAdd(this.target.dataset.railInitiativeId)
     }
     this.cleanup()
+  },
+  // Optimistic add (WL3.5 Fix B, §6.2): insert the dropped collaborator's
+  // avatar chip into the target rail entry's avatar row AT DROP, hold it on the
+  // preserve path (railAvatarAdds + the rail-avatars applier), then push and
+  // reconcile on the reply — ok pulls the dimmed stand-in (the server's rail
+  // refresh now carries the real avatar), failure pulls it + bonks (MUST NOT
+  // LIE). An 8s safety timer self-heals a dropped reply. The chip data rides
+  // this collaborator <li>'s data attributes (mirrors the rendered avatar).
+  optimisticAdd(iid) {
+    const uid = this.userId
+    const d = this.el.dataset
+    const echoId = "ra" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+    const a = {
+      iid,
+      uid,
+      name: d.userName || "",
+      initials: d.initials || "",
+      bg: d.avatarBg || "",
+      fg: d.avatarFg || "",
+    }
+    DoitState.railAvatarAdds[echoId] = a
+    // Insert now so the ack is instant; the applier covers any later patch.
+    const row = document.getElementById("rail-avatars-" + iid)
+    const group = row && row.querySelector("[data-rail-avatar-group]")
+    if (group && !group.querySelector(`[data-member-id="${uid}"]`)) {
+      group.appendChild(buildRailAvatarChip(echoId, a))
+    }
+    const clear = () => {
+      clearTimeout(timer)
+      delete DoitState.railAvatarAdds[echoId]
+      document.querySelectorAll(`[data-rail-avatar-echo="${echoId}"]`).forEach((n) => n.remove())
+    }
+    // Dropped reply → release the hold + pull the chip (server authoritative).
+    const timer = setTimeout(clear, 8000)
+    this.pushEvent("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+      clear()
+      if (reply && reply.ok === false && window.DoitBonk) window.DoitBonk()
+    })
   },
   suppressClick() {
     const swallow = (e) => {
@@ -3702,17 +5316,123 @@ const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 6000,
   params: {_csrf_token: csrfToken},
   hooks: {...colocatedHooks, ...Hooks},
+  // Preserve path (worklist 2): keep client-owned UI state through the morphdom
+  // patch, preventively, so it's never clobbered and there's no post-hoc race.
+  // This is the SOLE mechanism (worklist 2.4 retired the legacy reactive
+  // re-assert machinery — the body MutationObserver, reassertClientState, and
+  // the connect-lifecycle guards). The connect/reconnect join is itself a
+  // morphdom patch, so these callbacks fire on it too: onNodeAdded reconciles
+  // the wholesale-replaced join nodes, onPatchEnd runs the global re-asserts.
+  // LV 1.1.29 exposes three relevant `dom` hooks (see live_socket.js
+  // domCallbacks): onBeforeElUpdated(fromEl, toEl), onNodeAdded(el), and
+  // onPatchEnd() (fires once AFTER each morphdom patch).
+  //   - onBeforeElUpdated fires BEFORE morphdom commits an in-place update. Its
+  //     return value is ignored by LiveView, so we reconcile `toEl` (the
+  //     incoming node) in place — morphdom then copies the corrected value onto
+  //     the live element and the wrong value never paints.
+  //   - onNodeAdded fires AFTER morphdom inserts a node — the re-added case
+  //     (reorder, reset re-stream, the initial-join replace). We seed it from
+  //     the store on the freshly added element.
+  //   - onPatchEnd is the home for GLOBAL re-asserts that don't fit the
+  //     per-element model: presence painting (document-wide, idempotent), the
+  //     structural pending-move re-apply, the confirm saving-hue safety, and the
+  //     detailsOpen prune. It prunes DoitState.detailsOpen of entries whose
+  //     element is gone, so a re-added <details data-keep="open"> falls back to
+  //     the server default instead of reopening from a stale entry.
+  // onBeforeElUpdated / onNodeAdded dispatch by `data-keep` into KeepRegistry,
+  // reading DoitState.
+  dom: {
+    onBeforeElUpdated(_fromEl, toEl) { applyKeep(toEl, DoitState) },
+    onNodeAdded(el) { applyKeep(el, DoitState) },
+    onPatchEnd() {
+      applyPresenceBadges()
+      applyPendingMove()
+      // Re-assert the drop-time Initiatives card order (WL3.5 Fix A) — a child
+      // reorder hold, structural like applyPendingMove, so it lives here rather
+      // than in a per-element data-keep kind.
+      applyPendingInitiativeOrder()
+      // While a confirm modal is up, its maybe-write hue is server-held
+      // (pending_saving_ids) — disarm the client's 1.5s safety timer so it
+      // can't strip the pink mid-decision. The patch that renders the modal is
+      // exactly when this matters (§-finding: Proceed looked like it unpinked).
+      if (document.getElementById("completion-confirm")) releaseSavingHue()
+      // Evict stale detailsOpen entries (the store is otherwise add-only): once
+      // an element id no longer resolves, drop it so the "open" applier won't
+      // reopen a re-added <details> from a dead entry (e.g. the Delete-account
+      // destructive confirm reappearing expanded after nav).
+      for (const id of Object.keys(DoitState.detailsOpen)) {
+        if (!document.getElementById(id)) delete DoitState.detailsOpen[id]
+      }
+      // Once the server has removed the dismissed archive banner, clear the
+      // client flag (WL3 3.2) so a later re-raise — a fresh 100% crossing —
+      // isn't suppressed by the stale dismissal.
+      if (DoitState.archivePromptDismissed && !document.getElementById("archive-prompt")) {
+        DoitState.archivePromptDismissed = false
+      }
+    },
+  },
 })
 
-// Re-assert client-owned view state at the connect/reconnect join boundary, so
-// the slow LongPoll "major reload" can't wipe a pane the user opened during the
-// pre-connect window. See installConnectGuards.
-installConnectGuards(liveSocket.getSocket())
-
-// Show progress bar on live navigation and form submits
+// Show progress bar on live navigation and form submits.
+// topbar is the ORDINARY in-flight flash — a live navigate, patch, or form
+// submit on an already-live page. It is NOT the dead-window signifier below;
+// the two are deliberately distinct (see #conn-status).
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+
+// --- Connecting / dead-window signifier (UX_GUARDRAILS §6.8 + §6.9) ---------
+//
+// §6.8: a painted page must never "look ready but isn't." A LiveView page paints
+// in ~0.1s but isn't live until the socket connects and the channel joins
+// (~2.9s) — a ~2.8s dead window where input is silently lost. This badge says,
+// plainly, that the page isn't interactive yet — and clears the instant it is.
+//
+// Distinct from the topbar above: topbar = the ordinary in-flight flash
+// (navigate / patch / submit, brief and expected); #conn-status = the dead
+// window only (first connect, or a dropped connection reconnecting). They never
+// signify the same thing, so an ordinary flash is never mistaken for "not live."
+//
+// §6.9: driven off the SOCKET lifecycle (onOpen / onClose / onError), which
+// fires on BOTH transports — WebSocket and the LongPoll fallback — so the
+// signal never depends on the fast path. The initial channel-join completion
+// (phx:page-loading-stop kind "initial") is the precise "now live" moment:
+// onOpen is transport-only, but the page isn't interactive until mount renders.
+const connStatusEl = document.getElementById("conn-status")
+function setConnStatus(state) {
+  if (!connStatusEl) return
+  if (!state) { connStatusEl.hidden = true; return }
+  const label = connStatusEl.querySelector("[data-conn-text]")
+  // Write the text on every change so the aria-live region announces it — an
+  // unhide alone doesn't reliably trigger a screen-reader announcement.
+  if (label) label.textContent = state === "reconnecting" ? "Reconnecting…" : "Connecting…"
+  connStatusEl.dataset.connState = state
+  connStatusEl.hidden = false
+}
+
+// A LiveView page enters the dead window the instant it paints — well before the
+// socket opens — so show the signifier immediately (this module runs at ~paint,
+// far inside the gap). Dead views (no [data-phx-main], no socket) have nothing
+// to connect to: JS never reveals the badge there, so it stays hidden and inert.
+let connEverLive = false
+if (document.querySelector("[data-phx-main]")) setConnStatus("connecting")
+
+// onOpen fires when the transport (WS or LongPoll) opens. On the FIRST connect
+// we keep "connecting" until the channel-join lands (below) so we don't claim
+// live while mount is still rendering; on a RECONNECT the view rejoins on its
+// own, so transport-open is enough to clear the reconnecting hint.
+liveSocket.socket.onOpen(() => { if (connEverLive) setConnStatus(null) })
+// A dropped / erroring connection re-opens the dead window — actions won't take
+// until we rejoin. Before the first connect (connEverLive false) we're already
+// showing "connecting", which stays the right message.
+liveSocket.socket.onClose(() => setConnStatus(connEverLive ? "reconnecting" : "connecting"))
+liveSocket.socket.onError(() => setConnStatus(connEverLive ? "reconnecting" : "connecting"))
+// The main view's initial channel-join completed → the page is genuinely
+// interactive. This is the precise end of the first dead window (it fires once
+// per join; the onOpen above covers the clear on later reconnects).
+window.addEventListener("phx:page-loading-stop", e => {
+  if (e.detail && e.detail.kind === "initial") { connEverLive = true; setConnStatus(null) }
+})
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()

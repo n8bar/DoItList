@@ -5,9 +5,10 @@ defmodule DoItWeb.Presence do
   Two scopes:
 
   * **Per-initiative** (`initiative_presence:<id>`) — "who has which task
-    selected" (m02.04 §1.12). Each InitiativeShowLive process tracks itself
-    under the user id; the metas carry the selected task plus the avatar
-    ingredients, so subscribers render without a user lookup.
+    selected" (m02.04 §1.12). Each InitiativeWorkspaceLive process tracks itself
+    under the user id while a detail is open (entered on detail-enter, untracked
+    on leave/switch — M02.09 WL5.3); the metas carry the selected task plus the
+    avatar ingredients, so subscribers render without a user lookup.
 
   * **Global** (`presence:online`) — "who is logged into the app anywhere"
     (m02.05 item 8). Every authenticated LiveView tracks the user here via the
