@@ -351,7 +351,48 @@ defmodule DoItWeb.Layouts do
       </div>
     </main>
 
+    <.connecting_signifier />
     <.flash_group flash={@flash} />
+    """
+  end
+
+  @doc """
+  Connecting / reconnecting signifier (m02.09 WL4.1 — UX_GUARDRAILS §6.8 +
+  §6.9).
+
+  Surfaces the **dead window** this arc exists to close: a LiveView page paints
+  in ~0.1s but isn't *live* until the socket connects and the channel joins
+  (~2.9s) — a span where the page looks fully interactive but nothing the user
+  does takes. This badge says, plainly, that it isn't ready yet — and on either
+  transport (WebSocket *or* the LongPoll fallback, §6.9), since app.js drives it
+  off the socket lifecycle, not a WS-specific signal.
+
+  Rendered hidden and inert; the topbar block in `app.js` reveals it during the
+  pre-connect window and any later reconnect, and clears it once the view is
+  live. It is **distinct** from the topbar progress bar, which signifies the
+  *ordinary* in-flight flashes (a live navigate / patch / form submit on an
+  already-live page) — this badge is the connecting/reconnecting dead window
+  only. On dead views (no LiveView, hence no socket) JS never reveals it (it only
+  shows on a `[data-phx-main]` page), so it stays hidden there.
+
+  a11y: `role="status"` + `aria-live="polite"` announces each state change to
+  screen readers via the text (so the cue is *not* color-only); the icon is a
+  shape cue and its spin is `motion-safe` (reduced-motion users get a static,
+  still-legible badge). Both themes.
+  """
+  def connecting_signifier(assigns) do
+    ~H"""
+    <div
+      id="conn-status"
+      role="status"
+      aria-live="polite"
+      data-conn-state="connecting"
+      hidden
+      class="fixed bottom-4 left-4 z-50 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium shadow-lg border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/90 dark:text-amber-100"
+    >
+      <.icon name="hero-arrow-path" class="w-4 h-4 flex-none motion-safe:animate-spin" />
+      <span data-conn-text>Connecting…</span>
+    </div>
     """
   end
 

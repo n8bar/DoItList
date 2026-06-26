@@ -4963,10 +4963,66 @@ const liveSocket = new LiveSocket("/live", Socket, {
   },
 })
 
-// Show progress bar on live navigation and form submits
+// Show progress bar on live navigation and form submits.
+// topbar is the ORDINARY in-flight flash — a live navigate, patch, or form
+// submit on an already-live page. It is NOT the dead-window signifier below;
+// the two are deliberately distinct (see #conn-status).
 topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
+
+// --- Connecting / dead-window signifier (UX_GUARDRAILS §6.8 + §6.9) ---------
+//
+// §6.8: a painted page must never "look ready but isn't." A LiveView page paints
+// in ~0.1s but isn't live until the socket connects and the channel joins
+// (~2.9s) — a ~2.8s dead window where input is silently lost. This badge says,
+// plainly, that the page isn't interactive yet — and clears the instant it is.
+//
+// Distinct from the topbar above: topbar = the ordinary in-flight flash
+// (navigate / patch / submit, brief and expected); #conn-status = the dead
+// window only (first connect, or a dropped connection reconnecting). They never
+// signify the same thing, so an ordinary flash is never mistaken for "not live."
+//
+// §6.9: driven off the SOCKET lifecycle (onOpen / onClose / onError), which
+// fires on BOTH transports — WebSocket and the LongPoll fallback — so the
+// signal never depends on the fast path. The initial channel-join completion
+// (phx:page-loading-stop kind "initial") is the precise "now live" moment:
+// onOpen is transport-only, but the page isn't interactive until mount renders.
+const connStatusEl = document.getElementById("conn-status")
+function setConnStatus(state) {
+  if (!connStatusEl) return
+  if (!state) { connStatusEl.hidden = true; return }
+  const label = connStatusEl.querySelector("[data-conn-text]")
+  // Write the text on every change so the aria-live region announces it — an
+  // unhide alone doesn't reliably trigger a screen-reader announcement.
+  if (label) label.textContent = state === "reconnecting" ? "Reconnecting…" : "Connecting…"
+  connStatusEl.dataset.connState = state
+  connStatusEl.hidden = false
+}
+
+// A LiveView page enters the dead window the instant it paints — well before the
+// socket opens — so show the signifier immediately (this module runs at ~paint,
+// far inside the gap). Dead views (no [data-phx-main], no socket) have nothing
+// to connect to: JS never reveals the badge there, so it stays hidden and inert.
+let connEverLive = false
+if (document.querySelector("[data-phx-main]")) setConnStatus("connecting")
+
+// onOpen fires when the transport (WS or LongPoll) opens. On the FIRST connect
+// we keep "connecting" until the channel-join lands (below) so we don't claim
+// live while mount is still rendering; on a RECONNECT the view rejoins on its
+// own, so transport-open is enough to clear the reconnecting hint.
+liveSocket.socket.onOpen(() => { if (connEverLive) setConnStatus(null) })
+// A dropped / erroring connection re-opens the dead window — actions won't take
+// until we rejoin. Before the first connect (connEverLive false) we're already
+// showing "connecting", which stays the right message.
+liveSocket.socket.onClose(() => setConnStatus(connEverLive ? "reconnecting" : "connecting"))
+liveSocket.socket.onError(() => setConnStatus(connEverLive ? "reconnecting" : "connecting"))
+// The main view's initial channel-join completed → the page is genuinely
+// interactive. This is the precise end of the first dead window (it fires once
+// per join; the onOpen above covers the clear on later reconnects).
+window.addEventListener("phx:page-loading-stop", e => {
+  if (e.detail && e.detail.kind === "initial") { connEverLive = true; setConnStatus(null) }
+})
 
 // connect if there are any LiveViews on the page
 liveSocket.connect()
