@@ -40,9 +40,21 @@ defmodule DoItWeb.AssignedComponents do
 
   def assigned_list(assigns) do
     ~H"""
-    <div id={@id} class="flex flex-col gap-3">
-      <%!-- Controls: reveal toggles are ephemeral; group-by persists to the
-           account (item 1.6). Each only changes which/how rows show. --%>
+    <div
+      id={@id}
+      class="flex flex-col gap-3"
+      data-keep="assigned-group"
+      data-grouped={to_string(@group_by_initiative)}
+    >
+      <%!-- Controls (WL3 3.2). The two reveal toggles are server-GATED — their
+           rows are filtered out of the DOM, so the client can't reveal them
+           alone. Keep the round-trip but acknowledge at the click (§6.7): the
+           native tick flips optimistically (held by the "reveal-toggle"
+           preserve-path applier) while aria-busy + the trailing spinner signal
+           in-flight until the server's re-render agrees. Group-by is pure
+           arrangement (§6.5) — it reflows client-side at the click (CSS keys off
+           the wrapper's data-grouped, below) and only persists the pref on the
+           round-trip. --%>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-zinc-600 dark:text-zinc-300">
         <label class="flex items-center gap-1.5 select-none cursor-pointer">
           <input
@@ -50,8 +62,18 @@ defmodule DoItWeb.AssignedComponents do
             id={"#{@id}-show-completed"}
             phx-click="assigned_toggle_completed"
             checked={@show_completed}
+            data-keep="reveal-toggle"
             class="checkbox checkbox-xs"
           /> Show completed
+          <span
+            class="doit-reveal-slot inline-flex w-3.5 flex-none items-center justify-center"
+            aria-hidden="true"
+          >
+            <.icon
+              name="hero-arrow-path"
+              class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+            />
+          </span>
         </label>
         <label class="flex items-center gap-1.5 select-none cursor-pointer">
           <input
@@ -59,8 +81,18 @@ defmodule DoItWeb.AssignedComponents do
             id={"#{@id}-show-archived-hidden"}
             phx-click="assigned_toggle_archived_hidden"
             checked={@show_archived_hidden}
+            data-keep="reveal-toggle"
             class="checkbox checkbox-xs"
           /> Show archived &amp; hidden
+          <span
+            class="doit-reveal-slot inline-flex w-3.5 flex-none items-center justify-center"
+            aria-hidden="true"
+          >
+            <.icon
+              name="hero-arrow-path"
+              class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+            />
+          </span>
         </label>
         <label class="flex items-center gap-1.5 select-none cursor-pointer">
           <input
@@ -68,6 +100,8 @@ defmodule DoItWeb.AssignedComponents do
             id={"#{@id}-group-by"}
             phx-click="assigned_toggle_group_by"
             checked={@group_by_initiative}
+            data-keep="assigned-group-box"
+            data-group-wrap={@id}
             class="checkbox checkbox-xs"
           /> Group by Initiative
         </label>
@@ -90,10 +124,13 @@ defmodule DoItWeb.AssignedComponents do
         <li :for={{dom_id, task} <- @rows} id={dom_id}>
           <%!-- Group header (item 1.6): the first row of each Initiative carries
                it. group_start? is precomputed by the host so streamed rows need
-               no peeking at neighbors. --%>
+               no peeking at neighbors. WL3 3.2: rendered for every group_start?
+               row regardless of group-by; .assigned-group-header is hidden by
+               CSS unless the wrapper's data-grouped is set, so the toggle is a
+               client-side reflow (§6.5) instead of a re-stream. --%>
           <h3
-            :if={@group_by_initiative and task.group_start?}
-            class="mt-3 mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500 first:mt-0 dark:text-zinc-400"
+            :if={task.group_start?}
+            class="assigned-group-header mt-3 mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500 first:mt-0 dark:text-zinc-400"
           >
             <.botanical_icon kind={:grove} class="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
             {task.initiative_name}
@@ -139,10 +176,10 @@ defmodule DoItWeb.AssignedComponents do
         <span class="block truncate text-sm text-zinc-800 dark:text-zinc-100">
           {@task.title}
         </span>
-        <span
-          :if={!@group_by_initiative}
-          class="block truncate text-xs text-zinc-500 dark:text-zinc-400"
-        >
+        <%!-- WL3 3.2: always rendered; .assigned-row-subtitle is hidden by CSS
+             when the wrapper's data-grouped is set (the group header carries the
+             Initiative name then), so group-by is a pure client-side reflow. --%>
+        <span class="assigned-row-subtitle block truncate text-xs text-zinc-500 dark:text-zinc-400">
           {@task.initiative_name}
         </span>
       </span>

@@ -523,4 +523,30 @@ input[data-chat-input].input {
   }
 }
 
+/* Group-by-Initiative reflow (WL3 3.2, §6.5). Grouped vs ungrouped is pure
+   arrangement: the Assigned list always renders BOTH the per-Initiative group
+   headers and the per-row Initiative subtitles, and the list wrapper's
+   data-grouped decides which set shows. The toggle flips data-grouped
+   client-side at the click (instant, no round trip; the pref only persists on
+   the server reply), so the reflow never waits on the network. Intentionally
+   UNLAYERED, so these beat the Tailwind display utilities (block / flex)
+   without !important — the same mechanism the .task-id-pill rules above use. */
+.assigned-group-header { display: none; }
+[data-grouped="true"] .assigned-group-header { display: flex; }
+[data-grouped="true"] .assigned-row-subtitle { display: none; }
+
+/* In-flight signifier for the server-gated reveal toggles (WL3 3.2, §6.7):
+   Show completed / Show archived & hidden / Show hidden filter their rows out
+   of the DOM server-side, so the client genuinely can't reveal them — the
+   round-trip stays. The click is acknowledged with an optimistic tick (held by
+   the "reveal-toggle" preserve-path applier) plus this trailing spinner. It
+   lives in a fixed-width reserved slot, toggling visibility only, so revealing
+   it never shifts the control or its neighbors (1.1). Driven by LiveView's own
+   phx-click-loading class — added at the click, removed at settle — so it
+   tracks the real in-flight window on either transport (6.9). Motion is opt-in
+   via motion-safe (1.2); shape + motion (not color) keeps the cue perceivable
+   to colorblind users (4), and aria-busy on the control announces it. */
+.doit-reveal-spinner { visibility: hidden; }
+input.phx-click-loading ~ .doit-reveal-slot .doit-reveal-spinner { visibility: visible; }
+
 /* This file is for your main application CSS */

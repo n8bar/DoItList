@@ -172,6 +172,20 @@ const DoitState = {
   // fully covered by LiveView for this app — every focusable lives at a stable
   // id, so node identity + LV's restoreFocus carry them; nothing to keep here.)
   scroll: {}, // {[elId]: number} — captured scrollTop of data-keep="scroll" boxes
+  // Group-by-Initiative reflow (WL3 3.2, §6.5): client-owned arrangement, keyed
+  // by the Assigned-list wrapper id → the optimistic grouped? value. The pref
+  // persists on the round-trip; this bridges the click until the server render
+  // agrees, then the "assigned-group" applier releases the hold.
+  assignedGrouped: {}, // {[wrapperId]: bool}
+  // Server-gated reveal toggles (WL3 3.2, §6.7), keyed by checkbox id → the
+  // optimistic checked value. The rows are server-FILTERED, so the client can't
+  // reveal them — this only holds the CONTROL's own tick + aria-busy until the
+  // server's re-render agrees. It never paints phantom rows.
+  revealInflight: {}, // {[checkboxId]: bool}
+  // Archive-on-completion banner dismissal (WL3 3.2, §6.5): hidden instantly at
+  // the click; the flag holds it hidden across any mid-flight patch until the
+  // server's dismiss reply removes the element (onPatchEnd then clears it).
+  archivePromptDismissed: false,
 }
 window.DoitState = DoitState
 
@@ -361,6 +375,79 @@ const KeepRegistry = {
       if (!(el.id in state.scroll)) return
       const want = state.scroll[el.id]
       if (el.scrollTop !== want) el.scrollTop = want
+    },
+  },
+  "assigned-group": {
+    // The Assigned-to-Me list wrapper (div[data-keep="assigned-group"]).
+    // Group-by is pure arrangement (WL3 3.2, §6.5): data-grouped decides which
+    // of the always-rendered group headers / row subtitles the CSS shows. The
+    // value flips instantly at the click; hold the optimistic value until the
+    // server's persisted pref renders the same, then release so the server owns
+    // it. No entry → the user hasn't toggled; leave the server-rendered value.
+    apply(el, state) {
+      if (!(el.id in state.assignedGrouped)) return
+      const want = !!state.assignedGrouped[el.id]
+      const incoming = el.getAttribute("data-grouped") === "true"
+      if (incoming === want) {
+        delete state.assignedGrouped[el.id]
+        return
+      }
+      el.setAttribute("data-grouped", String(want))
+    },
+  },
+  "assigned-group-box": {
+    // The Group-by checkbox. Held to the wrapper's optimistic grouped? value so
+    // a mid-flight patch can't revert the tick before the pref reply lands.
+    // Yields to the server value once the wrapper applier releases the hold
+    // (entry gone) — they render from the same assign, so they settle together.
+    apply(el, state) {
+      const wrapId = el.dataset.groupWrap
+      if (!(wrapId in state.assignedGrouped)) return
+      const want = !!state.assignedGrouped[wrapId]
+      if (el.checked !== want) el.checked = want
+    },
+  },
+  "reveal-toggle": {
+    // A server-gated reveal checkbox (show-completed / show-archived-hidden /
+    // show-hidden, WL3 3.2, §6.7). Its rows are server-FILTERED, so the client
+    // can't reveal them alone: the round-trip stays, and this only holds the
+    // CONTROL's own optimistic tick + aria-busy until the server's re-render
+    // agrees — it NEVER paints phantom rows. agree → release; disagree while
+    // still in flight (the live node keeps phx-click-loading) → hold the tick;
+    // disagree once settled (class gone) → the server rejected the flip, so
+    // revert honestly by releasing and letting the server value stand.
+    apply(el, state) {
+      const want = state.revealInflight[el.id]
+      if (want === undefined) {
+        if (el.getAttribute("aria-busy") === "true") el.removeAttribute("aria-busy")
+        return
+      }
+      if (el.checked === want) {
+        delete state.revealInflight[el.id]
+        el.removeAttribute("aria-busy")
+        return
+      }
+      const live = document.getElementById(el.id)
+      const inFlight = live && live.classList.contains("phx-click-loading")
+      if (!inFlight) {
+        delete state.revealInflight[el.id]
+        el.removeAttribute("aria-busy")
+        return
+      }
+      el.checked = want
+      el.setAttribute("aria-busy", "true")
+    },
+  },
+  "archive-prompt": {
+    // The archive-on-completion banner (#archive-prompt). Dismissal is client-
+    // owned view state (WL3 3.2, §6.5): hidden at the click. The server's
+    // dismiss reply removes the element, but until it lands the banner is still
+    // rendered (show_archive_prompt true), so a mid-flight collaborator patch
+    // would otherwise re-show it — hold it hidden while the dismissed flag
+    // stands. onPatchEnd clears the flag once the server has removed the
+    // element, so a later re-raise (a fresh 100% crossing) shows normally.
+    apply(el, state) {
+      if (state.archivePromptDismissed && !el.hidden) el.hidden = true
     },
   },
 }
@@ -1262,6 +1349,54 @@ document.addEventListener("change", (e) => {
       markSaving([savingRowOf(li)])
     }
   }
+})
+
+// Client-side view-state reveals (WL3 3.2, §6.5/§6.7). Two checkbox buckets,
+// both riding the preserve path so the optimistic state survives patches and
+// reconnect:
+//
+//  - Group-by-Initiative (Assigned view) is pure arrangement — flip the
+//    wrapper's data-grouped at the click for an instant client-side reflow (the
+//    CSS shows/hides the always-rendered group headers + row subtitles); the
+//    phx-click round-trip only persists the pref and reconciles.
+//  - The reveal toggles (show-completed / show-archived-hidden / show-hidden)
+//    are server-gated (rows filtered out of the DOM) — keep the round-trip but
+//    acknowledge at the click: record the optimistic tick and raise aria-busy +
+//    the trailing spinner, held until the server's re-render agrees. We never
+//    reveal rows ourselves (no phantom rows).
+//
+// `change` (not `click`) so a click on the <label> — which toggles the box
+// natively without an input-targeted click — is caught too; it fires once,
+// after the checked state has settled, so box.checked is the optimistic value.
+// The phx-click on each box still fires (the server gets the event); this only
+// adds the client-owned acknowledgement on top.
+document.addEventListener("change", (e) => {
+  const box = e.target
+  if (!box || !box.matches) return
+  if (box.matches("input[data-group-wrap]")) {
+    const wrapId = box.dataset.groupWrap
+    DoitState.assignedGrouped[wrapId] = box.checked
+    const wrap = document.getElementById(wrapId)
+    if (wrap) wrap.setAttribute("data-grouped", String(box.checked))
+    return
+  }
+  if (box.matches("input[data-keep='reveal-toggle']")) {
+    DoitState.revealInflight[box.id] = box.checked
+    box.setAttribute("aria-busy", "true")
+    return
+  }
+})
+
+// Archive-on-completion banner dismiss (WL3 3.2, §6.5): hide it the instant the
+// X is clicked — pure view state — and let the existing phx-click reconcile
+// (the server drops show_archive_prompt, removing the element). The flag keeps
+// it hidden across any patch that lands before that reply; onPatchEnd clears the
+// flag once the element is gone.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("[data-archive-dismiss]")) return
+  DoitState.archivePromptDismissed = true
+  const banner = document.getElementById("archive-prompt")
+  if (banner) banner.hidden = true
 })
 
 // Optimistic row echo (UX_GUARDRAILS 6.2): a pane edit tells us exactly what
@@ -4646,6 +4781,12 @@ const liveSocket = new LiveSocket("/live", Socket, {
       // destructive confirm reappearing expanded after nav).
       for (const id of Object.keys(DoitState.detailsOpen)) {
         if (!document.getElementById(id)) delete DoitState.detailsOpen[id]
+      }
+      // Once the server has removed the dismissed archive banner, clear the
+      // client flag (WL3 3.2) so a later re-raise — a fresh 100% crossing —
+      // isn't suppressed by the stale dismissal.
+      if (DoitState.archivePromptDismissed && !document.getElementById("archive-prompt")) {
+        DoitState.archivePromptDismissed = false
       }
     },
   },

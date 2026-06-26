@@ -675,8 +675,21 @@ defmodule DoItWeb.InitiativeIndexLive do
                 id="show-hidden"
                 phx-click="toggle_show_hidden"
                 checked={@show_hidden}
+                data-keep="reveal-toggle"
                 class="checkbox checkbox-xs"
               /> Show hidden
+              <%!-- WL3 3.2 (§6.7): the hidden rows are server-filtered, so the
+                   round-trip stays; acknowledge the click with an optimistic tick
+                   + this in-flight spinner (driven by phx-click-loading). --%>
+              <span
+                class="doit-reveal-slot inline-flex w-3.5 flex-none items-center justify-center"
+                aria-hidden="true"
+              >
+                <.icon
+                  name="hero-arrow-path"
+                  class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+                />
+              </span>
             </label>
           </div>
           <ul class="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">

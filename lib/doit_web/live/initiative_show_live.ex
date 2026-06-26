@@ -2467,6 +2467,7 @@ defmodule DoItWeb.InitiativeShowLive do
             <div
               :if={@show_archive_prompt}
               id="archive-prompt"
+              data-keep="archive-prompt"
               class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2.5"
             >
               <p class="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
@@ -2485,6 +2486,7 @@ defmodule DoItWeb.InitiativeShowLive do
                 <button
                   type="button"
                   phx-click="dismiss_archive_prompt"
+                  data-archive-dismiss
                   aria-label="Dismiss"
                   class="inline-flex items-center justify-center w-6 h-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
                 >
