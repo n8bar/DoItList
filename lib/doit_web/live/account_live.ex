@@ -127,6 +127,26 @@ defmodule DoItWeb.AccountLive do
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} current_user={@current_user}>
+      <%!-- §6.8 dead-window flush (WL4.2.2): EVERY LiveView in the authenticated
+           live_session must register a livePush backend, so the global
+           capture-phase interceptor (app.js) goes inert the moment THIS page is
+           live, this page flushes its OWN dead-window queue on mount, and nothing
+           survives a live <.link navigate> into another view (Defect #1).
+           Mirrors .IndexLive / .TaskKeys. --%>
+      <div id="account-root" phx-hook=".AccountLive">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".AccountLive">
+          export default {
+            mounted() {
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
+            },
+            destroyed() {
+              window.DoitUnregisterLivePush(this._livePush);
+            },
+          }
+        </script>
+      </div>
+
       <div class="mx-auto max-w-2xl">
         <div class="mb-6 flex items-center gap-3">
           <.avatar user={@current_user} class="w-12 h-12 text-lg" />

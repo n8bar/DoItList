@@ -970,11 +970,17 @@ defmodule DoItWeb.InitiativeShowLive do
     end
   end
 
-  def handle_event("update_task", %{"task" => params}, socket) do
-    task = socket.assigns.selected_task
+  def handle_event("update_task", %{"task" => params} = payload, socket) do
+    task = update_task_target(socket, payload)
     user = socket.assigns.current_user
 
     cond do
+      # Stale captured id + no live selection (e.g. the target was deleted before
+      # the dead-window edit flushed) — nothing to apply to; a no-op is the honest
+      # outcome (no crash, and an edit to a real task always lands via its id).
+      is_nil(task) ->
+        {:noreply, socket}
+
       socket.assigns.can_edit ->
         case Tasks.update_task(task, user, params) do
           {:ok, _updated} ->
@@ -3195,6 +3201,24 @@ defmodule DoItWeb.InitiativeShowLive do
       </div>
     </Layouts.app>
     """
+  end
+
+  # The pane's update_task forms carry no task id, so natively the server applies
+  # them to the loaded selection (selected_task). A dead-window edit (WL4.2.2),
+  # though, flushes on connect BEFORE the selection replay lands — so the client
+  # captures the task the edit was made against (DoitState.selectedId) into the
+  # payload. Honor an explicit id when present so the edit ALWAYS lands on its own
+  # task (never the wrong one, never a silent drop); guard it to this initiative's
+  # tree and fall back to the current selection for a stale/absent id.
+  defp update_task_target(socket, payload) do
+    with id when is_binary(id) <- payload["id"],
+         {n, ""} <- Integer.parse(id),
+         %Task{} = task <- Tasks.get_task(n),
+         true <- task.initiative_id == socket.assigns.initiative.id do
+      task
+    else
+      _ -> socket.assigns.selected_task
+    end
   end
 
   # The sort controls name their own target (the form's hidden task_id /

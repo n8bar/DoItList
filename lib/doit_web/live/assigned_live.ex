@@ -48,6 +48,26 @@ defmodule DoItWeb.AssignedLive do
       rail_current_id={nil}
       rail_collaborators={@rail_collaborators}
     >
+      <%!-- §6.8 dead-window flush (WL4.2.2): EVERY LiveView in the authenticated
+           live_session must register a livePush backend, so the global
+           capture-phase interceptor (app.js) goes inert the moment THIS page is
+           live, this page flushes its OWN dead-window queue on mount, and nothing
+           survives a live <.link navigate> into another view (Defect #1).
+           Mirrors .IndexLive / .TaskKeys. --%>
+      <div id="assigned-root" phx-hook=".AssignedLive">
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".AssignedLive">
+          export default {
+            mounted() {
+              this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
+              window.DoitRegisterLivePush(this._livePush);
+            },
+            destroyed() {
+              window.DoitUnregisterLivePush(this._livePush);
+            },
+          }
+        </script>
+      </div>
+
       <div class="mb-6">
         <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">Assigned to Me</h1>
         <p class="text-sm text-zinc-500 dark:text-zinc-400">

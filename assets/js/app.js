@@ -234,31 +234,60 @@ let livePush = null
 // Default (event absent here) = append — safe: never silently drops a distinct
 // intent (§6 / [[feedback_optimistic_ui_must_not_lie]]).
 function preconnectCoalesceKey(ev, payload) {
+  const p = payload || {}
   switch (ev) {
-    // Singleton view prefs — only the final choice matters. (Today these
-    // dispatch via phx-change / phx-click, not DoitPush, so they don't actually
-    // reach the queue; the policy is declared so it's correct the day they're
-    // routed through DoitPush.)
+    // Singleton view prefs — only the FINAL choice matters, so each collapses to
+    // one entry (last-write-wins, kept at its original queue position). As of
+    // WL4.2.2 these reach the queue for real: they ride native phx-change /
+    // phx-click and are captured by the live-gated interceptor below.
     case "set_index_style":
+    case "set_progress_calc":
+    case "set_viewer_plus":
+    case "update_subtitle":
+    case "update_initiative": // editor form — change (validate) + submit (save)
     case "assigned_toggle_group_by":
+    case "assigned_toggle_completed":
+    case "assigned_toggle_archived_hidden":
+    case "validate_profile":
+    case "validate_username":
+    case "validate_password":
+    case "validate_preferences":
       return ev
-    // Inline pane-field write: the phx-change snapshot already carries the full
-    // current field state, so one latest entry per task supersedes earlier ones.
+    // Sort lives on ONE reused form that is re-pointed at the selected branch
+    // (its hidden task_id follows the selection), so coalesce PER BRANCH — a
+    // later branch's sort must not overwrite an earlier branch's queued change.
+    case "set_sort":
+      return "set_sort:" + (p.task_id || "")
+    // One role form per member (hidden user_id) — coalesce per member so two
+    // members' role changes both replay; repeats on one member last-write-win.
+    case "update_member_role":
+      return "update_member_role:" + (p.user_id || "")
+    // Inline pane edits: keyed per (TARGET TASK, form). p.id is the task the
+    // edit was made against (preconnectSelfTarget captures DoitState.selectedId),
+    // so cross-task dead-window edits don't collide. The field SET distinguishes
+    // the TWO split update_task forms (form 1 title/description/manual_progress vs
+    // form 2 priority/assignee), so neither partial overwrites the other; each
+    // form's keystrokes still coalesce last-write-wins.
     case "update_task":
-      return "update_task:" + (payload && (payload.id || (payload.task && payload.task.id)))
+      return "update_task:" + (p.id || "") + ":" + (p.task ? Object.keys(p.task).sort().join(",") : "")
     // Structural move / cascade: latest intent per target wins (these carry a
     // single latest intent in DoitState.pending.*). move_task is a hook gesture
     // (post-connect), so it won't reach the queue — declared for completeness; a
     // directional branch cascade is idempotent per (event, row).
     case "move_task":
-      return "move_task:" + (payload && payload.task_id)
+      return "move_task:" + p.task_id
     case "cascade_complete":
     case "cascade_incomplete":
-      return ev + ":" + (payload && payload.id)
-    // NOTE: toggle_complete is a server-side FLIP, not a set — two flips on one
-    // row must BOTH replay (check→uncheck nets to no change), so it APPENDS
-    // (default). Coalescing it would desync the optimistic net from the server.
-    // NOTE: select_task / close_task are not queued at all — see PRECONNECT_SKIP.
+      return ev + ":" + p.id
+    // APPEND (default, key null) — every distinct act preserved, in order:
+    //   • create_task / add_comment / save_comment / add_member / create /
+    //     confirm_handoff — distinct creates / submits, never merged.
+    //   • toggle_complete / toggle_show_hidden and the archived row actions
+    //     (hide / unhide / unarchive / restore_initiative) are server-side FLIPS
+    //     or per-row acts: two flips must BOTH replay (a coalesced single flip
+    //     would desync the optimistic net from the server).
+    //   • select_task / close_task never reach the queue — see PRECONNECT_SKIP /
+    //     DOITPUSH_OWNED (selection is replayed from the final DoitSelection).
     default:
       return null
   }
@@ -2984,6 +3013,179 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   if (moveFlipModal()) closeMoveFlipConfirmCancel()
 })
+
+// --- §6.8 dead-window capture: native phx-* interceptor (WL4.2.2) -----------
+//
+// The queue above captures only server-gated writes that funnel through
+// window.DoitPush. Many server-gated actions never touch DoitPush — they ride
+// NATIVE phx-click / phx-submit / phx-change and LiveView pushes them itself
+// (inline update_task + the progress slider, branch set_sort, the Assigned
+// reveal / group-by prefs, Archived toggle_show_hidden + hide/unhide/restore,
+// set_index_style, settings subtitle / progress-calc / viewer+, the common
+// add-task submit, save-comment, member-role, …). Before the view is live those
+// native pushes are silently dropped — the §6.8 dead window. This document-level
+// CAPTURE-phase interceptor closes that gap: while the view is dead
+// (livePush === null) it serializes the LiveView event INTENT off the gesture
+// and routes it through the SAME queue (enqueuePreconnect), so it flushes in
+// order on connect through the existing funnel. Once live it is a pure no-op —
+// the early `if (livePush) return` bails before any work, so LiveView handles
+// everything natively with zero steady-state effect.
+//
+// We SERIALIZE, we do NOT re-dispatch: on connect the queued intents flush via
+// pushEvent (a "hook"-type push whose payload is the literal object), NOT by
+// re-firing click / submit — the optimistic client handlers already ran at the
+// real gesture, so re-dispatching would double-apply them. We capture only the
+// server event NAME + PAYLOAD at the moment of the gesture and replay that.
+//
+// De-confliction (never double-send): an action already delivered by DoitPush
+// must not also be captured here. DOITPUSH_OWNED lists every DoitPush event
+// name; the interceptor skips them. create_task is intentionally NOT in that set
+// — see the submit handler. Registration ORDER matters: this block installs
+// AFTER the #add-task-form (create) and #add-comment capture listeners, so their
+// stopImmediatePropagation() — fired only on the paths where DoitPush takes
+// over — suppresses this interceptor for those gestures, leaving the no-flip
+// add-task submit (which has no DoitPush) for us to capture.
+
+// Event names DoitPush already delivers (so the dead window already captures
+// them) — derived from the DoitPush(...) call sites. Skipped here to avoid a
+// double send. toggle_complete / the cascades have no phx-* of their own (they
+// ride data-toggle-event) but are listed for completeness / future-proofing.
+const DOITPUSH_OWNED = new Set([
+  "select_task", "close_task",
+  "delete_task", "delete_initiative", "leave_initiative",
+  "cancel_handoff", "archive_initiative", "confirm_transfer",
+  "add_comment", "add_collaborator_to", "remove_collaborator", "remove_member",
+  "cascade_sort", "move_task",
+  "toggle_complete", "cascade_complete", "cascade_incomplete",
+])
+
+// Irreversible actions whose confirmation lives OUTSIDE this capture, so they
+// must never be auto-replayed across the dead window: a `data-confirm` click
+// (its LiveView confirm dialog can't run while dead — caught inline below) and
+// account deletion (gated by a details-expand, but too destructive to fire on
+// connect without a live re-confirm). The user simply re-acts once the badge
+// clears — a dropped re-confirmable click is the safe failure here.
+const PRECONNECT_DESTRUCTIVE = new Set(["delete_account"])
+
+// LiveView nested-form params, replicated (WL4.2.2). A native phx-change /
+// phx-submit serializes the whole form to a urlencoded string the server decodes
+// (Plug.Conn.Query) into a NESTED map: name="task[title]" => %{"task" =>
+// %{"title" => v}}. Because we replay through pushEvent (payload = literal
+// object) rather than the native "form" event, the object built HERE must equal
+// what the server would have decoded, or the handler sees the wrong shape. This
+// walks new FormData(form) and rebuilds that object from bracket notation,
+// matching Plug.Conn.Query: `name[]` => list append, duplicate flat key => last
+// wins, and DISABLED / unchecked controls are simply absent (FormData omits
+// them, exactly like the wire form — so an off viewer_plus sends no key, a
+// branch task's disabled slider sends none, same as native).
+function preconnectParseName(name) {
+  // "task[title]" -> ["task","title"]; "a[b][]" -> ["a","b",""]; "mode" -> ["mode"].
+  const i = name.indexOf("[")
+  if (i === -1) return [name]
+  const parts = [...name.slice(i).matchAll(/\[([^\]]*)\]/g)].map((m) => m[1])
+  return [name.slice(0, i), ...parts]
+}
+function preconnectSetPath(root, path, value) {
+  let node = root
+  for (let k = 0; k < path.length - 1; k++) {
+    const seg = path[k] === "" ? node.length : path[k]
+    if (node[seg] == null || typeof node[seg] !== "object") {
+      node[seg] = path[k + 1] === "" ? [] : {}
+    }
+    node = node[seg]
+  }
+  const last = path[path.length - 1]
+  if (last === "") node.push(value) // `name[]` -> array append
+  else node[last] = value // last-wins for a duplicate flat / nested key
+}
+function preconnectSerializeForm(form) {
+  const out = {}
+  for (const [name, value] of new FormData(form).entries()) {
+    preconnectSetPath(out, preconnectParseName(name), value)
+  }
+  return out
+}
+// The pane's two update_task forms carry NO task id — natively the server
+// applies them to its loaded selection. A dead-window edit, though, flushes on
+// connect BEFORE the .TaskKeys selection replay lands (DoitRegisterLivePush runs
+// ahead of the select_task push), so "current selection" is stale/nil at flush.
+// Capture the task this edit was made against (DoitState.selectedId) into the
+// payload so it ALWAYS lands on its own task — the server honors payload.id when
+// present and falls back to selected_task otherwise (WL4.2.2 Defect 2). The
+// coalesce key folds the id in, so cross-task dead-window edits never collide.
+function preconnectSelfTarget(ev, payload) {
+  if (ev === "update_task" && DoitState.selectedId != null) {
+    payload.id = String(DoitState.selectedId)
+  }
+  return payload
+}
+// phx-value-* attributes -> payload (strip the prefix), mirroring LiveView's
+// phx-click value serialization (phx-value-id="3" => {id: "3"}).
+function preconnectClickPayload(el) {
+  const payload = {}
+  for (const a of el.attributes) {
+    if (a.name.startsWith("phx-value-")) payload[a.name.slice("phx-value-".length)] = a.value
+  }
+  return payload
+}
+// True for a JS-command binding (e.g. phx-click={JS.toggle(...)} or JS.push(...)):
+// the attribute is a serialized command array ("[[...]]"), not a plain server
+// event name, so it can't be replayed as one. Skipped (and logged) — see report.
+function preconnectIsJsCommand(raw) {
+  return !raw || raw[0] === "["
+}
+
+// phx-click: event name = the attribute; payload = the phx-value-* map.
+document.addEventListener("click", (e) => {
+  if (livePush) return
+  const el = e.target.closest("[phx-click]")
+  if (!el) return
+  const ev = el.getAttribute("phx-click")
+  if (preconnectIsJsCommand(ev)) {
+    if (ev) console.debug("[preconnect] skipping JS-command phx-click:", ev)
+    return
+  }
+  if (DOITPUSH_OWNED.has(ev) || PRECONNECT_DESTRUCTIVE.has(ev)) return
+  if (el.hasAttribute("data-confirm")) return // confirm can't run while dead — don't auto-fire
+  enqueuePreconnect(ev, preconnectClickPayload(el))
+}, true)
+
+// phx-submit: event name = the form's binding; payload = the serialized form
+// (plus the submitter's name/value, which LiveView includes). preventDefault so
+// a dead-window submit can't trigger a native full-page POST / navigation.
+document.addEventListener("submit", (e) => {
+  if (livePush) return
+  const form = e.target
+  const ev = form && form.getAttribute && form.getAttribute("phx-submit")
+  if (!ev || preconnectIsJsCommand(ev) || DOITPUSH_OWNED.has(ev)) return
+  e.preventDefault()
+  const payload = preconnectSerializeForm(form)
+  if (e.submitter && e.submitter.name) {
+    preconnectSetPath(payload, preconnectParseName(e.submitter.name), e.submitter.value || "")
+  }
+  enqueuePreconnect(ev, preconnectSelfTarget(ev, payload))
+}, true)
+
+// phx-change: event name = the input's binding or its form's (mirrors LiveView,
+// which honors an input-level phx-change over the form's); payload = the
+// serialized form plus _target = the changed field's name (LiveView sends it to
+// scope validation; no handler here reads it, included for parity). Bound on
+// BOTH input and change (LiveView listens to both); coalescing per form means
+// the duplicate is harmless — the latest full-form snapshot wins.
+function preconnectCapturePhxChange(e) {
+  if (livePush) return
+  const input = e.target
+  if (!input || !input.getAttribute) return
+  const ev = input.getAttribute("phx-change") || (input.form && input.form.getAttribute("phx-change"))
+  if (!ev || preconnectIsJsCommand(ev) || DOITPUSH_OWNED.has(ev)) return
+  const form = input.form
+  if (!form) return
+  const payload = preconnectSerializeForm(form)
+  payload._target = input.name || ""
+  enqueuePreconnect(ev, preconnectSelfTarget(ev, payload))
+}
+document.addEventListener("input", preconnectCapturePhxChange, true)
+document.addEventListener("change", preconnectCapturePhxChange, true)
 
 // Confirmation suppression (.03.01.11): read the per-class skip flags from
 // localStorage on mount and push them to the LiveView; persist a flag when the
