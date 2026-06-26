@@ -72,7 +72,8 @@ defmodule DoIt.TrashTest do
       |> DateTime.truncate(:second)
 
     {1, _} =
-      from(i in Initiative, where: i.id == ^stale.id) |> DoIt.Repo.update_all(set: [trashed_at: long_ago])
+      from(i in Initiative, where: i.id == ^stale.id)
+      |> DoIt.Repo.update_all(set: [trashed_at: long_ago])
 
     assert Initiatives.purge_expired_trash() == 1
     assert Initiatives.get_initiative(stale.id) == nil

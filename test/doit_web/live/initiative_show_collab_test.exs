@@ -179,6 +179,7 @@ defmodule DoItWeb.InitiativeShowCollabTest do
       # document. If the preload ever loses its order_by (the bug), these flip.
       newest_pos = pos(html, "v2 second-edit")
       oldest_pos = pos(html, "v0 original")
+
       assert newest_pos < oldest_pos,
              "expected versions newest-first in the popup, got oldest-first"
     end

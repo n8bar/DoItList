@@ -531,9 +531,7 @@ defmodule DoItWeb.Layouts do
              list<->detail here is a same-module push_patch (no remount). --%>
         <.link
           :for={init <- @initiatives}
-          patch={
-            if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")
-          }
+          patch={if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")}
           aria-current={(init.id == @current_id && "page") || nil}
           data-rail-initiative-id={init.id}
           class={[

@@ -54,7 +54,9 @@ defmodule DoIt.AccountsTest do
           "password" => "password123"
         })
 
-      assert {:ok, %User{id: id}} = Accounts.authenticate("login-target@example.com", "password123")
+      assert {:ok, %User{id: id}} =
+               Accounts.authenticate("login-target@example.com", "password123")
+
       assert id == user.id
 
       assert {:ok, %User{id: ^id}} = Accounts.authenticate("LoginUser", "password123")
@@ -218,7 +220,9 @@ defmodule DoIt.AccountsTest do
       assert prefs.task_priority == "normal"
       assert prefs.show_task_activity
 
-      {:ok, saved} = Accounts.update_preferences(user, %{"initiative_progress_calc" => "single_level"})
+      {:ok, saved} =
+        Accounts.update_preferences(user, %{"initiative_progress_calc" => "single_level"})
+
       assert saved.id
       assert Accounts.get_preferences(user).initiative_progress_calc == "single_level"
 
@@ -323,7 +327,14 @@ defmodule DoIt.AccountsTest do
     test "rejects bad charsets, bad leading chars, and bad lengths" do
       user = register!()
 
-      for bad <- ["with space", "dots.are.out", "ab", "-leading-dash", "_leading_underscore", String.duplicate("a", 31)] do
+      for bad <- [
+            "with space",
+            "dots.are.out",
+            "ab",
+            "-leading-dash",
+            "_leading_underscore",
+            String.duplicate("a", 31)
+          ] do
         changeset = User.username_changeset(user, %{"username" => bad})
         refute changeset.valid?, "expected #{inspect(bad)} to be rejected"
       end

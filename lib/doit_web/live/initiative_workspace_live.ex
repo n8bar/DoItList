@@ -142,7 +142,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
     cond do
       is_nil(initiative) ->
-        socket |> put_flash(:error, "Initiative not found.") |> push_navigate(to: ~p"/initiatives")
+        socket
+        |> put_flash(:error, "Initiative not found.")
+        |> push_navigate(to: ~p"/initiatives")
 
       is_nil(role) ->
         socket
@@ -242,7 +244,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:activity, [])
     |> assign(:chat_messages, [])
     |> assign(:chat_log_id, 0)
-    |> assign(:online_ids, if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new()))
+    |> assign(
+      :online_ids,
+      if(connected?(socket), do: online_ids(initiative.id), else: MapSet.new())
+    )
     |> assign(:initiative_form, to_form(Initiatives.change_initiative(initiative)))
     |> assign_pending(nil)
     |> assign(:pending_handoff, nil)
@@ -284,7 +289,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       Tasks.unsubscribe(iid)
       Phoenix.PubSub.unsubscribe(DoIt.PubSub, presence_topic(iid))
       Phoenix.PubSub.unsubscribe(DoIt.PubSub, chat_topic(iid))
-      DoItWeb.Presence.untrack(self(), presence_topic(iid), to_string(socket.assigns.current_user.id))
+
+      DoItWeb.Presence.untrack(
+        self(),
+        presence_topic(iid),
+        to_string(socket.assigns.current_user.id)
+      )
     end
 
     socket
@@ -893,7 +903,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # unhide clears `hidden_at` — both on the caller's own membership row only.
   def handle_event("unarchive_initiative", %{"id" => id}, socket) do
     {:noreply,
-     with_member_initiative(socket, id, &Initiatives.unarchive_initiative/2, "Initiative restored.")}
+     with_member_initiative(
+       socket,
+       id,
+       &Initiatives.unarchive_initiative/2,
+       "Initiative restored."
+     )}
   end
 
   def handle_event("unhide_initiative", %{"id" => id}, socket) do
@@ -1428,7 +1443,8 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         {:reply, %{ok: false}, socket}
 
       not can_progress?(socket, task_id) ->
-        {:reply, %{ok: false}, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+        {:reply, %{ok: false},
+         socket |> put_flash(:error, "You don't have permission.") |> bonk()}
 
       true ->
         case Tasks.get_task(task_id) do
@@ -1932,15 +1948,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
     case Tasks.edit_comment(cid, user, body) do
       {:ok, _comment} ->
-        {:noreply,
-         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+        {:noreply, socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
 
       {:error, :not_found} ->
-        {:noreply,
-         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+        {:noreply, socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
 
       {:error, _cs} ->
         {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
@@ -2326,7 +2340,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     socket = if socket.assigns.initiative, do: assign_undo_state(socket), else: socket
 
     {:noreply,
-     assign(socket, :rail_collaborators, Initiatives.list_collaborators(socket.assigns.current_user))}
+     assign(
+       socket,
+       :rail_collaborators,
+       Initiatives.list_collaborators(socket.assigns.current_user)
+     )}
   end
 
   # A global presence join/leave (item 8): just refresh the Collaborators
@@ -2665,500 +2683,500 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             data-initiative-id={@initiative.id}
             phx-hook=".TaskKeys"
           >
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
-          export default {
-            mounted() {
-              this._h = (e) => this.handle(e);
-              window.addEventListener("keydown", this._h);
-              // M02.09 WL5 defect fix: this hook's element now carries the
-              // per-Initiative id, so an A->B rail switch truly DESTROYS this hook
-              // and MOUNTS a fresh one (morphdom can no longer move a static-id
-              // node into the new wrapper). But LiveView fires destroyed() in its
-              // post-patch removal pass — AFTER the new Initiative's subtree is
-              // morphed and this mounted() runs — so the leaving hook's cleanup is
-              // too late to stop B painting with A's client state. Detect the
-              // switch HERE (the prior Initiative still owns DoitDetailInitiativeId,
-              // since its destroyed() hasn't run yet) and clear the leaked
-              // detail-scoped state BEFORE B's data-keep appliers settle. Re-assert
-              // the keeps on the moved stable-id elements (editor pane, mobile rail,
-              // edit signifiers) that morphdom relocated with A's DoitState still
-              // set — all synchronous, so the corrected state is what the browser
-              // paints (no flash of A's editor/flyout on B). The query is scoped to
-              // the per-Initiative detail WRAPPER (#initiative-detail-<id>), NOT this
-              // hook's own element (#initiative-show-root-<id>): show-root holds only
-              // the tree column (#tree-scroll, the mobile members panel and the
-              // archive-prompt banner), while the right-rail flyout (#details-rail,
-              // carrying the initiative/task editor panes and the desktop members
-              // panel) is a SIBLING of show-root inside the wrapper. A this.el-scoped
-              // (show-root) query would skip those rail/editor keeps and leave A's
-              // editor/flyout state stuck on B, so we scope to the wrapper to
-              // re-assert every detail keep.
-              this._iid = this.el.dataset.initiativeId;
-              if (window.DoitDetailInitiativeId &&
-                  window.DoitDetailInitiativeId !== this._iid) {
-                this.clearDetailState();
-                const detail =
-                  document.getElementById("initiative-detail-" + this._iid) || this.el;
-                detail.querySelectorAll("[data-keep]").forEach((el) => {
-                  if (window.DoitApplyKeep) window.DoitApplyKeep(el);
-                });
-              }
-              window.DoitDetailInitiativeId = this._iid;
-              // M02.09 WL5.4: the dead-window livePush registration moved to the
-              // always-present .Workspace shell hook, so a list<->detail hop never
-              // unregisters it (the dead window exists only at first connect). This
-              // detail hook mounts on detail-enter and is destroyed on leave/switch
-              // (its element rides the per-Initiative keyed wrapper), so it owns the
-              // detail-only duties: the keydown handler, undo/redo clicks, the
-              // selection replay, and the deep-link / comment-saved / viewer-plus /
-              // bonk handleEvents.
-              // Expose the bonk so delegated listeners in app.js (e.g. the
-              // transfer-confirm in-flight latch, item 15.16) can sound it too.
-              window.DoitBonk = () => this.bonk();
-              // Server-pushed bonk: a permission denial (a viewer / viewer+
-              // attempting a disallowed action) sounds the same rejection thud,
-              // however the attempt arrived — key, form, click, or drop.
-              this.handleEvent("bonk", () => this.bonk());
-              // Saved-tick acks (WL3 item 3.7, §6.7): a debounced subtitle write
-              // and the viewer+ flip have no reply callback (they ride phx-change
-              // forms), so the server pushes these one-shot events; reveal the
-              // brief "✓ Saved" span. viewer-plus additionally re-enables its
-              // checkbox here (the in-flight signifier disabled it client-side) —
-              // that re-enable IS the success ack.
-              this.handleEvent("subtitle-saved", () => {
-                if (window.DoitSavedTick) window.DoitSavedTick("subtitle-saved-tick");
-              });
-              this.handleEvent("viewer-plus-saved", () => {
-                const box = document.querySelector("input[name='viewer_plus']");
-                if (box) { clearTimeout(box._vpTimer); box.disabled = false; }
-                if (window.DoitSavedTick) window.DoitSavedTick("viewer-plus-saved-tick");
-              });
-              // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
-              // client-owned (DoitState.commentEditId), but SAVE is server-gated.
-              // The server pushes this ONLY on a granted save (an :ok, or a
-              // :not_found that's already terminal) — never on a refusal — so it
-              // can clear the client open state honestly. Re-apply the row's
-              // "comment-edit" keep at once so the editor closes immediately,
-              // ahead of the reconciling patch.
-              this.handleEvent("comment-saved", ({id}) => {
-                if (String(window.DoitState.commentEditId) === String(id)) {
-                  window.DoitState.commentEditId = null;
-                }
-                const li = document.getElementById("comment-" + id);
-                if (li && window.DoitApplyKeep) window.DoitApplyKeep(li);
-              });
-              // A selection can land before we connect (DoitSelection is
-              // client-only; slow longpoll connect). Replay it now so the server
-              // loads the pane's comments / activity / co-assignees for it. This
-              // is ALSO the §6.8 de-confliction (WL4.2.2): the dead-window queue
-              // deliberately SKIPS select_task/close_task, leaving this one push
-              // of the FINAL selection (DoitSelection.id is the selection slot's
-              // single source of truth — it captures pill-click selections that
-              // never call DoitPush, which the queue would miss). One push, no
-              // double-fire.
-              if (window.DoitSelection && window.DoitSelection.id) {
-                this.pushEvent("select_task", {id: window.DoitSelection.id});
-              }
-              // After an undo/redo, select + scroll the affected task into view
-              // (m02.06 item 13). Guarded: an undone create removes the task, so
-              // there's nothing to show — skip rather than stall the pane.
-              this.handleEvent("select-task", ({id}) => {
-                if (!document.getElementById("task-" + id)) return;
-                if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
-                if (window.DoitPush) window.DoitPush("select_task", {id});
-              });
-              // Deep-link from Assigned-to-Me (m02.08 item 1.7): expand any
-              // collapsed ancestors so the target is visible, then select +
-              // scroll it into view. Expansion clears each ancestor's collapse
-              // state the same way the toggle does (localStorage + class +
-              // aria), so it sticks across the post-load collapse-guard pass.
-              this.handleEvent("deep-link-task", ({id, ancestors}) => {
-                (ancestors || []).forEach((aid) => {
-                  // The children <ul> + toggle button carry the initiative id;
-                  // mirror the toggle's localStorage key off it so the expand
-                  // survives the post-load collapse-guard re-apply.
-                  const ul = document.getElementById("children-" + aid);
-                  const btn = document.getElementById("collapse-" + aid);
-                  const init = (ul && ul.dataset.initiativeId) ||
-                               (btn && btn.dataset.initiativeId);
-                  if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0");
-                  if (ul) ul.classList.remove("collapsed-peek");
-                  if (btn) btn.setAttribute("aria-expanded", "true");
-                });
-                // Defer the select/scroll a frame so the just-expanded rows are
-                // laid out before scrollIntoView measures (no layout jank).
-                requestAnimationFrame(() => {
-                  if (!document.getElementById("task-" + id)) return;
-                  if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
-                  if (window.DoitPush) window.DoitPush("select_task", {id});
-                });
-              });
-              // Toolbar Undo/Redo clicks route through the same latch + feedback
-              // as the keyboard (item 15.9), so a repeat while one's in flight is
-              // dropped (with a bonk), never queued.
-              this._undoBtn = (e) => {
-                const b = e.target.closest("#undo-button, #redo-button");
-                if (!b || b.disabled) return;
-                e.preventDefault();
-                this.triggerUndoRedo(b.id === "redo-button" ? "redo" : "undo");
-              };
-              window.addEventListener("click", this._undoBtn);
-            },
-            destroyed() {
-              window.removeEventListener("keydown", this._h);
-              window.removeEventListener("click", this._undoBtn);
-              clearTimeout(this._paneT);
-              // M02.09 WL5.4 + defect fix: leaving the detail (patch to the list)
-              // must clear ALL detail-scoped client state, or it leaks into the
-              // next detail — e.g. a stale selection replayed against another
-              // Initiative's tree, or an editor/comment editor re-opening. On an
-              // Initiative SWITCH this destroyed() runs AFTER the next
-              // Initiative's hook has already mounted and reset the state
-              // (LiveView mounts on add, destroys on the later removal pass), so
-              // guard on the tracked id: only clear when WE are still the active
-              // detail (the leave-to-list case). On a switch the newer mount owns
-              // DoitDetailInitiativeId — skip, or we'd wipe B's freshly-set state
-              // and break detection of the next switch. The livePush stays
-              // registered (owned by the always-present .Workspace shell hook), so
-              // the dead-window funnel is untouched here.
-              if (window.DoitDetailInitiativeId === this._iid) {
-                window.DoitDetailInitiativeId = null;
-                this.clearDetailState();
-              }
-            },
-            // Reset every detail-scoped client store to its default. Shared by the
-            // leave path (destroyed) and the switch path (mounted) so the two stay
-            // in lock-step.
-            clearDetailState() {
-              // editorOpen must be cleared BEFORE the selection: DoitSelection.clear()
-              // runs syncRail (via apply -> syncPaneSkeleton), and syncRail computes
-              // the mobile rail/backdrop open state from BOTH the selection AND
-              // DoitInitiativeEditor.open. Clearing the editor flag first means that
-              // syncRail pass already sees the editor closed, so a switch-with-editor-
-              // open doesn't leave the rail/backdrop stuck open (nothing re-runs
-              // syncRail after clear()).
-              if (window.DoitState) {
-                window.DoitState.editorOpen = false;
-                window.DoitState.commentEditId = null;
-                window.DoitState.commentVersionsId = null;
-                window.DoitState.pending = {toggle: null, move: null, initiativeOrder: null};
-                window.DoitState.presence = {selections: [], online: []};
-                // Tree scroll is detail-scoped: the only data-keep="scroll" box is
-                // the per-Initiative #tree-scroll, so reset it wholesale — B's tree
-                // must open at the top, not inherit A's scrollTop.
-                window.DoitState.scroll = {};
-                // <details data-keep="open"> open-state is keyed by STABLE element
-                // id, and the detail disclosures (initiative-settings, task-activity,
-                // members-*-form) reuse the same ids across Initiatives — so A's open
-                // state would re-assert on B. Clear every detailsOpen entry EXCEPT the
-                // genuinely non-detail ones: the app-shell menus (notif/account/mobile
-                // -menu, cross-page) and the index-mode disclosures (new-initiative,
-                // archived, list-scoped). Everything else is a detail disclosure and
-                // must reset to its server default. (Keeping this an allow-list of the
-                // few stable non-detail ids means a NEW detail disclosure is cleared by
-                // default — failing safe against the very leak this closes.)
-                const KEEP_OPEN = new Set([
-                  "notif-menu", "account-menu", "mobile-menu", "new-initiative", "archived"
-                ]);
-                Object.keys(window.DoitState.detailsOpen).forEach((id) => {
-                  if (!KEEP_OPEN.has(id)) delete window.DoitState.detailsOpen[id];
-                });
-                // The archive-on-completion banner dismissal is detail-scoped
-                // (#archive-prompt renders per-Initiative); clear it so a fresh detail
-                // re-evaluates from the server's show_archive_prompt instead of
-                // inheriting A's dismissal.
-                window.DoitState.archivePromptDismissed = false;
-              }
-              if (window.DoitSelection) window.DoitSelection.clear();
-            },
-            inField() {
-              const a = document.activeElement;
-              return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" ||
-                              a.tagName === "SELECT" || a.isContentEditable));
-            },
-            selectedId() {
-              const S = window.DoitSelection;
-              return S ? S.id : null;
-            },
-            // The pane load trails rapid keyboard navigation: the highlight is
-            // client-instant, the server round-trip settles after the pause.
-            schedulePaneLoad(id) {
-              clearTimeout(this._paneT);
-              this._paneT = setTimeout(() => this.pushEvent("select_task", {id: id}), 150);
-            },
-            handle(e) {
-              // Suppression: a text-accepting element has focus — fall through
-              // (so native field-level undo still works).
-              if (this.inField()) return;
-              // Undo / redo (m02.06 item 4): Ctrl/Cmd+Z = undo; +Shift or Ctrl+Y
-              // = redo. Handled before the idclip letter-buffer so "z" isn't
-              // swallowed. No selection required.
-              if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
-                e.preventDefault();
-                const redo = /^y$/i.test(e.key) || e.shiftKey;
-                this.triggerUndoRedo(redo ? "redo" : "undo");
-                return;
-              }
-              const k = e.key;
-              // Easter egg (idclip — Doom's noclip): "see through" to each row's
-              // task/parent IDs as a debug pill. Type the code outside any field.
-              if (k.length === 1 && /[a-z]/i.test(k)) {
-                this._idbuf = ((this._idbuf || "") + k.toLowerCase()).slice(-6);
-                if (this._idbuf === "idclip") {
-                  this._idbuf = "";
-                  document.documentElement.classList.toggle("debug-task-ids");
-                  return;
-                }
-              }
-              if (k === "?") {
-                e.preventDefault();
-                const o = document.getElementById("shortcuts-overlay");
-                if (o) o.dispatchEvent(new CustomEvent("doit:shortcuts-toggle"));
-                return;
-              }
-              if (k === "Enter") {
-                e.preventDefault();
-                const S = window.DoitSelection;
-                if (!S) return;
-                if (S.id) {
-                  S.clear();
-                  this.pushEvent("close_task", {});
-                } else {
-                  const first = document.querySelector("li[data-task-id]");
-                  const id = S.lastId || (first && first.dataset.taskId);
-                  if (id) { S.set(id, {scroll: true}); this.pushEvent("select_task", {id: id}); }
-                }
-                return;
-              }
-              const sel = this.selectedId();
-              if (!sel) return; // every other shortcut needs a selected task
-              if (k === " ") {
-                e.preventDefault();
-                const btn = document.getElementById("collapse-" + sel);
-                if (btn) btn.click();
-                return;
-              }
-              if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
-                e.preventDefault();
-                if (e.altKey) {
-                  const li = document.querySelector(`li[data-task-id="${sel}"]`);
-                  if (li && this.blockedMove(li, k)) { this.bonk(); return; }
-                  const S = window.DoitSaving;
-                  if (S && li) {
-                    const rows = this.movePinkRows(S, li, k);
-                    S.markSaving(rows);
-                    // Reparents move the row between parents — both parents'
-                    // % is in flight (.03.07.23): indeterminate bars.
-                    if (k === "ArrowLeft" || k === "ArrowRight") S.markRecomputing(rows.slice(1));
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".TaskKeys">
+              export default {
+                mounted() {
+                  this._h = (e) => this.handle(e);
+                  window.addEventListener("keydown", this._h);
+                  // M02.09 WL5 defect fix: this hook's element now carries the
+                  // per-Initiative id, so an A->B rail switch truly DESTROYS this hook
+                  // and MOUNTS a fresh one (morphdom can no longer move a static-id
+                  // node into the new wrapper). But LiveView fires destroyed() in its
+                  // post-patch removal pass — AFTER the new Initiative's subtree is
+                  // morphed and this mounted() runs — so the leaving hook's cleanup is
+                  // too late to stop B painting with A's client state. Detect the
+                  // switch HERE (the prior Initiative still owns DoitDetailInitiativeId,
+                  // since its destroyed() hasn't run yet) and clear the leaked
+                  // detail-scoped state BEFORE B's data-keep appliers settle. Re-assert
+                  // the keeps on the moved stable-id elements (editor pane, mobile rail,
+                  // edit signifiers) that morphdom relocated with A's DoitState still
+                  // set — all synchronous, so the corrected state is what the browser
+                  // paints (no flash of A's editor/flyout on B). The query is scoped to
+                  // the per-Initiative detail WRAPPER (#initiative-detail-<id>), NOT this
+                  // hook's own element (#initiative-show-root-<id>): show-root holds only
+                  // the tree column (#tree-scroll, the mobile members panel and the
+                  // archive-prompt banner), while the right-rail flyout (#details-rail,
+                  // carrying the initiative/task editor panes and the desktop members
+                  // panel) is a SIBLING of show-root inside the wrapper. A this.el-scoped
+                  // (show-root) query would skip those rail/editor keeps and leave A's
+                  // editor/flyout state stuck on B, so we scope to the wrapper to
+                  // re-assert every detail keep.
+                  this._iid = this.el.dataset.initiativeId;
+                  if (window.DoitDetailInitiativeId &&
+                      window.DoitDetailInitiativeId !== this._iid) {
+                    this.clearDetailState();
+                    const detail =
+                      document.getElementById("initiative-detail-" + this._iid) || this.el;
+                    detail.querySelectorAll("[data-keep]").forEach((el) => {
+                      if (window.DoitApplyKeep) window.DoitApplyKeep(el);
+                    });
                   }
-                  this.pushEvent("kbd_move", {key: k, altKey: true, id: sel});
-                  return;
-                }
-                const id = this.navTarget(sel, k);
-                if (id) {
-                  window.DoitSelection.set(id, {scroll: true});
-                  this.schedulePaneLoad(id);
-                }
-                return;
+                  window.DoitDetailInitiativeId = this._iid;
+                  // M02.09 WL5.4: the dead-window livePush registration moved to the
+                  // always-present .Workspace shell hook, so a list<->detail hop never
+                  // unregisters it (the dead window exists only at first connect). This
+                  // detail hook mounts on detail-enter and is destroyed on leave/switch
+                  // (its element rides the per-Initiative keyed wrapper), so it owns the
+                  // detail-only duties: the keydown handler, undo/redo clicks, the
+                  // selection replay, and the deep-link / comment-saved / viewer-plus /
+                  // bonk handleEvents.
+                  // Expose the bonk so delegated listeners in app.js (e.g. the
+                  // transfer-confirm in-flight latch, item 15.16) can sound it too.
+                  window.DoitBonk = () => this.bonk();
+                  // Server-pushed bonk: a permission denial (a viewer / viewer+
+                  // attempting a disallowed action) sounds the same rejection thud,
+                  // however the attempt arrived — key, form, click, or drop.
+                  this.handleEvent("bonk", () => this.bonk());
+                  // Saved-tick acks (WL3 item 3.7, §6.7): a debounced subtitle write
+                  // and the viewer+ flip have no reply callback (they ride phx-change
+                  // forms), so the server pushes these one-shot events; reveal the
+                  // brief "✓ Saved" span. viewer-plus additionally re-enables its
+                  // checkbox here (the in-flight signifier disabled it client-side) —
+                  // that re-enable IS the success ack.
+                  this.handleEvent("subtitle-saved", () => {
+                    if (window.DoitSavedTick) window.DoitSavedTick("subtitle-saved-tick");
+                  });
+                  this.handleEvent("viewer-plus-saved", () => {
+                    const box = document.querySelector("input[name='viewer_plus']");
+                    if (box) { clearTimeout(box._vpTimer); box.disabled = false; }
+                    if (window.DoitSavedTick) window.DoitSavedTick("viewer-plus-saved-tick");
+                  });
+                  // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
+                  // client-owned (DoitState.commentEditId), but SAVE is server-gated.
+                  // The server pushes this ONLY on a granted save (an :ok, or a
+                  // :not_found that's already terminal) — never on a refusal — so it
+                  // can clear the client open state honestly. Re-apply the row's
+                  // "comment-edit" keep at once so the editor closes immediately,
+                  // ahead of the reconciling patch.
+                  this.handleEvent("comment-saved", ({id}) => {
+                    if (String(window.DoitState.commentEditId) === String(id)) {
+                      window.DoitState.commentEditId = null;
+                    }
+                    const li = document.getElementById("comment-" + id);
+                    if (li && window.DoitApplyKeep) window.DoitApplyKeep(li);
+                  });
+                  // A selection can land before we connect (DoitSelection is
+                  // client-only; slow longpoll connect). Replay it now so the server
+                  // loads the pane's comments / activity / co-assignees for it. This
+                  // is ALSO the §6.8 de-confliction (WL4.2.2): the dead-window queue
+                  // deliberately SKIPS select_task/close_task, leaving this one push
+                  // of the FINAL selection (DoitSelection.id is the selection slot's
+                  // single source of truth — it captures pill-click selections that
+                  // never call DoitPush, which the queue would miss). One push, no
+                  // double-fire.
+                  if (window.DoitSelection && window.DoitSelection.id) {
+                    this.pushEvent("select_task", {id: window.DoitSelection.id});
+                  }
+                  // After an undo/redo, select + scroll the affected task into view
+                  // (m02.06 item 13). Guarded: an undone create removes the task, so
+                  // there's nothing to show — skip rather than stall the pane.
+                  this.handleEvent("select-task", ({id}) => {
+                    if (!document.getElementById("task-" + id)) return;
+                    if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                    if (window.DoitPush) window.DoitPush("select_task", {id});
+                  });
+                  // Deep-link from Assigned-to-Me (m02.08 item 1.7): expand any
+                  // collapsed ancestors so the target is visible, then select +
+                  // scroll it into view. Expansion clears each ancestor's collapse
+                  // state the same way the toggle does (localStorage + class +
+                  // aria), so it sticks across the post-load collapse-guard pass.
+                  this.handleEvent("deep-link-task", ({id, ancestors}) => {
+                    (ancestors || []).forEach((aid) => {
+                      // The children <ul> + toggle button carry the initiative id;
+                      // mirror the toggle's localStorage key off it so the expand
+                      // survives the post-load collapse-guard re-apply.
+                      const ul = document.getElementById("children-" + aid);
+                      const btn = document.getElementById("collapse-" + aid);
+                      const init = (ul && ul.dataset.initiativeId) ||
+                                   (btn && btn.dataset.initiativeId);
+                      if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0");
+                      if (ul) ul.classList.remove("collapsed-peek");
+                      if (btn) btn.setAttribute("aria-expanded", "true");
+                    });
+                    // Defer the select/scroll a frame so the just-expanded rows are
+                    // laid out before scrollIntoView measures (no layout jank).
+                    requestAnimationFrame(() => {
+                      if (!document.getElementById("task-" + id)) return;
+                      if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true});
+                      if (window.DoitPush) window.DoitPush("select_task", {id});
+                    });
+                  });
+                  // Toolbar Undo/Redo clicks route through the same latch + feedback
+                  // as the keyboard (item 15.9), so a repeat while one's in flight is
+                  // dropped (with a bonk), never queued.
+                  this._undoBtn = (e) => {
+                    const b = e.target.closest("#undo-button, #redo-button");
+                    if (!b || b.disabled) return;
+                    e.preventDefault();
+                    this.triggerUndoRedo(b.id === "redo-button" ? "redo" : "undo");
+                  };
+                  window.addEventListener("click", this._undoBtn);
+                },
+                destroyed() {
+                  window.removeEventListener("keydown", this._h);
+                  window.removeEventListener("click", this._undoBtn);
+                  clearTimeout(this._paneT);
+                  // M02.09 WL5.4 + defect fix: leaving the detail (patch to the list)
+                  // must clear ALL detail-scoped client state, or it leaks into the
+                  // next detail — e.g. a stale selection replayed against another
+                  // Initiative's tree, or an editor/comment editor re-opening. On an
+                  // Initiative SWITCH this destroyed() runs AFTER the next
+                  // Initiative's hook has already mounted and reset the state
+                  // (LiveView mounts on add, destroys on the later removal pass), so
+                  // guard on the tracked id: only clear when WE are still the active
+                  // detail (the leave-to-list case). On a switch the newer mount owns
+                  // DoitDetailInitiativeId — skip, or we'd wipe B's freshly-set state
+                  // and break detection of the next switch. The livePush stays
+                  // registered (owned by the always-present .Workspace shell hook), so
+                  // the dead-window funnel is untouched here.
+                  if (window.DoitDetailInitiativeId === this._iid) {
+                    window.DoitDetailInitiativeId = null;
+                    this.clearDetailState();
+                  }
+                },
+                // Reset every detail-scoped client store to its default. Shared by the
+                // leave path (destroyed) and the switch path (mounted) so the two stay
+                // in lock-step.
+                clearDetailState() {
+                  // editorOpen must be cleared BEFORE the selection: DoitSelection.clear()
+                  // runs syncRail (via apply -> syncPaneSkeleton), and syncRail computes
+                  // the mobile rail/backdrop open state from BOTH the selection AND
+                  // DoitInitiativeEditor.open. Clearing the editor flag first means that
+                  // syncRail pass already sees the editor closed, so a switch-with-editor-
+                  // open doesn't leave the rail/backdrop stuck open (nothing re-runs
+                  // syncRail after clear()).
+                  if (window.DoitState) {
+                    window.DoitState.editorOpen = false;
+                    window.DoitState.commentEditId = null;
+                    window.DoitState.commentVersionsId = null;
+                    window.DoitState.pending = {toggle: null, move: null, initiativeOrder: null};
+                    window.DoitState.presence = {selections: [], online: []};
+                    // Tree scroll is detail-scoped: the only data-keep="scroll" box is
+                    // the per-Initiative #tree-scroll, so reset it wholesale — B's tree
+                    // must open at the top, not inherit A's scrollTop.
+                    window.DoitState.scroll = {};
+                    // <details data-keep="open"> open-state is keyed by STABLE element
+                    // id, and the detail disclosures (initiative-settings, task-activity,
+                    // members-*-form) reuse the same ids across Initiatives — so A's open
+                    // state would re-assert on B. Clear every detailsOpen entry EXCEPT the
+                    // genuinely non-detail ones: the app-shell menus (notif/account/mobile
+                    // -menu, cross-page) and the index-mode disclosures (new-initiative,
+                    // archived, list-scoped). Everything else is a detail disclosure and
+                    // must reset to its server default. (Keeping this an allow-list of the
+                    // few stable non-detail ids means a NEW detail disclosure is cleared by
+                    // default — failing safe against the very leak this closes.)
+                    const KEEP_OPEN = new Set([
+                      "notif-menu", "account-menu", "mobile-menu", "new-initiative", "archived"
+                    ]);
+                    Object.keys(window.DoitState.detailsOpen).forEach((id) => {
+                      if (!KEEP_OPEN.has(id)) delete window.DoitState.detailsOpen[id];
+                    });
+                    // The archive-on-completion banner dismissal is detail-scoped
+                    // (#archive-prompt renders per-Initiative); clear it so a fresh detail
+                    // re-evaluates from the server's show_archive_prompt instead of
+                    // inheriting A's dismissal.
+                    window.DoitState.archivePromptDismissed = false;
+                  }
+                  if (window.DoitSelection) window.DoitSelection.clear();
+                },
+                inField() {
+                  const a = document.activeElement;
+                  return !!(a && (a.tagName === "INPUT" || a.tagName === "TEXTAREA" ||
+                                  a.tagName === "SELECT" || a.isContentEditable));
+                },
+                selectedId() {
+                  const S = window.DoitSelection;
+                  return S ? S.id : null;
+                },
+                // The pane load trails rapid keyboard navigation: the highlight is
+                // client-instant, the server round-trip settles after the pause.
+                schedulePaneLoad(id) {
+                  clearTimeout(this._paneT);
+                  this._paneT = setTimeout(() => this.pushEvent("select_task", {id: id}), 150);
+                },
+                handle(e) {
+                  // Suppression: a text-accepting element has focus — fall through
+                  // (so native field-level undo still works).
+                  if (this.inField()) return;
+                  // Undo / redo (m02.06 item 4): Ctrl/Cmd+Z = undo; +Shift or Ctrl+Y
+                  // = redo. Handled before the idclip letter-buffer so "z" isn't
+                  // swallowed. No selection required.
+                  if ((e.ctrlKey || e.metaKey) && /^[zy]$/i.test(e.key)) {
+                    e.preventDefault();
+                    const redo = /^y$/i.test(e.key) || e.shiftKey;
+                    this.triggerUndoRedo(redo ? "redo" : "undo");
+                    return;
+                  }
+                  const k = e.key;
+                  // Easter egg (idclip — Doom's noclip): "see through" to each row's
+                  // task/parent IDs as a debug pill. Type the code outside any field.
+                  if (k.length === 1 && /[a-z]/i.test(k)) {
+                    this._idbuf = ((this._idbuf || "") + k.toLowerCase()).slice(-6);
+                    if (this._idbuf === "idclip") {
+                      this._idbuf = "";
+                      document.documentElement.classList.toggle("debug-task-ids");
+                      return;
+                    }
+                  }
+                  if (k === "?") {
+                    e.preventDefault();
+                    const o = document.getElementById("shortcuts-overlay");
+                    if (o) o.dispatchEvent(new CustomEvent("doit:shortcuts-toggle"));
+                    return;
+                  }
+                  if (k === "Enter") {
+                    e.preventDefault();
+                    const S = window.DoitSelection;
+                    if (!S) return;
+                    if (S.id) {
+                      S.clear();
+                      this.pushEvent("close_task", {});
+                    } else {
+                      const first = document.querySelector("li[data-task-id]");
+                      const id = S.lastId || (first && first.dataset.taskId);
+                      if (id) { S.set(id, {scroll: true}); this.pushEvent("select_task", {id: id}); }
+                    }
+                    return;
+                  }
+                  const sel = this.selectedId();
+                  if (!sel) return; // every other shortcut needs a selected task
+                  if (k === " ") {
+                    e.preventDefault();
+                    const btn = document.getElementById("collapse-" + sel);
+                    if (btn) btn.click();
+                    return;
+                  }
+                  if (k === "ArrowUp" || k === "ArrowDown" || k === "ArrowLeft" || k === "ArrowRight") {
+                    e.preventDefault();
+                    if (e.altKey) {
+                      const li = document.querySelector(`li[data-task-id="${sel}"]`);
+                      if (li && this.blockedMove(li, k)) { this.bonk(); return; }
+                      const S = window.DoitSaving;
+                      if (S && li) {
+                        const rows = this.movePinkRows(S, li, k);
+                        S.markSaving(rows);
+                        // Reparents move the row between parents — both parents'
+                        // % is in flight (.03.07.23): indeterminate bars.
+                        if (k === "ArrowLeft" || k === "ArrowRight") S.markRecomputing(rows.slice(1));
+                      }
+                      this.pushEvent("kbd_move", {key: k, altKey: true, id: sel});
+                      return;
+                    }
+                    const id = this.navTarget(sel, k);
+                    if (id) {
+                      window.DoitSelection.set(id, {scroll: true});
+                      this.schedulePaneLoad(id);
+                    }
+                    return;
+                  }
+                  if (k === "n" || k === "N") { e.preventDefault(); window.DoitAddForm.openChild(sel); return; }
+                  if (k === "s" || k === "S") { e.preventDefault(); window.DoitAddForm.openSibling(sel); return; }
+                  // Del clicks the delete button so its confirm dialog still fires.
+                  if (k === "Delete") {
+                    e.preventDefault();
+                    const btn = document.getElementById("delete-task-btn");
+                    if (btn) btn.click();
+                    return;
+                  }
+                  // P / A: Alt focuses the field for precise editing; plain steps
+                  // the value up, Shift steps it down.
+                  const field = k.length === 1 && {p: "priority", a: "assignee"}[k.toLowerCase()];
+                  if (field) {
+                    e.preventDefault();
+                    // Alt+P/A: focusing a pane field is pure view state — no
+                    // server (.03.07.17). The field exists whenever a task is
+                    // selected (persistent pane) and is disabled for viewers.
+                    if (e.altKey) {
+                      const el = document.getElementById("task-field-" + field);
+                      if (el && !el.disabled) { el.focus(); el.scrollIntoView({block: "nearest"}); }
+                      return;
+                    }
+                    const S = window.DoitSaving, li = S && S.selectedLi();
+                    if (li) S.markSaving([S.savingRowOf(li)]);
+                    this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
+                    return;
+                  }
+                },
+                visibleRows() {
+                  return [...document.querySelectorAll("li[data-task-id]")]
+                    .filter((li) => !li.closest("ul.collapsed-peek"));
+                },
+                navTarget(sel, key) {
+                  const cur = document.querySelector(`li[data-task-id="${sel}"]`);
+                  if (!cur) return null;
+                  if (key === "ArrowUp" || key === "ArrowDown") {
+                    const rows = this.visibleRows();
+                    const j = rows.indexOf(cur) + (key === "ArrowUp" ? -1 : 1);
+                    return rows[j] ? rows[j].dataset.taskId : null;
+                  }
+                  if (key === "ArrowLeft") {
+                    const p = cur.parentElement && cur.parentElement.closest("li[data-task-id]");
+                    return p ? p.dataset.taskId : null;
+                  }
+                  const ul = cur.querySelector(":scope > ul[id^='children-']");
+                  if (!ul || ul.classList.contains("collapsed-peek")) return null;
+                  const first = ul.querySelector(":scope > li[data-task-id]");
+                  return first ? first.dataset.taskId : null;
+                },
+                taskSibling(li, dir) {
+                  let el = dir < 0 ? li.previousElementSibling : li.nextElementSibling;
+                  while (el && !el.matches("li[data-task-id]")) {
+                    el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
+                  }
+                  return el;
+                },
+                // The four impossible reorgs (.03.07.02.12): first child up, last
+                // child down, top-level dedent, indent with no previous sibling.
+                blockedMove(li, key) {
+                  if (key === "ArrowUp" || key === "ArrowRight") return !this.taskSibling(li, -1);
+                  if (key === "ArrowDown") return !this.taskSibling(li, 1);
+                  return !li.parentElement.closest("li[data-task-id]");
+                },
+                // Pink only rows that certainly get a DB write. Moves write the
+                // moved row (parent_id / sort_order), the swapped sibling, and the
+                // parent when the reorder flips it from auto-sort to manual.
+                // Reparents (dedent / indent) also pink BOTH immediate parents —
+                // their % moves in almost every case. Chains above stay quiet:
+                // value-dependent.
+                movePinkRows(S, li, key) {
+                  if (key === "ArrowLeft" || key === "ArrowRight") {
+                    const rows = [S.savingRowOf(li)];
+                    const parentLi = li.parentElement.closest("li[data-task-id]");
+                    if (parentLi) rows.push(S.savingRowOf(parentLi));
+                    const dest = key === "ArrowRight"
+                      ? this.taskSibling(li, -1)
+                      : parentLi && parentLi.parentElement.closest("li[data-task-id]");
+                    if (dest) rows.push(S.savingRowOf(dest));
+                    return rows;
+                  }
+                  const swap = this.taskSibling(li, key === "ArrowUp" ? -1 : 1);
+                  const rows = [S.savingRowOf(li), S.savingRowOf(swap)];
+                  const parentLi = li.parentElement.closest("li[data-task-id]");
+                  if (parentLi && li.parentElement.dataset.sortMode !== "manual") {
+                    rows.push(S.savingRowOf(parentLi));
+                  }
+                  return rows;
+                },
+                // Short descending thud for a rejected move. Audio is a nicety —
+                // never let it break the keyboard path.
+                bonk() {
+                  try {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    this._audio = this._audio || new Ctx();
+                    const ctx = this._audio;
+                    if (ctx.state === "suspended") ctx.resume();
+                    const osc = ctx.createOscillator(), gain = ctx.createGain();
+                    // Triangle + ~220 Hz: pure sine below ~100 Hz is inaudible on
+                    // laptop speakers (tab showed the speaker icon, nobody heard it).
+                    osc.type = "triangle";
+                    osc.frequency.setValueAtTime(220, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.2);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
+                    osc.connect(gain).connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.3);
+                  } catch (_e) { /* no audio, no problem */ }
+                },
+                // In-flight undo/redo feedback (item 15.9): the first trigger latches
+                // and shows a working state instantly (no round trip); a repeat while
+                // it's in flight is DROPPED with a bonk, not queued. The server reply
+                // (handlers return {:reply,…}) clears the latch + working state.
+                triggerUndoRedo(dir) {
+                  if (this._undoInFlight) { this.bonk(); return; }
+                  this._undoInFlight = dir;
+                  this.setUndoBusy(dir, true);
+                  this.pushEvent(dir, {}, () => {
+                    this._undoInFlight = null;
+                    this.setUndoBusy(dir, false);
+                  });
+                },
+                setUndoBusy(dir, on) {
+                  const btn = document.getElementById(dir === "redo" ? "redo-button" : "undo-button");
+                  if (btn) {
+                    btn.classList.toggle("animate-pulse", on);
+                    btn.classList.toggle("pointer-events-none", on);
+                  }
+                  const toast = document.getElementById("undo-toast");
+                  if (toast) {
+                    if (on) {
+                      toast.textContent = dir === "redo" ? "Redoing…" : "Undoing…";
+                      toast.hidden = false;
+                    } else {
+                      toast.hidden = true;
+                    }
+                  }
+                },
               }
-              if (k === "n" || k === "N") { e.preventDefault(); window.DoitAddForm.openChild(sel); return; }
-              if (k === "s" || k === "S") { e.preventDefault(); window.DoitAddForm.openSibling(sel); return; }
-              // Del clicks the delete button so its confirm dialog still fires.
-              if (k === "Delete") {
-                e.preventDefault();
-                const btn = document.getElementById("delete-task-btn");
-                if (btn) btn.click();
-                return;
-              }
-              // P / A: Alt focuses the field for precise editing; plain steps
-              // the value up, Shift steps it down.
-              const field = k.length === 1 && {p: "priority", a: "assignee"}[k.toLowerCase()];
-              if (field) {
-                e.preventDefault();
-                // Alt+P/A: focusing a pane field is pure view state — no
-                // server (.03.07.17). The field exists whenever a task is
-                // selected (persistent pane) and is disabled for viewers.
-                if (e.altKey) {
-                  const el = document.getElementById("task-field-" + field);
-                  if (el && !el.disabled) { el.focus(); el.scrollIntoView({block: "nearest"}); }
-                  return;
-                }
-                const S = window.DoitSaving, li = S && S.selectedLi();
-                if (li) S.markSaving([S.savingRowOf(li)]);
-                this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
-                return;
-              }
-            },
-            visibleRows() {
-              return [...document.querySelectorAll("li[data-task-id]")]
-                .filter((li) => !li.closest("ul.collapsed-peek"));
-            },
-            navTarget(sel, key) {
-              const cur = document.querySelector(`li[data-task-id="${sel}"]`);
-              if (!cur) return null;
-              if (key === "ArrowUp" || key === "ArrowDown") {
-                const rows = this.visibleRows();
-                const j = rows.indexOf(cur) + (key === "ArrowUp" ? -1 : 1);
-                return rows[j] ? rows[j].dataset.taskId : null;
-              }
-              if (key === "ArrowLeft") {
-                const p = cur.parentElement && cur.parentElement.closest("li[data-task-id]");
-                return p ? p.dataset.taskId : null;
-              }
-              const ul = cur.querySelector(":scope > ul[id^='children-']");
-              if (!ul || ul.classList.contains("collapsed-peek")) return null;
-              const first = ul.querySelector(":scope > li[data-task-id]");
-              return first ? first.dataset.taskId : null;
-            },
-            taskSibling(li, dir) {
-              let el = dir < 0 ? li.previousElementSibling : li.nextElementSibling;
-              while (el && !el.matches("li[data-task-id]")) {
-                el = dir < 0 ? el.previousElementSibling : el.nextElementSibling;
-              }
-              return el;
-            },
-            // The four impossible reorgs (.03.07.02.12): first child up, last
-            // child down, top-level dedent, indent with no previous sibling.
-            blockedMove(li, key) {
-              if (key === "ArrowUp" || key === "ArrowRight") return !this.taskSibling(li, -1);
-              if (key === "ArrowDown") return !this.taskSibling(li, 1);
-              return !li.parentElement.closest("li[data-task-id]");
-            },
-            // Pink only rows that certainly get a DB write. Moves write the
-            // moved row (parent_id / sort_order), the swapped sibling, and the
-            // parent when the reorder flips it from auto-sort to manual.
-            // Reparents (dedent / indent) also pink BOTH immediate parents —
-            // their % moves in almost every case. Chains above stay quiet:
-            // value-dependent.
-            movePinkRows(S, li, key) {
-              if (key === "ArrowLeft" || key === "ArrowRight") {
-                const rows = [S.savingRowOf(li)];
-                const parentLi = li.parentElement.closest("li[data-task-id]");
-                if (parentLi) rows.push(S.savingRowOf(parentLi));
-                const dest = key === "ArrowRight"
-                  ? this.taskSibling(li, -1)
-                  : parentLi && parentLi.parentElement.closest("li[data-task-id]");
-                if (dest) rows.push(S.savingRowOf(dest));
-                return rows;
-              }
-              const swap = this.taskSibling(li, key === "ArrowUp" ? -1 : 1);
-              const rows = [S.savingRowOf(li), S.savingRowOf(swap)];
-              const parentLi = li.parentElement.closest("li[data-task-id]");
-              if (parentLi && li.parentElement.dataset.sortMode !== "manual") {
-                rows.push(S.savingRowOf(parentLi));
-              }
-              return rows;
-            },
-            // Short descending thud for a rejected move. Audio is a nicety —
-            // never let it break the keyboard path.
-            bonk() {
-              try {
-                const Ctx = window.AudioContext || window.webkitAudioContext;
-                this._audio = this._audio || new Ctx();
-                const ctx = this._audio;
-                if (ctx.state === "suspended") ctx.resume();
-                const osc = ctx.createOscillator(), gain = ctx.createGain();
-                // Triangle + ~220 Hz: pure sine below ~100 Hz is inaudible on
-                // laptop speakers (tab showed the speaker icon, nobody heard it).
-                osc.type = "triangle";
-                osc.frequency.setValueAtTime(220, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.2);
-                gain.gain.setValueAtTime(0.3, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-                osc.connect(gain).connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.3);
-              } catch (_e) { /* no audio, no problem */ }
-            },
-            // In-flight undo/redo feedback (item 15.9): the first trigger latches
-            // and shows a working state instantly (no round trip); a repeat while
-            // it's in flight is DROPPED with a bonk, not queued. The server reply
-            // (handlers return {:reply,…}) clears the latch + working state.
-            triggerUndoRedo(dir) {
-              if (this._undoInFlight) { this.bonk(); return; }
-              this._undoInFlight = dir;
-              this.setUndoBusy(dir, true);
-              this.pushEvent(dir, {}, () => {
-                this._undoInFlight = null;
-                this.setUndoBusy(dir, false);
-              });
-            },
-            setUndoBusy(dir, on) {
-              const btn = document.getElementById(dir === "redo" ? "redo-button" : "undo-button");
-              if (btn) {
-                btn.classList.toggle("animate-pulse", on);
-                btn.classList.toggle("pointer-events-none", on);
-              }
-              const toast = document.getElementById("undo-toast");
-              if (toast) {
-                if (on) {
-                  toast.textContent = dir === "redo" ? "Redoing…" : "Undoing…";
-                  toast.hidden = false;
-                } else {
-                  toast.hidden = true;
-                }
-              }
-            },
-          }
-        </script>
-        <%!-- Instant "we heard you" toast for undo/redo (item 15.9), shown
+            </script>
+            <%!-- Instant "we heard you" toast for undo/redo (item 15.9), shown
              client-side before the round trip and hidden when the server reply
              settles the latch; the result then shows as the normal flash. --%>
-        <div
-          id="undo-toast"
-          hidden
-          aria-live="polite"
-          class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
-        >
-        </div>
-        <%!-- Below lg: New List + a Show/Hide Members toggle, kept together as
+            <div
+              id="undo-toast"
+              hidden
+              aria-live="polite"
+              class="fixed top-4 left-1/2 -translate-x-1/2 z-50 rounded-lg bg-zinc-900/90 px-3 py-1.5 text-sm font-medium text-white shadow-lg dark:bg-zinc-100/90 dark:text-zinc-900"
+            >
+            </div>
+            <%!-- Below lg: New List + a Show/Hide Members toggle, kept together as
              one row (the pinned Members panel is lg:+ only, so the toggle is
              needed up to lg). The title-row New List takes over at lg:+, so it's
              hidden below lg and this pair carries New List everywhere else. --%>
-        <div class="lg:hidden mb-6">
-          <div class="flex justify-center items-center gap-2">
-            <button
-              :if={@can_edit}
-              type="button"
-              data-add-root
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-              aria-label="New list"
-              title="New list"
-            >
-              <.icon name="hero-plus" class="w-4 h-4" />
-              <span>New List</span>
-            </button>
-            <button
-              type="button"
-              phx-click={
-                Phoenix.LiveView.JS.toggle(to: "#mobile-members")
-                |> Phoenix.LiveView.JS.toggle(to: "#members-show-label")
-                |> Phoenix.LiveView.JS.toggle(to: "#members-hide-label")
-              }
-              aria-controls="mobile-members"
-              class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-            >
-              <.icon name="hero-users" class="w-4 h-4" />
-              <span id="members-show-label">Show Members</span>
-              <span id="members-hide-label" class="hidden">Hide Members</span>
-            </button>
-          </div>
-          <div id="mobile-members" class="hidden mt-2">
-            <.members_panel
-              id="members-mobile"
-              members={@members}
-              can_admin={@can_admin}
-              online_ids={@online_ids}
-              owner_id={@initiative.owner_id}
-              me={@current_user.id}
-              assignee_ids={@direct_assignee_ids}
-              viewer_plus_on={@initiative.viewer_plus}
-              can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
-            />
-          </div>
-        </div>
+            <div class="lg:hidden mb-6">
+              <div class="flex justify-center items-center gap-2">
+                <button
+                  :if={@can_edit}
+                  type="button"
+                  data-add-root
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                  aria-label="New list"
+                  title="New list"
+                >
+                  <.icon name="hero-plus" class="w-4 h-4" />
+                  <span>New List</span>
+                </button>
+                <button
+                  type="button"
+                  phx-click={
+                    Phoenix.LiveView.JS.toggle(to: "#mobile-members")
+                    |> Phoenix.LiveView.JS.toggle(to: "#members-show-label")
+                    |> Phoenix.LiveView.JS.toggle(to: "#members-hide-label")
+                  }
+                  aria-controls="mobile-members"
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-zinc-300 dark:border-zinc-600 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  <.icon name="hero-users" class="w-4 h-4" />
+                  <span id="members-show-label">Show Members</span>
+                  <span id="members-hide-label" class="hidden">Hide Members</span>
+                </button>
+              </div>
+              <div id="mobile-members" class="hidden mt-2">
+                <.members_panel
+                  id="members-mobile"
+                  members={@members}
+                  can_admin={@can_admin}
+                  online_ids={@online_ids}
+                  owner_id={@initiative.owner_id}
+                  me={@current_user.id}
+                  assignee_ids={@direct_assignee_ids}
+                  viewer_plus_on={@initiative.viewer_plus}
+                  can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
+                />
+              </div>
+            </div>
 
-        <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
+            <%!-- App-shell (m02.07 item 1.1): at lg:+ the grid is a viewport-height
              shell — the page stops scrolling and each column owns its own
              vertical scroll. Below lg: it's a plain grid and the page scrolls,
              unchanged. The calc trims the top header (~2.8rem) and the
@@ -3166,194 +3184,199 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
              lg: (lg:pb-0), so the shell fits flush to the viewport bottom. The
              close/role row now lives inside the center column (it used to sit
              full-width above the shell), so it no longer subtracts here. --%>
-        <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-5rem)] lg:items-stretch lg:overflow-hidden">
-          <%!-- Center column. At lg:+ it's a flex column: the close/role row and
+            <div class="grid grid-cols-1 lg:grid-cols-[1fr_360px] xl:grid-cols-[1fr_400px] 2xl:grid-cols-[1fr_440px] gap-6 lg:h-[calc(100dvh-5rem)] lg:items-stretch lg:overflow-hidden">
+              <%!-- Center column. At lg:+ it's a flex column: the close/role row and
                header are flex-none siblings above the tree's own scroll box
                (item 1.2), so the tree scrolls beneath chrome that never moves.
                Below lg: it's a normal block and the page scrolls. min-w-0 keeps
                the column from expanding to fit deep rows. --%>
-          <div class="min-w-0 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden">
-            <%!-- Close (back to the index) + role on the same row, scoped to the
+              <div class="min-w-0 lg:flex lg:flex-col lg:min-h-0 lg:overflow-hidden">
+                <%!-- Close (back to the index) + role on the same row, scoped to the
                  center column so it aligns with the header beneath it rather
                  than spanning the right pane. The little red X (item 12.7) reads
                  as "close this Initiative" rather than a plain back arrow —
                  matching the task pane's close affordance. --%>
-            <div class="mb-4 flex items-center justify-between gap-2">
-              <.link
-                patch={~p"/initiatives"}
-                title="Close this Initiative — back to all Initiatives"
-                class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
-              >
-                <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
-                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
-                </span>
-                Close Initiative
-              </.link>
-              <div class="flex items-center gap-3">
-                <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
+                <div class="mb-4 flex items-center justify-between gap-2">
+                  <.link
+                    patch={~p"/initiatives"}
+                    title="Close this Initiative — back to all Initiatives"
+                    class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
+                  >
+                    <span class="inline-flex items-center justify-center w-5 h-5 rounded bg-red-500/20 text-red-600 dark:text-red-400 group-hover:bg-red-500/40 transition">
+                      <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+                    </span>
+                    Close Initiative
+                  </.link>
+                  <div class="flex items-center gap-3">
+                    <%!-- Undo / Redo (m02.06 item 5). Disabled when the stack is empty
                      that way; the tooltip names the action. Ctrl+Z / Ctrl+Shift+Z
                      drive the same handlers (KbdNav hook). --%>
-                <div class="flex items-center gap-1">
-                  <button
-                    type="button"
-                    id="undo-button"
-                    disabled={is_nil(@undo_label)}
-                    title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
-                    aria-label={(@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"}
-                    class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
-                  >
-                    <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
-                  </button>
-                  <button
-                    type="button"
-                    id="redo-button"
-                    disabled={is_nil(@redo_label)}
-                    title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
-                    aria-label={(@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"}
-                    class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
-                  >
-                    <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
-                  </button>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        id="undo-button"
+                        disabled={is_nil(@undo_label)}
+                        title={(@undo_label && "Undo: #{@undo_label}") || "Nothing to undo"}
+                        aria-label={
+                          (@undo_label && "Undo #{@undo_label}") || "Undo (nothing to undo)"
+                        }
+                        class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                      >
+                        <.icon name="hero-arrow-uturn-left" class="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        id="redo-button"
+                        disabled={is_nil(@redo_label)}
+                        title={(@redo_label && "Redo: #{@redo_label}") || "Nothing to redo"}
+                        aria-label={
+                          (@redo_label && "Redo #{@redo_label}") || "Redo (nothing to redo)"
+                        }
+                        class="inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition"
+                      >
+                        <.icon name="hero-arrow-uturn-right" class="w-4 h-4" />
+                      </button>
+                    </div>
+                    <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
+                      Your role:
+                      <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
+                    </div>
+                  </div>
                 </div>
-                <div class="text-xs text-zinc-500 dark:text-zinc-400 whitespace-nowrap">
-                  Your role: <span class="font-medium text-zinc-700 dark:text-zinc-200">{@role}</span>
-                </div>
-              </div>
-            </div>
 
-            <.initiative_header
-              initiative={@initiative}
-              subtitle={@subtitle}
-              initiative_progress={@initiative_progress}
-              can_edit={@can_edit}
-            />
+                <.initiative_header
+                  initiative={@initiative}
+                  subtitle={@subtitle}
+                  initiative_progress={@initiative_progress}
+                  can_edit={@can_edit}
+                />
 
-            <%!-- Archive-on-completion prompt (m02.08 item 4.1): a dismissible
+                <%!-- Archive-on-completion prompt (m02.08 item 4.1): a dismissible
                  nudge when the roll-up hits 100%. It only OFFERS to archive —
                  Archive runs the same per-user archive (with its own 4.2
                  confirm); Dismiss just closes the banner. Never auto-archives. --%>
-            <div
-              :if={@show_archive_prompt}
-              id="archive-prompt"
-              data-keep="archive-prompt"
-              class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2.5"
-            >
-              <p class="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
-                <.icon name="hero-check-circle" class="w-5 h-5 flex-none" />
-                All done! Archive this Initiative to clear it from your active list?
-              </p>
-              <div class="flex items-center gap-2 flex-none">
-                <button
-                  type="button"
-                  data-archive-btn
-                  data-am-owner={to_string(@current_user.id == @initiative.owner_id)}
-                  class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition"
+                <div
+                  :if={@show_archive_prompt}
+                  id="archive-prompt"
+                  data-keep="archive-prompt"
+                  class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded border border-emerald-300 dark:border-emerald-700 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-2.5"
                 >
-                  <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
-                </button>
-                <button
-                  type="button"
-                  phx-click="dismiss_archive_prompt"
-                  data-archive-dismiss
-                  aria-label="Dismiss"
-                  class="inline-flex items-center justify-center w-6 h-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
-                >
-                  <.icon name="hero-x-mark" class="w-4 h-4" />
-                </button>
-              </div>
-            </div>
+                  <p class="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-200">
+                    <.icon name="hero-check-circle" class="w-5 h-5 flex-none" />
+                    All done! Archive this Initiative to clear it from your active list?
+                  </p>
+                  <div class="flex items-center gap-2 flex-none">
+                    <button
+                      type="button"
+                      data-archive-btn
+                      data-am-owner={to_string(@current_user.id == @initiative.owner_id)}
+                      class="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition"
+                    >
+                      <.icon name="hero-archive-box" class="w-3.5 h-3.5" /> Archive
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="dismiss_archive_prompt"
+                      data-archive-dismiss
+                      aria-label="Dismiss"
+                      class="inline-flex items-center justify-center w-6 h-6 rounded text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/50"
+                    >
+                      <.icon name="hero-x-mark" class="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
 
-            <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
+                <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
                  tree's own scroll box plus two theme-matched gradient overlays
                  at its top/bottom edges. The TreeScrollFade hook flips
                  data-scrolled / data-at-end on the scroll box; the overlays
                  show/hide off those. lg:+ only — below it the page scrolls so
                  there's nothing to fade. --%>
-            <div class="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
-              <%!-- min-w-0 + overflow-x-auto: deep indentation scrolls
+                <div class="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
+                  <%!-- min-w-0 + overflow-x-auto: deep indentation scrolls
                    horizontally inside the column. At lg:+ overflow-y-auto adds
                    the column's own vertical scroll; below lg: the page scrolls.
                    The hook lives on this scroll box but flips data-scrolled /
                    data-at-end on its parent frame, so the sibling fade overlays
                    can read them as group-data-* variants. --%>
-              <div
-                id="tree-scroll"
-                phx-hook="TreeScrollFade"
-                data-keep="scroll"
-                class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
-              >
-                <%!-- The one add-task form (parked in #add-task-home below) gets
+                  <div
+                    id="tree-scroll"
+                    phx-hook="TreeScrollFade"
+                    data-keep="scroll"
+                    class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
+                  >
+                    <%!-- The one add-task form (parked in #add-task-home below) gets
                      client-teleported into these phx-update="ignore" slots —
                      opening a form never phones home (UX_GUARDRAILS 6.5). --%>
-                <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
+                    <div id="add-slot-root" phx-update="ignore" class="mb-3 empty:hidden"></div>
 
-                <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
-                  <%= if @can_edit do %>
-                    No lists yet. Use the New List button above to start tracking work.
-                  <% else %>
-                    No lists yet.
-                  <% end %>
-                </div>
+                    <div :if={@tree == []} class="text-zinc-500 dark:text-zinc-400 text-sm">
+                      <%= if @can_edit do %>
+                        No lists yet. Use the New List button above to start tracking work.
+                      <% else %>
+                        No lists yet.
+                      <% end %>
+                    </div>
 
-                <ul
-                  id="task-tree"
-                  phx-hook="TreeWidth"
-                  data-sort-mode={@root_sort_mode}
-                  class="space-y-2"
-                >
-                  <%= for {t, i} <- Enum.with_index(@tree) do %>
-                    <.task_node
-                      task={t}
-                      depth={0}
-                      index_positions={[i]}
-                      index_style={@initiative.index_style}
-                      can_edit={@can_edit}
-                      initiative_id={@initiative.id}
-                      saving_ids={@pending_saving_ids}
-                      recompute_ids={@pending_recompute_ids}
-                      inherited_sort={@root_sort_mode}
-                      progress_calc={@initiative.progress_calc}
-                      display={@display}
-                      member_ids={MapSet.new(@members, & &1.user_id)}
-                      led_ids={@led_task_ids}
-                    />
-                    <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
-                  <% end %>
-                </ul>
-              </div>
+                    <ul
+                      id="task-tree"
+                      phx-hook="TreeWidth"
+                      data-sort-mode={@root_sort_mode}
+                      class="space-y-2"
+                    >
+                      <%= for {t, i} <- Enum.with_index(@tree) do %>
+                        <.task_node
+                          task={t}
+                          depth={0}
+                          index_positions={[i]}
+                          index_style={@initiative.index_style}
+                          can_edit={@can_edit}
+                          initiative_id={@initiative.id}
+                          saving_ids={@pending_saving_ids}
+                          recompute_ids={@pending_recompute_ids}
+                          inherited_sort={@root_sort_mode}
+                          progress_calc={@initiative.progress_calc}
+                          display={@display}
+                          member_ids={MapSet.new(@members, & &1.user_id)}
+                          led_ids={@led_task_ids}
+                        />
+                        <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
+                      <% end %>
+                    </ul>
+                  </div>
 
-              <%!-- Top fade: visible only while scrolled down (data-scrolled).
+                  <%!-- Top fade: visible only while scrolled down (data-scrolled).
                    pointer-events-none so it never intercepts a click/drag on
                    the rows beneath (item 1.3 hard requirement); aria-hidden as
                    it's purely decorative. The gradient stop is the column's
                    exact bg token (white / zinc-950), with a dark-mode variant. --%>
-              <div
-                aria-hidden="true"
-                class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
-              >
-              </div>
-              <%!-- Bottom fade: visible while more content sits below (i.e. NOT
+                  <div
+                    aria-hidden="true"
+                    class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
+                  >
+                  </div>
+                  <%!-- Bottom fade: visible while more content sits below (i.e. NOT
                    at the end). Same click-through + theme-match rules. --%>
+                  <div
+                    aria-hidden="true"
+                    class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
+                  >
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Backdrop on mobile when right-rail flyout is open. Always
+               rendered; the client flips `hidden` with the rail (.03.07.20). --%>
               <div
+                id="pane-backdrop"
+                hidden={is_nil(@selected_task_id)}
+                class="lg:hidden fixed inset-0 z-20 bg-black/50"
+                data-close-panel
                 aria-hidden="true"
-                class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
               >
               </div>
-            </div>
-          </div>
 
-          <%!-- Backdrop on mobile when right-rail flyout is open. Always
-               rendered; the client flips `hidden` with the rail (.03.07.20). --%>
-          <div
-            id="pane-backdrop"
-            hidden={is_nil(@selected_task_id)}
-            class="lg:hidden fixed inset-0 z-20 bg-black/50"
-            data-close-panel
-            aria-hidden="true"
-          >
-          </div>
-
-          <%!-- Right pane (m02.07 item 1.4). At lg:+ it's a persistent column —
+              <%!-- Right pane (m02.07 item 1.4). At lg:+ it's a persistent column —
                always shown, full grid-cell height, a flex column whose Members
                panel is pinned at the top (flex-none, own capped overflow) while
                the Details / initiative-editor content scrolls independently
@@ -3365,80 +3388,80 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                (.03.07.20): client flips data-open at the tap and the variants
                make it a fixed overlay over the backdrop. The shell layout
                (flex column, pinned Members) is lg:+ only. --%>
-          <aside
-            id="details-rail"
-            data-open={@selected_task_id && "true"}
-            data-keep="rail"
-            class={[
-              "not-data-open:hidden lg:not-data-open:block",
-              "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
-              "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
-              "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
-              "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
-              "data-open:overflow-y-auto lg:data-open:overflow-hidden data-open:[scrollbar-gutter:stable]",
-              "space-y-4 lg:space-y-0 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:overflow-hidden"
-            ]}
-          >
-            <div class="lg:hidden flex justify-end">
-              <button
-                type="button"
-                data-close-panel
-                aria-label="Close details panel"
-                title="Close"
-                class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+              <aside
+                id="details-rail"
+                data-open={@selected_task_id && "true"}
+                data-keep="rail"
+                class={[
+                  "not-data-open:hidden lg:not-data-open:block",
+                  "data-open:block lg:data-open:flex data-open:fixed lg:data-open:static data-open:top-0 data-open:bottom-0 data-open:right-0 data-open:z-30",
+                  "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
+                  "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
+                  "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
+                  "data-open:overflow-y-auto lg:data-open:overflow-hidden data-open:[scrollbar-gutter:stable]",
+                  "space-y-4 lg:space-y-0 lg:flex lg:flex-col lg:h-full lg:min-h-0 lg:overflow-hidden"
+                ]}
               >
-                <.icon name="hero-x-mark" class="w-5 h-5" />
-              </button>
-            </div>
-            <%!-- Members — pinned at the top of the pane (lg:flex-none) with its
+                <div class="lg:hidden flex justify-end">
+                  <button
+                    type="button"
+                    data-close-panel
+                    aria-label="Close details panel"
+                    title="Close"
+                    class="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+                  >
+                    <.icon name="hero-x-mark" class="w-5 h-5" />
+                  </button>
+                </div>
+                <%!-- Members — pinned at the top of the pane (lg:flex-none) with its
                  own capped height + overflow when the list is long (item 1.4),
                  so it never scrolls away beneath the Details content. On phone
                  it's hidden in favor of the header's collapsible toggle
                  (.05.04.1). --%>
-            <div class="hidden sm:block lg:flex-none lg:max-h-[45%] lg:overflow-y-auto lg:[scrollbar-gutter:stable] lg:mb-4">
-              <.members_panel
-                id="members-desktop"
-                members={@members}
-                can_admin={@can_admin}
-                online_ids={@online_ids}
-                owner_id={@initiative.owner_id}
-                me={@current_user.id}
-                assignee_ids={@direct_assignee_ids}
-                viewer_plus_on={@initiative.viewer_plus}
-                can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
-              />
-            </div>
+                <div class="hidden sm:block lg:flex-none lg:max-h-[45%] lg:overflow-y-auto lg:[scrollbar-gutter:stable] lg:mb-4">
+                  <.members_panel
+                    id="members-desktop"
+                    members={@members}
+                    can_admin={@can_admin}
+                    online_ids={@online_ids}
+                    owner_id={@initiative.owner_id}
+                    me={@current_user.id}
+                    assignee_ids={@direct_assignee_ids}
+                    viewer_plus_on={@initiative.viewer_plus}
+                    can_assign={@can_edit or MapSet.size(@led_task_ids) > 0}
+                  />
+                </div>
 
-            <%!-- Content region: Details / initiative-editor, scrolling
+                <%!-- Content region: Details / initiative-editor, scrolling
                  independently beneath the pinned Members (item 1.4). At lg:+
                  it's flex-1 with its own overflow; below lg: a normal block
                  (the whole flyout scrolls). space-y restores the gap the
                  aside-level one drops at lg. --%>
-            <div class="space-y-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
-              <%!-- Persistent like the task pane (.03.07.08): always rendered,
+                <div class="space-y-4 lg:flex-1 lg:min-h-0 lg:overflow-y-auto lg:[scrollbar-gutter:stable]">
+                  <%!-- Persistent like the task pane (.03.07.08): always rendered,
                    the editor's #initiative-form pre-populated from the
                    initiative. Visibility is CLIENT-OWNED view state (UX_GUARDRAILS
                    6.5): always rendered `hidden` here, and DoitInitiativeEditor
                    reveals it instantly on the title click — no round trip. The
                    guard observer re-asserts the open flag across patches. --%>
-              <div
-                id="initiative-editor-pane"
-                data-keep="editor"
-                hidden
-                class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-              >
-                <.initiative_editor
-                  form={@initiative_form}
-                  can_edit={@can_edit}
-                  can_admin={@can_admin}
-                  initiative={@initiative}
-                  root_task={@root_task}
-                  subtitle={@subtitle}
-                  am_owner={@current_user.id == @initiative.owner_id}
-                />
-              </div>
+                  <div
+                    id="initiative-editor-pane"
+                    data-keep="editor"
+                    hidden
+                    class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+                  >
+                    <.initiative_editor
+                      form={@initiative_form}
+                      can_edit={@can_edit}
+                      can_admin={@can_admin}
+                      initiative={@initiative}
+                      root_task={@root_task}
+                      subtitle={@subtitle}
+                      am_owner={@current_user.id == @initiative.owner_id}
+                    />
+                  </div>
 
-              <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
+                  <%!-- ONE pane, pre-mounted and never swapped (.03.07.06, item 15.8):
                    the shell renders from the start — a blank task when nothing is
                    selected — so the FIRST selection fills client-side with no
                    round trip, exactly like every later switch. Deselecting hides
@@ -3449,503 +3472,510 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                    reconciles the same elements in place (and fills the editable
                    co-assignee list, comments, activity) — LiveView never clobbers
                    the focused field, so in-progress typing survives the patch. --%>
-              <div
-                id="task-editor-pane"
-                data-task-id={@selected_task_id}
-                hidden={is_nil(@selected_task_id)}
-                class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
-              >
-                <.task_editor
-                  task={@selected_task || blank_task()}
-                  comments={@comments}
-                  current_user={@current_user}
-                  activity={@activity}
-                  members={@members}
-                  can_edit={@can_edit}
-                  can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
-                  can_staff={@selected_staff_pool != nil}
-                  staff_pool={@selected_staff_pool}
-                  show_activity={@show_task_activity}
-                  online_ids={@online_ids}
-                />
-              </div>
+                  <div
+                    id="task-editor-pane"
+                    data-task-id={@selected_task_id}
+                    hidden={is_nil(@selected_task_id)}
+                    class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
+                  >
+                    <.task_editor
+                      task={@selected_task || blank_task()}
+                      comments={@comments}
+                      current_user={@current_user}
+                      activity={@activity}
+                      members={@members}
+                      can_edit={@can_edit}
+                      can_progress={@can_edit or MapSet.member?(@led_task_ids, @selected_task_id)}
+                      can_staff={@selected_staff_pool != nil}
+                      staff_pool={@selected_staff_pool}
+                      show_activity={@show_task_activity}
+                      online_ids={@online_ids}
+                    />
+                  </div>
+                </div>
+              </aside>
             </div>
-          </aside>
-        </div>
-      </div>
+          </div>
 
-      <div id="confirm-skips" phx-hook="ConfirmSkips" hidden></div>
+          <div id="confirm-skips" phx-hook="ConfirmSkips" hidden></div>
 
-      <%!-- The single add-task form. Lives here (hidden) until the client
+          <%!-- The single add-task form. Lives here (hidden) until the client
            teleports it into a slot; all containers are phx-update="ignore",
            so no patch can disturb it mid-typing. create_task reads the two
            hidden inputs — opening/closing never touches the server. --%>
-      <div id="add-task-home" phx-update="ignore" hidden>
-        <form
-          id="add-task-form"
-          phx-submit="create_task"
-          class="flex items-center gap-2 rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2"
-        >
-          <input type="hidden" name="parent_id" value="" />
-          <input type="hidden" name="after_id" value="" />
-          <input
-            type="text"
-            name="title"
-            required
-            placeholder="New task..."
-            class="flex-1 input input-bordered input-sm"
-          />
-          <button
-            type="submit"
-            phx-disable-with="Adding..."
-            class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition"
-          >
-            Add
-          </button>
-          <%!-- "Done", not "Cancel": the adder stays open across submits so
+          <div id="add-task-home" phx-update="ignore" hidden>
+            <form
+              id="add-task-form"
+              phx-submit="create_task"
+              class="flex items-center gap-2 rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2"
+            >
+              <input type="hidden" name="parent_id" value="" />
+              <input type="hidden" name="after_id" value="" />
+              <input
+                type="text"
+                name="title"
+                required
+                placeholder="New task..."
+                class="flex-1 input input-bordered input-sm"
+              />
+              <button
+                type="submit"
+                phx-disable-with="Adding..."
+                class="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition"
+              >
+                Add
+              </button>
+              <%!-- "Done", not "Cancel": the adder stays open across submits so
                you can add several tasks; this button just closes it and
                discards nothing already added. --%>
-          <button
-            type="button"
-            data-add-cancel
-            class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
-          >
-            Done
-          </button>
-        </form>
-      </div>
-      <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
-      <.move_flip_confirm :if={@can_edit} />
-      <.cascade_confirm />
-      <.cascade_sort_confirm :if={@can_edit} />
-      <.delete_task_confirm :if={@can_edit} />
-      <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
-      <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
-      <.archive_confirm />
-      <.remove_member_confirm :if={@can_admin} />
-      <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
-      <div
-        :if={@pending_handoff}
-        id="handoff-confirm"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-      >
-        <form
-          :if={@pending_handoff}
-          id="handoff-form"
-          phx-submit="confirm_handoff"
-          class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
-        >
-          <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
-            Remove {@pending_handoff.name}
-          </h3>
-          <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            They hold {@pending_handoff.count} assignment(s) here. Choose what happens to those,
-            then they'll be removed.
-          </p>
-
-          <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
-            <input
-              type="checkbox"
-              name="promote_co"
-              value="true"
-              checked={@pending_handoff.promote_default}
-              class="checkbox checkbox-sm"
-            /> Promote the next co-assignee in line where one exists
-          </label>
-
-          <label class="mt-3 block text-xs text-zinc-500 dark:text-zinc-400">
-            Otherwise hand their tasks to
-          </label>
-          <select name="takeover" class="mt-1 w-full select select-bordered select-sm">
-            <option value="">No one — leave those tasks unassigned</option>
-            <option
-              :for={m <- @members}
-              :if={m.user_id != @pending_handoff.user_id}
-              value={m.user_id}
-            >
-              {m.user.name} (@{m.user.username})
-            </option>
-          </select>
-
-          <div class="mt-5 flex justify-end gap-2">
-            <button
-              type="button"
-              data-handoff-cancel
-              class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              phx-disable-with="Removing..."
-              class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700"
-            >
-              Remove &amp; hand off
-            </button>
+              <button
+                type="button"
+                data-add-cancel
+                class="text-sm px-2 py-1.5 text-zinc-500 hover:text-zinc-800 dark:text-zinc-100 dark:hover:text-white"
+              >
+                Done
+              </button>
+            </form>
           </div>
-        </form>
-      </div>
-      <%!-- Transfer-ownership confirm is client-side (UX_GUARDRAILS 6.5, like
+          <.completion_confirm pending={@pending_action} verb={pending_verb(@pending_action)} />
+          <.move_flip_confirm :if={@can_edit} />
+          <.cascade_confirm />
+          <.cascade_sort_confirm :if={@can_edit} />
+          <.delete_task_confirm :if={@can_edit} />
+          <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
+          <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
+          <.archive_confirm />
+          <.remove_member_confirm :if={@can_admin} />
+          <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
+          <div
+            :if={@pending_handoff}
+            id="handoff-confirm"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          >
+            <form
+              :if={@pending_handoff}
+              id="handoff-form"
+              phx-submit="confirm_handoff"
+              class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl"
+            >
+              <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+                Remove {@pending_handoff.name}
+              </h3>
+              <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+                They hold {@pending_handoff.count} assignment(s) here. Choose what happens to those,
+                then they'll be removed.
+              </p>
+
+              <label class="mt-3 flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
+                <input
+                  type="checkbox"
+                  name="promote_co"
+                  value="true"
+                  checked={@pending_handoff.promote_default}
+                  class="checkbox checkbox-sm"
+                /> Promote the next co-assignee in line where one exists
+              </label>
+
+              <label class="mt-3 block text-xs text-zinc-500 dark:text-zinc-400">
+                Otherwise hand their tasks to
+              </label>
+              <select name="takeover" class="mt-1 w-full select select-bordered select-sm">
+                <option value="">No one — leave those tasks unassigned</option>
+                <option
+                  :for={m <- @members}
+                  :if={m.user_id != @pending_handoff.user_id}
+                  value={m.user_id}
+                >
+                  {m.user.name} (@{m.user.username})
+                </option>
+              </select>
+
+              <div class="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-handoff-cancel
+                  class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  phx-disable-with="Removing..."
+                  class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700"
+                >
+                  Remove &amp; hand off
+                </button>
+              </div>
+            </form>
+          </div>
+          <%!-- Transfer-ownership confirm is client-side (UX_GUARDRAILS 6.5, like
            the delete confirms): everything it shows — the target's name, the
            demotion copy — is client-known, so it opens at the click with no
            round trip. app.js fills [data-transfer-name] + stashes the user-id;
            only Proceed touches the server (confirm_transfer). phx-update="ignore"
            keeps the server out of it (a rename mid-session leaves the initiative
            name stale — display-only and rare). --%>
-      <div
-        id="transfer-confirm"
-        hidden
-        phx-update="ignore"
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-      >
-        <div class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl">
-          <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
-            Transfer ownership
-          </h3>
-          <p data-transfer-body class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-            Make <span class="font-semibold" data-transfer-name></span>
-            the owner of <span class="font-semibold">{@initiative.name}</span>?
-            This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
-            and lose owner controls.
-          </p>
-          <div class="mt-5 flex justify-end gap-2">
-            <button
-              type="button"
-              data-transfer-cancel
-              class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              id="transfer-confirm-proceed"
-              data-transfer-proceed
-              class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
-            >
-              Transfer ownership
-            </button>
+          <div
+            id="transfer-confirm"
+            hidden
+            phx-update="ignore"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+          >
+            <div class="w-full max-w-md rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 p-5 shadow-xl">
+              <h3 class="text-base font-semibold text-zinc-800 dark:text-zinc-100">
+                Transfer ownership
+              </h3>
+              <p data-transfer-body class="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
+                Make <span class="font-semibold" data-transfer-name></span>
+                the owner of <span class="font-semibold">{@initiative.name}</span>?
+                This is a transfer — you'll be demoted to <span class="font-semibold">editor</span>
+                and lose owner controls.
+              </p>
+              <div class="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  data-transfer-cancel
+                  class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  id="transfer-confirm-proceed"
+                  data-transfer-proceed
+                  class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-amber-600 hover:bg-amber-700 active:bg-amber-800"
+                >
+                  Transfer ownership
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
-      <.shortcuts_overlay />
-      <%!-- Anchor for the selection-presence channel (.04.01.12): receives
+          <.shortcuts_overlay />
+          <%!-- Anchor for the selection-presence channel (.04.01.12): receives
            presence-selections pushes and paints row badges client-side. --%>
-      <div id="presence-badges" phx-hook="PresenceBadges" data-keep="presence" phx-update="ignore" hidden></div>
+          <div
+            id="presence-badges"
+            phx-hook="PresenceBadges"
+            data-keep="presence"
+            phx-update="ignore"
+            hidden
+          >
+          </div>
 
-      <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
+          <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
            for everyone currently viewing this Initiative. Fully ephemeral —
            the message log lives only in socket assigns (broadcast, never
            persisted), so a fresh viewer sees no history and it clears once the
            last viewer leaves. Open/closed is client view state (the .Chat hook,
            localStorage), so toggling never round-trips. The input sits in a
            phx-update="ignore" wrapper so typing survives a message arriving. --%>
-      <div
-        id="initiative-chat"
-        phx-hook=".Chat"
-        data-chat-log-id={@chat_log_id}
-        data-me={@current_user.id}
-        data-my-name={@current_user.name}
-        data-my-initials={initials(@current_user)}
-        data-my-bg={avatar_bg(@current_user)}
-        data-my-fg={avatar_fg(@current_user)}
-        class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
-      >
-        <button
-          type="button"
-          data-chat-toggle
-          class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
-        >
-          <span class="flex flex-none items-center gap-1.5">
-            <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
-          </span>
-          <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
+          <div
+            id="initiative-chat"
+            phx-hook=".Chat"
+            data-chat-log-id={@chat_log_id}
+            data-me={@current_user.id}
+            data-my-name={@current_user.name}
+            data-my-initials={initials(@current_user)}
+            data-my-bg={avatar_bg(@current_user)}
+            data-my-fg={avatar_fg(@current_user)}
+            class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
+          >
+            <button
+              type="button"
+              data-chat-toggle
+              class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
+            >
+              <span class="flex flex-none items-center gap-1.5">
+                <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
+              </span>
+              <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
                .Chat hook fills + shows this on a new message while closed, and
                clears it on open. Dimmed italic, single-line ellipsis. --%>
-          <span
-            data-chat-preview
-            hidden
-            class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
-          >
-          </span>
-          <span data-chat-chevron class="inline-flex flex-none transition-transform">
-            <.icon name="hero-chevron-up" class="w-4 h-4" />
-          </span>
-        </button>
+              <span
+                data-chat-preview
+                hidden
+                class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
+              >
+              </span>
+              <span data-chat-chevron class="inline-flex flex-none transition-transform">
+                <.icon name="hero-chevron-up" class="w-4 h-4" />
+              </span>
+            </button>
 
-        <div
-          data-chat-panel
-          hidden
-          class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
-        >
-          <div
-            id="chat-log"
-            data-chat-log
-            class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
-          >
-            <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
-              No messages yet — say hello to anyone else viewing this Initiative.
-            </p>
-            <%!-- A system line (e.g. "nobody's here to read that") is the
+            <div
+              data-chat-panel
+              hidden
+              class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
+            >
+              <div
+                id="chat-log"
+                data-chat-log
+                class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
+              >
+                <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
+                  No messages yet — say hello to anyone else viewing this Initiative.
+                </p>
+                <%!-- A system line (e.g. "nobody's here to read that") is the
                  sender's own local notice: dimmed italic, no avatar, and
                  marked data-chat-system so the .Chat hook never treats it as a
                  message from another viewer (no pop / flash / preview). It has
                  no user_id, so no data-chat-uid. --%>
-            <%= for m <- Enum.reverse(@chat_messages) do %>
-              <%= if Map.get(m, :system) do %>
-                <div
-                  id={"chat-msg-#{m.id}"}
-                  data-chat-system
-                  class="text-xs italic text-zinc-400 dark:text-zinc-500"
-                >
-                  {m.body}
-                </div>
-              <% else %>
-                <div
-                  id={"chat-msg-#{m.id}"}
-                  data-chat-uid={m.user_id}
-                  data-chat-echo={Map.get(m, :echo_id)}
-                  class="flex gap-2"
-                >
-                  <span
-                    class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
-                    style={"background-image: #{m.bg}; color: #{m.fg};"}
-                  >
-                    {m.initials}
-                  </span>
-                  <div class="min-w-0">
-                    <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                <%= for m <- Enum.reverse(@chat_messages) do %>
+                  <%= if Map.get(m, :system) do %>
                     <div
-                      data-chat-body
-                      class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                      id={"chat-msg-#{m.id}"}
+                      data-chat-system
+                      class="text-xs italic text-zinc-400 dark:text-zinc-500"
                     >
                       {m.body}
                     </div>
-                  </div>
-                </div>
-              <% end %>
-            <% end %>
-          </div>
+                  <% else %>
+                    <div
+                      id={"chat-msg-#{m.id}"}
+                      data-chat-uid={m.user_id}
+                      data-chat-echo={Map.get(m, :echo_id)}
+                      class="flex gap-2"
+                    >
+                      <span
+                        class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+                        style={"background-image: #{m.bg}; color: #{m.fg};"}
+                      >
+                        {m.initials}
+                      </span>
+                      <div class="min-w-0">
+                        <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                        <div
+                          data-chat-body
+                          class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                        >
+                          {m.body}
+                        </div>
+                      </div>
+                    </div>
+                  <% end %>
+                <% end %>
+              </div>
 
-          <div
-            id="chat-input-wrap"
-            phx-update="ignore"
-            class="border-t border-zinc-200 dark:border-zinc-700 p-2"
-          >
-            <form data-chat-form class="flex gap-2">
-              <input
-                type="text"
-                data-chat-input
-                maxlength="2000"
-                placeholder="Message viewers…"
-                aria-label="Chat message"
-                autocomplete="off"
-                class="flex-1 input input-bordered input-sm"
-              />
-              <button
-                type="submit"
-                class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+              <div
+                id="chat-input-wrap"
+                phx-update="ignore"
+                class="border-t border-zinc-200 dark:border-zinc-700 p-2"
               >
-                Send
-              </button>
-            </form>
+                <form data-chat-form class="flex gap-2">
+                  <input
+                    type="text"
+                    data-chat-input
+                    maxlength="2000"
+                    placeholder="Message viewers…"
+                    aria-label="Chat message"
+                    autocomplete="off"
+                    class="flex-1 input input-bordered input-sm"
+                  />
+                  <button
+                    type="submit"
+                    class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+                  >
+                    Send
+                  </button>
+                </form>
+              </div>
+            </div>
+
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
+              export default {
+                mounted() {
+                  this.toggle = this.el.querySelector("[data-chat-toggle]");
+                  this.panel = this.el.querySelector("[data-chat-panel]");
+                  this.chevron = this.el.querySelector("[data-chat-chevron]");
+                  this.preview = this.el.querySelector("[data-chat-preview]");
+                  this.log = this.el.querySelector("[data-chat-log]");
+                  this.form = this.el.querySelector("[data-chat-form]");
+                  this.input = this.el.querySelector("[data-chat-input]");
+                  // Track the server's monotonic chat counter to spot NEW messages
+                  // in updated() (vs. unrelated re-renders).
+                  this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
+
+                  // Open/closed is in-memory view state, default CLOSED on every
+                  // mount (refresh / initiative open) — not persisted, so the chat
+                  // never greets you open.
+                  this._open = false;
+                  this.setOpen(false);
+
+                  this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
+
+                  this.form.addEventListener("submit", (e) => {
+                    e.preventDefault();
+                    const body = this.input.value.trim();
+                    if (!body) return;
+                    // Optimistic own-line echo (§6.7): show the sent bubble at submit
+                    // instead of waiting for the PubSub broadcast to round-trip back.
+                    // A client nonce ties the pending node to the real line so we can
+                    // dedupe it in updated() (and pull it on alone/empty/failure — a
+                    // sent bubble must never stand if no reader got it).
+                    const echoId = "e" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+                    this.appendEcho(echoId, body);
+                    this.pushEvent("send_chat", { body, echo_id: echoId }, (reply) => {
+                      if (!reply || reply.ok === false) {
+                        const n = this.log && this.log.querySelector(`[data-chat-echo="${echoId}"][data-chat-pending]`);
+                        if (n) n.remove();
+                      }
+                    });
+                    this.input.value = "";
+                    this.input.focus();
+                  });
+                },
+                // Build + append a pending own-message node matching the server's
+                // own-message markup (avatar from data-my-*), dimmed while pending.
+                // Lives in the morphdom-owned log; updated() reconciles it once the
+                // real (broadcast) line arrives carrying the same echo id.
+                appendEcho(echoId, body) {
+                  if (!this.log) return;
+                  const d = this.el.dataset;
+                  const row = document.createElement("div");
+                  row.className = "flex gap-2 opacity-60";
+                  row.setAttribute("data-chat-uid", d.me || "");
+                  row.setAttribute("data-chat-echo", echoId);
+                  row.setAttribute("data-chat-pending", "");
+                  const av = document.createElement("span");
+                  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]";
+                  av.style.backgroundImage = d.myBg || "";
+                  av.style.color = d.myFg || "";
+                  av.textContent = d.myInitials || "";
+                  const wrap = document.createElement("div");
+                  wrap.className = "min-w-0";
+                  const name = document.createElement("div");
+                  name.className = "text-xs text-zinc-500 dark:text-zinc-400";
+                  name.textContent = d.myName || "";
+                  const bodyEl = document.createElement("div");
+                  bodyEl.setAttribute("data-chat-body", "");
+                  bodyEl.className = "break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100";
+                  bodyEl.textContent = body;
+                  wrap.appendChild(name);
+                  wrap.appendChild(bodyEl);
+                  row.appendChild(av);
+                  row.appendChild(wrap);
+                  this.log.appendChild(row);
+                  this.scrollToBottom();
+                },
+                // Remove any pending echo whose nonce now appears on a real
+                // (server-rendered, non-pending) message node — the broadcast line
+                // has landed and supersedes the optimistic bubble.
+                reconcileEchoes() {
+                  if (!this.log) return;
+                  const pending = this.log.querySelectorAll("[data-chat-pending][data-chat-echo]");
+                  pending.forEach((p) => {
+                    const id = p.getAttribute("data-chat-echo");
+                    if (!id) return;
+                    const real = this.log.querySelector(`[data-chat-echo="${id}"]:not([data-chat-pending])`);
+                    if (real) p.remove();
+                  });
+                },
+                setOpen(open) {
+                  this.panel.hidden = !open;
+                  // Bottom-docked panel opens upward: chevron points up when closed
+                  // ("open me"), down when open ("minimize"). Base icon is up, so
+                  // rotate only when open.
+                  if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
+                  this._open = open;
+                  if (open) {
+                    this.hidePreview(); // reading them now — clear the collapsed peek
+                    this.scrollToBottom();
+                    this.input.focus();
+                  }
+                },
+                hidePreview() {
+                  if (this.preview) {
+                    this.preview.hidden = true;
+                    this.preview.textContent = "";
+                  }
+                },
+                showLatestPreview() {
+                  if (!this.preview || !this.log) return;
+                  const bodies = this.log.querySelectorAll("[data-chat-body]");
+                  const last = bodies[bodies.length - 1];
+                  if (!last) return;
+                  this.preview.textContent = last.textContent.trim();
+                  this.preview.hidden = false;
+                },
+                scrollToBottom() {
+                  if (this.log) this.log.scrollTop = this.log.scrollHeight;
+                },
+                updated() {
+                  // A server re-render (e.g. your own sent message broadcasting
+                  // back) re-applies the template's `hidden` on the panel via
+                  // morphdom, which would snap an open chat shut. Re-assert the open
+                  // state from localStorage (the source of truth) before anything
+                  // else, so sending never closes the window.
+                  const reopen = this._open;
+                  this.panel.hidden = !reopen;
+                  if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
+                  // Reconcile optimistic echoes: when the real (broadcast) own-line
+                  // arrives it carries the same client nonce on a NON-pending node.
+                  // Drop the dimmed pending bubble so the canonical line supersedes
+                  // it — no duplicate, and the dimmed "pending" look clears.
+                  this.reconcileEchoes();
+                  // A new message bumps the server's monotonic chat-log id. A
+                  // system line (the alone-case "nobody's here" notice) also bumps
+                  // it, but it's the sender's own local notice — never pop / flash /
+                  // preview for it (the rejection bonk already fired server-side).
+                  const id = parseInt(this.el.dataset.chatLogId || "0", 10);
+                  if (id > this._lastLogId) {
+                    this._lastLogId = id;
+                    if (!this.latestIsSystem() && this.fromOther()) {
+                      this.pop(); // a quick blip — distinct from the rejection bonk
+                      if (this.panel.hidden) {
+                        this.showLatestPreview();
+                        this.flash();
+                      }
+                    }
+                  }
+                  if (this.panel && !this.panel.hidden) this.scrollToBottom();
+                },
+                // Is the newest log entry a system notice (data-chat-system)?
+                latestIsSystem() {
+                  if (!this.log) return false;
+                  const last = this.log.lastElementChild;
+                  return !!last && last.hasAttribute("data-chat-system");
+                },
+                // Was the latest message from someone else? No pop / flash for your
+                // own message echoing back over the broadcast.
+                fromOther() {
+                  if (!this.log) return false;
+                  const msgs = this.log.querySelectorAll("[data-chat-uid]");
+                  const last = msgs[msgs.length - 1];
+                  return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
+                },
+                // Brief green pulse on the collapsed bar (reflow to retrigger on
+                // rapid messages).
+                flash() {
+                  const t = this.toggle;
+                  if (!t) return;
+                  t.classList.remove("chat-flash");
+                  void t.offsetWidth;
+                  t.classList.add("chat-flash");
+                },
+                // A short rising blip — deliberately unlike the descending bonk thud.
+                pop() {
+                  try {
+                    const Ctx = window.AudioContext || window.webkitAudioContext;
+                    this._ac = this._ac || new Ctx();
+                    const ctx = this._ac;
+                    if (ctx.state === "suspended") ctx.resume();
+                    const osc = ctx.createOscillator(), gain = ctx.createGain();
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(420, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
+                    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                    gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
+                    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
+                    osc.connect(gain).connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.14);
+                  } catch (_e) {}
+                },
+              }
+            </script>
           </div>
-        </div>
-
-        <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
-          export default {
-            mounted() {
-              this.toggle = this.el.querySelector("[data-chat-toggle]");
-              this.panel = this.el.querySelector("[data-chat-panel]");
-              this.chevron = this.el.querySelector("[data-chat-chevron]");
-              this.preview = this.el.querySelector("[data-chat-preview]");
-              this.log = this.el.querySelector("[data-chat-log]");
-              this.form = this.el.querySelector("[data-chat-form]");
-              this.input = this.el.querySelector("[data-chat-input]");
-              // Track the server's monotonic chat counter to spot NEW messages
-              // in updated() (vs. unrelated re-renders).
-              this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
-
-              // Open/closed is in-memory view state, default CLOSED on every
-              // mount (refresh / initiative open) — not persisted, so the chat
-              // never greets you open.
-              this._open = false;
-              this.setOpen(false);
-
-              this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
-
-              this.form.addEventListener("submit", (e) => {
-                e.preventDefault();
-                const body = this.input.value.trim();
-                if (!body) return;
-                // Optimistic own-line echo (§6.7): show the sent bubble at submit
-                // instead of waiting for the PubSub broadcast to round-trip back.
-                // A client nonce ties the pending node to the real line so we can
-                // dedupe it in updated() (and pull it on alone/empty/failure — a
-                // sent bubble must never stand if no reader got it).
-                const echoId = "e" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-                this.appendEcho(echoId, body);
-                this.pushEvent("send_chat", { body, echo_id: echoId }, (reply) => {
-                  if (!reply || reply.ok === false) {
-                    const n = this.log && this.log.querySelector(`[data-chat-echo="${echoId}"][data-chat-pending]`);
-                    if (n) n.remove();
-                  }
-                });
-                this.input.value = "";
-                this.input.focus();
-              });
-            },
-            // Build + append a pending own-message node matching the server's
-            // own-message markup (avatar from data-my-*), dimmed while pending.
-            // Lives in the morphdom-owned log; updated() reconciles it once the
-            // real (broadcast) line arrives carrying the same echo id.
-            appendEcho(echoId, body) {
-              if (!this.log) return;
-              const d = this.el.dataset;
-              const row = document.createElement("div");
-              row.className = "flex gap-2 opacity-60";
-              row.setAttribute("data-chat-uid", d.me || "");
-              row.setAttribute("data-chat-echo", echoId);
-              row.setAttribute("data-chat-pending", "");
-              const av = document.createElement("span");
-              av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]";
-              av.style.backgroundImage = d.myBg || "";
-              av.style.color = d.myFg || "";
-              av.textContent = d.myInitials || "";
-              const wrap = document.createElement("div");
-              wrap.className = "min-w-0";
-              const name = document.createElement("div");
-              name.className = "text-xs text-zinc-500 dark:text-zinc-400";
-              name.textContent = d.myName || "";
-              const bodyEl = document.createElement("div");
-              bodyEl.setAttribute("data-chat-body", "");
-              bodyEl.className = "break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100";
-              bodyEl.textContent = body;
-              wrap.appendChild(name);
-              wrap.appendChild(bodyEl);
-              row.appendChild(av);
-              row.appendChild(wrap);
-              this.log.appendChild(row);
-              this.scrollToBottom();
-            },
-            // Remove any pending echo whose nonce now appears on a real
-            // (server-rendered, non-pending) message node — the broadcast line
-            // has landed and supersedes the optimistic bubble.
-            reconcileEchoes() {
-              if (!this.log) return;
-              const pending = this.log.querySelectorAll("[data-chat-pending][data-chat-echo]");
-              pending.forEach((p) => {
-                const id = p.getAttribute("data-chat-echo");
-                if (!id) return;
-                const real = this.log.querySelector(`[data-chat-echo="${id}"]:not([data-chat-pending])`);
-                if (real) p.remove();
-              });
-            },
-            setOpen(open) {
-              this.panel.hidden = !open;
-              // Bottom-docked panel opens upward: chevron points up when closed
-              // ("open me"), down when open ("minimize"). Base icon is up, so
-              // rotate only when open.
-              if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
-              this._open = open;
-              if (open) {
-                this.hidePreview(); // reading them now — clear the collapsed peek
-                this.scrollToBottom();
-                this.input.focus();
-              }
-            },
-            hidePreview() {
-              if (this.preview) {
-                this.preview.hidden = true;
-                this.preview.textContent = "";
-              }
-            },
-            showLatestPreview() {
-              if (!this.preview || !this.log) return;
-              const bodies = this.log.querySelectorAll("[data-chat-body]");
-              const last = bodies[bodies.length - 1];
-              if (!last) return;
-              this.preview.textContent = last.textContent.trim();
-              this.preview.hidden = false;
-            },
-            scrollToBottom() {
-              if (this.log) this.log.scrollTop = this.log.scrollHeight;
-            },
-            updated() {
-              // A server re-render (e.g. your own sent message broadcasting
-              // back) re-applies the template's `hidden` on the panel via
-              // morphdom, which would snap an open chat shut. Re-assert the open
-              // state from localStorage (the source of truth) before anything
-              // else, so sending never closes the window.
-              const reopen = this._open;
-              this.panel.hidden = !reopen;
-              if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
-              // Reconcile optimistic echoes: when the real (broadcast) own-line
-              // arrives it carries the same client nonce on a NON-pending node.
-              // Drop the dimmed pending bubble so the canonical line supersedes
-              // it — no duplicate, and the dimmed "pending" look clears.
-              this.reconcileEchoes();
-              // A new message bumps the server's monotonic chat-log id. A
-              // system line (the alone-case "nobody's here" notice) also bumps
-              // it, but it's the sender's own local notice — never pop / flash /
-              // preview for it (the rejection bonk already fired server-side).
-              const id = parseInt(this.el.dataset.chatLogId || "0", 10);
-              if (id > this._lastLogId) {
-                this._lastLogId = id;
-                if (!this.latestIsSystem() && this.fromOther()) {
-                  this.pop(); // a quick blip — distinct from the rejection bonk
-                  if (this.panel.hidden) {
-                    this.showLatestPreview();
-                    this.flash();
-                  }
-                }
-              }
-              if (this.panel && !this.panel.hidden) this.scrollToBottom();
-            },
-            // Is the newest log entry a system notice (data-chat-system)?
-            latestIsSystem() {
-              if (!this.log) return false;
-              const last = this.log.lastElementChild;
-              return !!last && last.hasAttribute("data-chat-system");
-            },
-            // Was the latest message from someone else? No pop / flash for your
-            // own message echoing back over the broadcast.
-            fromOther() {
-              if (!this.log) return false;
-              const msgs = this.log.querySelectorAll("[data-chat-uid]");
-              const last = msgs[msgs.length - 1];
-              return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
-            },
-            // Brief green pulse on the collapsed bar (reflow to retrigger on
-            // rapid messages).
-            flash() {
-              const t = this.toggle;
-              if (!t) return;
-              t.classList.remove("chat-flash");
-              void t.offsetWidth;
-              t.classList.add("chat-flash");
-            },
-            // A short rising blip — deliberately unlike the descending bonk thud.
-            pop() {
-              try {
-                const Ctx = window.AudioContext || window.webkitAudioContext;
-                this._ac = this._ac || new Ctx();
-                const ctx = this._ac;
-                if (ctx.state === "suspended") ctx.resume();
-                const osc = ctx.createOscillator(), gain = ctx.createGain();
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(420, ctx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
-                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
-                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
-                osc.connect(gain).connect(ctx.destination);
-                osc.start();
-                osc.stop(ctx.currentTime + 0.14);
-              } catch (_e) {}
-            },
-          }
-        </script>
-      </div>
         </div>
       <% else %>
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
@@ -4176,7 +4206,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <div class="hidden sm:flex justify-center mt-10 mb-16">
           <button
             type="button"
-            phx-click={Phoenix.LiveView.JS.dispatch("doit:shortcuts-toggle", to: "#shortcuts-overlay")}
+            phx-click={
+              Phoenix.LiveView.JS.dispatch("doit:shortcuts-toggle", to: "#shortcuts-overlay")
+            }
             class="inline-flex items-center gap-1 text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-800 dark:hover:text-zinc-100"
           >
             <.icon name="hero-command-line" class="w-4 h-4" /> Keyboard shortcuts
@@ -5817,7 +5849,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       </details>
 
       <ul data-members-list class="space-y-1 text-sm">
-        <li :for={m <- @members} data-member-row data-user-id={m.user_id} class="flex items-center justify-between">
+        <li
+          :for={m <- @members}
+          data-member-row
+          data-user-id={m.user_id}
+          class="flex items-center justify-between"
+        >
           <span class="flex items-center gap-1 min-w-0 text-zinc-700 dark:text-zinc-200">
             <%!-- Drag handle (item 12.8.1): grab a member and drop them on a
                  task to assign. Shown only when this user can assign; desktop

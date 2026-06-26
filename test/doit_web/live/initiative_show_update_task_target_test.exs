@@ -82,12 +82,21 @@ defmodule DoItWeb.InitiativeShowUpdateTaskTargetTest do
 
     # Select A, then replay an edit captured against B → lands on B, not A.
     render_hook(view, "select_task", %{"id" => to_string(task_a.id)})
-    render_hook(view, "update_task", %{"task" => %{"title" => "B-edit"}, "id" => to_string(task_b.id)})
+
+    render_hook(view, "update_task", %{
+      "task" => %{"title" => "B-edit"},
+      "id" => to_string(task_b.id)
+    })
+
     assert Tasks.get_task!(task_b.id).title == "B-edit"
     assert Tasks.get_task!(task_a.id).title == "A"
 
     # And an edit captured against A lands on A (its own task).
-    render_hook(view, "update_task", %{"task" => %{"title" => "A-edit"}, "id" => to_string(task_a.id)})
+    render_hook(view, "update_task", %{
+      "task" => %{"title" => "A-edit"},
+      "id" => to_string(task_a.id)
+    })
+
     assert Tasks.get_task!(task_a.id).title == "A-edit"
     assert Tasks.get_task!(task_b.id).title == "B-edit"
   end
@@ -107,7 +116,11 @@ defmodule DoItWeb.InitiativeShowUpdateTaskTargetTest do
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}")
 
     render_hook(view, "select_task", %{"id" => to_string(task_a.id)})
-    render_hook(view, "update_task", %{"task" => %{"title" => "fallback"}, "id" => to_string(foreign.id)})
+
+    render_hook(view, "update_task", %{
+      "task" => %{"title" => "fallback"},
+      "id" => to_string(foreign.id)
+    })
 
     # The foreign task is untouched; the edit fell back to the selected task A.
     assert Tasks.get_task!(foreign.id).title == "Foreign"

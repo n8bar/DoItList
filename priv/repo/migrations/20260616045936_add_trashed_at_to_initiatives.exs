@@ -9,6 +9,9 @@ defmodule DoIt.Repo.Migrations.AddTrashedAtToInitiatives do
       add :trashed_at, :utc_datetime
     end
 
-    create index(:initiatives, [:owner_id], where: "trashed_at IS NOT NULL", name: :initiatives_trashed_by_owner_index)
+    create index(:initiatives, [:owner_id],
+             where: "trashed_at IS NOT NULL",
+             name: :initiatives_trashed_by_owner_index
+           )
   end
 end
