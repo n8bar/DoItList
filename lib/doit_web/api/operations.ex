@@ -76,6 +76,19 @@ defmodule DoItWeb.Api.Operations do
   | `add`    | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.create_link/2`              | edit (source) |
   | `remove` | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.remove_link/2`              | edit (source) |
 
+  ### Task parentage (and one-batch bootstrap)
+
+  An `add task` resolves both an Initiative and a parent. Give a `parent_id` /
+  `parent_lid` (the parent may be a `lid` created earlier in the batch) and the
+  Initiative is derived from it. Give an `initiative_id` / `initiative_lid` with
+  **no** parent and the task is created **top-level**: its parent defaults to
+  that Initiative's root task. This is what lets a single batch create an
+  Initiative (`lid`) and its first top-level task referencing it via
+  `initiative_lid` — no two-round-trip bootstrap, and the caller never needs the
+  Initiative's `root_task_id` (which isn't referenceable as a `parent_lid` for a
+  just-created Initiative). The default parent goes through the same `:edit`
+  authz and same-Initiative parent guard as any explicit parent.
+
   ### Cross-references (`link`, worklist 4)
 
   A `link` is a task→task cross-reference ("see that other task"), anchored on
@@ -991,18 +1004,40 @@ defmodule DoItWeb.Api.Operations do
              "initiative_id"
            )}
 
+        # An `add task` that names an Initiative but no parent defaults to a
+        # TOP-LEVEL task: its parent is that Initiative's root task. This lets a
+        # single batch create an Initiative (lid) and its first top-level task
+        # referencing it via `initiative_lid` — no two-round-trip bootstrap, and
+        # without the caller needing the root_task_id (which isn't referenceable
+        # as a parent_lid for a just-created Initiative). The Initiative is
+        # resolved through the same path (a same-batch lid already resolved to
+        # its real id), and the :edit authz + parent_in_initiative guard below
+        # still apply to the root parent unchanged.
         is_nil(parent_id) ->
-          {:error,
-           err(
-             :unprocessable_entity,
-             "A task create needs parent_id (or parent_lid) — the Initiative's root_task_id for a top-level task.",
-             422,
-             "parent_id"
-           )}
+          with {:ok, root_id} <- initiative_root_task_id(initiative_id) do
+            {:ok, initiative_id, root_id}
+          end
 
         true ->
           {:ok, initiative_id, parent_id}
       end
+    end
+  end
+
+  # The Initiative's root task id, the implicit parent of a top-level task.
+  # Resolved within the transaction, so a same-batch initiative create is
+  # visible. Authz still runs on the create itself (below), so reading the id
+  # here leaks nothing the caller can't already address.
+  defp initiative_root_task_id(initiative_id) do
+    case Initiatives.get_initiative(initiative_id) do
+      %Initiative{root_task_id: root_id} when not is_nil(root_id) ->
+        {:ok, root_id}
+
+      %Initiative{} ->
+        {:error, err(:unprocessable_entity, "Initiative has no root task.", 422, "initiative_id")}
+
+      nil ->
+        {:error, err(:not_found, "No such Initiative.", 422)}
     end
   end
 

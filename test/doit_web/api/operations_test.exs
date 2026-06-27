@@ -107,6 +107,43 @@ defmodule DoItWeb.Api.OperationsTest do
     end
   end
 
+  describe "one-batch bootstrap: Initiative + its first top-level task" do
+    test "an add task with initiative_lid and no parent lands under the new root", ctx do
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{"op" => "add", "type" => "initiative", "lid" => "i1", "data" => %{"name" => "Fresh"}},
+          %{
+            "op" => "add",
+            "type" => "task",
+            "lid" => "t1",
+            # initiative_lid points at the same-batch Initiative; NO parent given,
+            # so it must default to that Initiative's root task.
+            "data" => %{"initiative_lid" => "i1", "title" => "First task"}
+          }
+        ])
+
+      assert status == 200
+
+      assert [
+               %{"index" => 0, "lid" => "i1", "status" => "ok", "data" => ini_data},
+               %{"index" => 1, "lid" => "t1", "status" => "ok", "data" => task_data}
+             ] = body["results"]
+
+      assert ini_data["type"] == "initiative"
+      assert task_data["type"] == "task"
+      assert task_data["title"] == "First task"
+
+      # The task is a child of the brand-new Initiative's root task.
+      root_id = ini_data["root_task_id"]
+      assert is_integer(root_id)
+      assert task_data["parent_id"] == root_id
+
+      # And it persisted under that root, in that Initiative.
+      assert %Task{parent_id: ^root_id, initiative_id: ini_id} = Repo.get(Task, task_data["id"])
+      assert ini_id == ini_data["id"]
+    end
+  end
+
   describe "ordered multi-op batch (all-or-nothing happy path)" do
     test "applies every op and all persist", ctx do
       phase1 = top_task(ctx.owner, ctx.ini, "Phase 1")
