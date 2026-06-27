@@ -73,6 +73,12 @@ defmodule DoItWeb.Api.Serializer do
         "priority": "high",
         "assignee_id": 7,
         "co_assignee_ids": [8, 9],
+        "cross_references": [
+          {"target_id": 205, "target_index": "2.1", "target_title": "Ship the SDK"}
+        ],
+        "referenced_by": [
+          {"source_id": 140, "source_index": "1.3", "source_title": "Plan the launch"}
+        ],
         "children": [ <task node>, ... ]
       }
 
@@ -99,6 +105,17 @@ defmodule DoItWeb.Api.Serializer do
   * `assignee_id` — the primary assignee's user id, or `null`.
   * `co_assignee_ids` — the **complete** co-assignee user id list in promotion
     order (uncapped, unlike the UI's avatar chip).
+  * `cross_references` — this task's **outgoing** task→task references (worklist
+    4). Each entry carries the target's stable `target_id` and its **live**
+    `target_index` label (computed from the current tree, so it never rots on a
+    reorder/reparent) plus `target_title`. Anchored on the stable id; the link
+    survives any reorder. Same-Initiative only, so the target is always in this
+    tree. A reference whose endpoint is soft-deleted (Trashed) is **hidden** until
+    restore. `[]` when the task references nothing.
+  * `referenced_by` — the **incoming** side: tasks (in this Initiative) that
+    cross-reference this one, each with the `source_id` / `source_index` /
+    `source_title`. `[]` when nothing points here. Same single link query feeds
+    both directions (no extra round-trip).
   * `children` — nested task nodes (empty for a leaf).
 
   ## Activity event — `GET /api/v1/initiatives/:id/activity`
@@ -187,9 +204,25 @@ defmodule DoItWeb.Api.Serializer do
 
   `tree` is the assembled task tree (`Tasks.initiative_task_tree/1`); `role` the
   acting user's role; `subtitle` / `progress` the Initiative header values;
-  `co_ids` a `%{task_id => [user_id]}` map (`Tasks.co_assignee_ids_for_initiative/1`).
+  `co_ids` a `%{task_id => [user_id]}` map (`Tasks.co_assignee_ids_for_initiative/1`);
+  `links` the live cross-references as `[{source_id, target_id}]`
+  (`Tasks.list_links_for_initiative/1`).
+
+  The cross-references' target labels are computed from a single pre-pass over
+  the same tree (`label_index`), so resolving every reference to its **live**
+  index label adds **no** query (batched, no N+1).
   """
-  def initiative_tree(initiative, tree, role, subtitle, progress, co_ids) do
+  def initiative_tree(initiative, tree, role, subtitle, progress, co_ids, links) do
+    index_style = initiative.index_style
+
+    ctx = %{
+      index_style: index_style,
+      co_ids: co_ids,
+      label_index: build_label_index(tree, index_style, [], %{}),
+      outgoing: adjacency(links, :outgoing),
+      incoming: adjacency(links, :incoming)
+    }
+
     %{
       id: initiative.id,
       name: initiative.name,
@@ -197,16 +230,17 @@ defmodule DoItWeb.Api.Serializer do
       role: role,
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
-      index_style: initiative.index_style,
+      index_style: index_style,
       root_task_id: initiative.root_task_id,
-      tasks: task_nodes(tree, initiative.index_style, co_ids, [], 0)
+      tasks: task_nodes(tree, ctx, [], 0)
     }
   end
 
   # Serialize a sibling list into task nodes, threading each node's positional
   # index chain (`positions`) and depth down the tree so `index` and `depth`
-  # come out right at every level.
-  defp task_nodes(nodes, index_style, co_ids, parent_positions, depth) do
+  # come out right at every level. `ctx` carries the index style, co-assignee
+  # map, the precomputed label index, and the link adjacency maps.
+  defp task_nodes(nodes, ctx, parent_positions, depth) do
     nodes
     |> Enum.with_index()
     |> Enum.map(fn {%Task{} = task, position} ->
@@ -215,7 +249,7 @@ defmodule DoItWeb.Api.Serializer do
       %{
         id: task.id,
         title: task.title,
-        index: DoIt.Tasks.Index.label(positions, index_style),
+        index: DoIt.Tasks.Index.label(positions, ctx.index_style),
         position: position,
         parent_id: task.parent_id,
         depth: depth,
@@ -226,11 +260,61 @@ defmodule DoItWeb.Api.Serializer do
         leaf: task.children == [],
         priority: task.priority,
         assignee_id: task.assignee_id,
-        co_assignee_ids: Map.get(co_ids, task.id, []),
-        children: task_nodes(task.children, index_style, co_ids, positions, depth + 1)
+        co_assignee_ids: Map.get(ctx.co_ids, task.id, []),
+        cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
+        referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
+        children: task_nodes(task.children, ctx, positions, depth + 1)
       }
     end)
   end
+
+  # Walk the tree once, recording each task's live index label + title keyed by
+  # its stable id — the lookup that resolves a cross-reference's target/source to
+  # its CURRENT label without re-walking or re-querying.
+  defp build_label_index(nodes, index_style, parent_positions, acc) do
+    nodes
+    |> Enum.with_index()
+    |> Enum.reduce(acc, fn {%Task{} = task, position}, acc ->
+      positions = parent_positions ++ [position]
+
+      acc
+      |> Map.put(task.id, %{
+        index: DoIt.Tasks.Index.label(positions, index_style),
+        title: task.title
+      })
+      |> then(&build_label_index(task.children, index_style, positions, &1))
+    end)
+  end
+
+  # `[{source_id, target_id}]` -> `%{task_id => [other_id, ...]}` keyed by the
+  # source (outgoing) or target (incoming) side.
+  defp adjacency(links, :outgoing) do
+    Enum.group_by(links, fn {source, _target} -> source end, fn {_source, target} -> target end)
+  end
+
+  defp adjacency(links, :incoming) do
+    Enum.group_by(links, fn {_source, target} -> target end, fn {source, _target} -> source end)
+  end
+
+  # Resolve a task's adjacent link ids to reference entries carrying the other
+  # task's id + its LIVE index label (and title). A `nil` lookup (an endpoint not
+  # in the live tree — e.g. soft-deleted) is dropped, so the reference never rots.
+  defp references(adjacency, task_id, label_index, role) do
+    adjacency
+    |> Map.get(task_id, [])
+    |> Enum.flat_map(fn other_id ->
+      case Map.get(label_index, other_id) do
+        nil -> []
+        %{index: index, title: title} -> [reference_entry(role, other_id, index, title)]
+      end
+    end)
+  end
+
+  defp reference_entry(:target, id, index, title),
+    do: %{target_id: id, target_index: index, target_title: title}
+
+  defp reference_entry(:source, id, index, title),
+    do: %{source_id: id, source_index: index, source_title: title}
 
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do

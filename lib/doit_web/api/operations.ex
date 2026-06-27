@@ -22,7 +22,7 @@ defmodule DoItWeb.Api.Operations do
 
       {
         "op":   "add" | "update" | "remove",   // the verb
-        "type": "task" | "initiative" | "comment" | "member" | "notification",
+        "type": "task" | "initiative" | "comment" | "member" | "notification" | "link",
         "id":   123,        // target of an update/remove (an EXISTING resource)
         "lid":  "t1",       // on `add`: the client-assigned local id (see below)
                             // on update/remove: a reference to a prior add's lid
@@ -73,12 +73,34 @@ defmodule DoItWeb.Api.Operations do
   | `update` | `member`       | `initiative_id`/`initiative_lid`, `user_id`, `role` | `Initiatives.update_member_role/4` | admin             |
   | `remove` | `member`       | `initiative_id`/`initiative_lid`, `user_id`    | `Initiatives.remove_member/3`           | admin             |
   | `update` | `notification` | `read: true` (target `id`), or `all: true`     | `Notifications.mark_read/1` / `mark_all_read/1` | own notification |
+  | `add`    | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.create_link/2`              | edit (source) |
+  | `remove` | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.remove_link/2`              | edit (source) |
+
+  ### Cross-references (`link`, worklist 4)
+
+  A `link` is a task→task cross-reference ("see that other task"), anchored on
+  the two **stable** task ids so it survives reorder/reparent; the read surface
+  resolves it to the target's **live** index label (worklist 4.3). A link is
+  identified by its `(source, target)` **pair** (not a single `id`/`lid` target),
+  so both `add` and `remove` carry the pair in `data`. Either endpoint may be a
+  batch-local `*_lid` — so one batch can create two tasks and link them.
+
+    * `add link` dedupes on the unique `(source, target)` index — re-adding the
+      same pair is an `unprocessable_entity` per-op error (the batch rolls back).
+    * `remove link` is by pair; removing a link that doesn't exist is a clean
+      `not_found` per-op error (it rolls the batch back — mirrors `remove member`).
+    * **Same-Initiative only.** Both endpoints must belong to the same
+      Initiative; the acting user needs **edit** on it (which subsumes view of the
+      target). A target in another Initiative — or a foreign task the caller can't
+      reach — is rejected, the analogue of the `parent_id` same-Initiative guard.
+      Both endpoints must be **live** (a soft-deleted/Trashed endpoint → `not_found`).
 
   Per-op **authorization** (no privilege escalation — the token only identifies
   the user): the affected Initiative is resolved for each op and the acting user
   is checked through the **existing** role predicates (`DoItWeb.Api.Authz` over
   `Initiatives.can_view?/can_edit?/can_admin?`). edit gates content ops
-  (task/comment/Initiative content); admin gates membership/role + the global
+  (task/comment/Initiative content, and cross-reference `link` add/remove on the
+  source's Initiative); admin gates membership/role + the global
   lifecycle (Trash); view gates the per-user lifecycle (archive/hide, which only
   ever touch the caller's own membership row); a notification op authorizes by
   ownership. A single unauthorized op fails the **whole** batch.
@@ -141,7 +163,7 @@ defmodule DoItWeb.Api.Operations do
   alias DoIt.Tasks.{Comment, Task}
   alias DoItWeb.Api.Authz
 
-  @types ~w(task initiative comment member notification)
+  @types ~w(task initiative comment member notification link)
   @verbs ~w(add update remove)
 
   # Initiative-content fields an `update initiative` may set (owner_id and any
@@ -538,11 +560,99 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  # ---- link (cross-reference, worklist 4) -----------------------------------
+
+  defp dispatch(user, "add", "link", op, changes) do
+    data = data(op)
+
+    with {:ok, lid} <- register_lid(op, changes),
+         {:ok, source} <- resolve_link_endpoint(data, "source", changes),
+         {:ok, _initiative} <- authorize(user, source.initiative_id, :edit),
+         {:ok, target} <- resolve_link_endpoint(data, "target", changes),
+         :ok <- distinct_link_endpoints(source, target),
+         :ok <- same_initiative_link(source, target) do
+      case Tasks.create_link(source, target) do
+        {:ok, link} -> ok(lid, link.id, "link", link_result(link, source, target))
+        {:error, reason} -> {:error, context_error(reason)}
+      end
+    end
+  end
+
+  defp dispatch(user, "remove", "link", op, changes) do
+    data = data(op)
+
+    with {:ok, source} <- resolve_link_endpoint_any(data, "source", changes),
+         {:ok, _initiative} <- authorize(user, source.initiative_id, :edit),
+         {:ok, target} <- resolve_link_endpoint_any(data, "target", changes) do
+      case Tasks.remove_link(source, target) do
+        {:ok, link} ->
+          ok(nil, link.id, "link", Map.put(link_result(link, source, target), :removed, true))
+
+        {:error, :not_found} ->
+          {:error, err(:not_found, "No such cross-reference to remove.", 422)}
+      end
+    end
+  end
+
   # ---- unsupported combinations --------------------------------------------
 
   defp dispatch(_user, verb, type, _op, _changes) do
     {:error, err(:unsupported_op, "Unsupported operation: #{verb} #{type}.", 422)}
   end
+
+  # A link endpoint (`source`/`target`) resolves a `<base>_lid` (a task created
+  # earlier in the batch), `<base>_id`, or bare `<base>` to a LIVE task.
+  defp resolve_link_endpoint(data, base, changes) do
+    with {:ok, id} <- resolve_ref_field(data, base, changes, "task", required: true) do
+      case load_task(id) do
+        {:ok, task} -> {:ok, task}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  # Like resolve_link_endpoint/3, but TOLERATES a soft-deleted (Trashed) endpoint.
+  # Removing a link is cleanup, so a link whose source or target was since trashed
+  # must still be detachable — load the task by id regardless of `deleted_at`.
+  defp resolve_link_endpoint_any(data, base, changes) do
+    with {:ok, id} <- resolve_ref_field(data, base, changes, "task", required: true) do
+      case load_task_any(id) do
+        {:ok, task} -> {:ok, task}
+        {:error, _} = error -> error
+      end
+    end
+  end
+
+  # A task can't cross-reference itself: reject a self-link (source == target) as
+  # a clean per-op error instead of persisting a meaningless self-loop.
+  defp distinct_link_endpoints(%Task{id: id}, %Task{id: id}),
+    do:
+      {:error,
+       err(
+         :unprocessable_entity,
+         "A task can't cross-reference itself.",
+         422,
+         "target_id"
+       )}
+
+  defp distinct_link_endpoints(_source, _target), do: :ok
+
+  # Cross-references are same-Initiative only (worklist 4.2): authorizing :edit
+  # on the source's Initiative then requiring the target in that SAME Initiative
+  # collapses "edit source + view target" into one check and keeps the read
+  # render free of any cross-Initiative tree load. A foreign/other-Initiative
+  # target is rejected here — the analogue of the parent_id same-Initiative guard.
+  defp same_initiative_link(%Task{initiative_id: id}, %Task{initiative_id: id}), do: :ok
+
+  defp same_initiative_link(_source, _target),
+    do:
+      {:error,
+       err(
+         :unprocessable_entity,
+         "A cross-reference can't span Initiatives — the target task belongs to a different Initiative.",
+         422,
+         "target_id"
+       )}
 
   # --- task update: dispatch by concern --------------------------------------
 
@@ -1032,6 +1142,17 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  # Loads a task by id even when it's soft-deleted (Trashed). Only `remove link`
+  # uses this — detaching a link whose endpoint was since trashed is valid cleanup.
+  defp load_task_any(nil), do: {:error, err(:not_found, "No such task.", 422)}
+
+  defp load_task_any(id) do
+    case Tasks.get_task(id) do
+      %Task{} = task -> {:ok, task}
+      nil -> {:error, err(:not_found, "No such task.", 422)}
+    end
+  end
+
   defp load_notification(id) do
     case Notifications.get(id) do
       %Notification{} = notification -> {:ok, notification}
@@ -1170,6 +1291,15 @@ defmodule DoItWeb.Api.Operations do
 
   defp member_result(initiative_id, user_id, role) do
     %{type: "member", initiative_id: initiative_id, user_id: user_id, role: role}
+  end
+
+  defp link_result(link, %Task{} = source, %Task{} = target) do
+    %{
+      id: link.id,
+      type: "link",
+      source_task_id: source.id,
+      target_task_id: target.id
+    }
   end
 
   # --- error helpers ---------------------------------------------------------

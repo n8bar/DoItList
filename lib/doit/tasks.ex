@@ -19,7 +19,17 @@ defmodule DoIt.Tasks do
   alias DoIt.Repo
   alias DoIt.Accounts.User
   alias DoIt.Notifications
-  alias DoIt.Tasks.{ActivityEvent, Comment, CommentVersion, Progress, Sort, Task, TaskCoAssignee}
+
+  alias DoIt.Tasks.{
+    ActivityEvent,
+    Comment,
+    CommentVersion,
+    Progress,
+    Sort,
+    Task,
+    TaskCoAssignee,
+    TaskLink
+  }
 
   # --- Queries ---------------------------------------------------------------
 
@@ -2110,6 +2120,74 @@ defmodule DoIt.Tasks do
     )
     |> Repo.all()
     |> Enum.group_by(fn {task_id, _} -> task_id end, fn {_, user_id} -> user_id end)
+  end
+
+  # --- Cross-references (task->task links, m03.01 worklist 4) -----------------
+
+  @doc """
+  Create a cross-reference from `source` to `target` (m03.01 worklist 4.2).
+
+  Anchored on the two stable task ids, so the link survives any later
+  reorder/reparent of either endpoint. The unique `(source, target)` index
+  dedupes: a second identical link returns the changeset error from
+  `unique_constraint`. Broadcasts a `:task_updated` for the source so a
+  subscriber re-renders its references.
+
+  Same-Initiative invariant: callers (`DoItWeb.Api.Operations`) must already
+  have checked `source` and `target` share an Initiative — this function does
+  not re-derive it.
+  """
+  def create_link(%Task{} = source, %Task{} = target) do
+    case %TaskLink{}
+         |> TaskLink.changeset(%{source_task_id: source.id, target_task_id: target.id})
+         |> Repo.insert() do
+      {:ok, link} ->
+        broadcast_change(source.initiative_id, {:task_updated, source.id})
+        {:ok, link}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
+  Remove the cross-reference from `source` to `target` (m03.01 worklist 4.2).
+  Returns `{:ok, link}` when one was deleted, or `{:error, :not_found}` when no
+  such link exists (the caller renders that as a clean per-op error).
+  """
+  def remove_link(%Task{} = source, %Task{} = target) do
+    case Repo.get_by(TaskLink, source_task_id: source.id, target_task_id: target.id) do
+      %TaskLink{} = link ->
+        {:ok, deleted} = Repo.delete(link)
+        broadcast_change(source.initiative_id, {:task_updated, source.id})
+        {:ok, deleted}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Every live cross-reference whose **source** is a live task in `initiative_id`,
+  as `[{source_task_id, target_task_id}, ...]` (m03.01 worklist 4.3).
+
+  ONE query over the whole tree (no per-task fan-out). Both endpoints are joined
+  and filtered `is_nil(deleted_at)`, so a link is **hidden** while either endpoint
+  is soft-deleted (Trashed) — it has no live index label to render — and reappears
+  on restore. Same-Initiative links mean the target's label is always available
+  from the same tree walk, so the read render needs no cross-Initiative lookup.
+  """
+  def list_links_for_initiative(initiative_id) do
+    from(l in TaskLink,
+      join: s in Task,
+      on: s.id == l.source_task_id,
+      join: t in Task,
+      on: t.id == l.target_task_id,
+      where: s.initiative_id == ^initiative_id and is_nil(s.deleted_at) and is_nil(t.deleted_at),
+      order_by: [asc: l.source_task_id, asc: l.id],
+      select: {l.source_task_id, l.target_task_id}
+    )
+    |> Repo.all()
   end
 
   @doc """
