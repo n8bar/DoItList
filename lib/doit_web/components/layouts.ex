@@ -106,10 +106,16 @@ defmodule DoItWeb.Layouts do
 
     ~H"""
     <header class="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900">
-      <div class={[@container, "flex items-center justify-between px-4 sm:px-6 py-3"]}>
-        <a href="/" class="flex items-center gap-2 font-semibold text-zinc-800 dark:text-zinc-100">
+      <div class={[@container, "relative flex items-center justify-between px-4 sm:px-6 py-3"]}>
+        <a
+          href="/"
+          data-nav-spinner
+          class="flex items-center gap-2 font-semibold text-zinc-800 dark:text-zinc-100"
+        >
           <span class="inline-block w-2.5 h-2.5 rounded-sm bg-emerald-500"></span> Do It List
         </a>
+
+        <.connecting_signifier />
 
         <nav class="flex items-center gap-3 text-sm">
           <%= if @current_user do %>
@@ -126,12 +132,14 @@ defmodule DoItWeb.Layouts do
               <.link
                 patch={if(@rail_initiatives, do: ~p"/initiatives")}
                 navigate={if(@rail_initiatives, do: nil, else: ~p"/initiatives")}
+                data-nav-spinner
                 class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
               >
                 Initiatives
               </.link>
               <.link
                 navigate={~p"/assigned"}
+                data-nav-spinner
                 class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
               >
                 Assigned to Me
@@ -150,7 +158,7 @@ defmodule DoItWeb.Layouts do
               <summary
                 title="Notifications"
                 aria-label="Notifications"
-                phx-click={JS.push("mark_notifications_read")}
+                data-notif-bell
                 class="inline-flex items-center cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden text-zinc-600 dark:text-zinc-300 hover:text-emerald-700 dark:hover:text-emerald-400"
               >
                 <span class="relative inline-flex">
@@ -178,6 +186,7 @@ defmodule DoItWeb.Layouts do
                 <li>
                   <.link
                     navigate={~p"/account"}
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     Account details
@@ -186,6 +195,7 @@ defmodule DoItWeb.Layouts do
                 <li>
                   <.link
                     navigate={~p"/account#account-preferences"}
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     User Preferences
@@ -195,6 +205,7 @@ defmodule DoItWeb.Layouts do
                   <.link
                     href={~p"/users/log_out"}
                     method="delete"
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
                     Log out
@@ -218,6 +229,7 @@ defmodule DoItWeb.Layouts do
                 <li>
                   <.link
                     navigate={~p"/account"}
+                    data-nav-spinner
                     class="flex items-center gap-1.5 rounded px-2 py-1 font-medium text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
                     <.avatar user={@current_user} class="w-5 h-5 text-[10px]" />
@@ -227,6 +239,7 @@ defmodule DoItWeb.Layouts do
                 <li>
                   <.link
                     navigate={~p"/account#account-preferences"}
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     User Preferences
@@ -236,6 +249,7 @@ defmodule DoItWeb.Layouts do
                   <.link
                     patch={if(@rail_initiatives, do: ~p"/initiatives")}
                     navigate={if(@rail_initiatives, do: nil, else: ~p"/initiatives")}
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     Initiatives
@@ -244,6 +258,7 @@ defmodule DoItWeb.Layouts do
                 <li>
                   <.link
                     navigate={~p"/assigned"}
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800"
                   >
                     Assigned to Me
@@ -257,6 +272,7 @@ defmodule DoItWeb.Layouts do
                   <.link
                     href={~p"/users/log_out"}
                     method="delete"
+                    data-nav-spinner
                     class="block rounded px-2 py-1.5 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-800"
                   >
                     Log out
@@ -269,12 +285,14 @@ defmodule DoItWeb.Layouts do
             <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
             <.link
               navigate={~p"/users/log_in"}
+              data-nav-spinner
               class="hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
             >
               Log in
             </.link>
             <.link
               navigate={~p"/users/register"}
+              data-nav-spinner
               class="px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700"
             >
               Register
@@ -355,7 +373,6 @@ defmodule DoItWeb.Layouts do
       </div>
     </main>
 
-    <.connecting_signifier />
     <.flash_group flash={@flash} />
     """
   end
@@ -392,9 +409,9 @@ defmodule DoItWeb.Layouts do
       aria-live="polite"
       data-conn-state="connecting"
       hidden
-      class="fixed bottom-4 left-4 z-50 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium shadow-lg border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/90 dark:text-amber-100"
+      class="fixed bottom-4 left-4 z-50 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium shadow-lg border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/90 dark:text-amber-100 lg:absolute lg:bottom-auto lg:left-1/2 lg:top-1/2 lg:-translate-x-1/2 lg:-translate-y-1/2"
     >
-      <.icon name="hero-arrow-path" class="w-4 h-4 flex-none motion-safe:animate-spin" />
+      <.icon name="hero-arrow-path" class="w-4 h-4 flex-none animate-spin" />
       <span data-conn-text>Connecting…</span>
     </div>
     """
@@ -410,6 +427,7 @@ defmodule DoItWeb.Layouts do
     ~H"""
     <span
       :if={@show}
+      data-notif-dot
       aria-label="Unread notifications"
       class="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-zinc-900"
     >
@@ -438,7 +456,7 @@ defmodule DoItWeb.Layouts do
         <button
           :if={@unread > 0}
           type="button"
-          phx-click={JS.push("mark_notifications_read")}
+          data-notif-mark-read
           class="text-xs text-emerald-700 hover:underline dark:text-emerald-400"
         >
           Mark all read
@@ -451,6 +469,8 @@ defmodule DoItWeb.Layouts do
         <li :for={notif <- @recent} id={"notification-#{@scope}-#{notif.id}"}>
           <.link
             navigate={notif_href(notif)}
+            data-notif-link
+            data-nav-spinner
             class={[
               "block rounded px-2 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-800",
               if(is_nil(notif.read_at),
@@ -461,6 +481,7 @@ defmodule DoItWeb.Layouts do
           >
             <span
               :if={is_nil(notif.read_at)}
+              data-notif-unread-dot
               class="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-red-500 align-middle"
               aria-hidden="true"
             >
@@ -534,6 +555,7 @@ defmodule DoItWeb.Layouts do
           patch={if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")}
           aria-current={(init.id == @current_id && "page") || nil}
           data-rail-initiative-id={init.id}
+          data-nav-spinner
           class={[
             "group block rounded px-2 py-1.5",
             if(init.id == @current_id,

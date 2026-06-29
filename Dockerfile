@@ -33,6 +33,9 @@ RUN mix deps.get && mix deps.compile
 # Tailwind/esbuild binaries.
 RUN mix assets.setup
 
+# Timezone database so the container honors $TZ (Elixir local-time logs + `date`).
+RUN apk add --no-cache tzdata
+
 # Copy the rest of the source tree.
 COPY . .
 
