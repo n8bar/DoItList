@@ -1,0 +1,17 @@
+meta {
+  name: 03 GET initiative tree
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/initiatives/{{initiativeId}}
+  body: none
+  auth: none
+}
+
+docs {
+  The whole nested tree (tasks, nesting, roll-up progress, m02.07 index labels).
+  Expect 200. On an Initiative where you're a viewer this still returns 200
+  (reads allowed) — but the writes (04/05) return 403 for a viewer.
+}

@@ -1,0 +1,16 @@
+meta {
+  name: 01 GET me
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/me
+  body: none
+  auth: none
+}
+
+docs {
+  Token sanity — expect 200 with your user. A garbage token or no Authorization
+  header → 401. After you revoke the token (Account → API tokens), re-run → 401.
+}

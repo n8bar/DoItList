@@ -1,0 +1,26 @@
+meta {
+  name: 05 POST operations (bad batch, rolls back)
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/v1/operations
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "operations": [
+      { "op": "add",    "type": "task", "lid": "p", "data": { "initiative_id": {{initiativeId}}, "title": "Should roll back" } },
+      { "op": "update", "type": "task", "id": 999999999, "data": { "title": "no such task" } }
+    ]
+  }
+}
+
+docs {
+  All-or-nothing proof: the 2nd op targets a non-existent task id → the whole
+  batch fails (the offending op is flagged in the response) and NOTHING is
+  applied. Re-run "03" and confirm the "Should roll back" parent was NOT created.
+}

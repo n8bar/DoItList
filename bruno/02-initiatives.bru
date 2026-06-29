@@ -1,0 +1,16 @@
+meta {
+  name: 02 GET initiatives
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/initiatives
+  body: none
+  auth: none
+}
+
+docs {
+  Your Initiatives (membership-scoped). Expect 200. Copy an `id` into the Local
+  env's `initiativeId` for the next requests.
+}

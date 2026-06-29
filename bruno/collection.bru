@@ -1,0 +1,16 @@
+headers {
+  Authorization: Bearer {{token}}
+}
+
+docs {
+  # DoIt /api/v1 — manual API pass (m03.01 WL5.3)
+
+  Every request inherits the `Authorization: Bearer {{token}}` header from here.
+
+  In the **Local** environment: paste a token minted at Account → API tokens
+  into `token`, set `baseUrl` to the host you load the app from, and
+  `initiativeId` to one of your Initiative ids (run "02 initiatives" to find one).
+
+  Run order: 01 → 02 → 03 → 04 → re-run 03 (see the batch) → 05 → re-run 03
+  (confirm the bad batch rolled back, nothing applied).
+}

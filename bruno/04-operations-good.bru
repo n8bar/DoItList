@@ -1,0 +1,28 @@
+meta {
+  name: 04 POST operations (good batch)
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/operations
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "operations": [
+      { "op": "add",    "type": "task", "lid": "p", "data": { "initiative_id": {{initiativeId}}, "title": "Parent via API" } },
+      { "op": "add",    "type": "task", "lid": "c", "data": { "parent_lid": "p", "title": "Child via API" } },
+      { "op": "update", "type": "task", "lid": "c", "data": { "progress": 50 } }
+    ]
+  }
+}
+
+docs {
+  Atomic batch: add a parent, add a child via parent_lid, update the child — one
+  request, all-or-nothing. Expect 200 with per-op results echoing lid → real id.
+  Re-run "03" → the child is nested under the parent at progress 50.
+  (As a viewer this whole POST → 403.)
+}
