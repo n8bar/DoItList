@@ -72,8 +72,10 @@ config :doit, DoItWeb.Endpoint,
 # Enable dev routes for dashboard and mailbox
 config :doit, dev_routes: true
 
-# Do not include metadata nor timestamps in development logs
-config :logger, :default_formatter, format: "[$level] $message\n"
+# Include a local-time ($time) stamp in dev logs — the container runs
+# TZ=America/Denver (see compose.yaml) so this renders in Denver time. Metadata
+# is still skipped to keep dev output clean.
+config :logger, :default_formatter, format: "$time [$level] $message\n"
 
 # Set a higher stacktrace during development. Avoid configuring such
 # in production as building large stacktraces may be expensive.
