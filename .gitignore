@@ -43,3 +43,6 @@ npm-debug.log
 
 # Local scratch dir (screenshots, notes shared with the agent) — never committed.
 /.cybercreek/
+
+# Bruno: keep real API tokens out of git (copy Local.bru.example -> Local.bru)
+bruno/environments/Local.bru
