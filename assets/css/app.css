@@ -235,18 +235,102 @@ li[data-selected] > [data-task-row] .kbd-key {
   text-decoration: underline;
 }
 
-/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): the title is a
-   button-styled click/tap-to-edit affordance ([data-edit-initiative]). While its
-   editor is open the affordance reads as pressed/active. The pane's visibility is
-   client-driven now (the server no longer flips @editing_initiative?), so this
-   keys off the .editor-open class DoitInitiativeEditor.apply() toggles, not a
-   server assign. The pressed tint matches the Tailwind active: states in both
-   themes (zinc-200 light / zinc-700 dark). */
+/* Initiative-title button bevel (M02.09 item 6.7). The title is a button-styled
+   click/tap-to-edit affordance ([data-edit-initiative][role="button"]); the
+   subtitle shares [data-edit-initiative] but not role="button", so the
+   role="button" qualifier scopes these rules to the title only. A subtle raised
+   bevel at rest (top highlight + soft drop) reads as a 3D, tappable button;
+   :active and the open-editor state press it in (inset bevel + a 1px nudge).
+   Both themes; dark variants use [data-theme=dark] to match the app's theme
+   mechanism (the `transition` utility on the span animates the press).
+   Light mode leans on a layered, darker DROP shadow (the inset white highlight
+   is near-invisible on a near-white page); dark mode pairs a brighter top inner
+   highlight with a dark bottom inner edge + drop so the lift reads in both. */
+[data-edit-initiative][role="button"] {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(24, 24, 27, 0.12),
+    0 2px 4px rgba(24, 24, 27, 0.14),
+    0 4px 8px rgba(24, 24, 27, 0.08);
+}
+/* Dark mode can't fake "raised" with shadows alone — a black drop disappears on
+   the near-black page — so the resting button reads as an ELEVATED face lit from
+   straight NORTH (modern, not the Win95 NW bevel): a clearly-lighter surface, a
+   crisp light TOP edge + a dark BOTTOM edge (vertical only, no left/right bevel),
+   and a soft top->bottom sheen for a rounded, pressable feel.
+   The lighter face is painted with an opaque inset fill (`inset 0 0 0 100px`)
+   layered under the North edges — NOT via background-color. That keeps the
+   :active / .editor-open pressed look untouched: those rules replace box-shadow
+   wholesale (the fill + bevel vanish on press), and the preserved
+   `background-color: #202024` stays the pressed face (it out-specifies the
+   Tailwind active: tint, exactly as before). Pressing animates the face from the
+   raised fill down to #202024.
+   The North edges are pushed hard for an obviously, confidently raised read: a
+   bright (near-white) top highlight edge + sheen and a deep, near-black bottom
+   shadow edge + shade — high contrast, but strictly vertical (no left/right). */
+[data-theme=dark] [data-edit-initiative][role="button"] {
+  background-color: #202024;
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.55),
+    inset 0 11px 13px -8px rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.85),
+    inset 0 -12px 13px -8px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 100px #31323c,
+    0 2px 6px rgba(0, 0, 0, 0.65),
+    0 8px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* Restore the dark hover signifier (the opaque elevated face covers the Tailwind
+   hover tint): on hover the raised FACE FILL DARKENS to ~half its resting
+   luminance (#31323c -> #191920) while the North bevel edges stay put, so the
+   button visibly settles/darkens under the cursor. Placed before :active so a
+   press (both match, equal specificity) still wins via source order. */
+[data-theme=dark] [data-edit-initiative][role="button"]:hover {
+  box-shadow:
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.55),
+    inset 0 11px 13px -8px rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.85),
+    inset 0 -12px 13px -8px rgba(0, 0, 0, 0.7),
+    inset 0 0 0 100px #191920,
+    0 2px 6px rgba(0, 0, 0, 0.65),
+    0 8px 16px rgba(0, 0, 0, 0.5);
+}
+
+/* Pressed-in (inset) on tap/mousedown. */
+[data-edit-initiative][role="button"]:active {
+  box-shadow:
+    inset 0 2px 4px rgba(24, 24, 27, 0.18),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.4);
+  transform: translateY(1px);
+}
+[data-theme=dark] [data-edit-initiative][role="button"]:active {
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.65),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  transform: translateY(1px);
+}
+
+/* Client-owned initiative-editor open state (UX_GUARDRAILS 6.5): while the
+   editor pane is open the title stays pressed (same inset bevel + tint as
+   :active), so an open pane reads as "this button is engaged". The pane's
+   visibility is client-driven now (the server no longer flips
+   @editing_initiative?), so this keys off the .editor-open class
+   DoitInitiativeEditor.apply() toggles, not a server assign. The pressed tint
+   matches the Tailwind active: states in both themes (zinc-200 light /
+   zinc-700 dark). */
 [data-edit-initiative][role="button"].editor-open {
   background-color: var(--color-zinc-200);
+  box-shadow:
+    inset 0 2px 4px rgba(24, 24, 27, 0.18),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.4);
+  transform: translateY(1px);
 }
-.dark [data-edit-initiative][role="button"].editor-open {
+[data-theme=dark] [data-edit-initiative][role="button"].editor-open {
   background-color: var(--color-zinc-700);
+  box-shadow:
+    inset 0 2px 5px rgba(0, 0, 0, 0.6),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.05);
+  transform: translateY(1px);
 }
 
 /* Drag-reorder visuals (Hooks.DragReorder).
@@ -356,16 +440,36 @@ div.init-drop-placeholder {
   background-color: rgba(52, 211, 153, 0.9); /* emerald-400 */
 }
 
-/* Optimistic "saving" hue (.03.03.08): a faint, mostly-transparent pink on the
-   rows / containers whose order is being persisted. Added client-side the moment
-   a reorder/sort happens and cleared automatically when the authoritative
-   re-render lands (the server never emits the class, so morphdom strips it). */
+/* Optimistic "saving" hue (.03.03.08): the in-flight signifier for a write the
+   client can't predict — pink the touched rows / containers the instant the
+   user acts; the authoritative re-render strips the client-added class (the
+   server never emits it, so morphdom reconciles it away).
+
+   It MUST stay perceptible on a SELECTED row, where the background is overridden
+   back to the emerald selection color (below). A faint background wash alone
+   failed that bar twice over: at ~5% it was barely visible even unselected, and
+   on a selected row the emerald override made it a pixel-for-pixel no-op. So the
+   wash is bumped for visibility AND the PRIMARY cue is now a saturated left-edge
+   bar that's independent of the row background — it reads in both themes and in
+   both selection states. */
 .is-saving {
-  background-color: rgba(236, 72, 153, 0.05) !important; /* pink-500 @ 5% */
+  background-color: rgba(236, 72, 153, 0.12) !important; /* pink-500 @ 12% */
   transition: background-color 200ms ease;
 }
 [data-theme=dark] .is-saving {
-  background-color: rgba(244, 114, 182, 0.09) !important; /* pink-400 @ 9% */
+  background-color: rgba(244, 114, 182, 0.16) !important; /* pink-400 @ 16% */
+}
+
+/* The left-edge "saving" bar on a task row: a saturated inset box-shadow that
+   survives the selection background override (which only sets background-color)
+   and so stays visible on a selected, mid-save row — the cue markSaving on the
+   operated/selected row now reliably produces. Both themes; !important to
+   outrank the transient drag-band rings, which never co-occur with saving. */
+[data-task-row].is-saving {
+  box-shadow: inset 3px 0 0 0 rgb(236 72 153) !important; /* pink-500 */
+}
+[data-theme=dark] [data-task-row].is-saving {
+  box-shadow: inset 3px 0 0 0 rgb(244 114 182) !important; /* pink-400 */
 }
 
 /* Selection highlight survives the saving hue (WL6 6.2): a selected row that's
@@ -373,7 +477,8 @@ div.init-drop-placeholder {
    !important and overrode the no-!important emerald selection paint (selection
    itself never broke, only the paint). A higher-specificity rule (still
    !important, since it must outrank an !important) restores the emerald while
-   saving, with hover + dark-mode variants mirroring the base selection colors. */
+   saving, with hover + dark-mode variants mirroring the base selection colors.
+   The left-edge bar above rides on top, so "selected" and "saving" both read. */
 li[data-selected] > [data-task-row].is-saving {
   background-color: #d1fae5 !important;
 }
@@ -573,5 +678,17 @@ input.phx-click-loading ~ .doit-reveal-slot .doit-reveal-spinner { visibility: v
    (cleared by the "reveal-toggle" applier alongside aria-busy), so the same
    spinner fires at the gesture regardless of connect state. */
 input.doit-reveal-busy ~ .doit-reveal-slot .doit-reveal-spinner { visibility: visible; }
+
+/* General in-place "working" spinner for server-gated controls that can't be
+   re-labelled or icon-swapped — a <select> or checkbox (M02 wrap-up, §6.7).
+   Generalizes the reveal-toggle slot above: a fixed-width reserved slot holds a
+   hidden spinner that toggles to visible while the control carries `.doit-busy`
+   (set at the gesture by setControlBusy, cleared when the action settles). The
+   control and slot are siblings (slot AFTER the control), so the spinner sits
+   just beside it without shifting it — visibility only, never display. Shape +
+   motion (not color) keeps it perceivable to colorblind users; motion-safe makes
+   reduced-motion users get a static glyph; aria-busy on the control announces it. */
+.doit-busy-spinner { visibility: hidden; }
+.doit-busy ~ .doit-busy-slot .doit-busy-spinner { visibility: visible; }
 
 /* This file is for your main application CSS */

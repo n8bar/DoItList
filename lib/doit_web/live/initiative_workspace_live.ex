@@ -1842,6 +1842,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
        socket
        |> assign(:pending_handoff, nil)
        |> assign(:members, Initiatives.list_members(initiative.id))
+       |> refresh_rail_initiatives()
        |> put_flash(:info, "Removed #{pending.name}; their assignments were handed off.")
        |> load_tree()
        |> refresh_selected()}
@@ -1862,6 +1863,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       {:noreply,
        socket
        |> assign(:members, Initiatives.list_members(initiative.id))
+       |> refresh_rail_initiatives()
        |> put_flash(:info, "Role updated.")}
     else
       {:noreply, socket}
@@ -1884,10 +1886,18 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         user ->
           case Initiatives.add_member(initiative.id, user.id, role, socket.assigns.current_user) do
             {:ok, _} ->
+              # Close the add-member form on success (it opened client-side via a
+              # data-keep="open" <details>); close-details collapses it AND evicts
+              # its preserved open-state so the preserve path can't re-open it on
+              # the members re-render patch. Both panels share this submit, so
+              # close whichever is mounted (desktop / mobile).
               {:noreply,
                socket
                |> put_flash(:info, "Added #{user.name}.")
-               |> assign(:members, Initiatives.list_members(initiative.id))}
+               |> assign(:members, Initiatives.list_members(initiative.id))
+               |> refresh_rail_initiatives()
+               |> push_event("close-details", %{id: "members-desktop-form"})
+               |> push_event("close-details", %{id: "members-mobile-form"})}
 
             {:error, cs} ->
               {:noreply,
@@ -1929,7 +1939,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         {ok?, socket} =
           case Initiatives.remove_collaborator(user, cid) do
             {:ok, _} ->
-              {true, assign(socket, :rail_collaborators, Initiatives.list_collaborators(user))}
+              {true,
+               socket
+               |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
+               |> refresh_rail_initiatives()}
 
             # Still sharing an Initiative → the row stays; ok:false un-hides the
             # optimistically-removed rail row (MUST NOT LIE — they weren't pruned).
@@ -2050,7 +2063,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     socket =
       socket
       |> assign(:rail_collaborators, Initiatives.list_collaborators(user))
-      |> assign(:initiatives, Initiatives.list_visible_initiatives(user))
+      |> refresh_rail_initiatives()
 
     # Only refresh members when the add landed on the currently-open Initiative
     # (detail mode). In list mode @initiative is nil, so guard it.
@@ -2292,6 +2305,20 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
+  # Re-attach the rail's member-avatar data. @initiatives drives the left rail in
+  # both list and detail modes (rail_initiatives={@initiatives}), and each entry
+  # carries its members for the WL3.5 avatar row. A membership change on the open
+  # Initiative — a local add/remove/role change OR a :members_changed broadcast —
+  # must refresh this so the left-column avatars reflect the change live, without
+  # a manual refresh. One re-query re-attaches every entry's avatars (no N+1).
+  defp refresh_rail_initiatives(socket) do
+    assign(
+      socket,
+      :initiatives,
+      Initiatives.list_visible_initiatives(socket.assigns.current_user)
+    )
+  end
+
   defp commit_remove_member(socket, user_id) do
     initiative = socket.assigns.initiative
     member = Enum.find(socket.assigns.members, &(&1.user_id == user_id))
@@ -2301,6 +2328,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign_pending(nil)
     |> put_flash(:info, "Removed #{(member && member.user.name) || "member"}.")
     |> assign(:members, Initiatives.list_members(initiative.id))
+    |> refresh_rail_initiatives()
   end
 
   defp commit_move(socket, task, attrs) do
@@ -2394,6 +2422,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
            |> assign(:can_edit, Initiatives.can_edit?(role))
            |> assign(:can_admin, Initiatives.can_admin?(role))
            |> assign(:members, Initiatives.list_members(initiative.id))
+           # Another user's add/remove/role change on this Initiative: refresh the
+           # rail entry's member-avatar row so the left-column avatars update live.
+           |> refresh_rail_initiatives()
            # A removal here may drop the last Initiative shared with someone, so
            # refresh the Collaborators pane too (item 9).
            |> assign(
@@ -3003,6 +3034,28 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                     }
                     const S = window.DoitSaving, li = S && S.selectedLi();
                     if (li) S.markSaving([S.savingRowOf(li)]);
+                    // Optimistic value echo (§6.2): step the pane <select> the
+                    // same way the server will, then recolor/relabel the row pill
+                    // through the shared echo — directly, NOT via a synthetic
+                    // input event (which would also fire the form's phx-change
+                    // and double-push update_task). The server's patch reconciles
+                    // (and reverts a refused write — MUST NOT LIE). Priority:
+                    // low→normal→high clamped; assignee: [Unassigned|members] wrap
+                    // — both mirror step_priority/step_assignee, and the option
+                    // order matches the server's because the template renders from
+                    // the same source lists.
+                    const fieldEl = document.getElementById("task-field-" + field);
+                    if (fieldEl && !fieldEl.disabled && fieldEl.options && fieldEl.options.length) {
+                      const step = e.shiftKey ? -1 : 1;
+                      if (field === "priority") {
+                        fieldEl.selectedIndex =
+                          Math.max(0, Math.min(fieldEl.selectedIndex + step, fieldEl.options.length - 1));
+                      } else {
+                        const n = fieldEl.options.length;
+                        fieldEl.selectedIndex = (fieldEl.selectedIndex + step + n) % n;
+                      }
+                      if (window.DoitRowEcho) window.DoitRowEcho(fieldEl);
+                    }
                     this.pushEvent("kbd_adjust", {field: field, dir: e.shiftKey ? "down" : "up", id: sel});
                     return;
                   }
@@ -3199,6 +3252,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 <div class="mb-4 flex items-center justify-between gap-2">
                   <.link
                     patch={~p"/initiatives"}
+                    data-nav-spinner
                     title="Close this Initiative — back to all Initiatives"
                     class="group inline-flex items-center gap-1.5 text-sm font-medium text-zinc-600 dark:text-zinc-300 hover:text-red-700 dark:hover:text-red-300"
                   >
@@ -3287,24 +3341,41 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 </div>
 
                 <%!-- Scroll-fade signifier (item 1.3): a relative frame holding the
-                 tree's own scroll box plus two theme-matched gradient overlays
-                 at its top/bottom edges. The TreeScrollFade hook flips
-                 data-scrolled / data-at-end on the scroll box; the overlays
-                 show/hide off those. lg:+ only — below it the page scrolls so
-                 there's nothing to fade. --%>
+                 tree's own scroll box. The two theme-matched gradient overlays
+                 live INSIDE the scroll box as sticky elements, so the scrollport
+                 bounds them past the scrollbars with no measurement (see below).
+                 The TreeScrollFade hook flips data-scrolled / data-at-end on the
+                 frame; the overlays show/hide off those. lg:+ only — below it the
+                 page scrolls so there's nothing to fade. --%>
                 <div class="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
                   <%!-- min-w-0 + overflow-x-auto: deep indentation scrolls
                    horizontally inside the column. At lg:+ overflow-y-auto adds
                    the column's own vertical scroll; below lg: the page scrolls.
                    The hook lives on this scroll box but flips data-scrolled /
-                   data-at-end on its parent frame, so the sibling fade overlays
-                   can read them as group-data-* variants. --%>
+                   data-at-end on its parent frame, so the fade overlays (sticky
+                   descendants of the frame) read them as group-data-* variants. --%>
                   <div
                     id="tree-scroll"
                     phx-hook="TreeScrollFade"
                     data-keep="scroll"
                     class="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
                   >
+                    <%!-- Top fade: a sticky overlay pinned to the scrollport's
+                     top-left edge, so the scrollport — which excludes both
+                     scrollbars by definition — bounds it on every platform with
+                     ZERO scrollbar measurement. -mb-24 cancels its h-24 so it
+                     adds no scrollable height. Visible only while scrolled down
+                     (data-scrolled on the frame). pointer-events-none so it
+                     never intercepts a click/drag on the rows beneath (item 1.3
+                     hard requirement); aria-hidden as it's purely decorative.
+                     The gradient stop is the column's exact bg token (white /
+                     zinc-950), with a dark-mode variant. --%>
+                    <div
+                      aria-hidden="true"
+                      class="hidden lg:block pointer-events-none sticky top-0 left-0 -mb-24 w-full h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
+                    >
+                    </div>
+
                     <%!-- The one add-task form (parked in #add-task-home below) gets
                      client-teleported into these phx-update="ignore" slots —
                      opening a form never phones home (UX_GUARDRAILS 6.5). --%>
@@ -3343,25 +3414,338 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                         <li id={"add-after-#{t.id}"} phx-update="ignore" class="empty:hidden"></li>
                       <% end %>
                     </ul>
+
+                    <%!-- Bottom fade: a sticky overlay pinned to the scrollport's
+                     bottom-left edge, so it sits ABOVE the horizontal scrollbar
+                     and its scrollport width stops short of the vertical
+                     scrollbar — both automatically, on every platform, with ZERO
+                     scrollbar measurement. -mt-24 cancels its h-24 so it adds no
+                     scrollable height. Visible while more content sits below
+                     (i.e. NOT at the end — group-data-at-end on the frame). Same
+                     click-through + theme-match rules as the top fade. --%>
+                    <div
+                      aria-hidden="true"
+                      class="hidden lg:block pointer-events-none sticky bottom-0 left-0 -mt-24 w-full h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
+                    >
+                    </div>
+                  </div>
+                </div>
+                <%!-- Live chat (m02.08 worklist 3 item 3.1): at lg:+ an in-flow row
+                 beneath the tree's scroll box (a flex-none sibling below #tree-scroll,
+                 so the collapsed bar never overlaps the scrollport); below lg: a fixed
+                 lower-left overlay. For everyone currently viewing this Initiative.
+                 Fully ephemeral —
+                 the message log lives only in socket assigns (broadcast, never
+                 persisted), so a fresh viewer sees no history and it clears once the
+                 last viewer leaves. Open/closed is client view state (the .Chat hook,
+                 localStorage), so toggling never round-trips. The input sits in a
+                 phx-update="ignore" wrapper so typing survives a message arriving. --%>
+                <div
+                  id="initiative-chat"
+                  phx-hook=".Chat"
+                  data-chat-log-id={@chat_log_id}
+                  data-me={@current_user.id}
+                  data-my-name={@current_user.name}
+                  data-my-initials={initials(@current_user)}
+                  data-my-bg={avatar_bg(@current_user)}
+                  data-my-fg={avatar_fg(@current_user)}
+                  class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)] lg:static lg:bottom-auto lg:left-auto lg:z-auto lg:mt-3 lg:max-w-none lg:flex-none"
+                >
+                  <button
+                    type="button"
+                    data-chat-toggle
+                    class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
+                  >
+                    <span class="flex flex-none items-center gap-1.5">
+                      <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
+                    </span>
+                    <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
+                     .Chat hook fills + shows this on a new message while closed, and
+                     clears it on open. Dimmed italic, single-line ellipsis. --%>
+                    <span
+                      data-chat-preview
+                      hidden
+                      class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
+                    >
+                    </span>
+                    <span data-chat-chevron class="inline-flex flex-none transition-transform">
+                      <.icon name="hero-chevron-up" class="w-4 h-4" />
+                    </span>
+                  </button>
+
+                  <div
+                    data-chat-panel
+                    hidden
+                    class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
+                  >
+                    <div
+                      id="chat-log"
+                      data-chat-log
+                      class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
+                    >
+                      <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
+                        No messages yet — say hello to anyone else viewing this Initiative.
+                      </p>
+                      <%!-- A system line (e.g. "nobody's here to read that") is the
+                       sender's own local notice: dimmed italic, no avatar, and
+                       marked data-chat-system so the .Chat hook never treats it as a
+                       message from another viewer (no pop / flash / preview). It has
+                       no user_id, so no data-chat-uid. --%>
+                      <%= for m <- Enum.reverse(@chat_messages) do %>
+                        <%= if Map.get(m, :system) do %>
+                          <div
+                            id={"chat-msg-#{m.id}"}
+                            data-chat-system
+                            class="text-xs italic text-zinc-400 dark:text-zinc-500"
+                          >
+                            {m.body}
+                          </div>
+                        <% else %>
+                          <div
+                            id={"chat-msg-#{m.id}"}
+                            data-chat-uid={m.user_id}
+                            data-chat-echo={Map.get(m, :echo_id)}
+                            class="flex gap-2"
+                          >
+                            <span
+                              class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
+                              style={"background-image: #{m.bg}; color: #{m.fg};"}
+                            >
+                              {m.initials}
+                            </span>
+                            <div class="min-w-0">
+                              <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
+                              <div
+                                data-chat-body
+                                class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
+                              >
+                                {m.body}
+                              </div>
+                            </div>
+                          </div>
+                        <% end %>
+                      <% end %>
+                    </div>
+
+                    <div
+                      id="chat-input-wrap"
+                      phx-update="ignore"
+                      class="border-t border-zinc-200 dark:border-zinc-700 p-2"
+                    >
+                      <form data-chat-form class="flex gap-2">
+                        <input
+                          type="text"
+                          data-chat-input
+                          maxlength="2000"
+                          placeholder="Message viewers…"
+                          aria-label="Chat message"
+                          autocomplete="off"
+                          class="flex-1 input input-bordered input-sm"
+                        />
+                        <button
+                          type="submit"
+                          class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+                        >
+                          Send
+                        </button>
+                      </form>
+                    </div>
                   </div>
 
-                  <%!-- Top fade: visible only while scrolled down (data-scrolled).
-                   pointer-events-none so it never intercepts a click/drag on
-                   the rows beneath (item 1.3 hard requirement); aria-hidden as
-                   it's purely decorative. The gradient stop is the column's
-                   exact bg token (white / zinc-950), with a dark-mode variant. --%>
-                  <div
-                    aria-hidden="true"
-                    class="hidden lg:block pointer-events-none absolute inset-x-0 top-0 h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
-                  >
-                  </div>
-                  <%!-- Bottom fade: visible while more content sits below (i.e. NOT
-                   at the end). Same click-through + theme-match rules. --%>
-                  <div
-                    aria-hidden="true"
-                    class="hidden lg:block pointer-events-none absolute inset-x-0 bottom-0 h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
-                  >
-                  </div>
+                  <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
+                    export default {
+                      mounted() {
+                        this.toggle = this.el.querySelector("[data-chat-toggle]");
+                        this.panel = this.el.querySelector("[data-chat-panel]");
+                        this.chevron = this.el.querySelector("[data-chat-chevron]");
+                        this.preview = this.el.querySelector("[data-chat-preview]");
+                        this.log = this.el.querySelector("[data-chat-log]");
+                        this.form = this.el.querySelector("[data-chat-form]");
+                        this.input = this.el.querySelector("[data-chat-input]");
+                        // Track the server's monotonic chat counter to spot NEW messages
+                        // in updated() (vs. unrelated re-renders).
+                        this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
+
+                        // Open/closed is in-memory view state, default CLOSED on every
+                        // mount (refresh / initiative open) — not persisted, so the chat
+                        // never greets you open.
+                        this._open = false;
+                        this.setOpen(false);
+
+                        this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
+
+                        this.form.addEventListener("submit", (e) => {
+                          e.preventDefault();
+                          const body = this.input.value.trim();
+                          if (!body) return;
+                          // Optimistic own-line echo (§6.7): show the sent bubble at submit
+                          // instead of waiting for the PubSub broadcast to round-trip back.
+                          // A client nonce ties the pending node to the real line so we can
+                          // dedupe it in updated() (and pull it on alone/empty/failure — a
+                          // sent bubble must never stand if no reader got it).
+                          const echoId = "e" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
+                          this.appendEcho(echoId, body);
+                          this.pushEvent("send_chat", { body, echo_id: echoId }, (reply) => {
+                            if (!reply || reply.ok === false) {
+                              const n = this.log && this.log.querySelector(`[data-chat-echo="${echoId}"][data-chat-pending]`);
+                              if (n) n.remove();
+                            }
+                          });
+                          this.input.value = "";
+                          this.input.focus();
+                        });
+                      },
+                      // Build + append a pending own-message node matching the server's
+                      // own-message markup (avatar from data-my-*), dimmed while pending.
+                      // Lives in the morphdom-owned log; updated() reconciles it once the
+                      // real (broadcast) line arrives carrying the same echo id.
+                      appendEcho(echoId, body) {
+                        if (!this.log) return;
+                        const d = this.el.dataset;
+                        const row = document.createElement("div");
+                        row.className = "flex gap-2 opacity-60";
+                        row.setAttribute("data-chat-uid", d.me || "");
+                        row.setAttribute("data-chat-echo", echoId);
+                        row.setAttribute("data-chat-pending", "");
+                        const av = document.createElement("span");
+                        av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]";
+                        av.style.backgroundImage = d.myBg || "";
+                        av.style.color = d.myFg || "";
+                        av.textContent = d.myInitials || "";
+                        const wrap = document.createElement("div");
+                        wrap.className = "min-w-0";
+                        const name = document.createElement("div");
+                        name.className = "text-xs text-zinc-500 dark:text-zinc-400";
+                        name.textContent = d.myName || "";
+                        const bodyEl = document.createElement("div");
+                        bodyEl.setAttribute("data-chat-body", "");
+                        bodyEl.className = "break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100";
+                        bodyEl.textContent = body;
+                        wrap.appendChild(name);
+                        wrap.appendChild(bodyEl);
+                        row.appendChild(av);
+                        row.appendChild(wrap);
+                        this.log.appendChild(row);
+                        this.scrollToBottom();
+                      },
+                      // Remove any pending echo whose nonce now appears on a real
+                      // (server-rendered, non-pending) message node — the broadcast line
+                      // has landed and supersedes the optimistic bubble.
+                      reconcileEchoes() {
+                        if (!this.log) return;
+                        const pending = this.log.querySelectorAll("[data-chat-pending][data-chat-echo]");
+                        pending.forEach((p) => {
+                          const id = p.getAttribute("data-chat-echo");
+                          if (!id) return;
+                          const real = this.log.querySelector(`[data-chat-echo="${id}"]:not([data-chat-pending])`);
+                          if (real) p.remove();
+                        });
+                      },
+                      setOpen(open) {
+                        this.panel.hidden = !open;
+                        // Bottom-docked panel opens upward: chevron points up when closed
+                        // ("open me"), down when open ("minimize"). Base icon is up, so
+                        // rotate only when open.
+                        if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
+                        this._open = open;
+                        if (open) {
+                          this.hidePreview(); // reading them now — clear the collapsed peek
+                          this.scrollToBottom();
+                          this.input.focus();
+                        }
+                      },
+                      hidePreview() {
+                        if (this.preview) {
+                          this.preview.hidden = true;
+                          this.preview.textContent = "";
+                        }
+                      },
+                      showLatestPreview() {
+                        if (!this.preview || !this.log) return;
+                        const bodies = this.log.querySelectorAll("[data-chat-body]");
+                        const last = bodies[bodies.length - 1];
+                        if (!last) return;
+                        this.preview.textContent = last.textContent.trim();
+                        this.preview.hidden = false;
+                      },
+                      scrollToBottom() {
+                        if (this.log) this.log.scrollTop = this.log.scrollHeight;
+                      },
+                      updated() {
+                        // A server re-render (e.g. your own sent message broadcasting
+                        // back) re-applies the template's `hidden` on the panel via
+                        // morphdom, which would snap an open chat shut. Re-assert the open
+                        // state from localStorage (the source of truth) before anything
+                        // else, so sending never closes the window.
+                        const reopen = this._open;
+                        this.panel.hidden = !reopen;
+                        if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
+                        // Reconcile optimistic echoes: when the real (broadcast) own-line
+                        // arrives it carries the same client nonce on a NON-pending node.
+                        // Drop the dimmed pending bubble so the canonical line supersedes
+                        // it — no duplicate, and the dimmed "pending" look clears.
+                        this.reconcileEchoes();
+                        // A new message bumps the server's monotonic chat-log id. A
+                        // system line (the alone-case "nobody's here" notice) also bumps
+                        // it, but it's the sender's own local notice — never pop / flash /
+                        // preview for it (the rejection bonk already fired server-side).
+                        const id = parseInt(this.el.dataset.chatLogId || "0", 10);
+                        if (id > this._lastLogId) {
+                          this._lastLogId = id;
+                          if (!this.latestIsSystem() && this.fromOther()) {
+                            this.pop(); // a quick blip — distinct from the rejection bonk
+                            if (this.panel.hidden) {
+                              this.showLatestPreview();
+                              this.flash();
+                            }
+                          }
+                        }
+                        if (this.panel && !this.panel.hidden) this.scrollToBottom();
+                      },
+                      // Is the newest log entry a system notice (data-chat-system)?
+                      latestIsSystem() {
+                        if (!this.log) return false;
+                        const last = this.log.lastElementChild;
+                        return !!last && last.hasAttribute("data-chat-system");
+                      },
+                      // Was the latest message from someone else? No pop / flash for your
+                      // own message echoing back over the broadcast.
+                      fromOther() {
+                        if (!this.log) return false;
+                        const msgs = this.log.querySelectorAll("[data-chat-uid]");
+                        const last = msgs[msgs.length - 1];
+                        return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
+                      },
+                      // Brief green pulse on the collapsed bar (reflow to retrigger on
+                      // rapid messages).
+                      flash() {
+                        const t = this.toggle;
+                        if (!t) return;
+                        t.classList.remove("chat-flash");
+                        void t.offsetWidth;
+                        t.classList.add("chat-flash");
+                      },
+                      // A short rising blip — deliberately unlike the descending bonk thud.
+                      pop() {
+                        try {
+                          const Ctx = window.AudioContext || window.webkitAudioContext;
+                          this._ac = this._ac || new Ctx();
+                          const ctx = this._ac;
+                          if (ctx.state === "suspended") ctx.resume();
+                          const osc = ctx.createOscillator(), gain = ctx.createGain();
+                          osc.type = "sine";
+                          osc.frequency.setValueAtTime(420, ctx.currentTime);
+                          osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
+                          gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                          gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
+                          gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
+                          osc.connect(gain).connect(ctx.destination);
+                          osc.start();
+                          osc.stop(ctx.currentTime + 0.14);
+                        } catch (_e) {}
+                      },
+                    }
+                  </script>
                 </div>
               </div>
 
@@ -3475,6 +3859,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   <div
                     id="task-editor-pane"
                     data-task-id={@selected_task_id}
+                    data-keep="pane"
                     hidden={is_nil(@selected_task_id)}
                     class="rounded border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-4"
                   >
@@ -3661,321 +4046,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             hidden
           >
           </div>
-
-          <%!-- Live chat (m02.08 worklist 3 item 3.1): a fixed lower-left overlay
-           for everyone currently viewing this Initiative. Fully ephemeral —
-           the message log lives only in socket assigns (broadcast, never
-           persisted), so a fresh viewer sees no history and it clears once the
-           last viewer leaves. Open/closed is client view state (the .Chat hook,
-           localStorage), so toggling never round-trips. The input sits in a
-           phx-update="ignore" wrapper so typing survives a message arriving. --%>
-          <div
-            id="initiative-chat"
-            phx-hook=".Chat"
-            data-chat-log-id={@chat_log_id}
-            data-me={@current_user.id}
-            data-my-name={@current_user.name}
-            data-my-initials={initials(@current_user)}
-            data-my-bg={avatar_bg(@current_user)}
-            data-my-fg={avatar_fg(@current_user)}
-            class="fixed bottom-3 left-3 z-40 w-72 max-w-[calc(100vw-1.5rem)]"
-          >
-            <button
-              type="button"
-              data-chat-toggle
-              class="flex w-full items-center justify-between gap-2 rounded-t-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-700 dark:text-zinc-200 shadow-lg"
-            >
-              <span class="flex flex-none items-center gap-1.5">
-                <.icon name="hero-chat-bubble-left-right" class="w-4 h-4" /> Chat
-              </span>
-              <%!-- Peek of the latest message when collapsed (3.1 follow-up): the
-               .Chat hook fills + shows this on a new message while closed, and
-               clears it on open. Dimmed italic, single-line ellipsis. --%>
-              <span
-                data-chat-preview
-                hidden
-                class="min-w-0 flex-1 truncate text-left font-normal italic text-zinc-400 dark:text-zinc-500"
-              >
-              </span>
-              <span data-chat-chevron class="inline-flex flex-none transition-transform">
-                <.icon name="hero-chevron-up" class="w-4 h-4" />
-              </span>
-            </button>
-
-            <div
-              data-chat-panel
-              hidden
-              class="flex flex-col rounded-b-lg border border-t-0 border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg"
-            >
-              <div
-                id="chat-log"
-                data-chat-log
-                class="flex flex-col gap-2 overflow-y-auto px-3 py-2 h-56 text-sm"
-              >
-                <p class="hidden only:block text-xs italic text-zinc-400 dark:text-zinc-500">
-                  No messages yet — say hello to anyone else viewing this Initiative.
-                </p>
-                <%!-- A system line (e.g. "nobody's here to read that") is the
-                 sender's own local notice: dimmed italic, no avatar, and
-                 marked data-chat-system so the .Chat hook never treats it as a
-                 message from another viewer (no pop / flash / preview). It has
-                 no user_id, so no data-chat-uid. --%>
-                <%= for m <- Enum.reverse(@chat_messages) do %>
-                  <%= if Map.get(m, :system) do %>
-                    <div
-                      id={"chat-msg-#{m.id}"}
-                      data-chat-system
-                      class="text-xs italic text-zinc-400 dark:text-zinc-500"
-                    >
-                      {m.body}
-                    </div>
-                  <% else %>
-                    <div
-                      id={"chat-msg-#{m.id}"}
-                      data-chat-uid={m.user_id}
-                      data-chat-echo={Map.get(m, :echo_id)}
-                      class="flex gap-2"
-                    >
-                      <span
-                        class="avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]"
-                        style={"background-image: #{m.bg}; color: #{m.fg};"}
-                      >
-                        {m.initials}
-                      </span>
-                      <div class="min-w-0">
-                        <div class="text-xs text-zinc-500 dark:text-zinc-400">{m.name}</div>
-                        <div
-                          data-chat-body
-                          class="break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100"
-                        >
-                          {m.body}
-                        </div>
-                      </div>
-                    </div>
-                  <% end %>
-                <% end %>
-              </div>
-
-              <div
-                id="chat-input-wrap"
-                phx-update="ignore"
-                class="border-t border-zinc-200 dark:border-zinc-700 p-2"
-              >
-                <form data-chat-form class="flex gap-2">
-                  <input
-                    type="text"
-                    data-chat-input
-                    maxlength="2000"
-                    placeholder="Message viewers…"
-                    aria-label="Chat message"
-                    autocomplete="off"
-                    class="flex-1 input input-bordered input-sm"
-                  />
-                  <button
-                    type="submit"
-                    class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
-                  >
-                    Send
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
-              export default {
-                mounted() {
-                  this.toggle = this.el.querySelector("[data-chat-toggle]");
-                  this.panel = this.el.querySelector("[data-chat-panel]");
-                  this.chevron = this.el.querySelector("[data-chat-chevron]");
-                  this.preview = this.el.querySelector("[data-chat-preview]");
-                  this.log = this.el.querySelector("[data-chat-log]");
-                  this.form = this.el.querySelector("[data-chat-form]");
-                  this.input = this.el.querySelector("[data-chat-input]");
-                  // Track the server's monotonic chat counter to spot NEW messages
-                  // in updated() (vs. unrelated re-renders).
-                  this._lastLogId = parseInt(this.el.dataset.chatLogId || "0", 10);
-
-                  // Open/closed is in-memory view state, default CLOSED on every
-                  // mount (refresh / initiative open) — not persisted, so the chat
-                  // never greets you open.
-                  this._open = false;
-                  this.setOpen(false);
-
-                  this.toggle.addEventListener("click", () => this.setOpen(this.panel.hidden));
-
-                  this.form.addEventListener("submit", (e) => {
-                    e.preventDefault();
-                    const body = this.input.value.trim();
-                    if (!body) return;
-                    // Optimistic own-line echo (§6.7): show the sent bubble at submit
-                    // instead of waiting for the PubSub broadcast to round-trip back.
-                    // A client nonce ties the pending node to the real line so we can
-                    // dedupe it in updated() (and pull it on alone/empty/failure — a
-                    // sent bubble must never stand if no reader got it).
-                    const echoId = "e" + Date.now() + "-" + Math.random().toString(36).slice(2, 8);
-                    this.appendEcho(echoId, body);
-                    this.pushEvent("send_chat", { body, echo_id: echoId }, (reply) => {
-                      if (!reply || reply.ok === false) {
-                        const n = this.log && this.log.querySelector(`[data-chat-echo="${echoId}"][data-chat-pending]`);
-                        if (n) n.remove();
-                      }
-                    });
-                    this.input.value = "";
-                    this.input.focus();
-                  });
-                },
-                // Build + append a pending own-message node matching the server's
-                // own-message markup (avatar from data-my-*), dimmed while pending.
-                // Lives in the morphdom-owned log; updated() reconciles it once the
-                // real (broadcast) line arrives carrying the same echo id.
-                appendEcho(echoId, body) {
-                  if (!this.log) return;
-                  const d = this.el.dataset;
-                  const row = document.createElement("div");
-                  row.className = "flex gap-2 opacity-60";
-                  row.setAttribute("data-chat-uid", d.me || "");
-                  row.setAttribute("data-chat-echo", echoId);
-                  row.setAttribute("data-chat-pending", "");
-                  const av = document.createElement("span");
-                  av.className = "avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]";
-                  av.style.backgroundImage = d.myBg || "";
-                  av.style.color = d.myFg || "";
-                  av.textContent = d.myInitials || "";
-                  const wrap = document.createElement("div");
-                  wrap.className = "min-w-0";
-                  const name = document.createElement("div");
-                  name.className = "text-xs text-zinc-500 dark:text-zinc-400";
-                  name.textContent = d.myName || "";
-                  const bodyEl = document.createElement("div");
-                  bodyEl.setAttribute("data-chat-body", "");
-                  bodyEl.className = "break-words whitespace-pre-wrap text-zinc-800 dark:text-zinc-100";
-                  bodyEl.textContent = body;
-                  wrap.appendChild(name);
-                  wrap.appendChild(bodyEl);
-                  row.appendChild(av);
-                  row.appendChild(wrap);
-                  this.log.appendChild(row);
-                  this.scrollToBottom();
-                },
-                // Remove any pending echo whose nonce now appears on a real
-                // (server-rendered, non-pending) message node — the broadcast line
-                // has landed and supersedes the optimistic bubble.
-                reconcileEchoes() {
-                  if (!this.log) return;
-                  const pending = this.log.querySelectorAll("[data-chat-pending][data-chat-echo]");
-                  pending.forEach((p) => {
-                    const id = p.getAttribute("data-chat-echo");
-                    if (!id) return;
-                    const real = this.log.querySelector(`[data-chat-echo="${id}"]:not([data-chat-pending])`);
-                    if (real) p.remove();
-                  });
-                },
-                setOpen(open) {
-                  this.panel.hidden = !open;
-                  // Bottom-docked panel opens upward: chevron points up when closed
-                  // ("open me"), down when open ("minimize"). Base icon is up, so
-                  // rotate only when open.
-                  if (this.chevron) this.chevron.classList.toggle("rotate-180", open);
-                  this._open = open;
-                  if (open) {
-                    this.hidePreview(); // reading them now — clear the collapsed peek
-                    this.scrollToBottom();
-                    this.input.focus();
-                  }
-                },
-                hidePreview() {
-                  if (this.preview) {
-                    this.preview.hidden = true;
-                    this.preview.textContent = "";
-                  }
-                },
-                showLatestPreview() {
-                  if (!this.preview || !this.log) return;
-                  const bodies = this.log.querySelectorAll("[data-chat-body]");
-                  const last = bodies[bodies.length - 1];
-                  if (!last) return;
-                  this.preview.textContent = last.textContent.trim();
-                  this.preview.hidden = false;
-                },
-                scrollToBottom() {
-                  if (this.log) this.log.scrollTop = this.log.scrollHeight;
-                },
-                updated() {
-                  // A server re-render (e.g. your own sent message broadcasting
-                  // back) re-applies the template's `hidden` on the panel via
-                  // morphdom, which would snap an open chat shut. Re-assert the open
-                  // state from localStorage (the source of truth) before anything
-                  // else, so sending never closes the window.
-                  const reopen = this._open;
-                  this.panel.hidden = !reopen;
-                  if (this.chevron) this.chevron.classList.toggle("rotate-180", reopen);
-                  // Reconcile optimistic echoes: when the real (broadcast) own-line
-                  // arrives it carries the same client nonce on a NON-pending node.
-                  // Drop the dimmed pending bubble so the canonical line supersedes
-                  // it — no duplicate, and the dimmed "pending" look clears.
-                  this.reconcileEchoes();
-                  // A new message bumps the server's monotonic chat-log id. A
-                  // system line (the alone-case "nobody's here" notice) also bumps
-                  // it, but it's the sender's own local notice — never pop / flash /
-                  // preview for it (the rejection bonk already fired server-side).
-                  const id = parseInt(this.el.dataset.chatLogId || "0", 10);
-                  if (id > this._lastLogId) {
-                    this._lastLogId = id;
-                    if (!this.latestIsSystem() && this.fromOther()) {
-                      this.pop(); // a quick blip — distinct from the rejection bonk
-                      if (this.panel.hidden) {
-                        this.showLatestPreview();
-                        this.flash();
-                      }
-                    }
-                  }
-                  if (this.panel && !this.panel.hidden) this.scrollToBottom();
-                },
-                // Is the newest log entry a system notice (data-chat-system)?
-                latestIsSystem() {
-                  if (!this.log) return false;
-                  const last = this.log.lastElementChild;
-                  return !!last && last.hasAttribute("data-chat-system");
-                },
-                // Was the latest message from someone else? No pop / flash for your
-                // own message echoing back over the broadcast.
-                fromOther() {
-                  if (!this.log) return false;
-                  const msgs = this.log.querySelectorAll("[data-chat-uid]");
-                  const last = msgs[msgs.length - 1];
-                  return !!last && last.dataset.chatUid !== (this.el.dataset.me || "");
-                },
-                // Brief green pulse on the collapsed bar (reflow to retrigger on
-                // rapid messages).
-                flash() {
-                  const t = this.toggle;
-                  if (!t) return;
-                  t.classList.remove("chat-flash");
-                  void t.offsetWidth;
-                  t.classList.add("chat-flash");
-                },
-                // A short rising blip — deliberately unlike the descending bonk thud.
-                pop() {
-                  try {
-                    const Ctx = window.AudioContext || window.webkitAudioContext;
-                    this._ac = this._ac || new Ctx();
-                    const ctx = this._ac;
-                    if (ctx.state === "suspended") ctx.resume();
-                    const osc = ctx.createOscillator(), gain = ctx.createGain();
-                    osc.type = "sine";
-                    osc.frequency.setValueAtTime(420, ctx.currentTime);
-                    osc.frequency.exponentialRampToValueAtTime(720, ctx.currentTime + 0.06);
-                    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-                    gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.012);
-                    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.13);
-                    osc.connect(gain).connect(ctx.destination);
-                    osc.start();
-                    osc.stop(ctx.currentTime + 0.14);
-                  } catch (_e) {}
-                },
-              }
-            </script>
-          </div>
         </div>
       <% else %>
         <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
@@ -4037,6 +4107,19 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <option value="created" selected={@sort_state.mode == "created"}>Created</option>
             <option value="updated" selected={@sort_state.mode == "updated"}>Updated</option>
           </select>
+          <%!-- In-flight slot (§6.7): explicit modes reorder client-side at the
+               change (instant), but "Recent" (and Reverse-while-Recent) is
+               server-derived — spin this reserved slot while .doit-busy is held
+               on the select so the server re-sort isn't silent. --%>
+          <span
+            class="doit-busy-slot inline-flex w-3.5 flex-none items-center justify-center"
+            aria-hidden="true"
+          >
+            <.icon
+              name="hero-arrow-path"
+              class="doit-busy-spinner size-3.5 animate-spin text-emerald-600 dark:text-emerald-400"
+            />
+          </span>
           <label class="flex items-center gap-1 text-xs select-none">
             <input
               type="checkbox"
@@ -4066,7 +4149,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           >
             <%!-- list<->detail is a same-module push_patch (no remount): use
                  patch, not navigate, so the kept-mounted shell stays intact. --%>
-            <.link patch={~p"/initiatives/#{initiative.id}"} draggable="false" class="block p-4">
+            <.link
+              patch={~p"/initiatives/#{initiative.id}"}
+              data-nav-spinner
+              draggable="false"
+              class="block p-4"
+            >
               <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
                 <span class="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
                   <span
@@ -4191,7 +4279,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   type="button"
                   phx-click="purge_initiative"
                   phx-value-id={t.id}
-                  phx-disable-with="Deleting…"
+                  data-latch="Deleting…"
                   data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
                   class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
                 >
@@ -4254,7 +4342,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 >
                   <.icon
                     name="hero-arrow-path"
-                    class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+                    class="doit-reveal-spinner size-3.5 animate-spin text-emerald-600 dark:text-emerald-400"
                   />
                 </span>
               </label>
@@ -4963,7 +5051,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             tabindex="0"
             aria-label="Edit initiative name"
             title="Edit name"
-            class="group flex items-start gap-2 px-2 py-1 -ml-2 rounded-lg cursor-pointer border border-zinc-300 dark:border-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:bg-zinc-200 dark:active:bg-zinc-700 transition-colors"
+            class="group flex items-start gap-2 px-2 py-1 rounded-lg cursor-pointer border border-zinc-400 dark:border-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 active:bg-zinc-200 dark:active:bg-zinc-700 transition"
           >
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
@@ -5890,7 +5978,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <form
               :if={@can_admin and m.user_id != @owner_id}
               phx-change="update_member_role"
-              class="flex-none"
+              class="flex-none inline-flex items-center gap-1"
             >
               <input type="hidden" name="user_id" value={m.user_id} />
               <%!-- Item 12.6.5: the effective role shows IN the dropdown — a
@@ -5899,6 +5987,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                    stays viewer). --%>
               <select
                 name="role"
+                data-member-role-select
                 aria-label={"Role for #{m.user.name}"}
                 class="select select-bordered select-xs"
               >
@@ -5909,6 +5998,18 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   <option value="viewer" selected={m.role == "viewer"}>viewer</option>
                 <% end %>
               </select>
+              <%!-- In-flight slot (§6.7): the role change is server-gated
+                   (applies only after members_changed re-renders), so spin a
+                   reserved slot beside the select while .doit-busy is held. --%>
+              <span
+                class="doit-busy-slot inline-flex w-3.5 flex-none items-center justify-center"
+                aria-hidden="true"
+              >
+                <.icon
+                  name="hero-arrow-path"
+                  class="doit-busy-spinner size-3.5 animate-spin text-emerald-600 dark:text-emerald-400"
+                />
+              </span>
             </form>
             <span
               :if={not (@can_admin and m.user_id != @owner_id)}
@@ -6087,7 +6188,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <h3 class="font-medium text-zinc-800 dark:text-zinc-100">Task details</h3>
         <button
           type="button"
-          phx-click="close_task"
+          data-close-task
           aria-label="Close"
           title="Close"
           class="hidden lg:inline-flex items-center justify-center w-7 h-7 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
@@ -6451,6 +6552,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                       <button
                         type="button"
                         id={"delete-comment-btn-#{c.id}"}
+                        data-comment-delete
                         phx-click="delete_comment"
                         phx-value-id={c.id}
                         data-confirm="Delete this comment? It will be marked as deleted."

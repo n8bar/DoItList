@@ -12,6 +12,7 @@
       <%= if @current_user do %>
         <.link
           navigate={~p"/initiatives"}
+          data-nav-spinner
           class="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
         >
           Go to my initiatives
@@ -19,12 +20,14 @@
       <% else %>
         <.link
           navigate={~p"/users/register"}
+          data-nav-spinner
           class="px-4 py-2 rounded bg-emerald-600 text-white hover:bg-emerald-700"
         >
           Create an account
         </.link>
         <.link
           navigate={~p"/users/log_in"}
+          data-nav-spinner
           class="px-4 py-2 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
         >
           Log in

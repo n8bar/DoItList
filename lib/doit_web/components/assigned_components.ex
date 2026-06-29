@@ -71,7 +71,7 @@ defmodule DoItWeb.AssignedComponents do
           >
             <.icon
               name="hero-arrow-path"
-              class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+              class="doit-reveal-spinner size-3.5 animate-spin text-emerald-600 dark:text-emerald-400"
             />
           </span>
         </label>
@@ -90,7 +90,7 @@ defmodule DoItWeb.AssignedComponents do
           >
             <.icon
               name="hero-arrow-path"
-              class="doit-reveal-spinner size-3.5 motion-safe:animate-spin text-emerald-600 dark:text-emerald-400"
+              class="doit-reveal-spinner size-3.5 animate-spin text-emerald-600 dark:text-emerald-400"
             />
           </span>
         </label>
@@ -150,6 +150,7 @@ defmodule DoItWeb.AssignedComponents do
     <.link
       id={"assigned-task-#{@task.id}"}
       navigate={"/initiatives/#{@task.initiative_id}?task=#{@task.id}"}
+      data-nav-spinner
       class="group flex items-center gap-2 rounded border border-zinc-200 bg-white px-3 py-2 transition hover:border-emerald-400 hover:shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-500 motion-reduce:transition-none dark:border-zinc-800 dark:bg-zinc-900 dark:hover:border-emerald-500"
     >
       <%!-- Direct (primary) vs co-assignee — a filled vs outlined chip so the

@@ -21,11 +21,12 @@
       <div class="flex items-center justify-between gap-4 pt-2">
         <.link
           navigate={~p"/users/register"}
+          data-nav-spinner
           class="text-sm text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200"
         >
           Need an account? Register
         </.link>
-        <.button type="submit">Log in</.button>
+        <.button type="submit" data-latch="Logging in…">Log in</.button>
       </div>
     </.form>
   </div>

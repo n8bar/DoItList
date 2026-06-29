@@ -475,7 +475,7 @@ defmodule DoItWeb.CoreComponents do
   ## Examples
 
       <.icon name="hero-x-mark" />
-      <.icon name="hero-arrow-path" class="ml-1 size-3 motion-safe:animate-spin" />
+      <.icon name="hero-arrow-path" class="ml-1 size-3 animate-spin" />
   """
   attr :name, :string, required: true
   attr :class, :any, default: "size-4"
