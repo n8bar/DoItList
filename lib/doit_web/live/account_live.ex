@@ -385,155 +385,6 @@ defmodule DoItWeb.AccountLive do
         </details>
 
         <details
-          id="account-api-tokens"
-          data-keep="open"
-          data-persist
-          class="group overflow-hidden rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4"
-        >
-          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
-              API tokens
-            </h2>
-            <.icon
-              name="hero-chevron-down"
-              class="w-4 h-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
-            />
-          </summary>
-          <div class="px-4 pb-4">
-          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">
-            Personal access tokens let scripts and AI agents act as you over the HTTP API, under your
-            existing roles. Send one as <code phx-no-curly-interpolation class="text-xs">Authorization: Bearer &lt;token&gt;</code>.
-          </p>
-
-          <%!-- One-time plaintext reveal: shown once, right after minting; never
-               again (the server keeps only a hash). A copy affordance + a clear
-               "copy it now" note, and a Done button to dismiss it. --%>
-          <%= if @new_api_token do %>
-            <div
-              id="api-token-reveal"
-              role="status"
-              aria-live="polite"
-              class="mb-4 rounded border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-3"
-            >
-              <p class="text-sm font-medium text-emerald-800 dark:text-emerald-300 mb-2">
-                Your new token — copy it now. It won't be shown again.
-              </p>
-              <div class="flex items-center gap-2">
-                <input
-                  id="api-token-value"
-                  type="text"
-                  readonly
-                  value={@new_api_token}
-                  aria-label="New API token"
-                  class="flex-1 font-mono text-xs px-2 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100"
-                />
-                <button
-                  type="button"
-                  id="api-token-copy"
-                  phx-hook=".CopyToken"
-                  data-token-target="api-token-value"
-                  class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                >
-                  Copy
-                </button>
-                <button
-                  type="button"
-                  id="api-token-dismiss"
-                  phx-click="dismiss_api_token"
-                  class="shrink-0 px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                >
-                  Done
-                </button>
-              </div>
-            </div>
-          <% end %>
-
-          <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
-            export default {
-              mounted() {
-                this.el.addEventListener("click", async () => {
-                  const target = document.getElementById(this.el.dataset.tokenTarget)
-                  if (!target) return
-                  try {
-                    await navigator.clipboard.writeText(target.value)
-                  } catch (_e) {
-                    target.select()
-                    document.execCommand("copy")
-                  }
-                  const original = this.el.textContent
-                  this.el.textContent = "Copied!"
-                  setTimeout(() => { this.el.textContent = original }, 1500)
-                })
-              }
-            }
-          </script>
-
-          <.form
-            for={@api_token_form}
-            id="api-token-form"
-            phx-submit="mint_api_token"
-            class="space-y-2"
-          >
-            <.input
-              field={@api_token_form[:label]}
-              type="text"
-              label="Label (optional)"
-              placeholder="e.g. Claude Code, laptop CLI"
-              autocomplete="off"
-            />
-            <p class="text-xs text-zinc-500 dark:text-zinc-400">
-              A name to recognize this token later.
-            </p>
-            <div class="flex justify-end">
-              <.button type="submit" data-latch="Minting…">Mint token</.button>
-            </div>
-          </.form>
-
-          <div class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
-            <h3 class="text-sm font-medium text-zinc-700 dark:text-zinc-200 mb-2">
-              Active tokens
-            </h3>
-            <%= if @api_tokens == [] do %>
-              <p class="text-sm text-zinc-500 dark:text-zinc-400">No tokens yet.</p>
-            <% else %>
-              <ul id="api-tokens-list" class="divide-y divide-zinc-200 dark:divide-zinc-800">
-                <%= for token <- @api_tokens do %>
-                  <li
-                    id={"api-token-#{token.id}"}
-                    class="flex items-center justify-between gap-4 py-2"
-                  >
-                    <div class="min-w-0">
-                      <p class="text-sm text-zinc-800 dark:text-zinc-100 truncate">
-                        {token.label || "Unlabeled token"}
-                      </p>
-                      <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                        Minted {Calendar.strftime(token.inserted_at, "%b %-d, %Y")} ·
-                        <%= if token.last_used_at do %>
-                          Last used {Calendar.strftime(token.last_used_at, "%b %-d, %Y")}
-                        <% else %>
-                          Never used
-                        <% end %>
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      id={"revoke-api-token-#{token.id}"}
-                      phx-click="revoke_api_token"
-                      phx-value-id={token.id}
-                      data-latch="Revoking…"
-                      class="shrink-0 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
-                    >
-                      Revoke
-                    </button>
-                  </li>
-                <% end %>
-              </ul>
-            <% end %>
-          </div>
-          </div>
-        </details>
-
-        <details
           id="account-preferences"
           phx-hook="ScrollOnHash"
           data-keep="open"
@@ -703,6 +554,155 @@ defmodule DoItWeb.AccountLive do
             <p id="reset-confirm-note" hidden class="text-xs text-emerald-700 dark:text-emerald-400">
               Done — every confirmation asks again. Initiative pages already open need a reload to notice.
             </p>
+          </div>
+          </div>
+        </details>
+
+        <details
+          id="account-api-tokens"
+          data-keep="open"
+          data-persist
+          class="group overflow-hidden rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4"
+        >
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              API tokens
+            </h2>
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 pb-4">
+          <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">
+            Personal access tokens let scripts and AI agents act as you over the HTTP API, under your
+            existing roles. Send one as <code phx-no-curly-interpolation class="text-xs">Authorization: Bearer &lt;token&gt;</code>.
+          </p>
+
+          <%!-- One-time plaintext reveal: shown once, right after minting; never
+               again (the server keeps only a hash). A copy affordance + a clear
+               "copy it now" note, and a Done button to dismiss it. --%>
+          <%= if @new_api_token do %>
+            <div
+              id="api-token-reveal"
+              role="status"
+              aria-live="polite"
+              class="mb-4 rounded border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/30 p-3"
+            >
+              <p class="text-sm font-medium text-emerald-800 dark:text-emerald-300 mb-2">
+                Your new token — copy it now. It won't be shown again.
+              </p>
+              <div class="flex items-center gap-2">
+                <input
+                  id="api-token-value"
+                  type="text"
+                  readonly
+                  value={@new_api_token}
+                  aria-label="New API token"
+                  class="flex-1 font-mono text-xs px-2 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 text-zinc-800 dark:text-zinc-100"
+                />
+                <button
+                  type="button"
+                  id="api-token-copy"
+                  phx-hook=".CopyToken"
+                  data-token-target="api-token-value"
+                  class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                >
+                  Copy
+                </button>
+                <button
+                  type="button"
+                  id="api-token-dismiss"
+                  phx-click="dismiss_api_token"
+                  class="shrink-0 px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          <% end %>
+
+          <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
+            export default {
+              mounted() {
+                this.el.addEventListener("click", async () => {
+                  const target = document.getElementById(this.el.dataset.tokenTarget)
+                  if (!target) return
+                  try {
+                    await navigator.clipboard.writeText(target.value)
+                  } catch (_e) {
+                    target.select()
+                    document.execCommand("copy")
+                  }
+                  const original = this.el.textContent
+                  this.el.textContent = "Copied!"
+                  setTimeout(() => { this.el.textContent = original }, 1500)
+                })
+              }
+            }
+          </script>
+
+          <.form
+            for={@api_token_form}
+            id="api-token-form"
+            phx-submit="mint_api_token"
+            class="space-y-2"
+          >
+            <.input
+              field={@api_token_form[:label]}
+              type="text"
+              label="Label (optional)"
+              placeholder="e.g. Claude Code, laptop CLI"
+              autocomplete="off"
+            />
+            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+              A name to recognize this token later.
+            </p>
+            <div class="flex justify-end">
+              <.button type="submit" data-latch="Minting…">Mint token</.button>
+            </div>
+          </.form>
+
+          <div class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
+            <h3 class="text-sm font-medium text-zinc-700 dark:text-zinc-200 mb-2">
+              Active tokens
+            </h3>
+            <%= if @api_tokens == [] do %>
+              <p class="text-sm text-zinc-500 dark:text-zinc-400">No tokens yet.</p>
+            <% else %>
+              <ul id="api-tokens-list" class="divide-y divide-zinc-200 dark:divide-zinc-800">
+                <%= for token <- @api_tokens do %>
+                  <li
+                    id={"api-token-#{token.id}"}
+                    class="flex items-center justify-between gap-4 py-2"
+                  >
+                    <div class="min-w-0">
+                      <p class="text-sm text-zinc-800 dark:text-zinc-100 truncate">
+                        {token.label || "Unlabeled token"}
+                      </p>
+                      <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                        Minted {Calendar.strftime(token.inserted_at, "%b %-d, %Y")} ·
+                        <%= if token.last_used_at do %>
+                          Last used {Calendar.strftime(token.last_used_at, "%b %-d, %Y")}
+                        <% else %>
+                          Never used
+                        <% end %>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      id={"revoke-api-token-#{token.id}"}
+                      phx-click="revoke_api_token"
+                      phx-value-id={token.id}
+                      data-latch="Revoking…"
+                      class="shrink-0 px-3 py-1.5 rounded border border-red-300 dark:border-red-800 text-sm text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                    >
+                      Revoke
+                    </button>
+                  </li>
+                <% end %>
+              </ul>
+            <% end %>
           </div>
           </div>
         </details>
