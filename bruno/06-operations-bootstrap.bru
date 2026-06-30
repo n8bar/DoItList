@@ -1,0 +1,29 @@
+meta {
+  name: 06 POST operations (bootstrap)
+  type: http
+  seq: 6
+}
+
+post {
+  url: {{baseUrl}}/api/v1/operations
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "operations": [
+      { "op": "add", "type": "initiative", "lid": "ini", "data": { "name": "API Test Drive" } },
+      { "op": "add", "type": "task", "lid": "t1", "data": { "initiative_lid": "ini", "title": "First task via API" } }
+    ]
+  }
+}
+
+docs {
+  From-nothing bootstrap: ONE atomic batch creates a fresh Initiative (lid "ini")
+  AND its first top-level task, which references the Initiative by `initiative_lid`
+  (no parent given → it lands under the new Initiative's root). Expect 200; the
+  results echo "ini" → the Initiative's real id and "t1" → the task's id.
+  Copy the Initiative id into the Local env's `initiativeId`, then run "03" to
+  see the tree. Tear it down at the end with "07".
+}

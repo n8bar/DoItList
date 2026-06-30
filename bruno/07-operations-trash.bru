@@ -1,0 +1,25 @@
+meta {
+  name: 07 POST operations (trash test initiative)
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/api/v1/operations
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "operations": [
+      { "op": "update", "type": "initiative", "id": {{initiativeId}}, "data": { "state": "trashed" } }
+    ]
+  }
+}
+
+docs {
+  Cleanup: reversibly Trash the throwaway Initiative you created in "06"
+  (state:"trashed" → it moves to Trash, restorable in the app). Expect 200.
+  Leaves your account as you found it. (Permanent delete is LiveView-only by design.)
+}
