@@ -2287,14 +2287,20 @@ function latchButton(btn, label) {
     }
     undoShape = () => { if (icon && priorClass != null) icon.className = priorClass }
   }
-  queueMicrotask(() => { btn.disabled = true })
+  // Lock out further clicks via pointer-events, NOT `disabled`: disabling the
+  // button mid-click makes LiveView's bubble-phase phx-click handler skip the
+  // disabled target (closestPhxBinding ignores `el.disabled`), dropping the very
+  // real click we're acknowledging. pointer-events:none blocks subsequent clicks
+  // without that side effect. Still deferred a microtask so it can't affect the
+  // current click's hit-testing.
+  queueMicrotask(() => { btn.style.pointerEvents = "none" })
   let restored = false
   const restore = () => {
     if (restored) return
     restored = true
     clearTimeout(timer)
     delete btn.dataset.latched
-    btn.disabled = false
+    btn.style.pointerEvents = ""
     btn.removeAttribute("aria-busy")
     undoShape()
   }
