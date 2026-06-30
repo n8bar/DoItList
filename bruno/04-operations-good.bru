@@ -15,7 +15,7 @@ body:json {
     "operations": [
       { "op": "add",    "type": "task", "lid": "p", "data": { "initiative_id": {{initiativeId}}, "title": "Parent via API" } },
       { "op": "add",    "type": "task", "lid": "c", "data": { "parent_lid": "p", "title": "Child via API" } },
-      { "op": "update", "type": "task", "lid": "c", "data": { "progress": 50 } }
+      { "op": "update", "type": "task", "lid": "c", "data": { "manual_progress": 50 } }
     ]
   }
 }
@@ -24,5 +24,6 @@ docs {
   Atomic batch: add a parent, add a child via parent_lid, update the child — one
   request, all-or-nothing. Expect 200 with per-op results echoing lid → real id.
   Re-run "03" → the child is nested under the parent at progress 50.
+  (Write the leaf's `manual_progress`; reads expose `progress` = the derived roll-up.)
   (As a viewer this whole POST → 403.)
 }
