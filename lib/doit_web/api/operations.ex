@@ -183,6 +183,41 @@ defmodule DoItWeb.Api.Operations do
   # other column are intentionally excluded — see "Irreversible ops").
   @initiative_content_fields ~w(name description progress_calc index_style auto_promote_co_assignees viewer_plus)
 
+  # The `data` keys each wired {verb, type} accepts, derived from every dispatch
+  # path. Drives validate_data_keys/3 — the fail-fast targeted-hint check that
+  # rejects an unrecognized key with a per-op error instead of silently dropping
+  # it (Map.take only lifts known keys). A {verb, type} that is NOT a key here is
+  # left to the unsupported/irreversible dispatch (e.g. remove initiative, add
+  # notification, update link) so its own error is never preempted.
+  @accepted_data_keys %{
+    {"add", "task"} =>
+      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status),
+    {"update", "task"} =>
+      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress),
+    {"remove", "task"} => [],
+    {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
+    {"update", "initiative"} => @initiative_content_fields ++ ~w(subtitle state owner_id),
+    {"add", "comment"} => ~w(task_id task_lid task body),
+    {"update", "comment"} => ~w(body),
+    {"remove", "comment"} => [],
+    {"add", "member"} => ~w(initiative_id initiative_lid initiative user_id role),
+    {"update", "member"} => ~w(initiative_id initiative_lid initiative user_id role),
+    {"remove", "member"} => ~w(initiative_id initiative_lid initiative user_id),
+    {"update", "notification"} => ~w(all read),
+    {"add", "link"} => ~w(source_id source_lid source target_id target_lid target),
+    {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target)
+  }
+
+  # Read-only / derived / aliased keys that earn a specific hint when rejected,
+  # pointing the caller at the field they most likely meant.
+  @field_hints %{
+    "progress" => "it's the server-derived roll-up (read-only) — set `manual_progress` on a leaf",
+    "computed_progress" => "it's read-only — set `manual_progress` on a leaf",
+    "index" => "it's a derived index label (read-only)",
+    "index_label" => "it's a derived index label (read-only)",
+    "status" => "set completion with `done: true`/`false`"
+  }
+
   @typedoc "A per-op error carries the wire code, message, an optional field pointer, and the batch HTTP status it implies."
   @type op_error :: %{
           code: String.t(),
@@ -313,6 +348,7 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, verb} <- fetch_verb(op),
          {:ok, type} <- fetch_type(op),
          :ok <- validate_data(op),
+         :ok <- validate_data_keys(verb, type, data(op)),
          {:ok, result} <- dispatch(user, verb, type, op, changes) do
       {:ok, result}
     else
@@ -333,6 +369,47 @@ defmodule DoItWeb.Api.Operations do
       data when is_map(data) -> :ok
       _ -> {:error, err(:unprocessable_entity, "\"data\" must be a JSON object.", 422, "data")}
     end
+  end
+
+  # Fail-fast targeted hints for an unrecognized `data` key — across ALL wired
+  # ops. Previously most ops SILENTLY DROPPED any key they didn't take (Map.take
+  # lifts only known keys) and `update task` returned an opaque generic error;
+  # now, before dispatch, we reject the FIRST unknown key with a per-op error
+  # naming the likely fix. A {verb, type} absent from @accepted_data_keys is
+  # skipped (returns :ok) so combos owned by the unsupported/irreversible
+  # dispatch (remove initiative, add notification, update link, …) keep their own
+  # errors and aren't preempted here.
+  defp validate_data_keys(verb, type, data) do
+    case Map.fetch(@accepted_data_keys, {verb, type}) do
+      :error ->
+        :ok
+
+      {:ok, accepted} ->
+        case Map.keys(data) -- accepted do
+          [] -> :ok
+          [key | _] -> {:error, unknown_field_error(verb, type, key, accepted)}
+        end
+    end
+  end
+
+  # Build the targeted per-op error for the first unrecognized `data` key. A key
+  # in @field_hints (read-only/derived/aliased) splices its specific hint before
+  # the period; an op that takes no data (remove task/comment) says so; otherwise
+  # the op's accepted keys are listed (sorted) to guide the caller. Pointer = key.
+  defp unknown_field_error(verb, type, key, accepted) do
+    hint = if h = @field_hints[key], do: " — #{h}", else: ""
+
+    message =
+      case accepted do
+        [] ->
+          "Field #{inspect(key)} isn't accepted — the `#{verb} #{type}` op takes no data (it targets by id/lid)#{hint}."
+
+        _ ->
+          "Field #{inspect(key)} isn't accepted by the `#{verb} #{type}` op#{hint}." <>
+            " Accepted data keys: #{accepted |> Enum.sort() |> Enum.join(", ")}."
+      end
+
+    err(:unprocessable_entity, message, 422, key)
   end
 
   defp fetch_verb(%{"op" => verb}) when verb in @verbs, do: {:ok, verb}
@@ -853,8 +930,7 @@ defmodule DoItWeb.Api.Operations do
 
   defp update_initiative_content(user, op, data, changes) do
     with {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
-         {:ok, initiative} <- authorize(user, initiative_id, :edit),
-         :ok <- reject_unknown_initiative_fields(data) do
+         {:ok, initiative} <- authorize(user, initiative_id, :edit) do
       attrs = take(data, @initiative_content_fields)
 
       with {:ok, initiative} <- maybe_update_initiative(initiative, attrs),
@@ -863,26 +939,6 @@ defmodule DoItWeb.Api.Operations do
       else
         {:error, reason} -> {:error, context_error(reason)}
       end
-    end
-  end
-
-  # Only content fields, subtitle, or state may appear in an initiative update.
-  defp reject_unknown_initiative_fields(data) do
-    allowed = MapSet.new(@initiative_content_fields ++ ["subtitle"])
-    unknown = data |> Map.keys() |> Enum.reject(&MapSet.member?(allowed, &1))
-
-    case unknown do
-      [] ->
-        :ok
-
-      [field | _] ->
-        {:error,
-         err(
-           :unprocessable_entity,
-           "Field #{inspect(field)} is not updatable on an Initiative.",
-           422,
-           field
-         )}
     end
   end
 

@@ -896,6 +896,109 @@ defmodule DoItWeb.Api.OperationsTest do
     end
   end
 
+  describe "unrecognized data keys are rejected with a targeted per-op error" do
+    test "update task with the derived `progress` key is a 422 pointing at manual_progress", ctx do
+      task = top_task(ctx.owner, ctx.ini, "Has progress")
+
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{"op" => "update", "type" => "task", "id" => task.id, "data" => %{"progress" => 50}}
+        ])
+
+      assert status == 422
+      err = Enum.at(body["results"], 0)["error"]
+      assert err["code"] == "unprocessable_entity"
+      assert err["pointer"] == "progress"
+      # The hint steers the caller to the writable field.
+      assert err["message"] =~ "manual_progress"
+    end
+
+    test "add task with an unknown data key is a 422 listing the accepted keys", ctx do
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "task",
+            "data" => %{
+              "initiative_id" => ctx.ini.id,
+              "parent_id" => ctx.ini.root_task_id,
+              "title" => "Colourful",
+              "colour" => "red"
+            }
+          }
+        ])
+
+      assert status == 422
+      err = Enum.at(body["results"], 0)["error"]
+      assert err["code"] == "unprocessable_entity"
+      assert err["pointer"] == "colour"
+      assert err["message"] =~ "Accepted data keys:"
+      assert err["message"] =~ "title"
+      # Failed before any write — the otherwise-valid task did not persist.
+      assert is_nil(Repo.get_by(Task, title: "Colourful"))
+    end
+
+    test "add member with an unknown data key is a targeted 422, nothing written", ctx do
+      target = user("newbie")
+
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "member",
+            "data" => %{
+              "initiative_id" => ctx.ini.id,
+              "user_id" => target.id,
+              "role" => "viewer",
+              "nickname" => "buddy"
+            }
+          }
+        ])
+
+      assert status == 422
+      err = Enum.at(body["results"], 0)["error"]
+      assert err["code"] == "unprocessable_entity"
+      assert err["pointer"] == "nickname"
+      assert is_nil(Initiatives.get_role(ctx.ini.id, target.id))
+    end
+
+    test "update initiative with an unknown content key is a targeted 422 (unified message)", ctx do
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "update",
+            "type" => "initiative",
+            "id" => ctx.ini.id,
+            "data" => %{"colour" => "red"}
+          }
+        ])
+
+      assert status == 422
+      err = Enum.at(body["results"], 0)["error"]
+      assert err["code"] == "unprocessable_entity"
+      assert err["pointer"] == "colour"
+      assert err["message"] =~ "isn't accepted"
+      assert err["message"] =~ "Accepted data keys:"
+    end
+
+    test "a valid update task with manual_progress still succeeds (no false positive)", ctx do
+      task = top_task(ctx.owner, ctx.ini, "Leaf")
+
+      {status, _body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "update",
+            "type" => "task",
+            "id" => task.id,
+            "data" => %{"manual_progress" => 50}
+          }
+        ])
+
+      assert status == 200
+      assert Repo.get(Task, task.id).manual_progress == 50
+    end
+  end
+
   describe "cross-initiative integrity (per-op authorization)" do
     test "add task with a foreign parent_id is rejected and mutates nothing", ctx do
       # Attacker is owner of their OWN Initiative but has no role on ctx.ini.
