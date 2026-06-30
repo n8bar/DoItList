@@ -80,11 +80,13 @@ defmodule DoIt.MixProject do
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
       test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
-      # Focused API/MCP slice — run this during API/MCP work instead of the full
-      # suite (reuses `test`'s ecto setup). Add the Arc 2 MCP test paths here when
-      # they land.
+      # Focused API/MCP slice — the API-logic checkpoint (controllers, operations,
+      # authz, reads, rate limiting, token context). Run at chunk close, not every
+      # loop; iterate with the single affected file. Excludes the LiveView token-UI
+      # test (it's UI, not API logic, and the slowest single — it rides the full
+      # suite). Add the Arc 2 MCP test paths here when they land.
       "test.api": [
-        "test test/doit_web/api test/doit/api test/doit/accounts/api_tokens_test.exs test/doit_web/live/account_api_tokens_test.exs"
+        "test test/doit_web/api test/doit/api test/doit/accounts/api_tokens_test.exs"
       ],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind doit", "esbuild doit"],
