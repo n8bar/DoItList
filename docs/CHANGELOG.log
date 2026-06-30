@@ -199,3 +199,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-06-28  Dev: container logs now print Denver local time — tzdata in the image + TZ=America/Denver + $time restored to the dev Logger format (dev had stripped it, so the only stamps were Docker's always-UTC -t).
 2026-06-29  M02.09 (Client-Interaction Foundation) COMPLETE — 98/98 items; the [Human] usability passes verified live on both WebSocket and LongPoll. Branch M02-wrap-up committed + merged to main.
 2026-06-29  m03.01 (HTTP API): lifted the "Draft — pending operator approval" marker — operator-approved (Arc 1 was built in the autonomous run; the manual API pass remains).
+2026-06-29  Code (account page): each settings section is now a collapsible <details> (Profile open, the rest collapsed); open/closed state persists per-section in localStorage (and a deep-linked section force-opens). Reuses data-keep="open" so the state survives the page's form patches.

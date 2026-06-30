@@ -206,7 +206,41 @@ defmodule DoItWeb.AccountLive do
         </script>
       </div>
 
-      <div class="mx-auto max-w-2xl">
+      <div id="account-sections" phx-hook=".CollapsePersist" class="mx-auto max-w-2xl">
+        <%!-- Each section is a client-owned <details>: the first opens by default,
+             the rest start collapsed. data-keep="open" preserves the open/closed
+             state across the page's frequent form patches; this hook persists it
+             to localStorage across reloads (and force-opens a deep-link target). --%>
+        <script :type={Phoenix.LiveView.ColocatedHook} name=".CollapsePersist">
+          export default {
+            mounted() {
+              const key = (id) => "doit:account-section:" + id
+              this.el.querySelectorAll("details[data-persist]").forEach((d) => {
+                if (!d.id) return
+                if (window.location.hash === "#" + d.id) {
+                  d.open = true
+                } else {
+                  const stored = localStorage.getItem(key(d.id))
+                  if (stored === "true") d.open = true
+                  else if (stored === "false") d.open = false
+                }
+                // Seed client truth so the data-keep="open" applier agrees on patch.
+                if (window.DoitState) window.DoitState.detailsOpen[d.id] = d.open
+              })
+              // `toggle` doesn't bubble — capture phase reaches every section.
+              this.onToggle = (e) => {
+                const d = e.target
+                if (d && d.matches && d.matches("details[data-persist]") && d.id) {
+                  localStorage.setItem(key(d.id), d.open ? "true" : "false")
+                }
+              }
+              this.el.addEventListener("toggle", this.onToggle, true)
+            },
+            destroyed() {
+              if (this.onToggle) this.el.removeEventListener("toggle", this.onToggle, true)
+            },
+          }
+        </script>
         <div class="mb-6 flex items-center gap-3">
           <.avatar user={@current_user} class="w-12 h-12 text-lg" />
           <div>
@@ -217,14 +251,24 @@ defmodule DoItWeb.AccountLive do
           </div>
         </div>
 
-        <section
+        <details
           id="account-profile"
-          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+          data-keep="open"
+          data-persist
+          open
+          class="group overflow-hidden rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4"
         >
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
-            Profile
-          </h2>
-          <dl class="space-y-3 text-sm">
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Profile
+            </h2>
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 pb-4">
+            <dl class="space-y-3 text-sm">
             <div class="flex items-baseline justify-between gap-4">
               <dt class="text-zinc-500 dark:text-zinc-400">Member since</dt>
               <dd class="text-zinc-800 dark:text-zinc-100">
@@ -287,16 +331,25 @@ defmodule DoItWeb.AccountLive do
               <.button type="submit" data-latch="Saving…">Save username</.button>
             </div>
           </.form>
-        </section>
+          </div>
+        </details>
 
-        <section
+        <details
           id="account-security"
-          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+          data-keep="open"
+          data-persist
+          class="group overflow-hidden rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4"
         >
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
-            Security
-          </h2>
-
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Security
+            </h2>
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 pb-4">
           <.form
             for={@password_form}
             id="password-form"
@@ -328,15 +381,25 @@ defmodule DoItWeb.AccountLive do
               <.button type="submit" data-latch="Saving…">Change password</.button>
             </div>
           </.form>
-        </section>
+          </div>
+        </details>
 
-        <section
+        <details
           id="account-api-tokens"
-          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+          data-keep="open"
+          data-persist
+          class="group overflow-hidden rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4"
         >
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
-            API tokens
-          </h2>
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              API tokens
+            </h2>
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 pb-4">
           <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-4">
             Personal access tokens let scripts and AI agents act as you over the HTTP API, under your
             existing roles. Send one as <code phx-no-curly-interpolation class="text-xs">Authorization: Bearer &lt;token&gt;</code>.
@@ -467,17 +530,26 @@ defmodule DoItWeb.AccountLive do
               </ul>
             <% end %>
           </div>
-        </section>
+          </div>
+        </details>
 
-        <section
+        <details
           id="account-preferences"
           phx-hook="ScrollOnHash"
-          class="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4 mb-4"
+          data-keep="open"
+          data-persist
+          class="group overflow-hidden rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 mb-4"
         >
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400 mb-3">
-            Preferences
-          </h2>
-
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-400">
+              Preferences
+            </h2>
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 shrink-0 text-zinc-400 transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 pb-4">
           <.form
             for={@prefs_form}
             id="preferences-form"
@@ -632,15 +704,25 @@ defmodule DoItWeb.AccountLive do
               Done — every confirmation asks again. Initiative pages already open need a reload to notice.
             </p>
           </div>
-        </section>
+          </div>
+        </details>
 
-        <section
+        <details
           id="account-danger"
-          class="rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 p-4 mb-4"
+          data-keep="open"
+          data-persist
+          class="group overflow-hidden rounded border border-red-200 dark:border-red-900/60 bg-white dark:bg-zinc-900 mb-4"
         >
-          <h2 class="text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400 mb-3">
-            Danger zone
-          </h2>
+          <summary class="flex items-center justify-between gap-3 cursor-pointer list-none [&::-webkit-details-marker]:hidden px-4 pt-4 pb-3 hover:bg-red-50 dark:hover:bg-red-950/30">
+            <h2 class="text-sm font-semibold uppercase tracking-wide text-red-600 dark:text-red-400">
+              Danger zone
+            </h2>
+            <.icon
+              name="hero-chevron-down"
+              class="w-4 h-4 shrink-0 text-red-400 transition-transform group-open:rotate-180"
+            />
+          </summary>
+          <div class="px-4 pb-4">
           <p class="text-sm text-zinc-600 dark:text-zinc-300 mb-3">
             Deleting your account also deletes Initiatives only you belong to. Initiatives you own
             with other members are handed to another member, so their work isn't lost.
@@ -667,7 +749,8 @@ defmodule DoItWeb.AccountLive do
               </button>
             </div>
           </details>
-        </section>
+          </div>
+        </details>
       </div>
     </Layouts.app>
     """
