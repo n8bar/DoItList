@@ -30,16 +30,17 @@ _The per-decision rationale (transport, versioning, auth, rate limiting, bulk, t
 
 ## Arcs
 
-**Two arcs, sequenced — Arc 1 then Arc 2.** Arc 1 is the HTTP API; Arc 2 is the MCP server over it (a thin consumer of the public API, never a shortcut into the contexts). Each arc carries its own tests; testing isn't a separate arc. Per-arc detail lives in the arc files linked below.
+**Three arcs.** Arc 1 (HTTP API) and Arc 2 (the MCP server over it — a thin consumer of the public API, never a shortcut into the contexts) are sequenced and deliver the surface; Arc 3 (Documentation & maintenance) publishes the reference and keeps it synced, running last and then continuously. Each arc carries its own tests; testing isn't a separate arc. Per-arc detail lives in the arc files linked below.
 
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | draft |
 | 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing | draft |
+| 3 — Documentation & maintenance | [`m03.03-documentation+maintenance.md`](m03.03-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Scoping in progress. Design decisions are operator-approved; the two arcs are broken out into draft arc files pending approval; the two Arc 2 (MCP) questions are deferred (non-blocking).
+Scoping in progress. Design decisions are operator-approved; the three arcs are broken out into draft arc files pending approval (Arc 3, Documentation & maintenance, is a fresh stub); the two Arc 2 (MCP) questions are deferred (non-blocking).
 
 ## Preconditions
 
