@@ -208,16 +208,6 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target)
   }
 
-  # Read-only / derived / aliased keys that earn a specific hint when rejected,
-  # pointing the caller at the field they most likely meant.
-  @field_hints %{
-    "progress" => "it's the server-derived roll-up (read-only) — set `manual_progress` on a leaf",
-    "computed_progress" => "it's read-only — set `manual_progress` on a leaf",
-    "index" => "it's a derived index label (read-only)",
-    "index_label" => "it's a derived index label (read-only)",
-    "status" => "set completion with `done: true`/`false`"
-  }
-
   @typedoc "A per-op error carries the wire code, message, an optional field pointer, and the batch HTTP status it implies."
   @type op_error :: %{
           code: String.t(),
@@ -392,20 +382,18 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
-  # Build the targeted per-op error for the first unrecognized `data` key. A key
-  # in @field_hints (read-only/derived/aliased) splices its specific hint before
-  # the period; an op that takes no data (remove task/comment) says so; otherwise
-  # the op's accepted keys are listed (sorted) to guide the caller. Pointer = key.
+  # Build the targeted per-op error for the first unrecognized `data` key. The
+  # message names the bad field and then either lists the op's accepted keys
+  # (sorted) or, for an op that takes no data (remove task/comment), says so.
+  # Pointer = key.
   defp unknown_field_error(verb, type, key, accepted) do
-    hint = if h = @field_hints[key], do: " — #{h}", else: ""
-
     message =
       case accepted do
         [] ->
-          "Field #{inspect(key)} isn't accepted — the `#{verb} #{type}` op takes no data (it targets by id/lid)#{hint}."
+          "Field #{inspect(key)} isn't accepted — the `#{verb} #{type}` op takes no data (it targets by id/lid)."
 
         _ ->
-          "Field #{inspect(key)} isn't accepted by the `#{verb} #{type}` op#{hint}." <>
+          "Field #{inspect(key)} isn't accepted by the `#{verb} #{type}` op." <>
             " Accepted data keys: #{accepted |> Enum.sort() |> Enum.join(", ")}."
       end
 

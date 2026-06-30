@@ -909,7 +909,8 @@ defmodule DoItWeb.Api.OperationsTest do
       err = Enum.at(body["results"], 0)["error"]
       assert err["code"] == "unprocessable_entity"
       assert err["pointer"] == "progress"
-      # The hint steers the caller to the writable field.
+      # The accepted-keys list surfaces the writable field the caller meant.
+      assert err["message"] =~ "Accepted data keys:"
       assert err["message"] =~ "manual_progress"
     end
 
