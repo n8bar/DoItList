@@ -1,11 +1,11 @@
-# M06-Prep-Launch
-_Status: stub · Planned start: after M05 (Final Features) · Target: TBD_
+# M05-Prep-Launch
+_Status: stub · Planned start: after M04 (Final Features) · Target: TBD_
 
-> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M06 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
+> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M05 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
 ## Goal
 
-Take the feature-complete app from M05 **public**: the launch-readiness work (legal, onboarding, security review) and the go-live work (hosting, deploy, ops). This is the milestone that opens Do It List to the world.
+Take the feature-complete app from M04 **public**: the launch-readiness work (legal, onboarding, security review) and the go-live work (hosting, deploy, ops). This is the milestone that opens Do It List to the world.
 
 ## Status
 
@@ -29,12 +29,12 @@ Stub — to be expanded. Not yet scoped into arcs.
 
 ## Preconditions
 
-- M05 (Final Features) lands — the product is feature-complete; this milestone adds no new functionality, only readiness and infrastructure.
-- Email infrastructure (M05) is live — public registration, verification, and password reset all depend on it.
+- M04 (Final Features) lands — the product is feature-complete for launch; this milestone adds no new functionality, only readiness and infrastructure.
+- Email infrastructure (M04) is live — public registration, verification, and password reset all depend on it.
 
 ## Open Questions
 
-- Hosting target (managed PaaS vs VPS vs container platform) and what it implies for deploy, backups, and avatar/object storage.
+- Hosting target (managed PaaS vs VPS vs container platform) and what it implies for deploy and backups.
 - CI/CD: this is the trigger named in [`PLAN.md`](../../PLAN.md)'s Deferred Decisions for GitHub Actions and branch protection — revisit both here.
 - Whether the MCP server (M03) is hosted/public at launch or stays a local/private connector initially.
 - Legal review depth for Privacy Policy / ToS (templated vs reviewed).
@@ -49,4 +49,4 @@ _(TBD once scoped.)_
 
 ## Branch
 
-`M06-prep-launch` (created at scoping time).
+`M05-prep-launch` (created at scoping time).

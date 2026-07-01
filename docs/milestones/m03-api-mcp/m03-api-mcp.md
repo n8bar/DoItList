@@ -49,7 +49,7 @@ Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.
 ## Non-Goals
 
 - Rich-text / document-style task descriptions — the details field stays plain prose.
-- OAuth and hosted third-party MCP access — deferred to hosting (M06).
+- OAuth and hosted third-party MCP access — deferred to hosting (M05).
 - GraphQL.
 - Push / real-time API — M03 is pull-only; no webhooks or push stream (the LiveView's internal PubSub stays internal). Deferred until a consumer needs it.
 - Cross-Initiative bulk operations (mirrors the ProductSpec cross-Initiative reorganization deferral).
