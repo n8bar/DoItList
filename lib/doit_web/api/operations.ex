@@ -355,9 +355,20 @@ defmodule DoItWeb.Api.Operations do
   # the shape up front so every dispatch clause can assume a map.
   defp validate_data(op) do
     case Map.get(op, "data") do
-      nil -> :ok
-      data when is_map(data) -> :ok
-      _ -> {:error, err(:unprocessable_entity, "\"data\" must be a JSON object.", 422, "data")}
+      nil ->
+        :ok
+
+      data when is_map(data) ->
+        :ok
+
+      _ ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "\"data\" must be a JSON object (got #{inspect(Map.get(op, "data"))}).",
+           422,
+           "data"
+         )}
     end
   end
 
@@ -533,8 +544,14 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, %Comment{} = comment} <- fetch_comment_target(op, changes),
          {:ok, _initiative} <- authorize_comment(user, comment, :edit) do
       case Tasks.edit_comment(comment.id, user, data(op)["body"]) do
-        {:ok, updated} -> ok(nil, updated.id, "comment", comment_result(updated))
-        {:error, reason} -> {:error, context_error(reason)}
+        {:ok, updated} ->
+          ok(nil, updated.id, "comment", comment_result(updated))
+
+        {:error, :not_found} ->
+          {:error, err(:not_found, "No such comment with id #{comment.id}.", 422)}
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
       end
     end
   end
@@ -543,8 +560,14 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, %Comment{} = comment} <- fetch_comment_target(op, changes),
          {:ok, _initiative} <- authorize_comment(user, comment, :edit) do
       case Tasks.delete_comment(comment.id, user) do
-        {:ok, deleted} -> ok(nil, deleted.id, "comment", comment_result(deleted))
-        {:error, reason} -> {:error, context_error(reason)}
+        {:ok, deleted} ->
+          ok(nil, deleted.id, "comment", comment_result(deleted))
+
+        {:error, :not_found} ->
+          {:error, err(:not_found, "No such comment with id #{comment.id}.", 422)}
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
       end
     end
   end
@@ -581,6 +604,14 @@ defmodule DoItWeb.Api.Operations do
         {:ok, _member} ->
           ok(nil, target_user_id, "member", member_result(initiative.id, target_user_id, role))
 
+        {:error, :not_found} ->
+          {:error,
+           err(
+             :not_found,
+             "No such member with user_id #{target_user_id} in Initiative #{initiative.id}.",
+             422
+           )}
+
         {:error, reason} ->
           {:error, context_error(reason)}
       end
@@ -604,7 +635,12 @@ defmodule DoItWeb.Api.Operations do
           })
 
         _ ->
-          {:error, err(:not_found, "No such member to remove.", 422)}
+          {:error,
+           err(
+             :not_found,
+             "No such member with user_id #{target_user_id} in Initiative #{initiative.id}.",
+             422
+           )}
       end
     end
   end
@@ -667,7 +703,12 @@ defmodule DoItWeb.Api.Operations do
           ok(nil, link.id, "link", Map.put(link_result(link, source, target), :removed, true))
 
         {:error, :not_found} ->
-          {:error, err(:not_found, "No such cross-reference to remove.", 422)}
+          {:error,
+           err(
+             :not_found,
+             "No such cross-reference from task #{source.id} to task #{target.id}.",
+             422
+           )}
       end
     end
   end
@@ -708,7 +749,7 @@ defmodule DoItWeb.Api.Operations do
       {:error,
        err(
          :unprocessable_entity,
-         "A task can't cross-reference itself.",
+         "Task #{id} can't cross-reference itself.",
          422,
          "target_id"
        )}
@@ -722,12 +763,12 @@ defmodule DoItWeb.Api.Operations do
   # target is rejected here — the analogue of the parent_id same-Initiative guard.
   defp same_initiative_link(%Task{initiative_id: id}, %Task{initiative_id: id}), do: :ok
 
-  defp same_initiative_link(_source, _target),
+  defp same_initiative_link(source, target),
     do:
       {:error,
        err(
          :unprocessable_entity,
-         "A cross-reference can't span Initiatives — the target task belongs to a different Initiative.",
+         "Task #{target.id} belongs to Initiative #{target.initiative_id}, not Initiative #{source.initiative_id} — a cross-reference can't span Initiatives.",
          422,
          "target_id"
        )}
@@ -970,7 +1011,8 @@ defmodule DoItWeb.Api.Operations do
           else: {:ok, lid}
 
       _ ->
-        {:error, err(:bad_reference, "\"lid\" must be a string.", 422)}
+        {:error,
+         err(:bad_reference, "\"lid\" must be a string (got #{inspect(op["lid"])}).", 422)}
     end
   end
 
@@ -988,7 +1030,13 @@ defmodule DoItWeb.Api.Operations do
       Map.has_key?(data, id_key) ->
         case normalize_int(data[id_key]) do
           nil ->
-            {:error, err(:unprocessable_entity, "#{id_key} must be an integer id.", 422, id_key)}
+            {:error,
+             err(
+               :unprocessable_entity,
+               "#{id_key} must be an integer id (got #{inspect(data[id_key])}).",
+               422,
+               id_key
+             )}
 
           n ->
             {:ok, n}
@@ -996,8 +1044,17 @@ defmodule DoItWeb.Api.Operations do
 
       Map.has_key?(data, base) ->
         case normalize_int(data[base]) do
-          nil -> {:error, err(:unprocessable_entity, "#{base} must be an integer id.", 422, base)}
-          n -> {:ok, n}
+          nil ->
+            {:error,
+             err(
+               :unprocessable_entity,
+               "#{base} must be an integer id (got #{inspect(data[base])}).",
+               422,
+               base
+             )}
+
+          n ->
+            {:ok, n}
         end
 
       required? ->
@@ -1078,10 +1135,16 @@ defmodule DoItWeb.Api.Operations do
         {:ok, root_id}
 
       %Initiative{} ->
-        {:error, err(:unprocessable_entity, "Initiative has no root task.", 422, "initiative_id")}
+        {:error,
+         err(
+           :unprocessable_entity,
+           "Initiative #{initiative_id} has no root task.",
+           422,
+           "initiative_id"
+         )}
 
       nil ->
-        {:error, err(:not_found, "No such Initiative.", 422)}
+        {:error, err(:not_found, "No such Initiative with id #{initiative_id}.", 422)}
     end
   end
 
@@ -1113,12 +1176,12 @@ defmodule DoItWeb.Api.Operations do
   defp parent_in_initiative(%Task{initiative_id: id}, initiative_id) when id == initiative_id,
     do: :ok
 
-  defp parent_in_initiative(_parent, _initiative_id),
+  defp parent_in_initiative(parent, initiative_id),
     do:
       {:error,
        err(
          :unprocessable_entity,
-         "parent_id belongs to a different Initiative than initiative_id.",
+         "parent_id #{parent.id} belongs to Initiative #{parent.initiative_id}, not Initiative #{initiative_id}.",
          422,
          "parent_id"
        )}
@@ -1146,7 +1209,7 @@ defmodule DoItWeb.Api.Operations do
       id ->
         if Initiatives.get_role(initiative_id, id),
           do: :ok,
-          else: not_a_member_error(id, "assignee_id")
+          else: not_a_member_error(id, initiative_id, "assignee_id")
     end
   end
 
@@ -1157,15 +1220,15 @@ defmodule DoItWeb.Api.Operations do
 
     case Enum.find(ids, &(not Map.has_key?(members, &1))) do
       nil -> :ok
-      stranger -> not_a_member_error(stranger, "co_assignee_ids")
+      stranger -> not_a_member_error(stranger, initiative_id, "co_assignee_ids")
     end
   end
 
-  defp not_a_member_error(user_id, pointer) do
+  defp not_a_member_error(user_id, initiative_id, pointer) do
     {:error,
      err(
        :unprocessable_entity,
-       "User #{user_id} is not a member of this Initiative.",
+       "User #{user_id} is not a member of Initiative #{initiative_id}.",
        422,
        pointer
      )}
@@ -1183,7 +1246,7 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, id} <- fetch_target_ref(op, changes, "comment") do
       case Tasks.get_comment(id) do
         %Comment{} = comment -> {:ok, comment}
-        nil -> {:error, err(:not_found, "No such comment.", 422)}
+        nil -> {:error, err(:not_found, "No such comment with id #{id}.", 422)}
       end
     end
   end
@@ -1205,8 +1268,16 @@ defmodule DoItWeb.Api.Operations do
 
   defp fetch_target_id(op) do
     case normalize_int(op["id"]) do
-      nil -> {:error, err(:unprocessable_entity, "Operation \"id\" must be an integer.", 422)}
-      n -> {:ok, n}
+      nil ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "Operation \"id\" must be an integer (got #{inspect(op["id"])}).",
+           422
+         )}
+
+      n ->
+        {:ok, n}
     end
   end
 
@@ -1217,7 +1288,7 @@ defmodule DoItWeb.Api.Operations do
   defp load_task(id) do
     case Tasks.get_task(id) do
       %Task{deleted_at: nil} = task -> {:ok, task}
-      _ -> {:error, err(:not_found, "No such task.", 422)}
+      _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
     end
   end
 
@@ -1228,21 +1299,21 @@ defmodule DoItWeb.Api.Operations do
   defp load_task_any(id) do
     case Tasks.get_task(id) do
       %Task{} = task -> {:ok, task}
-      nil -> {:error, err(:not_found, "No such task.", 422)}
+      nil -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
     end
   end
 
   defp load_notification(id) do
     case Notifications.get(id) do
       %Notification{} = notification -> {:ok, notification}
-      nil -> {:error, err(:not_found, "No such notification.", 422)}
+      nil -> {:error, err(:not_found, "No such notification with id #{id}.", 422)}
     end
   end
 
   defp own_notification(%User{id: uid}, %Notification{user_id: uid}), do: :ok
 
-  defp own_notification(_user, _notification),
-    do: {:error, err(:forbidden, "That notification belongs to another user.", 403)}
+  defp own_notification(_user, notification),
+    do: {:error, err(:forbidden, "Notification #{notification.id} belongs to another user.", 403)}
 
   # Resolve the Initiative and run the capability check through the SAME role
   # predicates the LiveView uses. fetch_initiative returns :not_found (unknown
@@ -1253,10 +1324,15 @@ defmodule DoItWeb.Api.Operations do
         {:ok, initiative}
 
       {:error, :not_found} ->
-        {:error, err(:not_found, "No such Initiative.", 422)}
+        {:error, err(:not_found, "No such Initiative with id #{initiative_id}.", 422)}
 
       {:error, :forbidden} ->
-        {:error, err(:forbidden, "You don't have permission for this operation.", 403)}
+        {:error,
+         err(
+           :forbidden,
+           "You don't have #{capability} permission for Initiative #{initiative_id}.",
+           403
+         )}
     end
   end
 
@@ -1264,8 +1340,12 @@ defmodule DoItWeb.Api.Operations do
     query = from(t in Task, where: t.id == ^comment.task_id, select: t.initiative_id)
 
     case Repo.one(query) do
-      nil -> {:error, err(:not_found, "The comment's task no longer exists.", 422)}
-      initiative_id -> authorize(user, initiative_id, capability)
+      nil ->
+        {:error,
+         err(:not_found, "The comment's task (id #{comment.task_id}) no longer exists.", 422)}
+
+      initiative_id ->
+        authorize(user, initiative_id, capability)
     end
   end
 
@@ -1280,8 +1360,17 @@ defmodule DoItWeb.Api.Operations do
 
   defp fetch_int(data, key) do
     case normalize_int(data[key]) do
-      nil -> {:error, err(:unprocessable_entity, "#{key} must be an integer id.", 422, key)}
-      n -> {:ok, n}
+      nil ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "#{key} must be an integer id (got #{inspect(data[key])}).",
+           422,
+           key
+         )}
+
+      n ->
+        {:ok, n}
     end
   end
 
@@ -1304,7 +1393,13 @@ defmodule DoItWeb.Api.Operations do
          )}
 
       _ ->
-        {:error, err(:unprocessable_entity, "role must be one of: editor, viewer.", 422, "role")}
+        {:error,
+         err(
+           :unprocessable_entity,
+           "role must be one of: editor, viewer (got #{inspect(data["role"])}).",
+           422,
+           "role"
+         )}
     end
   end
 
@@ -1399,7 +1494,8 @@ defmodule DoItWeb.Api.Operations do
   defp context_error(:unauthorized),
     do: err(:forbidden, "Only the author may edit or delete this comment.", 403)
 
-  defp context_error(:not_found), do: err(:not_found, "Not found.", 422)
+  defp context_error(:not_found),
+    do: err(:not_found, "The referenced resource was not found.", 422)
 
   defp context_error(:cross_initiative),
     do: err(:unprocessable_entity, "A task can't move across Initiatives.", 422, "parent_id")

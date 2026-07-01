@@ -24,6 +24,5 @@ docs {
   Atomic batch: add a parent, add a child via parent_lid, update the child — one
   request, all-or-nothing. Expect 200 with per-op results echoing lid → real id.
   Re-run "03" → the child is nested under the parent at progress 50.
-  (Write the leaf's `manual_progress`; reads expose `progress` = the derived roll-up.)
   (As a viewer this whole POST → 403.)
 }
