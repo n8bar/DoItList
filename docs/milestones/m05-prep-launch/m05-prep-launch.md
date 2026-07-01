@@ -26,6 +26,7 @@ Stub — to be expanded. Not yet scoped into arcs.
 - **Observability.** Error tracking, uptime monitoring, basic metrics/logging.
 - **Backups.** Automated DB backups + a tested restore path.
 - **Perf / scale pass.** The data-layer optimization deferred in [`PLAN.md`](../../PLAN.md) (index strategy, `load_tree` scaling, pagination / bulk reads) — now that real client load patterns (the API/MCP and a public audience) exist to key it to.
+- **MCP goes public.** The stdio adapter (M03 Arc 2) stays local-only by construction — it needs `docker exec` access to whatever machine runs it, so it doesn't reach a hosted instance. Decided: MCP goes public at launch, not staying a local/private connector. Wire `anubis_mcp`'s Streamable-HTTP/SSE transport (stdio-only today) so any MCP client can reach the hosted instance with a personal API token — the same Bearer-token model Arc 1 already built, no new auth path. OAuth and any official third-party-connector-UI integration (e.g. a vendor's own "Bring Your Own MCP" button) are a separate, still-open question, not required for this.
 
 ## Preconditions
 
@@ -36,7 +37,6 @@ Stub — to be expanded. Not yet scoped into arcs.
 
 - Hosting target (managed PaaS vs VPS vs container platform) and what it implies for deploy and backups.
 - CI/CD: this is the trigger named in [`PLAN.md`](../../PLAN.md)'s Deferred Decisions for GitHub Actions and branch protection — revisit both here.
-- Whether the MCP server (M03) is hosted/public at launch or stays a local/private connector initially.
 - Legal review depth for Privacy Policy / ToS (templated vs reviewed).
 
 ## Non-Goals
