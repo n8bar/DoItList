@@ -105,6 +105,55 @@ defmodule DoItWeb.ArchiveLiveTest do
     end
   end
 
+  describe "index Trash (merged into the Archive drawer, m03.01 item 5.3)" do
+    test "drawer title omits \"Trash\" with nothing trashed; includes it with a count once trashed",
+         ctx do
+      {:ok, 1} = Initiatives.archive_initiative(ctx.me, ctx.archived)
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/initiatives")
+      refute view |> element("#archived summary") |> render() =~ "Trash"
+
+      {:ok, _} = Initiatives.trash_initiative(ctx.active)
+
+      {:ok, view2, _html} = live(ctx.conn, ~p"/initiatives")
+      assert view2 |> element("#archived summary") |> render() =~ "Trash (1)"
+    end
+
+    test "a trashed Initiative's row stays hidden until Show-trash is checked", ctx do
+      {:ok, _} = Initiatives.trash_initiative(ctx.active)
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/initiatives")
+      refute has_element?(view, "#trashed-#{ctx.active.id}")
+
+      view |> element("#show-trash") |> render_click()
+      assert has_element?(view, "#trashed-#{ctx.active.id}")
+    end
+
+    test "Show-trash does NOT persist across visits (resets each mount)", ctx do
+      {:ok, _} = Initiatives.trash_initiative(ctx.active)
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/initiatives")
+      view |> element("#show-trash") |> render_click()
+      assert has_element?(view, "#trashed-#{ctx.active.id}")
+
+      # Fresh mount — the checkbox state is gone; trash is out of sight again.
+      {:ok, view2, _html} = live(ctx.conn, ~p"/initiatives")
+      refute has_element?(view2, "#trashed-#{ctx.active.id}")
+    end
+
+    test "restore from the drawer returns a trashed Initiative to the active list", ctx do
+      {:ok, _} = Initiatives.trash_initiative(ctx.active)
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/initiatives")
+      view |> element("#show-trash") |> render_click()
+      view |> element("#trashed-#{ctx.active.id} button", "Restore") |> render_click()
+
+      refute has_element?(view, "#trashed-#{ctx.active.id}")
+
+      assert ctx.active.id in (Initiatives.list_visible_initiatives(ctx.me) |> Enum.map(& &1.id))
+    end
+  end
+
   describe "show page archive + hide" do
     # The archive confirm opens CLIENT-SIDE now (no round trip, UX_GUARDRAILS
     # 6.5) — the owner case predicts from the DOM, the member case via the

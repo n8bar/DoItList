@@ -121,10 +121,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:reverse_by_mode, reverse_by_mode)
     |> assign(:form, build_empty_form())
     |> assign(:trashed, Initiatives.list_trashed_initiatives(user))
-    # `show_hidden` is plain assign state — deliberately NON-persistent: it resets
-    # to false on every mount, so hidden Initiatives stay out of sight by default.
+    # `show_hidden` / `show_trash` are plain assign state — deliberately
+    # NON-persistent: they reset to false on every mount, so hidden Initiatives
+    # and trashed Initiatives both stay out of sight by default.
     |> assign(:archived, Initiatives.list_archived_initiatives(user))
     |> assign(:show_hidden, false)
+    |> assign(:show_trash, false)
     |> AssignedActions.assign_initial(user)
   end
 
@@ -919,6 +921,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # Show-hidden toggle: a plain, NON-persistent assign (m02.08 item 4.3).
   def handle_event("toggle_show_hidden", _params, socket) do
     {:noreply, assign(socket, :show_hidden, !socket.assigns.show_hidden)}
+  end
+
+  # Show-trash toggle: a plain, NON-persistent assign, same rationale as
+  # show_hidden — every trashed Initiative is equally hidden by default, so
+  # this reveal is all-or-nothing (unlike show_hidden's partial filter).
+  def handle_event("toggle_show_trash", _params, socket) do
+    {:noreply, assign(socket, :show_trash, !socket.assigns.show_trash)}
   end
 
   # Assigned-to-Me pane toggles (m02.08 item 1.3) — same handlers as the
@@ -2627,6 +2636,20 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     Enum.filter(archived, fn a -> a.archived? or (a.hidden? and show_hidden) end)
   end
 
+  # The merged Archive/Trash drawer's summary title (m03.01 item 5.3): each
+  # bucket contributes its own "Name (count)" segment, only when non-empty —
+  # "Trash" never appears in the title while there's nothing trashed. The
+  # Archived count still reacts to Show-hidden; Trash's count is the honest
+  # total regardless of show_trash — only the detail rows are gated behind it.
+  defp archive_drawer_title(archived, show_hidden, trashed) do
+    [
+      archived != [] && "Archived (#{length(visible_archived(archived, show_hidden))})",
+      trashed != [] && "Trash (#{length(trashed)})"
+    ]
+    |> Enum.filter(& &1)
+    |> Enum.join(" · ")
+  end
+
   # Owner-gated Trash action (m02.06 item 10): apply `fun` to the named trashed
   # Initiative the current user owns, then refresh both the Trash list and the
   # live index stream (a restore reappears there).
@@ -4260,56 +4283,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           No initiatives yet. Create one to get started.
         </p>
 
-        <%!-- Trash (m02.06 item 10): the owner's soft-deleted Initiatives. --%>
-        <section
-          :if={@trashed != []}
-          id="trash"
-          class="mt-10 border-t border-zinc-200 dark:border-zinc-800 pt-4"
-        >
-          <h2 class="flex items-center gap-1.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300">
-            <.icon name="hero-trash" class="w-4 h-4" /> Trash
-            <span class="font-normal text-xs text-zinc-400 dark:text-zinc-500">
-              · auto-deletes after {Initiatives.trash_retention_days()} days
-            </span>
-          </h2>
-          <ul class="mt-2 space-y-1">
-            <li
-              :for={t <- @trashed}
-              id={"trashed-#{t.id}"}
-              class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
-            >
-              <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
-                <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
-                <span class="truncate">{t.name}</span>
-                <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
-                  trashed <.local_time value={t.trashed_at} format="%b %-d" />
-                </span>
-              </span>
-              <span class="flex items-center gap-1 flex-none">
-                <button
-                  type="button"
-                  phx-click="restore_initiative"
-                  phx-value-id={t.id}
-                  data-latch="Restoring…"
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                >
-                  <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
-                </button>
-                <button
-                  type="button"
-                  phx-click="purge_initiative"
-                  phx-value-id={t.id}
-                  data-latch="Deleting…"
-                  data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
-                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
-                >
-                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
-                </button>
-              </span>
-            </li>
-          </ul>
-        </section>
-
         <%!-- Desktop-only entry to the keyboard-shortcuts help (.07.2.1). --%>
         <div class="hidden sm:flex justify-center mt-10 mb-16">
           <button
@@ -4325,18 +4298,27 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
         <.shortcuts_overlay />
 
-        <%!-- Archived (m02.08 worklist 4): the caller's per-user Archived list,
-             distinct from the owner-level Trash above. data-keep="open" pins the
-             open state across LiveView patches. --%>
+        <%!-- Archived + Trash (m02.08 worklist 4 / m03.01 item 5.3): the caller's
+             per-user Archived list merged with the owner-level Trash into one
+             drawer. data-keep="open" pins the open state across LiveView
+             patches. --%>
         <details
-          :if={@archived != []}
+          :if={@trashed != [] or @archived != []}
           id="archived"
           data-keep="open"
+          aria-label={archive_drawer_title(@archived, @show_hidden, @trashed)}
           class="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
         >
           <summary class="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 3xl:px-3 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-            <.icon name="hero-archive-box" class="w-4 h-4 flex-none" />
-            <span>Archived ({length(visible_archived(@archived, @show_hidden))})</span>
+            <.icon :if={@archived != []} name="hero-archive-box" class="w-4 h-4 flex-none" />
+            <span :if={@archived != []}>
+              Archived ({length(visible_archived(@archived, @show_hidden))})
+            </span>
+            <span :if={@archived != [] and @trashed != []} class="text-zinc-400 dark:text-zinc-500">
+              ·
+            </span>
+            <.icon :if={@trashed != []} name="hero-trash" class="w-4 h-4 flex-none" />
+            <span :if={@trashed != []}>Trash ({length(@trashed)})</span>
             <.icon
               name="hero-chevron-up"
               class="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
@@ -4366,24 +4348,51 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   />
                 </span>
               </label>
+              <label
+                :if={@trashed != []}
+                class="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none"
+              >
+                <input
+                  type="checkbox"
+                  id="show-trash"
+                  phx-click="toggle_show_trash"
+                  checked={@show_trash}
+                  data-keep="reveal-toggle"
+                  class="checkbox checkbox-xs"
+                /> Show trash
+                <span
+                  class="doit-reveal-slot inline-flex w-3.5 flex-none items-center justify-center"
+                  aria-hidden="true"
+                >
+                  <.icon
+                    name="hero-arrow-path"
+                    class="doit-reveal-spinner size-3.5 animate-spin text-emerald-600 dark:text-emerald-400"
+                  />
+                </span>
+              </label>
             </div>
             <ul class="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
               <%= for a <- visible_archived(@archived, @show_hidden) do %>
                 <li
                   id={"archived-#{a.id}"}
-                  class="flex items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+                  class="flex items-start sm:items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
                 >
-                  <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
-                    <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
-                    <span class="truncate">{a.name}</span>
+                  <div class="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                    <span class="flex items-center gap-2 min-w-0">
+                      <.botanical_icon
+                        kind={:grove}
+                        class="w-4 h-4 text-zinc-400 dark:text-zinc-500"
+                      />
+                      <span class="truncate">{a.name}</span>
+                    </span>
                     <span
                       :if={a.hidden? and not a.archived?}
                       class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
                     >
                       hidden
                     </span>
-                  </span>
-                  <span class="flex items-center gap-1 flex-none">
+                  </div>
+                  <span class="flex flex-col sm:flex-row items-end sm:items-center gap-1 flex-none">
                     <button
                       :if={a.archived?}
                       type="button"
@@ -4408,6 +4417,58 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 </li>
               <% end %>
             </ul>
+            <div
+              :if={@trashed != [] and @show_trash}
+              class="mt-4 pt-3 border-t border-zinc-200 dark:border-zinc-800"
+            >
+              <h3 class="flex items-center gap-1.5 text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+                <.icon name="hero-trash" class="w-3.5 h-3.5" /> Trash
+                <span class="font-normal normal-case text-zinc-400 dark:text-zinc-500">
+                  · auto-deletes after {Initiatives.trash_retention_days()} days
+                </span>
+              </h3>
+              <ul class="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
+                <li
+                  :for={t <- @trashed}
+                  id={"trashed-#{t.id}"}
+                  class="flex items-start sm:items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+                >
+                  <div class="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                    <span class="flex items-center gap-2 min-w-0">
+                      <.botanical_icon
+                        kind={:grove}
+                        class="w-4 h-4 text-zinc-400 dark:text-zinc-500"
+                      />
+                      <span class="truncate">{t.name}</span>
+                    </span>
+                    <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
+                      trashed <.local_time value={t.trashed_at} format="%b %-d" />
+                    </span>
+                  </div>
+                  <span class="flex flex-col sm:flex-row items-end sm:items-center gap-1 flex-none">
+                    <button
+                      type="button"
+                      phx-click="restore_initiative"
+                      phx-value-id={t.id}
+                      data-latch="Restoring…"
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                    >
+                      <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="purge_initiative"
+                      phx-value-id={t.id}
+                      data-latch="Deleting…"
+                      data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
+                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                    >
+                      <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
+                    </button>
+                  </span>
+                </li>
+              </ul>
+            </div>
           </div>
         </details>
       <% end %>
