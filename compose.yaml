@@ -34,9 +34,13 @@ services:
       - doit_build:/app/_build
       - doit_deps:/app/deps
       - doit_node_modules:/app/assets/node_modules
+      - doit_mcp_build:/app/mcp_server/_build
+      - doit_mcp_deps:/app/mcp_server/deps
 
 volumes:
   doit_pgdata:
   doit_build:
   doit_deps:
   doit_node_modules:
+  doit_mcp_build:
+  doit_mcp_deps:

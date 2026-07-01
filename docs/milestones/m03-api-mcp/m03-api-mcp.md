@@ -35,12 +35,12 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
-| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing | scoped |
+| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing and Verification | scoped |
 | 3 — Documentation & maintenance | [`m03.03-documentation+maintenance.md`](m03.03-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (MCP server) is scoped and approved — runtime (a separate stdio process on `hermes_mcp`), the tools/resources mapping, and the concurrency approach are all settled; ready to build. Arc 3 (Documentation & maintenance) remains a draft stub, unscoped, though it's already picked up one candidate item from Arc 2's scoping: a Claude Code skill for `apply_operations`.
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (MCP server) is scoped and approved — runtime (a separate stdio process on `anubis_mcp`, the maintained fork of `hermes_mcp`), the tools/resources mapping, and the concurrency approach are all settled; ready to build. Arc 3 (Documentation & maintenance) remains a draft stub, unscoped, though it's already picked up one candidate item from Arc 2's scoping: a Claude Code skill for `apply_operations`.
 
 ## Preconditions
 
