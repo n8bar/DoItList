@@ -20,6 +20,9 @@ defmodule DoitMcp.ToolResult do
       {:error, %{status: status, body: %{"error" => error}}} ->
         {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}
 
+      {:error, %{status: status, body: body}} ->
+        {:reply, Response.error(Response.tool(), "(#{status}) #{inspect(body)}"), frame}
+
       {:error, %{reason: reason}} ->
         {:reply, Response.error(Response.tool(), "Request failed: #{inspect(reason)}"), frame}
     end
@@ -46,6 +49,12 @@ defmodule DoitMcp.ToolResult do
       {:error, %{status: status, body: %{"error" => error}}} ->
         response = Response.json(Response.tool(), %{ok: false, status: status, error: error})
         {:reply, %{response | isError: true}, frame}
+
+      {:error, %{status: status, body: body}} ->
+        # An unhandled server crash (e.g. a 500 past Phoenix's default error
+        # view) never matches the app's own {"error": ...} envelope — surface
+        # it anyway instead of falling through with no matching clause.
+        {:reply, Response.error(Response.tool(), "(#{status}) #{inspect(body)}"), frame}
 
       {:error, %{reason: reason}} ->
         {:reply, Response.error(Response.tool(), "Request failed: #{inspect(reason)}"), frame}
