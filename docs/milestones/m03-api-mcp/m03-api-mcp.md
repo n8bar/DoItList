@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: Arc 1 complete · Arc 2 in review · Arc 3 draft stub · Target: TBD_
+_Status: Arc 1 complete · Arc 2 scoped · Arc 3 draft stub · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
@@ -13,11 +13,11 @@ The API is designed **MCP-first**: the MCP server is the API's first concrete co
 
 An AI agent — **Claude Code first** — manages an Initiative as its working worklist, the way work is tracked today in the `docs/milestones/**` markdown hierarchy (Milestones → Arcs → Worklists → Items → Subitems). The bar: driving a task tree through the MCP/API is **at least as efficient as editing those `.md` files**. The tree mechanics (nesting, order, progress, reparent/reorder) are a natural — arguably better — fit; the doc-only affordances (inline prose, cross-references, git-diff review) map onto the carriers below.
 
-## Design Decisions
+A sharper form of the same case: an agent's own in-flight todo list, normally ephemeral and passively rendered in its coding tool, becomes an interactive Initiative instead — live and two-way. The agent pushes updates as it works (add a task, mark one done, discover and add a subtask); the human can edit or reprioritize from the DoItList UI while the agent is still running, and the agent's next write reflects the current state rather than a stale plan.
 
-**Scope: structural-first.** M03 delivers the structural surface — tree CRUD (create / read / update / move / reorder / reparent), roll-up progress, membership — plus the three supporting surfaces below. The prose/narrative layer rides existing fields; no new editor.
+## Carrier Mapping
 
-**The four carriers** — how the markdown docs' content maps onto an Initiative:
+The four carriers — how the markdown docs' content maps onto an Initiative, reusing existing fields rather than building new ones:
 
 | Doc content | Carrier |
 |---|---|
@@ -26,7 +26,7 @@ An AI agent — **Claude Code first** — manages an Initiative as its working w
 | What changed, when, by whom (review-as-diff) | **activity rollup** at Initiative / subtree level — `activity_events` already carries both `initiative_id` and `task_id`, so this is read queries + a surface, **no schema change** |
 | "see that other task" | **cross-references** — an ID-anchored task→task link, rendered with the task's index label so it never rots on reorder (the index from m02.07 §1.7 is the *label*; the stable ID is the *link*) |
 
-_The per-decision rationale (transport, versioning, auth, rate limiting, bulk, the public/reversible surface, MCP stdio transport) is folded into the arc items in [`m03.01-http-api.md`](m03.01-http-api.md) and [`m03.02-mcp-server.md`](m03.02-mcp-server.md)._
+_Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the public/reversible surface, MCP runtime/tool-surface choices) lives in `docs/CHANGELOG.log` as each arc gets scoped and built, not in the arc docs themselves._
 
 ## Arcs
 
@@ -35,12 +35,12 @@ _The per-decision rationale (transport, versioning, auth, rate limiting, bulk, t
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
-| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing | draft |
+| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing | scoped |
 | 3 — Documentation & maintenance | [`m03.03-documentation+maintenance.md`](m03.03-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (MCP server) is next: the operator is beginning review of its scope and design now. Arc 3 (Documentation & maintenance) remains a draft stub, unscoped.
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (MCP server) is scoped and approved — runtime (a separate stdio process on `hermes_mcp`), the tools/resources mapping, and the concurrency approach are all settled; ready to build. Arc 3 (Documentation & maintenance) remains a draft stub, unscoped, though it's already picked up one candidate item from Arc 2's scoping: a Claude Code skill for `apply_operations`.
 
 ## Preconditions
 
