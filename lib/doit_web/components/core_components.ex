@@ -30,6 +30,7 @@ defmodule DoItWeb.CoreComponents do
   use Gettext, backend: DoItWeb.Gettext
 
   alias Phoenix.LiveView.JS
+  alias DoItWeb.LocalTime
 
   @doc """
   Renders flash notices.
@@ -815,6 +816,26 @@ defmodule DoItWeb.CoreComponents do
         {"transition-all ease-in duration-200", "opacity-100 translate-y-0 sm:scale-100",
          "opacity-0 translate-y-4 sm:translate-y-0 sm:scale-95"}
     )
+  end
+
+  @doc """
+  Renders a stored UTC timestamp in the deployment's local time
+  (`DoItWeb.LocalTime`), formatted with `Calendar.strftime/2`. Use this instead
+  of calling `Calendar.strftime` directly on a stored timestamp — a guard test
+  (`test/doit_web/local_time_usage_test.exs`) fails the suite if
+  `Calendar.strftime` appears anywhere else under `lib/doit_web`.
+
+  ## Examples
+
+      <.local_time value={@task.updated_at} format="%b %-d %H:%M" />
+  """
+  attr :value, :any, required: true, doc: "a stored %DateTime{} (UTC)"
+  attr :format, :string, required: true, doc: "a Calendar.strftime/2 format string"
+
+  def local_time(assigns) do
+    ~H"""
+    {Calendar.strftime(LocalTime.from_utc(@value), @format)}
+    """
   end
 
   @doc """

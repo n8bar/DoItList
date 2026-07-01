@@ -272,7 +272,7 @@ defmodule DoItWeb.AccountLive do
               <div class="flex items-baseline justify-between gap-4">
                 <dt class="text-zinc-500 dark:text-zinc-400">Member since</dt>
                 <dd class="text-zinc-800 dark:text-zinc-100">
-                  {Calendar.strftime(LocalTime.from_utc(@current_user.inserted_at), "%b %-d, %Y")}
+                  <.local_time value={@current_user.inserted_at} format="%b %-d, %Y" />
                 </dd>
               </div>
             </dl>
@@ -681,15 +681,9 @@ defmodule DoItWeb.AccountLive do
                           {token.label || "Unlabeled token"}
                         </p>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                          Minted {Calendar.strftime(
-                            LocalTime.from_utc(token.inserted_at),
-                            "%b %-d, %Y"
-                          )} ·
+                          Minted <.local_time value={token.inserted_at} format="%b %-d, %Y" /> ·
                           <%= if token.last_used_at do %>
-                            Last used {Calendar.strftime(
-                              LocalTime.from_utc(token.last_used_at),
-                              "%b %-d, %Y"
-                            )}
+                            Last used <.local_time value={token.last_used_at} format="%b %-d, %Y" />
                           <% else %>
                             Never used
                           <% end %>

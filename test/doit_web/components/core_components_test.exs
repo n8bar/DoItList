@@ -59,4 +59,13 @@ defmodule DoItWeb.CoreComponentsTest do
       assert length(Enum.uniq(looks)) == 40
     end
   end
+
+  describe "local_time/1" do
+    test "formats a UTC timestamp in local time" do
+      utc = ~U[2026-01-15 03:30:00Z]
+      expected = Calendar.strftime(DoItWeb.LocalTime.from_utc(utc), "%b %-d %H:%M")
+      html = render_component(&CoreComponents.local_time/1, value: utc, format: "%b %-d %H:%M")
+      assert html =~ expected
+    end
+  end
 end

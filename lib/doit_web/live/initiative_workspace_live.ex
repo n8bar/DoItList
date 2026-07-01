@@ -4209,10 +4209,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                     {initiative.my_role}
                   </span>
                   <span class="text-xs text-zinc-500 dark:text-zinc-400">
-                    Updated {Calendar.strftime(
-                      LocalTime.from_utc(initiative.updated_at),
-                      "%b %-d, %Y"
-                    )}
+                    Updated <.local_time value={initiative.updated_at} format="%b %-d, %Y" />
                   </span>
                 </div>
               </div>
@@ -4285,7 +4282,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 <.botanical_icon kind={:grove} class="w-4 h-4 text-zinc-400 dark:text-zinc-500" />
                 <span class="truncate">{t.name}</span>
                 <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
-                  trashed {Calendar.strftime(LocalTime.from_utc(t.trashed_at), "%b %-d")}
+                  trashed <.local_time value={t.trashed_at} format="%b %-d" />
                 </span>
               </span>
               <span class="flex items-center gap-1 flex-none">
@@ -6494,10 +6491,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               />{@task.updated_by.name}
             </span>
             <span title={LocalTime.from_utc(@task.updated_at)}>
-              ({Calendar.strftime(LocalTime.from_utc(@task.updated_at), "%b %-d %H:%M")})
+              (<.local_time value={@task.updated_at} format="%b %-d %H:%M" />)
             </span>
           <% else %>
-            Updated {Calendar.strftime(LocalTime.from_utc(@task.updated_at), "%b %-d %H:%M")}
+            Updated <.local_time value={@task.updated_at} format="%b %-d %H:%M" />
           <% end %>
         </div>
         <div class="flex items-center gap-2">
@@ -6539,10 +6536,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 online={c.user && MapSet.member?(@online_ids, c.user.id)}
                 class="w-4 h-4 text-[8px]"
               />
-              {c.user && c.user.name} · {Calendar.strftime(
-                LocalTime.from_utc(c.inserted_at),
-                "%b %-d %H:%M"
-              )}
+              {c.user && c.user.name} · <.local_time value={c.inserted_at} format="%b %-d %H:%M" />
             </div>
 
             <%= cond do %>
@@ -6671,7 +6665,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   class="text-xs text-zinc-600 dark:text-zinc-300"
                 >
                   <span class="text-zinc-400 dark:text-zinc-500">
-                    {Calendar.strftime(LocalTime.from_utc(v.inserted_at), "%b %-d %H:%M")}
+                    <.local_time value={v.inserted_at} format="%b %-d %H:%M" />
                   </span>
                   <div class="whitespace-pre-wrap">{v.body}</div>
                 </li>
@@ -6727,7 +6721,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <ul data-async-list class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
           <li :for={e <- @activity} :if={e.kind != "status_changed"}>
             <span class="text-zinc-500 dark:text-zinc-400">
-              {Calendar.strftime(LocalTime.from_utc(e.inserted_at), "%b %-d %H:%M")}
+              <.local_time value={e.inserted_at} format="%b %-d %H:%M" />
             </span>
             ·
             <span class="font-medium inline-flex items-center gap-1 align-bottom">
