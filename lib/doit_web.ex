@@ -90,6 +90,7 @@ defmodule DoItWeb do
       # Common modules used in templates
       alias Phoenix.LiveView.JS
       alias DoItWeb.Layouts
+      alias DoItWeb.LocalTime
 
       # Routes generation with the ~p sigil
       unquote(verified_routes())
