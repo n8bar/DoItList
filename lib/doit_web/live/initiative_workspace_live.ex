@@ -2979,6 +2979,22 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                     }
                     return;
                   }
+                  // Down arrow while the Initiative (not a task) is the thing
+                  // selected: the mirror of the top-of-list Up-arrow escape below —
+                  // reverse back into the first visible task. DoitSelection.set
+                  // already closes the editor pane (syncPaneSkeleton), so this stays
+                  // pure client view-state, no round trip.
+                  if (k === "ArrowDown" && !this.selectedId() &&
+                      window.DoitInitiativeEditor && window.DoitInitiativeEditor.open) {
+                    e.preventDefault();
+                    const first = this.visibleRows()[0];
+                    if (first) {
+                      const id = first.dataset.taskId;
+                      window.DoitSelection.set(id, {scroll: true});
+                      this.schedulePaneLoad(id);
+                    }
+                    return;
+                  }
                   const sel = this.selectedId();
                   if (!sel) return; // every other shortcut needs a selected task
                   if (k === " ") {
@@ -3007,6 +3023,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                     if (id) {
                       window.DoitSelection.set(id, {scroll: true});
                       this.schedulePaneLoad(id);
+                    } else if (k === "ArrowUp" && window.DoitInitiativeEditor) {
+                      // Top of the visible list: Up escapes into the Initiative
+                      // itself (the mirror of the ArrowDown reversal above).
+                      window.DoitInitiativeEditor.show();
                     }
                     return;
                   }
