@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: scoping — design decisions settled; arcs broken out (draft, pending approval) · Planned start: after M02 (UX Buildout) lands · Target: TBD_
+_Status: Arc 1 complete · Arc 2 in review · Arc 3 draft stub · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
@@ -34,13 +34,13 @@ _The per-decision rationale (transport, versioning, auth, rate limiting, bulk, t
 
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
-| 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | draft |
+| 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
 | 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing | draft |
 | 3 — Documentation & maintenance | [`m03.03-documentation+maintenance.md`](m03.03-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Scoping in progress. Design decisions are operator-approved; the three arcs are broken out into draft arc files pending approval (Arc 3, Documentation & maintenance, is a fresh stub); the two Arc 2 (MCP) questions are deferred (non-blocking).
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (MCP server) is next: the operator is beginning review of its scope and design now. Arc 3 (Documentation & maintenance) remains a draft stub, unscoped.
 
 ## Preconditions
 
