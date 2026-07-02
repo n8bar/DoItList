@@ -287,7 +287,7 @@ defmodule DoIt.Tasks do
         if is_integer(position), do: insert_at_position(task, parent_id, position), else: task
 
       record_event(task, actor, "created", %{title: task.title})
-      task = recompute_self_and_ancestors(task)
+      task = recompute_self_and_ancestors(task, progress_calc_mode(initiative_id))
       {:ok, task}
     end
   end
@@ -381,15 +381,20 @@ defmodule DoIt.Tasks do
                 do: maybe_auto_promote(updated, actor),
                 else: updated
 
-            # Re-compute progress for old and new parents (parent reparent)
+            # Re-compute progress for old and new parents (parent reparent).
+            # One mode resolution covers all three recomputes below (up to
+            # three separate chain walks for one logical edit).
             old_parent = task.parent_id
             new_parent = updated.parent_id
+            mode = progress_calc_mode(updated.initiative_id)
 
-            if old_parent && old_parent != new_parent, do: recompute_ancestors(old_parent)
-            if new_parent, do: recompute_ancestors(new_parent)
+            if old_parent && old_parent != new_parent,
+              do: recompute_ancestors(old_parent, mode)
+
+            if new_parent, do: recompute_ancestors(new_parent, mode)
 
             # Always recompute self in case manual_progress changed
-            updated = recompute_self_and_ancestors(updated)
+            updated = recompute_self_and_ancestors(updated, mode)
 
             # Auto-sorted parents need their children re-ordered when any
             # sort-key field on a child changes (status, priority, title,
@@ -532,10 +537,12 @@ defmodule DoIt.Tasks do
         )
       end
 
-      if old_parent_id && old_parent_id != new_parent_id,
-        do: recompute_ancestors(old_parent_id)
+      mode = progress_calc_mode(task.initiative_id)
 
-      if new_parent_id, do: recompute_ancestors(new_parent_id)
+      if old_parent_id && old_parent_id != new_parent_id,
+        do: recompute_ancestors(old_parent_id, mode)
+
+      if new_parent_id, do: recompute_ancestors(new_parent_id, mode)
 
       {:ok, {Repo.get!(Task, moved.id), old_parent_id, new_parent_id}}
     end
@@ -902,7 +909,7 @@ defmodule DoIt.Tasks do
             {:error, cs} -> Repo.rollback(cs)
           end
 
-          recompute_ancestors(parent_id)
+          recompute_ancestors(parent_id, progress_calc_mode(initiative_id))
         end
 
         broadcast_change(initiative_id, {:task_deleted, task.id})
@@ -922,7 +929,7 @@ defmodule DoIt.Tasks do
         from(t in Task, where: t.id in ^ids and not is_nil(t.deleted_at))
         |> Repo.update_all(set: [deleted_at: nil])
 
-      if parent_id, do: recompute_ancestors(parent_id)
+      if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(initiative_id))
       broadcast_change(initiative_id, {:task_created, parent_id || List.first(ids)})
       :ok
     end)
@@ -1157,9 +1164,10 @@ defmodule DoIt.Tasks do
 
         with :ok <- validate_move(task, parent_id) do
           old_parent = task.parent_id
+          mode = progress_calc_mode(task.initiative_id)
           perform_move(task, parent_id, target["position"], event_actor(event))
-          if old_parent && old_parent != parent_id, do: recompute_ancestors(old_parent)
-          recompute_ancestors(parent_id)
+          if old_parent && old_parent != parent_id, do: recompute_ancestors(old_parent, mode)
+          recompute_ancestors(parent_id, mode)
           :ok
         end
     end
@@ -1177,7 +1185,7 @@ defmodule DoIt.Tasks do
         |> Repo.update_all(set: [deleted_at: now_seconds()])
       end
 
-    if parent_id, do: recompute_ancestors(parent_id)
+    if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(event.initiative_id))
     :ok
   end
 
@@ -1197,7 +1205,9 @@ defmodule DoIt.Tasks do
             from(t in Task, where: t.id in ^ids) |> Repo.update_all(set: [deleted_at: nil])
           end
 
-        if task.parent_id, do: recompute_ancestors(task.parent_id)
+        if task.parent_id,
+          do: recompute_ancestors(task.parent_id, progress_calc_mode(task.initiative_id))
+
         :ok
     end
   end
@@ -1219,7 +1229,10 @@ defmodule DoIt.Tasks do
         |> Repo.update()
         |> case do
           {:ok, updated} ->
-            if kind == "progress_changed", do: recompute_ancestors(updated.parent_id)
+            if kind == "progress_changed",
+              do:
+                recompute_ancestors(updated.parent_id, progress_calc_mode(updated.initiative_id))
+
             :ok
 
           {:error, _} ->
@@ -1268,7 +1281,11 @@ defmodule DoIt.Tasks do
       end
     end)
 
-    reconcile_progress(event.initiative_id)
+    # The affected set spans both the up-cascade (ancestors) and any
+    # down-cascade (descendants) from the original completion — not one
+    # ancestor chain — so this stays the whole-Initiative recompute rather
+    # than the chain-scoped path.
+    reconcile_progress(event.initiative_id, progress_calc_mode(event.initiative_id))
     :ok
   end
 
@@ -1440,9 +1457,41 @@ defmodule DoIt.Tasks do
     )
   end
 
+  # These two only ever climb one level at a time — that part was already
+  # cheap. What used to cost was routing each level's write through
+  # `flip_status/3` (a full `update_task/4`, its own recompute pass, its own
+  # `Repo.update!`): one write per ancestor instead of one write for the
+  # whole chain. `collect_*_flips/1` below stays a pure read-only walk
+  # (unchanged in shape from before); `commit_status_cascade/4` does the one
+  # batched write afterward.
+  #
+  # No progress recompute happens here, and that's not an oversight: progress
+  # is a pure function of LEAF state (`DoIt.Tasks.Progress`) — an ancestor's
+  # own `status` never feeds into anyone's `computed_progress`. Every caller
+  # of these two functions already recomputed progress up this exact chain
+  # (via `recompute_ancestors/2` or `recompute_self_and_ancestors/2`) before
+  # calling in, so `computed_progress` is already correct by the time the
+  # status walk starts.
   defp check_completed_ancestors(nil, _actor), do: []
 
   defp check_completed_ancestors(parent_id, actor) do
+    parent_id
+    |> collect_completed_flips(nil)
+    |> commit_status_cascade(actor, "done", 100)
+  end
+
+  # `pending` is the id of the level just below in the walk that this
+  # function itself decided should flip to done — real, but not yet written
+  # (the write happens once, in `commit_status_cascade/4`, after the whole
+  # chain is collected). Without it, the very next level's "are all my
+  # children done?" check would read that child's stale (still "open") DB
+  # row and stop the cascade short — the direct trigger (the task the caller
+  # originally toggled) is the one exception: its own `flip_status/3` call
+  # already committed before this walk starts, so the first level needs no
+  # substitute.
+  defp collect_completed_flips(nil, _pending), do: []
+
+  defp collect_completed_flips(parent_id, pending) do
     case Repo.get(Task, parent_id) do
       nil ->
         []
@@ -1451,11 +1500,11 @@ defmodule DoIt.Tasks do
         siblings =
           Repo.all(from t in Task, where: t.parent_id == ^parent.id and is_nil(t.deleted_at))
 
-        all_done? = siblings != [] and Enum.all?(siblings, &(&1.status == "done"))
+        all_done? =
+          siblings != [] and Enum.all?(siblings, &(&1.id == pending or &1.status == "done"))
 
         if all_done? and parent.status != "done" do
-          {updated, entry} = flip_status(parent, actor, "done")
-          [entry | check_completed_ancestors(updated.parent_id, actor)]
+          [parent | collect_completed_flips(parent.parent_id, parent.id)]
         else
           []
         end
@@ -1465,17 +1514,63 @@ defmodule DoIt.Tasks do
   defp uncheck_done_ancestors(nil, _actor), do: []
 
   defp uncheck_done_ancestors(parent_id, actor) do
+    parent_id
+    |> collect_done_flips()
+    |> commit_status_cascade(actor, "open", 0)
+  end
+
+  defp collect_done_flips(nil), do: []
+
+  defp collect_done_flips(parent_id) do
     case Repo.get(Task, parent_id) do
       nil ->
         []
 
       %Task{status: "done"} = parent ->
-        {updated, entry} = flip_status(parent, actor, "open")
-        [entry | uncheck_done_ancestors(updated.parent_id, actor)]
+        [parent | collect_done_flips(parent.parent_id)]
 
       parent ->
-        uncheck_done_ancestors(parent.parent_id, actor)
+        collect_done_flips(parent.parent_id)
     end
+  end
+
+  # Batch every ancestor's status + manual_progress flip into one query,
+  # matching what N individual `flip_status/3` calls would have written
+  # (status, the progress snap/reset, `updated_by_id`, `updated_at`) — every
+  # ancestor in one cascade call flips to the SAME target status/progress, so
+  # a plain `set:` covers it; no per-row CASE WHEN needed (unlike the
+  # progress batch below, where each ancestor's new value differs).
+  defp commit_status_cascade([], _actor, _status, _progress), do: []
+
+  defp commit_status_cascade(ancestors, actor, status, progress) do
+    ids = Enum.map(ancestors, & &1.id)
+    now = now_seconds()
+
+    {_n, _} =
+      from(t in Task, where: t.id in ^ids)
+      |> Repo.update_all(
+        set: [
+          status: status,
+          manual_progress: progress,
+          updated_by_id: actor.id,
+          updated_at: now
+        ]
+      )
+
+    Enum.each(ancestors, fn parent ->
+      maybe_resort_children(parent.parent_id)
+      broadcast_change(parent.initiative_id, {:task_updated, parent.id})
+    end)
+
+    Enum.map(ancestors, fn parent ->
+      %{
+        "task_id" => parent.id,
+        "from_status" => parent.status,
+        "from_progress" => parent.manual_progress,
+        "to_status" => status,
+        "to_progress" => progress
+      }
+    end)
   end
 
   @doc """
@@ -1562,6 +1657,29 @@ defmodule DoIt.Tasks do
     |> Enum.map(&Ecto.put_meta(&1, source: Task.__schema__(:source)))
     |> Repo.preload([:assignee, :updated_by])
     |> with_co_counts()
+  end
+
+  @doc """
+  One task's own row, shaped exactly like a `lineage/1` entry (`:assignee` /
+  `:updated_by` preloaded, co-assignee virtual fields populated) but with no
+  ancestor walk. For a caller that already holds the rest of the tree in
+  memory (the LiveView, reacting to a `{:task_updated, id}` broadcast) — it
+  learns just the one row that actually changed, then recomputes the
+  ancestor chain's roll-up itself from its in-memory tree via
+  `DoIt.Tasks.Progress` instead of re-fetching the whole chain. `nil` when
+  the task is gone.
+  """
+  def task_row(task_id) do
+    case Repo.get(Task, task_id) do
+      nil ->
+        nil
+
+      task ->
+        task
+        |> Repo.preload([:assignee, :updated_by])
+        |> then(&with_co_counts([&1]))
+        |> List.first()
+    end
   end
 
   @doc "Live child ids of `parent_id` in display order."
@@ -2511,47 +2629,279 @@ defmodule DoIt.Tasks do
   defp jsonable(other), do: other
 
   # --- Progress roll-up ------------------------------------------------------
+  #
+  # Two write paths, same formula (`DoIt.Tasks.Progress`), same batched-write
+  # technique:
+  #
+  #   * `reconcile_ancestor_chain/2` — the per-edit hot path. A leaf edit (or
+  #     a reparent) can only ever change nodes on its OWN ancestor chain, so
+  #     this fetches just that chain (`fetch_ancestor_chain/1`, an up-walk on
+  #     the same recursive-CTE pattern `ancestor_chain_query/1` already
+  #     provides) instead of the whole Initiative, and writes only the
+  #     ancestors whose value actually changed in one batched query.
+  #   * `reconcile_progress/2` — the whole-Initiative recompute. Still needed
+  #     for the two cases where the affected set genuinely isn't one chain:
+  #     switching an Initiative's `progress_calc` mode (every node can
+  #     change) and undoing/redoing a completion cascade (the affected set
+  #     spans both the up-cascade ancestors and the down-cascade
+  #     descendants). Same tree-walk as before; now shares the batched
+  #     write with the chain-scoped path instead of writing one row at a
+  #     time.
+  #
+  # Both paths thread `mode` in from the caller rather than re-querying
+  # `progress_calc_mode/1` per recompute — a single logical operation (e.g.
+  # `update_task/4`, which can trigger up to three chain recomputes for the
+  # old parent, the new parent, and the task itself) resolves it once.
 
   @doc """
   Recompute the rolled-up progress for the entire Initiative. Returns the
   updated tree.
   """
   def recompute_initiative_progress(initiative_id) do
-    reconcile_progress(initiative_id)
+    reconcile_progress(initiative_id, progress_calc_mode(initiative_id))
     initiative_task_tree(initiative_id)
   end
 
-  defp persist_progress(%Task{} = task, value) do
-    task
-    |> Task.computed_progress_changeset(value)
-    |> Repo.update!()
-  end
-
   @doc """
-  Reconcile computed_progress after a change at or under `task_id`'s parent.
-  Leaf-average roll-up (ProductSpec § Roll-up Progress) can't be derived
-  level-by-level from children's persisted percentages — it needs leaf
-  masses too — so this recomputes the whole initiative's values from one
-  query and writes only the diffs. Self-healing by construction.
+  Reconcile computed_progress along `task_id`'s ancestor chain (`task_id`
+  itself up through the Initiative's root). `mode` is the caller's already-
+  resolved `progress_calc_mode/1` result — resolve it once per outer
+  operation, not once per chain recompute.
   """
-  def recompute_ancestors(nil), do: :ok
+  def recompute_ancestors(nil, _mode), do: :ok
 
-  def recompute_ancestors(task_id) when is_integer(task_id) do
-    case Repo.get(Task, task_id) do
-      nil -> :ok
-      task -> reconcile_progress(task.initiative_id)
-    end
+  def recompute_ancestors(task_id, mode) when is_integer(task_id) do
+    reconcile_ancestor_chain(task_id, mode)
   end
 
-  defp recompute_self_and_ancestors(%Task{id: id} = task) do
-    reconcile_progress(task.initiative_id)
+  defp recompute_self_and_ancestors(%Task{id: id}, mode) do
+    reconcile_ancestor_chain(id, mode)
     Repo.get!(Task, id)
   end
 
-  defp reconcile_progress(initiative_id) do
+  # The per-initiative calc setting (Initiative pane → Settings). Schemaless
+  # read keeps Tasks from depending on the Initiatives schema.
+  defp progress_calc_mode(initiative_id) do
+    calc =
+      Repo.one(
+        from i in "initiatives",
+          where: i.id == type(^initiative_id, :integer),
+          select: i.progress_calc
+      )
+
+    if calc == "single_level", do: :single_level, else: :leaf_average
+  end
+
+  # --- Chain-scoped recompute (the per-edit hot path) -------------------------
+
+  defp reconcile_ancestor_chain(task_id, mode) do
+    case fetch_ancestor_chain(task_id) do
+      [] ->
+        :ok
+
+      chain ->
+        changes = compute_chain_values(chain, mode)
+
+        if changes != [] do
+          batch_persist_progress(changes)
+
+          by_id = Map.new(chain, &{&1.id, &1})
+
+          Enum.each(changes, fn {id, _value} ->
+            case Map.get(by_id, id) do
+              %{parent_id: parent_id} -> maybe_resort_children(parent_id)
+              nil -> :ok
+            end
+          end)
+        end
+
+        :ok
+    end
+  end
+
+  # `task_id` and every ancestor up to the root, nearest first — built in
+  # Elixir from one unordered CTE fetch (`ancestor_chain_query/1`) by walking
+  # `parent_id` pointers, so it doesn't depend on the CTE's row order.
+  defp fetch_ancestor_chain(task_id) do
+    rows =
+      task_id
+      |> ancestor_chain_query()
+      |> select([t], %{
+        id: t.id,
+        parent_id: t.parent_id,
+        status: t.status,
+        manual_progress: t.manual_progress,
+        computed_progress: t.computed_progress
+      })
+      |> Repo.all()
+
+    by_id = Map.new(rows, &{&1.id, &1})
+    build_chain(by_id, task_id)
+  end
+
+  defp build_chain(_by_id, nil), do: []
+
+  defp build_chain(by_id, id) do
+    case Map.get(by_id, id) do
+      nil -> []
+      node -> [node | build_chain(by_id, node.parent_id)]
+    end
+  end
+
+  # {ancestor_id, new_value} for every chain node whose recomputed value
+  # differs from what's currently persisted (nearest-first order, harmless
+  # since the batched write doesn't care about order).
+  defp compute_chain_values(chain, :single_level) do
+    {changes, _last} =
+      Enum.reduce(chain, {[], nil}, fn node, {changes, substitute} ->
+        new_value = single_level_node_value(node, substitute)
+
+        changes =
+          if new_value != node.computed_progress,
+            do: [{node.id, new_value} | changes],
+            else: changes
+
+        {changes, {node.id, new_value}}
+      end)
+
+    Enum.reverse(changes)
+  end
+
+  defp compute_chain_values(chain, :leaf_average) do
+    leaves_by_ancestor = leaf_rows_for_ancestors(Enum.map(chain, & &1.id))
+
+    chain
+    |> Enum.reduce([], fn node, changes ->
+      values =
+        leaves_by_ancestor
+        |> Map.get(node.id, [])
+        |> Enum.map(&Progress.leaf_value/1)
+
+      new_value = Progress.average(values)
+
+      if new_value != node.computed_progress,
+        do: [{node.id, new_value} | changes],
+        else: changes
+    end)
+    |> Enum.reverse()
+  end
+
+  # Single-level value for one chain node: the plain average of its DIRECT
+  # children's CURRENT computed_progress — substituting `substitute`'s
+  # freshly-recomputed value for whichever child is the level just below in
+  # the chain (not yet persisted, so the DB's copy is stale for that one
+  # child only; every other sibling's stored value is already correct). A
+  # node with no live children is treated as a leaf, mirroring
+  # `Progress.compute/2`'s `:single_level` clause.
+  defp single_level_node_value(node, substitute) do
+    case direct_children_progress(node.id) do
+      [] ->
+        Progress.leaf_value(node)
+
+      children ->
+        children
+        |> Enum.map(&substitute_child_value(&1, substitute))
+        |> Progress.average()
+    end
+  end
+
+  defp substitute_child_value(%{id: id}, {id, sub_value}), do: sub_value
+  defp substitute_child_value(%{computed_progress: cp}, _substitute), do: cp
+
+  defp direct_children_progress(parent_id) do
+    Repo.all(
+      from t in Task,
+        where: t.parent_id == ^parent_id and is_nil(t.deleted_at),
+        select: %{id: t.id, computed_progress: t.computed_progress}
+    )
+  end
+
+  # Leaf descendants (status + manual_progress) for every ancestor in
+  # `ancestor_ids`, tagged with which ancestor they fall under — one
+  # recursive CTE for the whole chain rather than one query per ancestor
+  # (mirrors `DoIt.Tasks.Assigned.leaf_counts/1`'s root-tagging approach). A
+  # leaf directly under two chain ancestors (a child and its parent, say)
+  # tags into both — the same overlap `Progress.leaf_values/1` walks when it
+  # visits a subtree from two different starting points, just computed in
+  # one round trip instead of a query per level. "Leaf" here mirrors
+  # `Progress`: a row with no live children, self included — so a childless
+  # ancestor tags itself as its own one-leaf subtree.
+  #
+  # Returns %{ancestor_id => [%{status:, manual_progress:}, ...]}.
+  defp leaf_rows_for_ancestors(ancestor_ids) do
+    seed =
+      from(t in Task,
+        where: t.id in ^ancestor_ids and is_nil(t.deleted_at),
+        select: %{root_id: t.id, id: t.id, status: t.status, manual_progress: t.manual_progress}
+      )
+
+    step =
+      from(t in Task,
+        join: s in "subtree",
+        on: t.parent_id == s.id,
+        where: is_nil(t.deleted_at),
+        select: %{
+          root_id: s.root_id,
+          id: t.id,
+          status: t.status,
+          manual_progress: t.manual_progress
+        }
+      )
+
+    leaves =
+      from(s in "subtree",
+        as: :node,
+        where:
+          not exists(
+            from(c in Task, where: c.parent_id == parent_as(:node).id and is_nil(c.deleted_at))
+          ),
+        select: %{root_id: s.root_id, status: s.status, manual_progress: s.manual_progress}
+      )
+      |> recursive_ctes(true)
+      |> with_cte("subtree", as: ^union_all(seed, ^step))
+
+    leaves
+    |> Repo.all()
+    |> Enum.group_by(& &1.root_id, &%{status: &1.status, manual_progress: &1.manual_progress})
+  end
+
+  # One batched write for every {id, value} pair — a `CASE WHEN id = ? THEN
+  # ? ELSE computed_progress END` fragment built up via `dynamic/2`
+  # composition, keyed by id, so N changed ancestors cost one query
+  # regardless of chain depth. `updated_at` is stamped explicitly because
+  # `Repo.update_all/2` (unlike a changeset-driven `Repo.update/1`) doesn't
+  # auto-touch timestamps — matching what the old per-row changeset-based
+  # write did (a `sort by updated` container depended on that bump).
+  defp batch_persist_progress(changes) do
+    ids = Enum.map(changes, &elem(&1, 0))
+    now = now_seconds()
+
+    case_expr =
+      Enum.reduce(changes, dynamic([t], t.computed_progress), fn {id, value}, acc ->
+        dynamic(
+          [t],
+          fragment(
+            "CASE WHEN ? = ? THEN ? ELSE ? END",
+            t.id,
+            type(^id, :integer),
+            type(^value, :integer),
+            ^acc
+          )
+        )
+      end)
+
+    from(t in Task, where: t.id in ^ids)
+    |> update([t], set: [computed_progress: ^case_expr, updated_at: ^now])
+    |> Repo.update_all([])
+
+    :ok
+  end
+
+  # --- Whole-Initiative recompute (settings change; multi-branch undo/redo) ---
+
+  defp reconcile_progress(initiative_id, mode) do
     tasks = list_initiative_tasks(initiative_id)
     by_parent = Enum.group_by(tasks, & &1.parent_id)
-    mode = progress_calc_mode(initiative_id)
 
     # Unlike assemble_tree/1, keep the system root as a node — the Initiative
     # header shows its roll-up.
@@ -2566,34 +2916,22 @@ defmodule DoIt.Tasks do
 
     values = Progress.compute_all(tree, mode)
 
-    changed_parents =
-      Enum.reduce(tasks, MapSet.new(), fn task, acc ->
+    changes =
+      Enum.reduce(tasks, [], fn task, acc ->
         value = Map.get(values, task.id, task.computed_progress)
-
-        if value != task.computed_progress do
-          persist_progress(task, value)
-          # A changed value re-sorts siblings under progress-keyed sort modes.
-          if task.parent_id, do: MapSet.put(acc, task.parent_id), else: acc
-        else
-          acc
-        end
+        if value != task.computed_progress, do: [{task.id, value} | acc], else: acc
       end)
 
-    Enum.each(changed_parents, &maybe_resort_children/1)
+    if changes != [] do
+      batch_persist_progress(changes)
+      changed_ids = MapSet.new(changes, &elem(&1, 0))
+
+      tasks
+      |> Enum.filter(&MapSet.member?(changed_ids, &1.id))
+      |> Enum.each(fn task -> if task.parent_id, do: maybe_resort_children(task.parent_id) end)
+    end
+
     :ok
-  end
-
-  # The per-initiative calc setting (Initiative pane → Settings). Schemaless
-  # read keeps Tasks from depending on the Initiatives schema.
-  defp progress_calc_mode(initiative_id) do
-    calc =
-      Repo.one(
-        from i in "initiatives",
-          where: i.id == type(^initiative_id, :integer),
-          select: i.progress_calc
-      )
-
-    if calc == "single_level", do: :single_level, else: :leaf_average
   end
 
   @doc """

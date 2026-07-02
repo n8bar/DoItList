@@ -177,4 +177,38 @@ defmodule DoIt.Tasks.ProgressTest do
       assert Progress.compute(tree) == 60
     end
   end
+
+  # `leaf_value/1` and `average/1` are the two building blocks a chain-scoped
+  # recompute (`DoIt.Tasks`) composes directly against rows it queries
+  # itself — plain maps off a `select: %{status: ..., manual_progress: ...}`
+  # projection, not full `%Task{}` structs. `compute/2` and `compute_all/2`
+  # above already exercise the same logic via the whole-tree walk; these
+  # pin that the public entry points work standalone, against the shape a
+  # scoped caller actually has in hand.
+  describe "leaf_value/1 (public building block)" do
+    test "done snaps to 100 regardless of manual_progress" do
+      assert Progress.leaf_value(%{status: "done", manual_progress: 12}) == 100
+    end
+
+    test "open/in_progress uses manual_progress, clamped" do
+      assert Progress.leaf_value(%{status: "open", manual_progress: 42}) == 42
+      assert Progress.leaf_value(%{status: "in_progress", manual_progress: -5}) == 0
+      assert Progress.leaf_value(%{status: "open", manual_progress: 150}) == 100
+    end
+
+    test "works against a plain map, not just a %Task{}" do
+      assert Progress.leaf_value(%{status: "open", manual_progress: 33}) == 33
+    end
+  end
+
+  describe "average/1 (public building block)" do
+    test "empty list averages to 0" do
+      assert Progress.average([]) == 0
+    end
+
+    test "rounds half-up and clamps" do
+      assert Progress.average([1, 2]) == 2
+      assert Progress.average([100, 100, 100]) == 100
+    end
+  end
 end

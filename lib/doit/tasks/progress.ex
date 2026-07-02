@@ -25,6 +25,13 @@ defmodule DoIt.Tasks.Progress do
     * A branch with no children is treated as a leaf.
 
   Result is always an integer in 0..100.
+
+  `leaf_value/1` and `average/1` below are the two public building blocks —
+  a chain-scoped ancestor recompute (`DoIt.Tasks`) composes them directly
+  against rows it fetched itself, instead of assembling a full tree, so
+  there's still exactly one implementation of "what a leaf is worth" and
+  "how values combine," reused by both the whole-tree walk here and any
+  scoped caller.
   """
 
   alias DoIt.Tasks.Task
@@ -60,7 +67,7 @@ defmodule DoIt.Tasks.Progress do
     Enum.flat_map(kids, &leaf_values/1)
   end
 
-  defp leaf_values(%Task{} = task), do: [leaf_progress(task)]
+  defp leaf_values(%Task{} = task), do: [leaf_value(task)]
 
   # Same traversal, accumulating every node's value into a map.
   # Returns {leaf_values, acc}.
@@ -75,7 +82,7 @@ defmodule DoIt.Tasks.Progress do
   end
 
   defp evaluate_into(%Task{} = task, acc) do
-    value = leaf_progress(task)
+    value = leaf_value(task)
     {[value], Map.put(acc, task.id, value)}
   end
 
@@ -88,7 +95,7 @@ defmodule DoIt.Tasks.Progress do
     kids |> Enum.map(&single_level_value/1) |> average()
   end
 
-  defp single_level_value(%Task{} = task), do: leaf_progress(task)
+  defp single_level_value(%Task{} = task), do: leaf_value(task)
 
   defp single_level_into(%Task{children: kids} = task, acc) when is_list(kids) and kids != [] do
     {values, acc} =
@@ -102,18 +109,37 @@ defmodule DoIt.Tasks.Progress do
   end
 
   defp single_level_into(%Task{} = task, acc) do
-    value = leaf_progress(task)
+    value = leaf_value(task)
     {value, Map.put(acc, task.id, value)}
   end
 
-  # --- Shared -----------------------------------------------------------------
+  # --- Shared -------------------------------------------------------------
 
-  defp leaf_progress(%Task{status: "done"}), do: 100
-  defp leaf_progress(%Task{manual_progress: mp}), do: clamp(mp)
+  @doc """
+  A single leaf's contribution to a roll-up: `done` snaps to 100, otherwise
+  `manual_progress` clamped to 0..100. Accepts anything with `:status` and
+  `:manual_progress` keys — a `%Task{}` or a plain map projected straight off
+  a query — so a caller scoping a fetch to just those two columns (the
+  ancestor-chain recompute in `DoIt.Tasks`) doesn't need a full struct.
+  Public so there's exactly one place that maps a task's raw fields to its
+  roll-up value; a childless branch is "treated as a leaf" by feeding its
+  own row through this same function (see moduledoc).
+  """
+  @spec leaf_value(%{status: String.t(), manual_progress: integer() | nil}) :: integer()
+  def leaf_value(%{status: "done"}), do: 100
+  def leaf_value(%{manual_progress: mp}), do: clamp(mp)
 
-  defp average([]), do: 0
+  @doc """
+  Average a list of roll-up values into the single rounded, clamped result
+  (half-up rounding, 0..100). Shared by both modes — `leaf_average` averages
+  leaf values, `single_level` averages direct children's values — so a
+  chain-scoped recompute can call this directly instead of re-deriving the
+  rounding rule.
+  """
+  @spec average([integer()]) :: integer()
+  def average([]), do: 0
 
-  defp average(values) do
+  def average(values) do
     values
     |> Enum.sum()
     |> Decimal.new()

@@ -110,8 +110,4 @@ defmodule DoIt.Tasks.Task do
     |> validate_inclusion(:sort_mode, [nil | @sort_modes])
     |> validate_number(:manual_progress, greater_than_or_equal_to: 0, less_than_or_equal_to: 100)
   end
-
-  def computed_progress_changeset(task, computed_progress) do
-    change(task, computed_progress: computed_progress)
-  end
 end

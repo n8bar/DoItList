@@ -14,6 +14,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
+  alias DoIt.Tasks.Progress
   alias DoIt.Tasks.Tree
   alias DoItWeb.AssignedActions
 
@@ -718,7 +719,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # shows an affected task. Structural changes (create / move / delete / sort
   # / cascades) still take the full load_tree.
   defp patch_task(socket, task_id) do
-    case Tasks.lineage(task_id) do
+    case patched_lineage(socket, task_id) do
       [] ->
         # The task vanished under us (e.g. deleted concurrently) — reload.
         socket |> load_tree() |> refresh_selected()
@@ -794,6 +795,80 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       key = if parent_id == root_id, do: :root, else: parent_id
       Tree.reorder_children(acc, key, ids)
     end)
+  end
+
+  # `patch_task`'s data source: a `Tasks.lineage/1`-shaped list (the task plus
+  # every ancestor up to the system root) — but only the changed task's own
+  # row comes from the database. A PubSub `{:task_updated, id}` names WHICH
+  # task changed, not its new values, so a single cheap row read (not the
+  # whole chain — `Tasks.task_row/1`) tells us that; every ancestor's fresh
+  # roll-up is then recomputed from the LiveView's OWN already-loaded `@tree`
+  # (no DB read at all) via the one shared formula module, `DoIt.Tasks.Progress`
+  # — the same math `DoIt.Tasks.reconcile_progress/2` uses server-side, just
+  # run here on in-memory data instead of a fresh fetch. Every OTHER connected
+  # viewer's process was doing its own redundant `Tasks.lineage/1` DB read in
+  # response to the very same broadcast; this replaces all of them with one
+  # row read plus pure Elixir. Returns `[]` when the task is gone (mirrors
+  # `Tasks.lineage/1`'s empty-list contract for a concurrently deleted task).
+  defp patched_lineage(socket, task_id) do
+    case Tasks.task_row(task_id) do
+      nil ->
+        []
+
+      %Task{parent_id: nil} = fresh_task ->
+        # The system root itself has no ancestors — its own fresh row (already
+        # carrying the backend-persisted roll-up) is the whole "lineage."
+        [fresh_task]
+
+      fresh_task ->
+        case socket.assigns.root_task do
+          nil ->
+            [fresh_task]
+
+          root ->
+            rooted = Map.put(root, :children, Tree.merge(socket.assigns.tree, [fresh_task]))
+
+            case tree_path(rooted, task_id) do
+              nil ->
+                # Not (yet) anywhere in the loaded tree — e.g. a broadcast that
+                # beat our own load_tree to arrive. The fresh row alone is a
+                # harmless no-op through patched_tree's merge for a chain we
+                # can't walk.
+                [fresh_task]
+
+              path ->
+                mode = progress_calc_mode(socket)
+                values = Progress.compute_all([rooted], mode)
+
+                Enum.map(
+                  path,
+                  &%{&1 | computed_progress: Map.get(values, &1.id, &1.computed_progress)}
+                )
+            end
+        end
+    end
+  end
+
+  # `node` plus every ancestor down to (and including) the one whose id
+  # matches `target_id`, root-most first. `nil` when `target_id` isn't
+  # anywhere in this subtree.
+  defp tree_path(%{id: id} = node, target_id) when id == target_id, do: [node]
+
+  defp tree_path(%{children: children} = node, target_id) when is_list(children) do
+    Enum.find_value(children, fn child ->
+      case tree_path(child, target_id) do
+        nil -> nil
+        rest -> [node | rest]
+      end
+    end)
+  end
+
+  defp tree_path(_node, _target_id), do: nil
+
+  defp progress_calc_mode(socket) do
+    if socket.assigns.initiative.progress_calc == "single_level",
+      do: :single_level,
+      else: :leaf_average
   end
 
   # A sort change on the system root re-resolves every inheriting branch.
@@ -3436,6 +3511,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                       id="task-tree"
                       phx-hook="TreeWidth"
                       data-sort-mode={@root_sort_mode}
+                      data-progress-calc={@initiative.progress_calc}
                       class="space-y-2"
                     >
                       <%= for {t, i} <- Enum.with_index(@tree) do %>

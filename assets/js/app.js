@@ -24,6 +24,9 @@ import {Socket} from "phoenix"
 import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/doit"
 import topbar from "../vendor/topbar"
+import DoitRollup from "./rollup.js"
+
+const {computeRollup, computeDoneCascade} = DoitRollup
 
 const Hooks = {}
 
@@ -91,6 +94,96 @@ function savingChildren(li) {
   const ul = li.querySelector(":scope > ul[id^='children-']")
   const kids = ul ? [...ul.querySelectorAll(":scope > li[data-task-id]")].map(savingRowOf) : []
   return [savingRowOf(li), ...kids]
+}
+
+// --- Ancestor roll-up prediction (m03.02 item 3) ---------------------------
+// Paints a REAL predicted progress number / done-state on an ancestor row the
+// instant the acting user's own edit is fully known — a leaf's new manual
+// progress, or a toggle/cascade snapping its whole subtree to 100/0 — instead
+// of the indeterminate "is-recomputing" gradient (kept for every OTHER writer
+// whose outcome genuinely can't be known client-side, e.g. another
+// collaborator's edit, or the tree-wide progress-calc setting change).
+// Mirrors DoIt.Tasks.Progress (leaf-average vs single-level) and the "all
+// children done" cascade rule via rollup.js — the one sanctioned client-side
+// duplicate of that math (m03.02 cross-cutting requirements). Display only:
+// never lands in a push payload; the write's own confirming render (or any
+// later broadcast) is always the source of truth and silently overwrites
+// whatever's painted here via the existing morphdom reconciliation — no new
+// reconciliation machinery.
+//
+// The whole task tree is always in the DOM (branch collapse is CSS-only —
+// see .collapsed-peek), so a DOM query correctly reaches every descendant
+// leaf of any ancestor regardless of what's currently expanded on screen.
+
+const isLeafLi = (li) => !li.querySelector(":scope > ul[id^='children-']")
+
+const directChildLis = (li) => {
+  const ul = li.querySelector(":scope > ul[id^='children-']")
+  return ul ? [...ul.querySelectorAll(":scope > li[data-task-id]")] : []
+}
+
+const rowBarValue = (li) => {
+  const row = savingRowOf(li)
+  const bar = row && row.querySelector("[role='progressbar']")
+  return bar ? Number(bar.getAttribute("aria-valuenow")) : 0
+}
+
+const rowDone = (li) => {
+  const row = savingRowOf(li)
+  return !!(row && row.hasAttribute("data-done"))
+}
+
+// The Initiative's progress_calc mode, read off #task-tree's own data
+// attribute (never hardcoded/assumed) — falls back to leaf_average, the
+// server's own default, if the attribute is somehow missing.
+const progressCalcMode = () => {
+  const tree = document.getElementById("task-tree")
+  return tree && tree.dataset.progressCalc === "single_level" ? "single_level" : "leaf_average"
+}
+
+// Every descendant LEAF value under `li` (leaf_average mode's input),
+// substituting `forcedValue` for any leaf under (or at) `forcedLi` — a plain
+// leaf edit forces just itself; a completion toggle/cascade forces its whole
+// subtree uniformly (every descendant leaf snaps to the same new 100/0).
+function leafValuesUnder(li, forcedLi, forcedValue) {
+  if (isLeafLi(li)) return [forcedLi.contains(li) ? forcedValue : rowBarValue(li)]
+  return directChildLis(li).flatMap((c) => leafValuesUnder(c, forcedLi, forcedValue))
+}
+
+// Ascends `ancestors` (row divs, nearest-parent first — savingAncestors'
+// own order) predicting each one's rolled-up progress + done-state.
+// `forcedLi` is the node whose new value is already known (the edited leaf,
+// or the toggled leaf/branch); `forcedValue` (0-100) / `forcedDone` are its
+// new progress and done-state. Returns [{row, li, progress, done}], nearest
+// ancestor first — each level's OWN freshly-predicted value feeds the next
+// level up (single_level's direct-children average needs it; leaf_average
+// doesn't, since it always walks down to real leaves, but tracking both
+// costs nothing extra and keeps one code path for both modes).
+function predictAncestors(ancestors, forcedLi, forcedValue, forcedDone) {
+  const mode = progressCalcMode()
+  const progressOverride = new Map([[forcedLi.dataset.taskId, forcedValue]])
+  const doneOverride = new Map([[forcedLi.dataset.taskId, forcedDone]])
+
+  return ancestors
+    .map((row) => {
+      const li = row.closest("li[data-task-id]")
+      const kids = li ? directChildLis(li) : []
+      if (!li || kids.length === 0) return null
+
+      const progressValues =
+        mode === "single_level"
+          ? kids.map((k) => progressOverride.get(k.dataset.taskId) ?? rowBarValue(k))
+          : leafValuesUnder(li, forcedLi, forcedValue)
+      const progress = computeRollup(progressValues, mode)
+      const done = computeDoneCascade(
+        kids.map((k) => doneOverride.get(k.dataset.taskId) ?? rowDone(k))
+      )
+
+      progressOverride.set(li.dataset.taskId, progress)
+      doneOverride.set(li.dataset.taskId, done)
+      return {row, li, progress, done}
+    })
+    .filter((p) => p != null)
 }
 
 function markSaving(rows, opts = {}) {
@@ -1600,14 +1693,46 @@ document.addEventListener("click", (e) => {
     const subtree = savingSubtree(li)
     const ancestors = savingAncestors(li)
     markSaving([...subtree, ...ancestors])
-    // Everyone EXCEPT the operated row recomputes — their bars go
-    // indeterminate; the operated row's bar is set optimistically below.
-    markRecomputing([...subtree.slice(1), ...ancestors])
+    // Descendants (a branch cascade's subtree, below the toggled node) stay
+    // indeterminate — item 3's client prediction is scoped to the ANCESTOR
+    // chain only. The operated row's own bar is set optimistically below.
+    markRecomputing(subtree.slice(1))
     const ev = toggle.dataset.toggleEvent
     if (!ev || !window.DoitPush) return
+    // Predicted, not indeterminate (m03.02 item 3): a toggle/cascade snaps
+    // its whole subtree to a known 100/0, so the ancestor chain's new
+    // progress + done-state are both fully computable — paint them instead
+    // of the gradient. Snapshot each ancestor's PRE-paint values first:
+    // unlike the progress slider (a plain form round trip), this write can
+    // be REJECTED (ok:false, no assign change -> no corrective patch) or
+    // CANCELLED (the branch-cascade confirm never touches the server at
+    // all) — so these ride the SAME pending-toggle hold as the operated
+    // row's own flip and get reverted alongside it (revertPendingToggle),
+    // not new reconciliation machinery. Painted only past this point (not
+    // above, alongside markSaving/markRecomputing) so it never paints
+    // without also being wired into that hold — the CSS-only hue above is
+    // safe to paint speculatively (self-heals via markSaving's own timer
+    // regardless); a real number/done-state is not.
+    const newDone = !(toggle.getAttribute("aria-pressed") === "true")
+    const predicted = predictAncestors(ancestors, li, newDone ? 100 : 0, newDone)
+    const ancestorRevert = predicted.map((p) => ({
+      row: p.row,
+      prevProgress: rowBarValue(p.li),
+      prevDone: rowDone(p.li),
+    }))
+    predicted.forEach((p) => {
+      setRowBar(p.row, p.progress)
+      p.row.toggleAttribute("data-done", p.done)
+      const ancestorToggle = p.row.querySelector("[data-complete-toggle]")
+      if (ancestorToggle) {
+        ancestorToggle.setAttribute("aria-pressed", String(p.done))
+        ancestorToggle.setAttribute("aria-label", p.done ? "Reopen task" : "Mark task completed")
+      }
+    })
     // Flip the operated row optimistically FIRST (6.6) — the change shows
     // before any confirm decides; the held handle survives until settled.
     applyToggleOptimism(li, toggle)
+    window.DoitPendingToggle = {...window.DoitPendingToggle, ancestorRevert}
     // A branch cascade (complete / reopen this branch AND all subtasks) asks
     // first, unless suppressed. The confirm opens CLIENT-SIDE (#cascade-confirm,
     // UX_GUARDRAILS 6.5) — title + verb are client-known — holding the flip
@@ -1686,8 +1811,17 @@ document.addEventListener("change", (e) => {
     if (rollup) {
       const ancestors = savingAncestors(li)
       markSaving([savingRowOf(li), ...ancestors])
-      // Ancestor %s are in flight — indeterminate bars (.03.07.23).
-      markRecomputing(ancestors)
+      // Predicted, not indeterminate (m03.02 item 3): the edited leaf's exact
+      // new value is already known, so paint each ancestor's real rolled-up
+      // number — replaces the indeterminate gradient entirely for this path
+      // (still pinked via markSaving above, signaling "in flight"; just no
+      // longer "we don't know the number"). This write is a plain LiveView
+      // form round trip (phx-change="update_task"), not a reply-gated push,
+      // so a misprediction self-heals on the very next patch with no revert
+      // bookkeeping needed — same guarantee applyRowEcho already relies on
+      // for this exact field.
+      const predicted = predictAncestors(ancestors, li, Number(e.target.value), rowDone(li))
+      predicted.forEach((p) => setRowBar(p.row, p.progress))
     } else {
       markSaving([savingRowOf(li)])
     }
@@ -2985,14 +3119,31 @@ function revertPendingToggle() {
   window.DoitPendingToggle = null
   if (!p) return
   const parts = pendingToggleParts(p)
-  if (!parts) return
-  parts.toggle.setAttribute("aria-pressed", String(!p.value))
-  parts.toggle.setAttribute("aria-label", !p.value ? "Reopen task" : "Mark task completed")
-  parts.row.toggleAttribute("data-done", !p.value)
-  if (p.prevBarValue != null) setRowBar(parts.row, p.prevBarValue)
-  // Restore the pane slider to what it showed before the optimistic flip.
-  const li = document.getElementById(p.liId)
-  if (li && p.prevSliderValue != null) setPaneSlider(li, p.prevSliderValue)
+  if (parts) {
+    parts.toggle.setAttribute("aria-pressed", String(!p.value))
+    parts.toggle.setAttribute("aria-label", !p.value ? "Reopen task" : "Mark task completed")
+    parts.row.toggleAttribute("data-done", !p.value)
+    if (p.prevBarValue != null) setRowBar(parts.row, p.prevBarValue)
+    // Restore the pane slider to what it showed before the optimistic flip.
+    const li = document.getElementById(p.liId)
+    if (li && p.prevSliderValue != null) setPaneSlider(li, p.prevSliderValue)
+  }
+  // Ancestor roll-up predictions (m03.02 item 3) revert alongside the
+  // operated row — a rejected write (ok:false) or a cancelled branch-cascade
+  // confirm never touches the tree server-side, so nothing else would ever
+  // correct these otherwise (MUST NOT LIE: a predicted number/done-state
+  // implying the toggle succeeded can't be left standing when it didn't).
+  if (p.ancestorRevert) {
+    p.ancestorRevert.forEach(({row, prevProgress, prevDone}) => {
+      setRowBar(row, prevProgress)
+      row.toggleAttribute("data-done", prevDone)
+      const ancestorToggle = row.querySelector("[data-complete-toggle]")
+      if (ancestorToggle) {
+        ancestorToggle.setAttribute("aria-pressed", String(prevDone))
+        ancestorToggle.setAttribute("aria-label", prevDone ? "Reopen task" : "Mark task completed")
+      }
+    })
+  }
 }
 
 // Commit a completion toggle: push the event with the move_task-style reply

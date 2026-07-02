@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>rollup.js — hand-run tests</title>
+<style>
+  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, sans-serif; margin: 2rem; background: #111; color: #eee; }
+  h1 { font-size: 1.1rem; }
+  #summary { font-weight: bold; margin: 1rem 0; padding: .5rem; border-radius: 4px; }
+  .pass { color: #4ade80; }
+  .fail { color: #f87171; font-weight: bold; }
+  ol { padding-left: 1.5rem; }
+  li { margin: 2px 0; }
+</style>
+</head>
+<body>
+<h1>rollup.js — hand-run tests</h1>
+<p>Open this file directly in a browser (no server, no build step). Green summary = all pass.</p>
+<div id="summary">Running…</div>
+<ol id="results"></ol>
+
+<!-- Plain, non-module script tag — deliberately NOT type="module": ES module
+     <script> tags fetching a relative sibling file are blocked by CORS on a
+     file:// path in every major browser, which would break "open directly in
+     a browser". rollup.js's UMD-style wrapper (see its own header comment)
+     falls back to `window.DoitRollup = {...}` in exactly this situation. -->
+<script src="rollup.js"></script>
+<script>
+  var computeRollup = window.DoitRollup.computeRollup;
+  var computeDoneCascade = window.DoitRollup.computeDoneCascade;
+
+  var results = { total: 0, passed: 0, failed: 0 };
+  var list = document.getElementById("results");
+
+  function assert(condition, message) {
+    results.total++;
+    var li = document.createElement("li");
+    if (condition) {
+      results.passed++;
+      li.className = "pass";
+      li.textContent = "PASS — " + message;
+    } else {
+      results.failed++;
+      li.className = "fail";
+      li.textContent = "FAIL — " + message;
+    }
+    list.appendChild(li);
+  }
+
+  function assertEqual(actual, expected, message) {
+    assert(actual === expected, message + " (expected " + expected + ", got " + actual + ")");
+  }
+
+  // --- computeRollup: a single leaf --------------------------------------
+  // A one-task tree: the rolled-up value is just that leaf's own value,
+  // under either mode (mirrors Progress.compute/2 on a childless task).
+  assertEqual(computeRollup([42], "leaf_average"), 42, "single leaf, leaf_average");
+  assertEqual(computeRollup([42], "single_level"), 42, "single leaf, single_level");
+  assertEqual(computeRollup([0], "leaf_average"), 0, "single leaf at 0");
+  assertEqual(computeRollup([100], "leaf_average"), 100, "single leaf at 100");
+
+  // --- computeRollup: several leaves, plain average -----------------------
+  assertEqual(computeRollup([10, 20, 30], "leaf_average"), 20, "three leaves, exact average");
+  assertEqual(computeRollup([0, 0, 100, 100], "leaf_average"), 50, "four leaves, exact average");
+
+  // --- computeRollup: zero-leaf branch (edge case) -------------------------
+  // Matches DoIt.Tasks.Progress.average([]) == 0 exactly (progress.ex:114).
+  // (In the real tree a branch with zero children is treated as a leaf
+  // before it ever reaches average/1 — this case is computeRollup's own
+  // contract for an empty input list, on its own terms.)
+  assertEqual(computeRollup([], "leaf_average"), 0, "empty list, leaf_average");
+  assertEqual(computeRollup([], "single_level"), 0, "empty list, single_level");
+
+  // --- computeRollup: rounding — half-up to nearest integer ---------------
+  // Mirrors Decimal.round(0, :half_up) (progress.ex:121). Math.round is
+  // round-half-away-from-zero for non-negative numbers, which is exactly
+  // half-up in this domain; every .5 boundary reachable from averaging two
+  // small integers is exactly representable in IEEE-754 (0.5 = 2^-1), so
+  // there's no float-precision gap between this and Decimal's behavior.
+  assertEqual(computeRollup([50, 51], "leaf_average"), 51, "50.5 rounds up to 51 (half-up)");
+  assertEqual(computeRollup([0, 1], "leaf_average"), 1, "0.5 rounds up to 1 (half-up)");
+  assertEqual(computeRollup([1, 2], "leaf_average"), 2, "1.5 rounds up to 2 (half-up)");
+  assertEqual(computeRollup([1, 1, 1, 2], "leaf_average"), 1, "1.25 rounds down to 1");
+  assertEqual(computeRollup([0, 0, 100], "leaf_average"), 33, "33.33... (repeating decimal) rounds down to 33");
+
+  // --- computeRollup: both progress_calc modes -----------------------------
+  // computeRollup's own averaging arithmetic is IDENTICAL for both modes
+  // (progress.ex funnels both leaf_average and single_level into the same
+  // average/1) — the mode only changes what list the CALLER builds:
+  // leaf_average gathers every descendant leaf; single_level gathers only
+  // direct children's own already-rolled-up values. The multi-level tree
+  // below shows the two modes disagreeing precisely BECAUSE the lists differ,
+  // not because computeRollup treats the mode argument differently.
+  //
+  //   Root
+  //   ├── A (branch: A1=0, A2=0, A3=0, A4=100 — 4 leaves, single_level(A)=25)
+  //   └── B (leaf: 75)
+  //
+  // leaf_average(Root)  = avg(all 5 leaves: 0,0,0,100,75)      = 175/5 = 35
+  // single_level(Root)  = avg(direct children: single_level(A)=25, B=75) = 50
+  var leafAverageLeaves = [0, 0, 0, 100, 75];
+  var singleLevelDirectChildren = [25, 75]; // [single_level(A), B] — A's own value computed below
+  assertEqual(computeRollup([0, 0, 0, 100], "single_level"), 25, "A's own single_level value (4 leaves)");
+  assertEqual(computeRollup(leafAverageLeaves, "leaf_average"), 35, "Root leaf_average (all 5 leaves)");
+  assertEqual(computeRollup(singleLevelDirectChildren, "single_level"), 50, "Root single_level (2 direct children)");
+
+  // --- computeRollup: multi-level nested tree, hand-computed ---------------
+  //   Root
+  //   ├── A (branch)
+  //   │   ├── A1 (leaf: 20)
+  //   │   └── A2 (leaf: 80)
+  //   └── B (branch)
+  //       ├── B1 (leaf: 0)
+  //       ├── B2 (leaf: 40)
+  //       └── B3 (leaf: 100)
+  //
+  // leaf_average(A) = avg(20, 80)         = 50
+  // leaf_average(B) = avg(0, 40, 100)     = 140/3 = 46.67 -> 47
+  // leaf_average(Root) = avg(all 5 leaves: 20,80,0,40,100) = 240/5 = 48
+  assertEqual(computeRollup([20, 80], "leaf_average"), 50, "branch A leaf_average");
+  assertEqual(computeRollup([0, 40, 100], "leaf_average"), 47, "branch B leaf_average (46.67 rounds to 47)");
+  assertEqual(computeRollup([20, 80, 0, 40, 100], "leaf_average"), 48, "Root leaf_average over all 5 leaves");
+  // single_level(Root) = avg(single_level(A)=50, single_level(B)=47) = 48.5 -> 49
+  assertEqual(computeRollup([50, 47], "single_level"), 49, "Root single_level over 2 direct children (48.5 rounds to 49)");
+
+  // --- computeDoneCascade: edge cases --------------------------------------
+  // Mirrors `siblings != [] and Enum.all?(siblings, &(&1.status == "done"))`
+  // (lib/doit/tasks.ex, check_completed_ancestors/2).
+  assertEqual(computeDoneCascade([]), false, "empty children list is NOT all-done");
+  assertEqual(computeDoneCascade([true]), true, "single done child is all-done");
+  assertEqual(computeDoneCascade([false]), false, "single open child is not all-done");
+  assertEqual(computeDoneCascade([true, true, true]), true, "all children done");
+  assertEqual(computeDoneCascade([true, false, true]), false, "mixed done/open siblings is not all-done");
+  assertEqual(computeDoneCascade([false, false]), false, "no children done");
+
+  // --- summary --------------------------------------------------------------
+  var summary = document.getElementById("summary");
+  summary.textContent = results.passed + " / " + results.total + " passed";
+  summary.className = results.failed === 0 ? "pass" : "fail";
+  if (results.failed > 0) {
+    summary.textContent += " — " + results.failed + " FAILED";
+  }
+</script>
+</body>
+</html>
