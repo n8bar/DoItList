@@ -1,5 +1,5 @@
 # PLAN
-_Last updated: 2026-07-01_
+_Last updated: 2026-07-02_
 
 Human-facing execution dashboard for Do It List. Open this doc first when resuming work.
 
@@ -14,7 +14,6 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 |---|---|---|
 | Branch protection on `main` (require PR, status checks, etc.) | A second contributor joins the repo | Solo dev — protection is friction with no review benefit. |
 | GitHub Actions CI (`mix test`, build, etc.) | A second contributor joins the repo | Tests run locally in the dev container; remote CI is overhead until shared review matters. |
-| Data-layer optimization beyond hot-path fixes (index strategy, `load_tree` scaling, pagination / bulk reads) | M03 (API) scoping — real client load patterns exist | Hot N+1s fixed in M02 Arc 3; the rest has no trigger at current single-user scale, and an API is what will create one. |
 
 ## Release Target
 No public release yet. The app won't open to the public before **M05 (Prep and Launch)** — the milestone that owns going public. M02 (UX Buildout) remains the floor for the app feeling presentable. M06 and M07 are deliberately sequenced *after* launch to keep the path there short.

@@ -1,6 +1,6 @@
 defmodule DoitMcp.Server do
   @moduledoc """
-  The Do It List MCP server (m03.02) — a thin stdio adapter over `/api/v1`
+  The Do It List MCP server (m03.03) — a thin stdio adapter over `/api/v1`
   (Arc 1). Holds no domain logic; every tool/resource is a translation layer
   that calls `DoitMcp.Client`, the only module that speaks HTTP.
   """

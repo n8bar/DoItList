@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: Arc 1 complete · Arc 2 scoped · Arc 3 draft stub · Target: TBD_
+_Status: Arc 1 complete · Arc 2 scoped · Arc 3 scoped · Arc 4 draft stub · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
@@ -30,17 +30,18 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 
 ## Arcs
 
-**Three arcs.** Arc 1 (HTTP API) and Arc 2 (the MCP server over it — a thin consumer of the public API, never a shortcut into the contexts) are sequenced and deliver the surface; Arc 3 (Documentation & maintenance) publishes the reference and keeps it synced, running last and then continuously. Each arc carries its own tests; testing isn't a separate arc. Per-arc detail lives in the arc files linked below.
+**Four arcs.** Arc 1 (HTTP API) delivers the surface. Arc 2 (Roll-up progress & completion) is a data-layer/UX fix, not an MCP feature — Arc 3 depends on it landing first, since it's what makes Arc 3's own north-star claim provably true. Arc 3 (the MCP server — a thin consumer of the public API, never a shortcut into the contexts) delivers the agent-facing surface. Arc 4 (Documentation & maintenance) publishes the reference and keeps it synced, running last and then continuously. Each arc carries its own tests; testing isn't a separate arc. Per-arc detail lives in the arc files linked below.
 
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
-| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Omissions & Corrections · Testing and Verification | scoped |
-| 3 — Documentation & maintenance | [`m03.03-documentation+maintenance.md`](m03.03-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
+| 2 — Roll-up progress & completion | [`m03.02-rollup-progress.md`](m03.02-rollup-progress.md) | Backend lazy computation · Live collaborator updates · Client-side prediction · Testing | scoped |
+| 3 — MCP server | [`m03.03-mcp-server.md`](m03.03-mcp-server.md) | MCP server · Batch reliability · Testing and Verification | scoped |
+| 4 — Documentation & maintenance | [`m03.04-documentation+maintenance.md`](m03.04-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (MCP server) is scoped and approved — runtime (a separate stdio process on `anubis_mcp`, the maintained fork of `hermes_mcp`), the tools/resources mapping, and the concurrency approach are all settled; ready to build. Arc 3 (Documentation & maintenance) remains a draft stub, unscoped, though it's already picked up one candidate item from Arc 2's scoping: a Claude Code skill for `apply_operations`.
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is scoped — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashes under a realistic batch and causes lock contention between concurrent collaborators; the fix moves to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is scoped and mostly built — runtime (a separate stdio process on `anubis_mcp`, the maintained fork of `hermes_mcp`), the tools/resources mapping, and the concurrency approach are all settled; its own north-star efficiency claim depends on Arc 2 landing first. Arc 4 (Documentation & maintenance) remains a draft stub, unscoped, though it's already picked up one candidate item from Arc 3's scoping: a Claude Code skill for `apply_operations`.
 
 ## Preconditions
 

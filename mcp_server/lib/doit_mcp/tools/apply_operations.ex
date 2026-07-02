@@ -21,6 +21,31 @@ defmodule DoitMcp.Tools.ApplyOperations do
                    documents for that op/type>
       }
 
+  ## Referencing a `lid` from a later op — the forward-reference mechanism
+
+  Registering a `lid` on an `add` (above) is only half of it — here's how a
+  LATER op in the same batch points back to it:
+
+    * To target the created resource itself (an `update`/`remove` on it):
+      put the same string in that op's own top-level `"lid"` field instead
+      of `"id"` — e.g. `%{"op" => "update", "type" => "task", "lid" => "t1",
+      "data" => %{"manual_progress" => 50}}`.
+    * To reference it as a RELATIONSHIP inside another op's `data`: use a
+      `<field>_lid` key instead of `<field>_id` — e.g. `"parent_lid" =>
+      "t1"` instead of `"parent_id"` (a task's parent), `"initiative_lid" =>
+      "i"` (a task's Initiative), `"source_lid"`/`"target_lid"` (a link's
+      endpoints), `"task_lid"` (a comment's task).
+
+  A lid only resolves to an EARLIER op's `add` of the matching `type` —
+  never a later or wrong-type one. Worked example — bootstrap an Initiative
+  and its first task, then mark it done, in one call:
+
+      [
+        %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "New project"}},
+        %{"op" => "add", "type" => "task", "lid" => "t1", "data" => %{"initiative_lid" => "i", "title" => "First task"}},
+        %{"op" => "update", "type" => "task", "lid" => "t1", "data" => %{"done" => true}}
+      ]
+
   This tool is a pure pass-through — the caller is responsible for building
   each op object correctly per the wire format above; no reshaping happens
   here.
