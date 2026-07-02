@@ -35,7 +35,7 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
-| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Testing and Verification | scoped |
+| 2 — MCP server | [`m03.02-mcp-server.md`](m03.02-mcp-server.md) | MCP server · Omissions & Corrections · Testing and Verification | scoped |
 | 3 — Documentation & maintenance | [`m03.03-documentation+maintenance.md`](m03.03-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
