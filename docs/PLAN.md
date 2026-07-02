@@ -14,6 +14,7 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 |---|---|---|
 | Branch protection on `main` (require PR, status checks, etc.) | A second contributor joins the repo | Solo dev — protection is friction with no review benefit. |
 | GitHub Actions CI (`mix test`, build, etc.) | A second contributor joins the repo | Tests run locally in the dev container; remote CI is overhead until shared review matters. |
+| JS test framework (vs. the homemade `assert()` in `rollup_test.html`, m03.02) | The JS test surface grows meaningfully beyond m03.02's rollup/cascade cases | Current surface is small and fixed — a framework's grouping/diffing doesn't pay for itself yet. Must be a zero-install vendored file either way; this project has no Node/npm to install one via. |
 
 ## Release Target
 No public release yet. The app won't open to the public before **M05 (Prep and Launch)** — the milestone that owns going public. M02 (UX Buildout) remains the floor for the app feeling presentable. M06 and M07 are deliberately sequenced *after* launch to keep the path there short.
