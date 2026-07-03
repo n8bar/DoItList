@@ -7,6 +7,12 @@ defmodule DoIt.Tasks.RollupBatchingTest do
   and `progress_test.exs` already cover the roll-up MATH end to end — this
   file is about the query SHAPE: how few rows get touched, and how few
   queries it takes, via `:telemetry`'s `[:do_it, :repo, :query]` event.
+
+  These run under the suite's `:rollup_recompute` `:inline` route, where the
+  leaf and its ancestors write together — so "one query, N rows" here means
+  the whole chain including the leaf. Under the production `:async` route the
+  leaf's own row is written synchronously and the ancestors defer to one
+  batched debounce pass; that split is covered in `rollup_debounce_test.exs`.
   """
   use DoIt.DataCase, async: true
 

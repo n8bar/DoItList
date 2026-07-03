@@ -69,10 +69,15 @@ config :doit, DoIt.Api.RateLimiter,
 config :doit, :rollup_recompute, :async
 
 # Debounce tuning: flush after debounce_ms of quiet, but never later than
-# max_wait_ms after a window's first enqueue.
+# max_wait_ms after a window's first enqueue. max_wait is the anti-starvation
+# ceiling for *sustained* editing (no debounce_ms gap ever opens) — set long
+# enough that a realistic write burst drains before the ceiling forces a flush
+# mid-burst (a mid-burst pass competes with the writers for the connection
+# pool), short enough that worst-case ancestor staleness stays imperceptible
+# and self-heals on the next edit.
 config :doit, DoIt.Tasks.RollupDebounce,
   debounce_ms: 150,
-  max_wait_ms: 500
+  max_wait_ms: 2000
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
