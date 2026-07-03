@@ -15,6 +15,11 @@ defmodule DoIt.Application do
       DoItWeb.Presence,
       # Owns the ETS table backing the per-token API rate limiter (m03.01 wl1.5).
       DoIt.Api.RateLimiter,
+      # Per-Initiative roll-up debounce processes (m03.02 item 4): one
+      # RollupDebounce per Initiative with pending recompute work, keyed in
+      # the Registry, started on demand under the DynamicSupervisor.
+      {Registry, keys: :unique, name: DoIt.Tasks.RollupDebounce.registry()},
+      {DynamicSupervisor, strategy: :one_for_one, name: DoIt.Tasks.RollupDebounce.supervisor()},
       # Start a worker by calling: DoIt.Worker.start_link(arg)
       # {DoIt.Worker, arg},
       # Start to serve requests, typically the last entry

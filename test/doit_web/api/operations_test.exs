@@ -897,7 +897,8 @@ defmodule DoItWeb.Api.OperationsTest do
   end
 
   describe "unrecognized data keys are rejected with a targeted per-op error" do
-    test "update task with the derived `progress` key is a 422 pointing at manual_progress", ctx do
+    test "update task with the derived `progress` key is a 422 pointing at manual_progress",
+         ctx do
       task = top_task(ctx.owner, ctx.ini, "Has progress")
 
       {status, body} =
@@ -963,7 +964,8 @@ defmodule DoItWeb.Api.OperationsTest do
       assert is_nil(Initiatives.get_role(ctx.ini.id, target.id))
     end
 
-    test "update initiative with an unknown content key is a targeted 422 (unified message)", ctx do
+    test "update initiative with an unknown content key is a targeted 422 (unified message)",
+         ctx do
       {status, body} =
         post_ops(ctx.owner, [
           %{

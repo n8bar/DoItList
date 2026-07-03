@@ -61,6 +61,19 @@ config :doit, DoIt.Api.RateLimiter,
   window_ms: 60_000,
   ip_limit: 600
 
+# Roll-up recompute routing (m03.02 item 4). :async defers ancestor-chain
+# recomputes to the per-Initiative DoIt.Tasks.RollupDebounce (one coalesced
+# pass per debounce window — a write's own row still updates synchronously);
+# :inline runs them in the triggering transaction. config/test.exs pins
+# :inline so the suite stays deterministic.
+config :doit, :rollup_recompute, :async
+
+# Debounce tuning: flush after debounce_ms of quiet, but never later than
+# max_wait_ms after a window's first enqueue.
+config :doit, DoIt.Tasks.RollupDebounce,
+  debounce_ms: 150,
+  max_wait_ms: 500
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

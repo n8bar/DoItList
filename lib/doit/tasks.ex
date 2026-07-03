@@ -25,6 +25,7 @@ defmodule DoIt.Tasks do
     Comment,
     CommentVersion,
     Progress,
+    RollupDebounce,
     Sort,
     Task,
     TaskCoAssignee,
@@ -612,7 +613,11 @@ defmodule DoIt.Tasks do
       Repo.transaction(fn ->
         before = snapshot_ancestors(ancestor_ids)
 
-        case body_fun.() do
+        # Flip classification diffs ancestor computed_progress across the
+        # body, so the recompute must run inside this rolled-back dry-run
+        # regardless of the :rollup_recompute route (nothing commits here —
+        # no contention to avoid, and the discard below drops any enqueue).
+        case with_inline_rollup(body_fun) do
           {:ok, _} ->
             after_progress = snapshot_progress(ancestor_ids)
             Repo.rollback({:preview, before, after_progress})
@@ -1229,9 +1234,15 @@ defmodule DoIt.Tasks do
         |> Repo.update()
         |> case do
           {:ok, updated} ->
+            # Seeded at the task itself (not its parent) so the undone
+            # task's OWN computed_progress row refreshes with the reverted
+            # manual_progress (item 4.2), synchronously in both routes.
             if kind == "progress_changed",
               do:
-                recompute_ancestors(updated.parent_id, progress_calc_mode(updated.initiative_id))
+                recompute_self_and_ancestors(
+                  updated,
+                  progress_calc_mode(updated.initiative_id)
+                )
 
             :ok
 
@@ -2667,16 +2678,151 @@ defmodule DoIt.Tasks do
   itself up through the Initiative's root). `mode` is the caller's already-
   resolved `progress_calc_mode/1` result — resolve it once per outer
   operation, not once per chain recompute.
+
+  This and `recompute_self_and_ancestors/2` are the only two recompute entry
+  points, so the `:rollup_recompute` routing (m03.02 item 4.3) lives here
+  rather than at the ~10 mutator call sites: `:inline` runs the chain in the
+  caller's transaction (the pre-item-4 behavior, pinned in config/test.exs);
+  `:async` queues a post-commit enqueue to `DoIt.Tasks.RollupDebounce`
+  instead. Moves keep both chains covered either way — they call this once
+  for the old parent and once for the new, and each call routes identically.
   """
   def recompute_ancestors(nil, _mode), do: :ok
 
   def recompute_ancestors(task_id, mode) when is_integer(task_id) do
-    reconcile_ancestor_chain(task_id, mode)
+    case rollup_strategy() do
+      :inline -> reconcile_ancestor_chain(task_id, mode)
+      :async -> enqueue_rollup(task_id)
+    end
+
+    :ok
   end
 
-  defp recompute_self_and_ancestors(%Task{id: id}, mode) do
-    reconcile_ancestor_chain(id, mode)
+  # Same routing, for writes that change the task's OWN computed value
+  # (manual_progress edit, status flip, create): the self row is ALWAYS
+  # written synchronously in the caller's transaction — the struct returned
+  # here feeds every API per-op result and LiveView ack, which must never
+  # echo a stale `progress` (item 4.2) — while true ancestors follow the
+  # configured route. Inline mode needs no separate self write: the chain
+  # recompute seeds at the task itself.
+  defp recompute_self_and_ancestors(%Task{id: id} = task, mode) do
+    case rollup_strategy() do
+      :inline ->
+        reconcile_ancestor_chain(id, mode)
+
+      :async ->
+        reconcile_self_row(task, mode)
+        enqueue_rollup(id)
+    end
+
     Repo.get!(Task, id)
+  end
+
+  # The configured recompute route, with a process-scoped inline override:
+  # `preview_move`/`preview_create` classify completion flips by diffing
+  # ancestor `computed_progress` across their rolled-back dry-run body, which
+  # only works when the recompute runs inside that transaction.
+  defp rollup_strategy do
+    if Process.get(:rollup_force_inline),
+      do: :inline,
+      else: Application.get_env(:doit, :rollup_recompute, :inline)
+  end
+
+  defp with_inline_rollup(fun) do
+    previous = Process.put(:rollup_force_inline, true)
+
+    try do
+      fun.()
+    after
+      unless previous, do: Process.delete(:rollup_force_inline)
+    end
+  end
+
+  # Queue the debounce enqueue as a post-commit side effect, riding the same
+  # deferral as broadcasts (item 4.3): it fires only after the outermost
+  # transaction commits — the pass never reads pre-commit state — and a
+  # rolled-back transaction or discarded preview never enqueues.
+  defp enqueue_rollup(task_id) do
+    case Repo.one(from t in Task, where: t.id == ^task_id, select: t.initiative_id) do
+      nil ->
+        :ok
+
+      initiative_id ->
+        DoIt.Broadcast.after_commit(fn -> RollupDebounce.enqueue(initiative_id, task_id) end)
+    end
+  end
+
+  # The written task's OWN computed_progress, synchronously in the write
+  # transaction (item 4.2): a one-node run of the same chain math. Its reads
+  # stay scoped under the task itself (its leaf subtree / direct children) —
+  # no ancestor rows, so none of the shared-root contention the async route
+  # exists to avoid. The resort mirrors reconcile_ancestor_chain/2's: a
+  # progress-sorted parent re-orders on a child's value change.
+  defp reconcile_self_row(%Task{} = task, mode) do
+    node = %{
+      id: task.id,
+      parent_id: task.parent_id,
+      status: task.status,
+      manual_progress: task.manual_progress,
+      computed_progress: task.computed_progress
+    }
+
+    case compute_chain_values([node], mode) do
+      [] ->
+        :ok
+
+      changes ->
+        batch_persist_progress(changes)
+        maybe_resort_children(task.parent_id)
+        :ok
+    end
+  end
+
+  @doc """
+  The debounce flush (m03.02 items 4.4/4.5), called by
+  `DoIt.Tasks.RollupDebounce` only: one recompute pass covering every dirty
+  seed queued for `initiative_id` since the last flush, then a post-commit
+  `{:task_updated, id}` broadcast per ancestor whose value actually changed —
+  absorbed by the LiveView's existing patch path, so a screen that
+  full-loaded mid-window converges. `progress_calc` mode is resolved fresh
+  here, not at enqueue time. Runs outside any transaction (the pass IS the
+  post-commit work), so the broadcasts below fire after its writes land.
+  """
+  def run_rollup_pass(initiative_id, seed_ids) do
+    mode = progress_calc_mode(initiative_id)
+
+    # A seed soft-deleted since its enqueue drops out: its subtree no longer
+    # feeds any roll-up (writing to the dead row would corrupt its Trash
+    # state), and whatever deleted it enqueued the parent chain itself.
+    live_seed_ids =
+      Repo.all(from t in Task, where: t.id in ^seed_ids and is_nil(t.deleted_at), select: t.id)
+
+    {:ok, changed_ids} =
+      with_resort_batching(fn -> {:ok, reconcile_seed_set(live_seed_ids, mode)} end)
+
+    Enum.each(changed_ids, &broadcast_change(initiative_id, {:task_updated, &1}))
+    :ok
+  end
+
+  # One deduped recompute for a multi-seed set. :leaf_average unions the
+  # seeds' ancestor chains into one node set — each node's value is an
+  # independent function of its leaf subtree, so the union costs one leaf CTE
+  # and one batched write regardless of seed count. :single_level threads
+  # each freshly-computed child value up a LINEAR chain (`substitute` in
+  # compute_chain_values/2), which doesn't extend to a union — those run
+  # sequentially per seed, each chain's write landing before the next chain
+  # reads, so shared ancestors converge on the last write.
+  defp reconcile_seed_set(seed_ids, :leaf_average) do
+    seed_ids
+    |> Enum.flat_map(&fetch_ancestor_chain/1)
+    |> Enum.uniq_by(& &1.id)
+    |> reconcile_chain_nodes(:leaf_average)
+  end
+
+  defp reconcile_seed_set(seed_ids, :single_level) do
+    seed_ids
+    |> Enum.flat_map(&reconcile_ancestor_chain(&1, :single_level))
+    |> Enum.uniq()
   end
 
   # The per-initiative calc setting (Initiative pane → Settings). Schemaless
@@ -2695,28 +2841,31 @@ defmodule DoIt.Tasks do
   # --- Chain-scoped recompute (the per-edit hot path) -------------------------
 
   defp reconcile_ancestor_chain(task_id, mode) do
-    case fetch_ancestor_chain(task_id) do
-      [] ->
-        :ok
+    task_id |> fetch_ancestor_chain() |> reconcile_chain_nodes(mode)
+  end
 
-      chain ->
-        changes = compute_chain_values(chain, mode)
+  # Recompute + one batched write over an already-fetched node set. Returns
+  # the ids whose computed_progress actually changed — the debounce pass
+  # broadcasts exactly those (item 4.5); inline callers ignore the list.
+  defp reconcile_chain_nodes([], _mode), do: []
 
-        if changes != [] do
-          batch_persist_progress(changes)
+  defp reconcile_chain_nodes(nodes, mode) do
+    changes = compute_chain_values(nodes, mode)
 
-          by_id = Map.new(chain, &{&1.id, &1})
+    if changes != [] do
+      batch_persist_progress(changes)
 
-          Enum.each(changes, fn {id, _value} ->
-            case Map.get(by_id, id) do
-              %{parent_id: parent_id} -> maybe_resort_children(parent_id)
-              nil -> :ok
-            end
-          end)
+      by_id = Map.new(nodes, &{&1.id, &1})
+
+      Enum.each(changes, fn {id, _value} ->
+        case Map.get(by_id, id) do
+          %{parent_id: parent_id} -> maybe_resort_children(parent_id)
+          nil -> :ok
         end
-
-        :ok
+      end)
     end
+
+    Enum.map(changes, &elem(&1, 0))
   end
 
   # `task_id` and every ancestor up to the root, nearest first — built in

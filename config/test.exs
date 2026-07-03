@@ -39,6 +39,11 @@ config :doit, DoIt.Api.RateLimiter,
   # in its own unit test with an isolated remote_ip and a small override.
   ip_limit: 100_000
 
+# Ancestor roll-ups recompute inline (in the triggering transaction) so the
+# existing suite stays synchronous and deterministic; only the
+# RollupDebounce tests flip this to :async to exercise the real GenServer.
+config :doit, :rollup_recompute, :inline
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

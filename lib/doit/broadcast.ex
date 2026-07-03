@@ -39,6 +39,25 @@ defmodule DoIt.Broadcast do
   end
 
   @doc """
+  Run `fun` (0-arity) after the outermost transaction commits, riding the same
+  queue as broadcasts: fired in enqueue order by `flush/1` on `{:ok, _}`,
+  dropped on rollback and by `discard/1` (a dry-run/preview). Outside a
+  transaction `fun` runs immediately. For non-PubSub post-commit side effects
+  that need exactly the broadcasts' all-or-nothing deferral — e.g. the roll-up
+  debounce enqueue (`DoIt.Tasks`), which must never fire for state that didn't
+  commit. Always returns `:ok`.
+  """
+  def after_commit(fun) when is_function(fun, 0) do
+    if Repo.in_transaction?() do
+      Process.put(@pending, [{:after_commit, fun} | Process.get(@pending, [])])
+    else
+      fun.()
+    end
+
+    :ok
+  end
+
+  @doc """
   Flush (fire) or drop the queued broadcasts given a transaction `result`.
 
     * still inside a transaction — a no-op (an outer mutator will flush);
@@ -56,8 +75,11 @@ defmodule DoIt.Broadcast do
         pending = Process.get(@pending, [])
         Process.delete(@pending)
 
-        for {topic, message} <- Enum.reverse(pending) do
-          Phoenix.PubSub.broadcast(DoIt.PubSub, topic, message)
+        for entry <- Enum.reverse(pending) do
+          case entry do
+            {:after_commit, fun} -> fun.()
+            {topic, message} -> Phoenix.PubSub.broadcast(DoIt.PubSub, topic, message)
+          end
         end
 
         result
