@@ -233,9 +233,16 @@ defmodule DoIt.Initiatives do
 
   @doc "Update an Initiative's editable fields (name, description). Owner stays as-is."
   def update_initiative(%Initiative{} = initiative, attrs) do
-    initiative
-    |> Initiative.changeset(stringify_keys(attrs))
-    |> Repo.update()
+    changeset = Initiative.changeset(initiative, stringify_keys(attrs))
+    calc_changed? = Ecto.Changeset.get_change(changeset, :progress_calc) != nil
+
+    with {:ok, updated} <- Repo.update(changeset) do
+      # A progress_calc switch invalidates every cached branch value at once;
+      # recompute the whole tree so stored roll-ups don't linger in the old
+      # mode until the next edit.
+      if calc_changed?, do: DoIt.Tasks.recompute_initiative_tree(updated.id)
+      {:ok, updated}
+    end
   end
 
   @doc """

@@ -301,6 +301,27 @@ defmodule DoIt.Tasks.RollupBatchingTest do
       # root's one child is m.
       assert get(initiative.root_task_id).computed_progress == 53
     end
+
+    test "switching progress_calc recomputes the whole stored tree under the new mode" do
+      owner = user()
+      initiative = init(owner)
+      %{m: m, y: y} = build_nontrivial_tree(owner, initiative)
+
+      # Built under leaf_average (see the hand math in the test above).
+      assert get(m.id).computed_progress == 58
+
+      {:ok, _} =
+        Initiatives.update_initiative(
+          Initiatives.get_initiative(initiative.id),
+          %{"progress_calc" => "single_level"}
+        )
+
+      # Every stored value now matches the single_level math with no edit
+      # needed — the switch itself recomputes the tree.
+      assert get(y.id).computed_progress == 70
+      assert get(m.id).computed_progress == 53
+      assert get(initiative.root_task_id).computed_progress == 53
+    end
   end
 
   describe "a branch reverting to childless mid-tree (scoped recompute, not just create-time)" do

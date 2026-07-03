@@ -2804,6 +2804,59 @@ defmodule DoIt.Tasks do
     :ok
   end
 
+  @doc """
+  Recompute every task's `computed_progress` in `initiative_id` under its
+  current `progress_calc` — the whole-tree companion to the per-edit chain
+  recompute, for the rare events that invalidate every branch value at once
+  (an Initiative's `progress_calc` switch; `Initiatives.update_initiative/2`
+  calls this). One tree read, the one formula in memory
+  (`Progress.compute_all/2`), one batched write, then a `{:task_updated, id}`
+  broadcast per changed task so open views converge through their normal
+  patch path. Inline, no debounce routing: mode switches are rare admin
+  actions with no concurrency story.
+  """
+  def recompute_initiative_tree(initiative_id) do
+    mode = progress_calc_mode(initiative_id)
+    tasks = list_initiative_tasks(initiative_id)
+    values = tasks |> assemble_with_root() |> Progress.compute_all(mode)
+
+    changes =
+      tasks
+      |> Enum.map(fn t ->
+        {t.id, Map.get(values, t.id, t.computed_progress), t.computed_progress}
+      end)
+      |> Enum.reject(fn {_id, new, old} -> new == old end)
+      |> Enum.map(fn {id, new, _old} -> {id, new} end)
+
+    if changes != [] do
+      batch_persist_progress(changes)
+      Enum.each(changes, fn {id, _} -> broadcast_change(initiative_id, {:task_updated, id}) end)
+    end
+
+    :ok
+  end
+
+  # The Initiative's live tasks as one in-memory tree INCLUDING the system
+  # root — unlike `assemble_tree/1`, which drops the root because it isn't a
+  # rendered row. The root's value is the Initiative's header progress, so a
+  # whole-tree recompute must produce it too.
+  defp assemble_with_root(tasks) do
+    by_parent = Enum.group_by(tasks, & &1.parent_id)
+
+    by_parent
+    |> Map.get(nil, [])
+    |> Enum.map(&attach_children(&1, by_parent))
+  end
+
+  defp attach_children(task, by_parent) do
+    children =
+      by_parent
+      |> Map.get(task.id, [])
+      |> Enum.map(&attach_children(&1, by_parent))
+
+    %{task | children: children}
+  end
+
   # One deduped recompute for a multi-seed set. :leaf_average unions the
   # seeds' ancestor chains into one node set — each node's value is an
   # independent function of its leaf subtree, so the union costs one leaf CTE
