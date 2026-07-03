@@ -185,6 +185,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
+  # Client hook events (e.g. DragReorder's "move_task") send ids as JSON
+  # numbers, not strings — accept a valid in-range integer id as-is so the
+  # "never crash, reply not_found" guard doesn't silently reject every move.
+  defp parse_id(value) when is_integer(value) and value >= @pg_bigint_min and value <= @pg_bigint_max,
+    do: value
+
   defp parse_id(_), do: nil
 
   # The :id route segment matches any string, but the Initiative primary key is
