@@ -104,4 +104,28 @@ defmodule DoItWeb.InitiativeWorkspaceRollupBroadcastTest do
     assert has_element?(mate_view, "#task-#{parent.id} [data-done]")
     assert has_element?(mate_view, "#task-#{parent.id} [data-task-progress='100']")
   end
+
+  test "the acting user's OWN completion toggle shows the flipped ancestor done in the same response — no stale-status revert",
+       %{conn: conn, owner: owner, ini: ini} do
+    parent = new_task(owner, ini, %{"title" => "Parent"})
+    done_child = new_task(owner, ini, %{"title" => "Done child", "parent_id" => parent.id})
+    {:ok, _} = Tasks.toggle_complete(done_child, owner)
+    last_child = new_task(owner, ini, %{"title" => "Last open child", "parent_id" => parent.id})
+
+    {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+
+    # One child still open, so the parent's OWN row isn't done yet.
+    refute has_element?(view, "#task-#{parent.id} > [data-task-row][data-done]")
+
+    # The acting user toggles the last open leaf. patch_task's confirming
+    # render must carry the cascade's fresh ancestor status (Tasks.statuses_for/1),
+    # not the stale in-memory copy — else the optimistic parent-done flip reverts
+    # here until a later broadcast. The `>` combinator pins the parent's OWN row
+    # so a done CHILD can't give a false pass.
+    render_hook(view, "toggle_complete", %{"id" => to_string(last_child.id)})
+
+    assert has_element?(view, "#task-#{last_child.id} > [data-task-row][data-done]")
+    assert has_element?(view, "#task-#{parent.id} > [data-task-row][data-done]")
+    assert has_element?(view, "#task-#{parent.id} > [data-task-row][data-task-progress='100']")
+  end
 end

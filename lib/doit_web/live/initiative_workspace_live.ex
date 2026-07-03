@@ -839,10 +839,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               path ->
                 mode = progress_calc_mode(socket)
                 values = Progress.compute_all([rooted], mode)
+                statuses = Tasks.statuses_for(Enum.map(path, & &1.id))
 
                 Enum.map(
                   path,
-                  &%{&1 | computed_progress: Map.get(values, &1.id, &1.computed_progress)}
+                  &%{
+                    &1
+                    | computed_progress: Map.get(values, &1.id, &1.computed_progress),
+                      status: Map.get(statuses, &1.id, &1.status)
+                  }
                 )
             end
         end

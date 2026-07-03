@@ -1693,6 +1693,19 @@ defmodule DoIt.Tasks do
     end
   end
 
+  @doc """
+  Fresh `status` for the given task ids, as an `id => status` map. The own-edit
+  render (`patched_lineage`) recomputes ancestor *progress* in memory but the
+  completion cascade's ancestor status flips are only in the DB — this reads
+  them back so the confirming render doesn't revert an optimistic done-flip.
+  """
+  def statuses_for([]), do: %{}
+
+  def statuses_for(ids) do
+    Repo.all(from t in Task, where: t.id in ^ids, select: {t.id, t.status})
+    |> Map.new()
+  end
+
   @doc "Live child ids of `parent_id` in display order."
   def ordered_child_ids(parent_id) do
     Repo.all(
