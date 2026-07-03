@@ -165,4 +165,20 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
       assert redirect_kind in [:redirect, :live_redirect]
     end
   end
+
+  test "a stale sort-form replay with empty values is a no-op, not a crash", %{
+    conn: conn,
+    owner: owner,
+    alpha: alpha
+  } do
+    new_task(owner, alpha, %{"title" => "A"})
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
+
+    # Seen live: a client reconnecting across a server restart replays the
+    # sort form with everything empty and no pane task selected. It must not
+    # take the LiveView down.
+    render_change(view, "set_sort", %{"task_id" => "", "mode" => "", "_target" => ["mode"]})
+
+    assert has_element?(view, "#workspace-root")
+  end
 end

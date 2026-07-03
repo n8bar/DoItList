@@ -1473,27 +1473,37 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   end
 
   def handle_event("set_sort", params, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
-    else
-      task = sort_target(socket, params)
-      user = socket.assigns.current_user
+    task = sort_target(socket, params)
 
-      mode =
-        case params["mode"] do
-          "" -> nil
-          m -> m
+    cond do
+      not socket.assigns.can_edit ->
+        {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+
+      is_nil(task) ->
+        # No named target AND no pane task to fall back to — a stale client
+        # replaying the sort form with empty values (seen on reconnect after
+        # a server restart). Nothing to act on.
+        {:noreply, socket}
+
+      true ->
+        user = socket.assigns.current_user
+
+        mode =
+          case params["mode"] do
+            "" -> nil
+            m -> m
+          end
+
+        reverse = params["reverse"] == "true"
+
+        case Tasks.set_sort(task, user, mode, reverse) do
+          {:ok, _updated} ->
+            {:noreply, socket |> load_tree() |> refresh_selected()}
+
+          {:error, cs} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't change sort: #{summarize_errors(cs)}.")}
         end
-
-      reverse = params["reverse"] == "true"
-
-      case Tasks.set_sort(task, user, mode, reverse) do
-        {:ok, _updated} ->
-          {:noreply, socket |> load_tree() |> refresh_selected()}
-
-        {:error, cs} ->
-          {:noreply, put_flash(socket, :error, "Couldn't change sort: #{summarize_errors(cs)}.")}
-      end
     end
   end
 
