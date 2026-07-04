@@ -14,6 +14,8 @@ defmodule DoItWeb.Api.OperationsController do
     * Batch rolled back → `403` (the offending op failed authorization) or `422`,
       with the top-level `error` plus the per-op `results` (offending op flagged
       `error`, the rest `not_applied`).
+    * Batch over the `@max_batch_size` cap → `422` single-error naming the count
+      and the limit (rejected before any DB work).
     * Malformed body (no non-empty `operations` array) → `422` single-error.
   """
   use DoItWeb, :controller
@@ -29,6 +31,9 @@ defmodule DoItWeb.Api.OperationsController do
         conn
         |> put_status(status)
         |> json(%{error: top_error, results: results})
+
+      {:error, :batch_too_large, message} ->
+        Errors.send_error(conn, 422, :unprocessable_entity, message)
 
       {:error, :invalid_request} ->
         invalid_request(conn)

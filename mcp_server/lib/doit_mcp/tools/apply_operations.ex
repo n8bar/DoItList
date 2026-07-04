@@ -8,6 +8,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
   Initiative and its first task in one call) and multi-op batches; every
   other tool in this MCP server builds exactly one op against a real id.
 
+  A batch is capped at **150 operations**; a larger batch is rejected up front
+  with a `422` (naming the count and the limit) before any of it is applied.
+
   Each element of `operations` must be a JSON object matching the wire
   format:
 

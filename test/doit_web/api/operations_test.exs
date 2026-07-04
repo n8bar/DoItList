@@ -896,6 +896,38 @@ defmodule DoItWeb.Api.OperationsTest do
     end
   end
 
+  describe "batch-size cap (worklist 2.1)" do
+    test "a batch over @max_batch_size (151) is a 422 naming the count and limit, nothing persisted",
+         ctx do
+      # 151 otherwise-valid add-task ops — one past the 150 cap. The guard fires
+      # before the Ecto.Multi, so this never touches the DB.
+      ops =
+        for _ <- 1..151 do
+          %{
+            "op" => "add",
+            "type" => "task",
+            "data" => %{
+              "initiative_id" => ctx.ini.id,
+              "parent_id" => ctx.ini.root_task_id,
+              "title" => "Over-cap probe"
+            }
+          }
+        end
+
+      {status, body} = post_ops(ctx.owner, ops)
+
+      assert status == 422
+      # Single-error shape (no per-op results), naming the real count + limit.
+      assert body["error"]["code"] == "unprocessable_entity"
+      assert body["error"]["message"] =~ "151"
+      assert body["error"]["message"] =~ "150"
+      refute Map.has_key?(body, "results")
+
+      # Rejected up front — not one of the 151 ops was applied.
+      assert is_nil(Repo.get_by(Task, title: "Over-cap probe"))
+    end
+  end
+
   describe "unrecognized data keys are rejected with a targeted per-op error" do
     test "update task with the derived `progress` key is a 422 pointing at manual_progress",
          ctx do

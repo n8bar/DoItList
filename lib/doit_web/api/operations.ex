@@ -179,6 +179,15 @@ defmodule DoItWeb.Api.Operations do
   @types ~w(task initiative comment member notification link)
   @verbs ~w(add update remove)
 
+  # Hard cap on ops per batch, enforced before any DB work (see apply_batch/2).
+  # The whole batch runs in one synchronous Repo.transaction, which is bound by
+  # the 15 s transaction timeout — breach it and the entire batch fails. A
+  # cascade-heavy benchmark (dev-over-docker) ran roughly linear at ~40-55 ms/op;
+  # 250 ops took ~11 s and 200 breached 15 s once under added load. 150 ops
+  # (~6-8 s in that pessimistic env, far less in prod) keeps ~2x headroom while
+  # staying a useful atomic batch.
+  @max_batch_size 150
+
   # Initiative-content fields an `update initiative` may set (owner_id and any
   # other column are intentionally excluded — see "Irreversible ops").
   @initiative_content_fields ~w(name description progress_calc index_style auto_promote_co_assignees viewer_plus)
@@ -227,15 +236,33 @@ defmodule DoItWeb.Api.Operations do
     * `{:error, status, results}` — the batch rolled back; `status` is `403` or
       `422`, `results` carries the offending op (`:status` `"error"`, `:error`)
       and every other op as `"not_applied"`.
+    * `{:error, :batch_too_large, message}` — more than `@max_batch_size` ops;
+      rejected up front (no DB work) and rendered as the single-error shape.
     * `{:error, :invalid_request}` — the body was not a non-empty operations list
       (rendered by the controller as the single-error shape).
   """
   @spec apply_batch(User.t(), list()) ::
           {:ok, [map()]}
           | {:error, 403 | 422, [map()], map()}
+          | {:error, :batch_too_large, String.t()}
           | {:error, :invalid_request}
   def apply_batch(%User{} = user, operations)
       when is_list(operations) and operations != [] do
+    # Reject an oversized batch before any DB work — the whole batch shares one
+    # synchronous transaction bound by the 15 s timeout (see @max_batch_size).
+    count = length(operations)
+
+    if count > @max_batch_size do
+      {:error, :batch_too_large,
+       "Batch has #{count} operations; the maximum is #{@max_batch_size} per request."}
+    else
+      apply_within_cap(user, operations, count)
+    end
+  end
+
+  def apply_batch(_user, _operations), do: {:error, :invalid_request}
+
+  defp apply_within_cap(%User{} = user, operations, count) do
     # Drop any broadcast residue a PRIOR raised request left queued on THIS
     # process. DoIt.Broadcast queues in the process dictionary, and Bandit
     # reuses one connection process across keep-alive requests; without this a
@@ -266,7 +293,7 @@ defmodule DoItWeb.Api.Operations do
       # guarantee extends to PubSub side effects, none escaping a rolled-back
       # batch or leaking pre-commit.
       Broadcast.flush(transaction_ok?(result))
-      render(result, length(operations))
+      render(result, count)
     after
       # An op may RAISE inside the transaction (a DB constraint / Postgrex /
       # Ecto.StaleEntryError / an unmatched context return). Repo.transaction
@@ -277,8 +304,6 @@ defmodule DoItWeb.Api.Operations do
       Broadcast.discard(:ok)
     end
   end
-
-  def apply_batch(_user, _operations), do: {:error, :invalid_request}
 
   # `Repo.transaction(multi)` returns {:ok, changes} | {:error, name, val, changes}.
   # Reduce to the {:ok, _} | other shape Broadcast.flush/1 expects.
