@@ -52,6 +52,13 @@ defmodule DoitMcp.Tools.ApplyOperations do
   This tool is a pure pass-through — the caller is responsible for building
   each op object correctly per the wire format above; no reshaping happens
   here.
+
+  ## Safe retries — `idempotency_key`
+
+  Pass an optional `idempotency_key` (any client-chosen string) to make a retry
+  safe: it is forwarded as the `Idempotency-Key` header, so if a first attempt
+  already committed but its response was lost (e.g. a timeout), a retry with the
+  same key replays that stored response instead of re-applying the batch.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -60,11 +67,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   schema do
     field(:operations, {:list, :map}, required: true)
+    field(:idempotency_key, :string, required: false)
   end
 
   def execute(params, frame) do
     params.operations
-    |> Client.operations()
+    |> Client.operations(idempotency_key: Map.get(params, :idempotency_key))
     |> then(&ToolResult.reply_batch(frame, &1))
   end
 end

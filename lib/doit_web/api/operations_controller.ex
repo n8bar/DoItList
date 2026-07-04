@@ -17,30 +17,87 @@ defmodule DoItWeb.Api.OperationsController do
     * Batch over the `@max_batch_size` cap → `422` single-error naming the count
       and the limit (rejected before any DB work).
     * Malformed body (no non-empty `operations` array) → `422` single-error.
+
+  ## Idempotent retries (m03.03 worklist 2.2)
+
+  A client may send an `Idempotency-Key` request header (Stripe's convention).
+  On the first request for a `(user, key)` the batch runs normally and its
+  response is stored; a later request carrying the **same** key **replays** that
+  stored response verbatim instead of re-applying the batch — so a retry after a
+  client-side timeout can't double-apply. Only real **execution** outcomes are
+  stored (a commit or a per-op-error rollback); the pre-execution rejections
+  (batch-too-large, malformed body) commit nothing, so they're never stored and
+  a retry is already safe. With no header, behavior is exactly as above. The key
+  itself is enforced server-side here; the MCP tool merely forwards it.
   """
   use DoItWeb, :controller
 
+  alias DoIt.Api.Idempotency
   alias DoItWeb.Api.{Errors, Operations}
 
   def create(conn, %{"operations" => operations}) do
-    case Operations.apply_batch(conn.assigns.current_user, operations) do
-      {:ok, results} ->
-        json(conn, %{results: results})
+    user = conn.assigns.current_user
 
-      {:error, status, results, top_error} ->
-        conn
-        |> put_status(status)
-        |> json(%{error: top_error, results: results})
+    case idempotency_key(conn) do
+      nil ->
+        render_outcome(conn, Operations.apply_batch(user, operations))
 
-      {:error, :batch_too_large, message} ->
-        Errors.send_error(conn, 422, :unprocessable_entity, message)
+      key ->
+        case Idempotency.fetch(user, key) do
+          {status, body} ->
+            # Replay the first attempt's stored response — no re-execution.
+            conn |> put_status(status) |> json(body)
 
-      {:error, :invalid_request} ->
-        invalid_request(conn)
+          nil ->
+            outcome = Operations.apply_batch(user, operations)
+            store_if_execution(user, key, outcome)
+            render_outcome(conn, outcome)
+        end
     end
   end
 
   def create(conn, _params), do: invalid_request(conn)
+
+  # The `Idempotency-Key` request header (Plug lowercases header names), or nil
+  # when absent/blank.
+  defp idempotency_key(conn) do
+    case get_req_header(conn, "idempotency-key") do
+      [key | _] when is_binary(key) and key != "" -> key
+      _ -> nil
+    end
+  end
+
+  # Persist ONLY execution outcomes (a commit, or a per-op-error rollback) —
+  # both are captured through the SAME {status, body} the response uses, so a
+  # replay is byte-identical to what was sent. The pre-execution rejections
+  # commit nothing and are left unstored (a retry of them is already safe).
+  defp store_if_execution(_user, _key, {:error, :batch_too_large, _message}), do: :ok
+  defp store_if_execution(_user, _key, {:error, :invalid_request}), do: :ok
+
+  defp store_if_execution(user, key, outcome) do
+    {status, body} = execution_response(outcome)
+    Idempotency.store(user, key, status, body)
+  end
+
+  # The single {status, body} shape used for BOTH the HTTP response and the
+  # stored idempotency record of an execution outcome.
+  defp execution_response({:ok, results}), do: {200, %{results: results}}
+
+  defp execution_response({:error, status, results, top_error}),
+    do: {status, %{error: top_error, results: results}}
+
+  # Render any apply_batch/2 outcome. The two pre-execution rejections keep their
+  # single-error shapes; every execution outcome goes through execution_response/1
+  # so the sent body matches the one store_if_execution/3 persists.
+  defp render_outcome(conn, {:error, :batch_too_large, message}),
+    do: Errors.send_error(conn, 422, :unprocessable_entity, message)
+
+  defp render_outcome(conn, {:error, :invalid_request}), do: invalid_request(conn)
+
+  defp render_outcome(conn, outcome) do
+    {status, body} = execution_response(outcome)
+    conn |> put_status(status) |> json(body)
+  end
 
   defp invalid_request(conn) do
     Errors.send_error(

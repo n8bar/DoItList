@@ -71,4 +71,31 @@ defmodule DoitMcp.Tools.ApplyOperationsTest do
              "results" => results
            }
   end
+
+  test "forwards idempotency_key as the Idempotency-Key request header" do
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "idempotency-key") == ["retry-abc-123"]
+      Req.Test.json(conn, %{"results" => []})
+    end)
+
+    frame = %{test: true}
+
+    assert {:reply, _response, ^frame} =
+             ApplyOperations.execute(
+               %{operations: [], idempotency_key: "retry-abc-123"},
+               frame
+             )
+  end
+
+  test "sends no Idempotency-Key header when idempotency_key is omitted" do
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      assert Plug.Conn.get_req_header(conn, "idempotency-key") == []
+      Req.Test.json(conn, %{"results" => []})
+    end)
+
+    frame = %{test: true}
+
+    assert {:reply, _response, ^frame} =
+             ApplyOperations.execute(%{operations: []}, frame)
+  end
 end

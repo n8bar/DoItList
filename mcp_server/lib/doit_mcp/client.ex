@@ -5,10 +5,24 @@ defmodule DoitMcp.Client do
   the public API (Arc 1, `/api/v1`), never a shortcut into the Elixir contexts.
   """
 
-  @doc "POST an ordered batch of operations to `/api/v1/operations`."
-  @spec operations([map()]) :: {:ok, [map()]} | {:error, map()}
-  def operations(ops) when is_list(ops) do
-    request(:post, "/api/v1/operations", json: %{operations: ops})
+  @doc """
+  POST an ordered batch of operations to `/api/v1/operations`.
+
+  `opts[:idempotency_key]`, when a non-empty string, is sent as the
+  `Idempotency-Key` request header so a retried batch is de-duplicated
+  server-side (m03.03 worklist 2.2). Enforcement is entirely the API's; this
+  just forwards the header.
+  """
+  @spec operations([map()], keyword()) :: {:ok, [map()]} | {:error, map()}
+  def operations(ops, opts \\ []) when is_list(ops) do
+    request(:post, "/api/v1/operations", [json: %{operations: ops}] ++ idempotency_header(opts))
+  end
+
+  defp idempotency_header(opts) do
+    case Keyword.get(opts, :idempotency_key) do
+      key when is_binary(key) and key != "" -> [headers: %{"idempotency-key" => key}]
+      _ -> []
+    end
   end
 
   @doc "GET a read endpoint under `/api/v1`."
