@@ -261,7 +261,25 @@ defmodule DoIt.Tasks do
         end
       end)
     end)
+    |> sync_links_after_write(attrs)
   end
+
+  # After a successful create/update, mirror the cross-reference `task_links`
+  # FROM the task to the `%⟨id⟩` tokens in its just-saved title/description
+  # (m03.03). Runs post-commit, and only when a title/description was in play
+  # (edges derive from those two fields alone) so a move/done/progress-only
+  # touch skips the extra work. Both the create and update paths — across every
+  # editing surface (LiveView + API) — funnel through here, so this one seam
+  # keeps their edges in step. A new task has no existing edges, so create is
+  # add-only; the same diff handles it.
+  defp sync_links_after_write({:ok, task} = result, attrs) do
+    if Map.has_key?(attrs, "title") or Map.has_key?(attrs, "description"),
+      do: sync_reference_links(task)
+
+    result
+  end
+
+  defp sync_links_after_write(other, _attrs), do: other
 
   # Body shared by `create_task` and `preview_create`. Does the insert + the
   # progress recompute, but NOT the status reconcile (which broadcasts).
@@ -418,6 +436,7 @@ defmodule DoIt.Tasks do
         end
       end)
     end)
+    |> sync_links_after_write(attrs)
   end
 
   @sort_gap 1000
@@ -2330,6 +2349,73 @@ defmodule DoIt.Tasks do
       select: {l.source_task_id, l.target_task_id}
     )
     |> Repo.all()
+  end
+
+  # Reference tokens embedded by the %-notation editor: `%⟨<id>⟩`, with the
+  # U+27E8/U+27E9 angle brackets wrapping an integer task id.
+  @ref_token_regex ~r/%⟨(\d+)⟩/
+
+  @doc """
+  Reconcile the cross-reference `task_links` FROM `task` with the `%⟨id⟩` tokens
+  embedded in its (already-updated) title + description (m03.03).
+
+  `task` must carry its current title + description — sync reads them off the
+  struct. Desired targets are the parsed token ids kept only when VALID: same
+  Initiative as `task`, not a self-reference, and a live (existing, not
+  soft-deleted) task. Any other id — a typo, a foreign or dead reference — is
+  silently dropped so a bad token never crashes a save.
+
+  Only the delta is applied: a newly-referenced target gets a `create_link`, a
+  no-longer-referenced target a `remove_link`. An edge whose target is still
+  referenced is left untouched — its row is preserved, not blown away and
+  recreated. Returns `{:ok, %{added: [ids], removed: [ids]}}`.
+  """
+  def sync_reference_links(%Task{} = task) do
+    valid_targets = valid_reference_targets(task)
+    desired = valid_targets |> Map.keys() |> MapSet.new()
+    existing = existing_link_target_ids(task)
+
+    added =
+      for id <- MapSet.difference(desired, existing),
+          target = Map.fetch!(valid_targets, id),
+          {:ok, _link} <- [create_link(task, target)] do
+        id
+      end
+
+    removed =
+      for id <- MapSet.difference(existing, desired),
+          {:ok, _link} <- [remove_link(task, %Task{id: id, initiative_id: task.initiative_id})] do
+        id
+      end
+
+    {:ok, %{added: Enum.sort(added), removed: Enum.sort(removed)}}
+  end
+
+  # The distinct integer target ids referenced by the task's title + description.
+  defp reference_target_ids(%Task{title: title, description: description}) do
+    @ref_token_regex
+    |> Regex.scan("#{title} #{description}", capture: :all_but_first)
+    |> Enum.map(fn [id] -> String.to_integer(id) end)
+    |> Enum.uniq()
+  end
+
+  # Referenced ids mapped to their loaded Task, keeping only VALID targets: same
+  # Initiative, not the source itself, and a live (not soft-deleted) task. A
+  # non-matching id (missing / foreign / trashed) is filtered out by the pattern.
+  defp valid_reference_targets(%Task{initiative_id: source_init, id: source_id} = task) do
+    for id <- reference_target_ids(task),
+        id != source_id,
+        %Task{deleted_at: nil, initiative_id: ^source_init} = target <- [get_task(id)],
+        into: %{} do
+      {id, target}
+    end
+  end
+
+  # Target ids of the existing cross-reference edges whose source is this task.
+  defp existing_link_target_ids(%Task{id: id}) do
+    from(l in TaskLink, where: l.source_task_id == ^id, select: l.target_task_id)
+    |> Repo.all()
+    |> MapSet.new()
   end
 
   @doc """
