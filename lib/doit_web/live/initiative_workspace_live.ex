@@ -6393,6 +6393,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             class="w-full input input-bordered input-sm"
             disabled={not @can_edit}
             phx-debounce="blur"
+            phx-hook="RefField"
           />
         </div>
 
@@ -6407,6 +6408,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             rows="3"
             disabled={not @can_edit}
             phx-debounce="blur"
+            phx-hook="RefField"
           >{@task.description}</textarea>
         </div>
 

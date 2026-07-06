@@ -25,7 +25,7 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/doit"
 import topbar from "../vendor/topbar"
 import DoitRollup from "./rollup.js"
-import {segments} from "./refs.js"
+import {segments, transformForSave, rehydrate} from "./refs.js"
 
 const {computeRollup, computeDoneCascade} = DoitRollup
 
@@ -874,10 +874,24 @@ const DoitSelection = {
       if (el && el !== document.activeElement && el.value !== value) el.value = value
     }
 
-    set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
+    // Ref-bearing title/description (Wave 2): after the read-path render, the
+    // row's textContent is link LABEL text ("1.5", no leading `%`, escapes
+    // resolved) — an optimistic fill would put a mis-formatted, mis-saveable
+    // value in the box. Skip those; the server value + RefField.rehydrate()
+    // supply the correct `%label` a beat later. Ref-free fields keep the instant
+    // optimistic fill.
+    const hasRef = (sel) => {
+      const el = row.querySelector(sel)
+      return !!(el && el.querySelector(".doit-ref, .doit-ref-dead"))
+    }
+    if (!hasRef("[data-task-title]")) {
+      set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
+    }
     // Description rides a hidden-when-empty row span (item 15.11) — fill the
     // textarea from it so the pane shows it instantly on selection, no round trip.
-    set(pane.querySelector("#task-field-description"), text("[data-task-description]"))
+    if (!hasRef("[data-task-description]")) {
+      set(pane.querySelector("#task-field-description"), text("[data-task-description]"))
+    }
 
     // Progress slider (item 15.11): value + enabled state from the row, so it
     // reflects reality instantly. Value is the row's displayed % (branch =
@@ -2003,6 +2017,34 @@ function buildRefLabelMap() {
     if (li) map.set(Number(li.dataset.taskId), el.getAttribute("data-copy-index"))
   })
   return map
+}
+
+// WRITE-path resolvers (Wave 2) — the reverse of buildRefLabelMap, read live
+// from the SAME [data-copy-index] rows so a re-number needs no round trip.
+// Labels are unique per tree (positional dotted numbers), so label -> id is a
+// function. Both build a fresh map per call: a pane title/description carries a
+// handful of refs, so the O(rows) scan per ref is negligible and keeps the DOM
+// the single source of truth.
+//
+//   resolveRefPath("1.5") -> id | null   (label -> id; used by transformForSave
+//                                          to id-anchor %path on blur/save)
+//   refLabelOf(id)        -> "1.5" | null (id -> label; used by rehydrate to
+//                                          show %label in the edit box)
+function buildRefPathMap() {
+  const map = new Map()
+  document.querySelectorAll("[data-copy-index]").forEach((el) => {
+    const li = el.closest("li[data-task-id]")
+    if (li) map.set(el.getAttribute("data-copy-index"), Number(li.dataset.taskId))
+  })
+  return map
+}
+function resolveRefPath(path) {
+  const id = buildRefPathMap().get(path)
+  return id == null ? null : id
+}
+function refLabelOf(id) {
+  const label = buildRefLabelMap().get(id)
+  return label == null ? null : label
 }
 
 // The DOM node for one `%⟨id⟩` token, given a prebuilt id->label map:
@@ -6049,6 +6091,50 @@ Hooks.SortRecall = {
     localStorage.setItem(this.key(mode), reverse ? "1" : "0")
   },
   recall(mode) { return localStorage.getItem(this.key(mode)) === "1" },
+}
+
+// Cross-reference (%-notation) WRITE path — Wave 2: the two Details-pane inputs
+// (#task-field-title / #task-field-description). The server renders value= as the
+// RAW stored string (with `%⟨id⟩` tokens); we keep the EDIT box showing `%label`
+// (never the raw id) and, on save, rewrite the box back to id-anchored tokens so
+// update_task stores by id — a re-number never rots the reference.
+//
+// No `phx-update="ignore"`: the server value must keep flowing so a save reply
+// (the DB re-renders value= with the freshly stored tokens) re-drives rehydrate.
+Hooks.RefField = {
+  mounted() {
+    // Show %label on first paint (the server-rendered value is raw tokens).
+    this.rehydrate()
+    // Rewrite %label -> %⟨id⟩ the instant the field blurs, in the element's
+    // CAPTURE phase. LiveView reads the value from its OWN `blur` listener
+    // (dom_default.debounce, registered in the BUBBLE phase on this element by
+    // `phx-debounce="blur"`); for a given event on its target, capture-phase
+    // listeners fire before bubble-phase ones, so this transform lands before
+    // LiveView serializes the form — the server receives `%⟨id⟩`, not `%1.5`.
+    this.onBlurCapture = () => {
+      const next = transformForSave(this.el.value, resolveRefPath)
+      if (next !== this.el.value) this.el.value = next
+    }
+    this.el.addEventListener("blur", this.onBlurCapture, true)
+  },
+  updated() {
+    // A server patch (our own save reply, or a collab edit) resets value= to raw
+    // tokens; turn them back into %label. Only when a token is actually present,
+    // so a user mid-typing `%1.5` (no tokens yet) is never disturbed.
+    this.rehydrate()
+  },
+  destroyed() {
+    if (this.onBlurCapture) {
+      this.el.removeEventListener("blur", this.onBlurCapture, true)
+    }
+  },
+  rehydrate() {
+    // U+27E8 (⟨) only appears inside a `%⟨id⟩` token, so its absence means there
+    // is nothing to rehydrate — leave the box (and any in-progress typing) alone.
+    if (this.el.value.indexOf("⟨") === -1) return
+    const next = rehydrate(this.el.value, refLabelOf)
+    if (next !== this.el.value) this.el.value = next
+  },
 }
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
