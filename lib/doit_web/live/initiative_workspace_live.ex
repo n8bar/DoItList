@@ -4063,6 +4063,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 placeholder="New task..."
                 class="flex-1 input input-bordered input-sm"
               />
+              <.ref_picker_button target="#add-task-form input[name='title']" class="flex-none" />
               <button
                 type="submit"
                 phx-disable-with="Adding..."
@@ -6356,6 +6357,30 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   defp comment_author?(comment, %{id: user_id}), do: comment.user_id == user_id
   defp comment_author?(_comment, _user), do: false
 
+  # "Link task" picker button (m03.03 worklist 3 item 3.2): opens the client-only
+  # %-reference picker (app.js) anchored to `target` (a CSS selector for one of
+  # the three eligible ref fields). The button only opens the popover; all
+  # list-building + insertion is client-side.
+  attr :target, :string, required: true
+  attr :class, :any, default: nil
+
+  defp ref_picker_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      data-ref-picker={@target}
+      aria-label="Link a task by number"
+      title="Link a task by number"
+      class={[
+        "inline-flex items-center justify-center w-6 h-6 rounded text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition",
+        @class
+      ]}
+    >
+      <.icon name="hero-link" class="w-4 h-4" />
+    </button>
+    """
+  end
+
   attr :task, :map, required: true
   attr :comments, :list, required: true
   attr :current_user, :map, required: true
@@ -6402,9 +6427,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
            element IDs, so the split is harmless). --%>
       <form phx-change="update_task" phx-submit="update_task" class="space-y-3">
         <div>
-          <label for="task-field-title" class="text-xs text-zinc-500 dark:text-zinc-400">
-            Title
-          </label>
+          <div class="flex items-center justify-between gap-2">
+            <label for="task-field-title" class="text-xs text-zinc-500 dark:text-zinc-400">
+              Title
+            </label>
+            <.ref_picker_button :if={@can_edit} target="#task-field-title" />
+          </div>
           <input
             id="task-field-title"
             type="text"
@@ -6418,9 +6446,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         </div>
 
         <div>
-          <label for="task-field-description" class="text-xs text-zinc-500 dark:text-zinc-400">
-            Description
-          </label>
+          <div class="flex items-center justify-between gap-2">
+            <label for="task-field-description" class="text-xs text-zinc-500 dark:text-zinc-400">
+              Description
+            </label>
+            <.ref_picker_button :if={@can_edit} target="#task-field-description" />
+          </div>
           <textarea
             id="task-field-description"
             name="task[description]"

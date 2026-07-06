@@ -2163,6 +2163,311 @@ document.addEventListener("click", (e) => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// %-reference "Link task" picker (Worklist 3 item 3.2) — CLIENT-ONLY.
+//
+// A small button next to each of the three eligible ref-input fields (add-task
+// title, details title, details description) opens a popover: a search box + a
+// scrollable list of THIS Initiative's tasks, built live from the tree DOM so it
+// opens instantly with NO round trip (the picker is an optional aid — typing
+// `%label` directly already works). Choosing a task inserts `%<label>` at the
+// caret of the last-focused eligible field. The picker only inserts TEXT — the
+// field's existing RefField save-transform anchors `%label` -> `%⟨id⟩` on blur
+// (add-task on submit), so nothing here resolves or stores.
+//
+// Numbering-off choice: labels come from each row's [data-copy-index], which is
+// present ONLY when Initiative numbering is on. With no labels the picker can't
+// produce a `%label`, so the popover still OPENS (so a click is acknowledged,
+// §6) but shows a "turn on Initiative numbering" hint instead of a task list —
+// the button is never a dead no-op.
+
+// The three fields that accept a %-ref. Stable selectors, so `.matches()` holds
+// wherever the add-task form teleports in the tree.
+const REF_PICKER_FIELDS =
+  '#add-task-form input[name="title"], #task-field-title, #task-field-description'
+function refEligibleField(el) {
+  return el && el.matches && el.matches(REF_PICKER_FIELDS) ? el : null
+}
+
+// The eligible field (+ caret) that last held focus — the insert target. Kept
+// fresh on focus and on any selection change within an eligible field, so the
+// caret survives the field blurring to the picker. `chooseRef` inserts into
+// THIS field (spec 3.2.1); a picker button whose field was never focused falls
+// back to the field it's anchored to (its own data-ref-picker selector).
+let refPickerTarget = null // { el, caret }
+function recordRefTarget(el) {
+  const field = refEligibleField(el)
+  if (!field) return
+  const caret =
+    typeof field.selectionStart === "number" ? field.selectionStart : field.value.length
+  refPickerTarget = {el: field, caret}
+}
+document.addEventListener("focusin", (e) => recordRefTarget(e.target))
+;["keyup", "pointerup", "input", "select"].forEach((type) =>
+  document.addEventListener(
+    type,
+    (e) => { if (refEligibleField(e.target)) recordRefTarget(e.target) },
+    true
+  )
+)
+// Snapshot the caret at the instant a picker button is pressed: on mousedown the
+// field is still focused (blur happens in the default action AFTER this), so
+// document.activeElement is the true target with a live selectionStart.
+document.addEventListener(
+  "mousedown",
+  (e) => { if (e.target.closest("[data-ref-picker]")) recordRefTarget(document.activeElement) },
+  true
+)
+
+let refPopover = null // singleton popover (lazily built, hosted on <body>)
+let refPickerTrigger = null // the button that opened it (click-outside + toggle)
+let refPickerItems = [] // [{label, title, hay}] full task list for the open picker
+let refActiveIndex = -1 // highlighted row in the filtered list
+
+function ensureRefPopover() {
+  if (refPopover) return refPopover
+  const pop = document.createElement("div")
+  pop.id = "ref-picker-popover"
+  pop.hidden = true
+  pop.setAttribute("role", "dialog")
+  pop.setAttribute("aria-label", "Link a task")
+  pop.className =
+    "fixed z-50 w-72 max-w-[calc(100vw-1rem)] rounded-lg border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl p-2"
+  const search = document.createElement("input")
+  search.type = "text"
+  search.setAttribute("data-ref-search", "")
+  search.placeholder = "Search by number or title…"
+  search.className = "w-full mb-2 input input-bordered input-sm"
+  const list = document.createElement("ul")
+  list.setAttribute("data-ref-list", "")
+  list.className = "max-h-64 overflow-y-auto text-sm"
+  pop.appendChild(search)
+  pop.appendChild(list)
+  // Body-hosted, so it lives OUTSIDE the LiveView root — morphdom never patches
+  // it, and it survives tree re-renders while open.
+  document.body.appendChild(pop)
+  refPopover = pop
+  search.addEventListener("input", () => renderRefList(search.value))
+  search.addEventListener("keydown", onRefSearchKeydown)
+  list.addEventListener("click", (e) => {
+    const li = e.target.closest("[data-ref-label]")
+    if (li) chooseRef(li.getAttribute("data-ref-label"))
+  })
+  return pop
+}
+
+// Build the task list live from the tree DOM: each row's [data-copy-index]
+// (its clean dotted label) + [data-task-title]. Empty when numbering is off.
+function collectRefTasks() {
+  const items = []
+  document.querySelectorAll("#task-tree [data-copy-index]").forEach((el) => {
+    const li = el.closest("li[data-task-id]")
+    if (!li) return
+    const label = el.getAttribute("data-copy-index")
+    if (!label) return
+    const titleEl = li.querySelector(":scope > [data-task-row] [data-task-title]")
+    const title = titleEl ? titleEl.textContent.trim() : ""
+    items.push({label, title, hay: (label + " " + title).toLowerCase()})
+  })
+  return items
+}
+
+function refListEls() {
+  return refPopover ? [...refPopover.querySelectorAll("[data-ref-label]")] : []
+}
+
+function renderRefList(query) {
+  const list = refPopover.querySelector("[data-ref-list]")
+  const q = (query || "").trim().toLowerCase()
+  list.replaceChildren()
+  refActiveIndex = -1
+  const hint = (text) => {
+    const li = document.createElement("li")
+    li.className = "px-2 py-3 text-xs text-zinc-500 dark:text-zinc-400 italic"
+    li.textContent = text
+    list.appendChild(li)
+  }
+  if (refPickerItems.length === 0) {
+    hint("Turn on Initiative numbering to link tasks by number.")
+    return
+  }
+  const matches = q ? refPickerItems.filter((it) => it.hay.includes(q)) : refPickerItems
+  if (matches.length === 0) {
+    hint("No matching tasks.")
+    return
+  }
+  matches.forEach((it) => {
+    const li = document.createElement("li")
+    li.setAttribute("data-ref-label", it.label)
+    li.className =
+      "flex items-baseline gap-2 px-2 py-1.5 rounded cursor-pointer hover:bg-emerald-50 dark:hover:bg-emerald-900/30 aria-selected:bg-emerald-100 dark:aria-selected:bg-emerald-900/50"
+    const num = document.createElement("span")
+    num.className =
+      "flex-none font-mono text-xs font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums"
+    num.textContent = it.label
+    const ttl = document.createElement("span")
+    ttl.className = "truncate text-zinc-700 dark:text-zinc-200"
+    ttl.textContent = it.title
+    li.appendChild(num)
+    li.appendChild(ttl)
+    list.appendChild(li)
+  })
+  refActiveIndex = 0
+  highlightRef()
+}
+
+function highlightRef() {
+  refListEls().forEach((li, i) => {
+    const active = i === refActiveIndex
+    li.setAttribute("aria-selected", active ? "true" : "false")
+    if (active) li.scrollIntoView({block: "nearest"})
+  })
+}
+
+function moveRefActive(dir) {
+  const els = refListEls()
+  if (els.length === 0) return
+  refActiveIndex = Math.max(0, Math.min(els.length - 1, refActiveIndex + dir))
+  highlightRef()
+}
+
+function onRefSearchKeydown(e) {
+  switch (e.key) {
+    case "ArrowDown":
+      e.preventDefault()
+      moveRefActive(1)
+      break
+    case "ArrowUp":
+      e.preventDefault()
+      moveRefActive(-1)
+      break
+    case "Enter": {
+      e.preventDefault()
+      const li = refListEls()[refActiveIndex]
+      if (li) chooseRef(li.getAttribute("data-ref-label"))
+      break
+    }
+    case "Escape":
+      e.preventDefault()
+      closeRefPicker(true)
+      break
+  }
+}
+
+function positionRefPopover(trigger) {
+  const r = trigger.getBoundingClientRect()
+  const pw = refPopover.offsetWidth
+  const ph = refPopover.offsetHeight
+  let left = Math.min(r.left, window.innerWidth - pw - 8)
+  if (left < 8) left = 8
+  let top = r.bottom + 4
+  if (top + ph > window.innerHeight - 8) {
+    const above = r.top - 4 - ph
+    if (above > 8) top = above
+  }
+  refPopover.style.left = left + "px"
+  refPopover.style.top = top + "px"
+}
+
+function openRefPicker(trigger) {
+  ensureRefPopover()
+  refPickerTrigger = trigger
+  // Target field: the last-focused eligible field (spec 3.2.1) when still on
+  // page, else the field this button is anchored to, caret at end.
+  const last = refPickerTarget
+  if (!last || !last.el.isConnected || !refEligibleField(last.el)) {
+    const sel = trigger.getAttribute("data-ref-picker")
+    const el = sel && document.querySelector(sel)
+    refPickerTarget = el ? {el, caret: el.value.length} : null
+  }
+  refPickerItems = collectRefTasks()
+  const search = refPopover.querySelector("[data-ref-search]")
+  search.value = ""
+  renderRefList("")
+  refPopover.hidden = false
+  positionRefPopover(trigger)
+  search.focus()
+}
+
+function closeRefPicker(returnFocus) {
+  if (!refPopover || refPopover.hidden) return
+  refPopover.hidden = true
+  const t = refPickerTarget
+  refPickerTrigger = null
+  if (returnFocus && t && t.el.isConnected) {
+    t.el.focus()
+    const pos = Math.min(t.caret == null ? t.el.value.length : t.caret, t.el.value.length)
+    try { t.el.setSelectionRange(pos, pos) } catch (_e) {}
+  }
+}
+
+// Insert `%<label>` at the tracked caret of the target field, restore focus,
+// place the caret AFTER the insert, and fire `input` so the row echo + any
+// validation update. RefField's blur transform (or the add-task submit) later
+// anchors the `%label` to its `%⟨id⟩` token — we never store here.
+function chooseRef(label) {
+  refPopover.hidden = true
+  refPickerTrigger = null
+  const t = refPickerTarget
+  if (!t || !t.el.isConnected) return
+  const el = t.el
+  const v = el.value
+  const pos = Math.min(Math.max(t.caret == null ? v.length : t.caret, 0), v.length)
+  const insert = "%" + label
+  el.value = v.slice(0, pos) + insert + v.slice(pos)
+  el.focus()
+  const after = pos + insert.length
+  try { el.setSelectionRange(after, after) } catch (_e) {}
+  el.dispatchEvent(new Event("input", {bubbles: true}))
+  // Advance the tracked caret so a follow-up pick lands after this insert.
+  refPickerTarget = {el, caret: after}
+}
+
+document.addEventListener("click", (e) => {
+  const trigger = e.target.closest("[data-ref-picker]")
+  if (trigger) {
+    e.preventDefault()
+    if (refPopover && !refPopover.hidden && refPickerTrigger === trigger) {
+      closeRefPicker(true) // second click on the same button toggles it closed
+    } else {
+      openRefPicker(trigger)
+    }
+    return
+  }
+  // Click-outside: dismiss (no focus return — the user is going elsewhere).
+  if (refPopover && !refPopover.hidden && !e.target.closest("#ref-picker-popover")) {
+    closeRefPicker(false)
+  }
+})
+
+// Escape closes + returns focus to the field, ahead of the other Escape owners.
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if (e.key === "Escape" && refPopover && !refPopover.hidden) {
+      e.preventDefault()
+      e.stopPropagation()
+      closeRefPicker(true)
+    }
+  },
+  true
+)
+
+// Keep the popover glued to its trigger through outer scroll/resize (ignore the
+// popover's own list scroll).
+window.addEventListener("resize", () => {
+  if (refPopover && !refPopover.hidden && refPickerTrigger) positionRefPopover(refPickerTrigger)
+})
+document.addEventListener(
+  "scroll",
+  (e) => {
+    if (!refPopover || refPopover.hidden || !refPickerTrigger) return
+    if (e.target && e.target.closest && e.target.closest("#ref-picker-popover")) return
+    positionRefPopover(refPickerTrigger)
+  },
+  true
+)
+
 // Optimistically pull a user's row from the pane's co-assignee list — used when
 // they're promoted to PRIMARY (a person can't be both). The list is the same
 // hook-owned (phx-update="ignore") <ul> the CoAssignees hook drives, so we touch
