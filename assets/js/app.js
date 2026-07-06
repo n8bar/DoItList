@@ -25,6 +25,7 @@ import {LiveSocket} from "phoenix_live_view"
 import {hooks as colocatedHooks} from "phoenix-colocated/doit"
 import topbar from "../vendor/topbar"
 import DoitRollup from "./rollup.js"
+import {segments} from "./refs.js"
 
 const {computeRollup, computeDoneCascade} = DoitRollup
 
@@ -1971,6 +1972,141 @@ function applyRowEcho(t) {
 document.addEventListener("input", (e) => applyRowEcho(e.target))
 // Reused by the colocated TaskKeys hook for the keyboard P/A step (can't import).
 window.DoitRowEcho = applyRowEcho
+
+// ---------------------------------------------------------------------------
+// Cross-reference (%-notation) READ path — Wave 1: render + navigate.
+//
+// Titles/descriptions are STORED with resolved tokens `%⟨<id>⟩` (angle brackets
+// U+27E8/U+27E9) and the server renders that raw string straight into
+// [data-task-title] / [data-task-description]. Here we turn each token into a
+// live link labelled with the referenced task's CURRENT tree number, and a click
+// selects + scrolls to it. Pure `segments()` (refs.js) does the parse; the DOM is
+// the sole source of truth for id -> label (read live from each row's
+// [data-copy-index]), so a re-number is reflected with no server round trip.
+//
+// Idempotent + morphdom-safe: a server patch RESETS a changed element back to the
+// raw token text (our nodes wiped), and the tree hook re-runs the render; an
+// unchanged element keeps our nodes and only has its labels refreshed in place.
+// Styling rides Tailwind utilities written as literal strings so the
+// `@source "../js"` scan generates them (no app.css edit).
+const REF_LINK_CLASS =
+  "doit-ref text-emerald-700 dark:text-emerald-400 hover:underline decoration-dotted underline-offset-2 cursor-pointer"
+const REF_DEAD_CLASS = "doit-ref-dead text-zinc-400 dark:text-zinc-500 cursor-default"
+
+// id -> label ("1.5.1") for every row in the tree, read from each row's OWN
+// [data-copy-index] (descendant rows carry their own, so bind each label to the
+// nearest enclosing li[data-task-id]). Empty when Initiative numbering is off.
+function buildRefLabelMap() {
+  const map = new Map()
+  document.querySelectorAll("[data-copy-index]").forEach((el) => {
+    const li = el.closest("li[data-task-id]")
+    if (li) map.set(Number(li.dataset.taskId), el.getAttribute("data-copy-index"))
+  })
+  return map
+}
+
+// The DOM node for one `%⟨id⟩` token, given a prebuilt id->label map:
+//   * resolvable label     -> clickable <a> showing the number (e.g. "1.5.1")
+//   * live row, no label   -> clickable <a> showing "↗"  (numbering off)
+//   * unresolved (no row)  -> muted, inert <span> showing "%?"
+// The raw id is never surfaced to the reader.
+function buildRefNode(id, map) {
+  const label = map.has(id) ? map.get(id) : null
+  const live = !!document.getElementById("task-" + id)
+  if (label != null || live) {
+    const a = document.createElement("a")
+    a.className = REF_LINK_CLASS
+    a.dataset.taskId = String(id)
+    a.setAttribute("role", "link")
+    a.textContent = label != null ? label : "↗"
+    return a
+  }
+  const span = document.createElement("span")
+  span.className = REF_DEAD_CLASS
+  span.dataset.taskId = String(id)
+  span.title = "Referenced task not found"
+  span.textContent = "%?"
+  return span
+}
+
+// Render one [data-task-title]/[data-task-description] from its RAW text.
+// Already-rendered elements (they hold our nodes, so textContent is no longer the
+// raw token string) are NOT re-parsed — we only refresh each ref's label in place
+// so numbers stay live across re-orders. Ref-less prose is left as the server's
+// text node, untouched.
+function renderRefEl(el, map) {
+  if (el.querySelector(".doit-ref, .doit-ref-dead")) {
+    el.querySelectorAll(".doit-ref, .doit-ref-dead").forEach((node) => {
+      const fresh = buildRefNode(Number(node.dataset.taskId), map)
+      if (
+        fresh.tagName !== node.tagName ||
+        fresh.className !== node.className ||
+        fresh.textContent !== node.textContent
+      ) {
+        node.replaceWith(fresh)
+      }
+    })
+    return
+  }
+  const segs = segments(el.textContent)
+  if (!segs.some((s) => s.type === "ref")) return
+  const frag = document.createDocumentFragment()
+  segs.forEach((s) => {
+    frag.appendChild(
+      s.type === "text" ? document.createTextNode(s.value) : buildRefNode(s.id, map)
+    )
+  })
+  el.replaceChildren(frag)
+}
+
+// Re-render every title/description in `root` (defaults to the whole document).
+// Cheap + idempotent, so it's safe to re-run after every tree patch.
+function renderTaskRefs(root) {
+  const map = buildRefLabelMap()
+  ;(root || document)
+    .querySelectorAll("[data-task-title], [data-task-description]")
+    .forEach((el) => renderRefEl(el, map))
+}
+window.DoitRenderTaskRefs = renderTaskRefs
+
+// Expand any collapsed ancestors of a task so it can be scrolled into view —
+// derived from the DOM (walk up through the enclosing children <ul>s) and applied
+// exactly like the deep-link / keyboard incantation (localStorage + collapsed-peek
+// + aria-expanded), so the expand survives the post-load collapse-guard pass.
+function expandRefAncestors(id) {
+  let li = document.getElementById("task-" + id)
+  while (li) {
+    const ul = li.closest('ul[id^="children-"]')
+    if (!ul) break
+    const aid = ul.id.slice("children-".length)
+    const btn = document.getElementById("collapse-" + aid)
+    const init = ul.dataset.initiativeId || (btn && btn.dataset.initiativeId)
+    if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0")
+    ul.classList.remove("collapsed-peek")
+    if (btn) btn.setAttribute("aria-expanded", "true")
+    li = document.getElementById("task-" + aid)
+  }
+}
+
+// Click a %-reference: select + scroll to the referenced task, expanding any
+// collapsed ancestors first. The row-click selection handler already ignores
+// clicks on <a>, so this never double-fires with row selection; dead refs are a
+// <span> (not matched) and stay inert row text. Mirrors the .TaskKeys select +
+// scroll primitive (DoitSelection.set + DoitPush("select_task")).
+document.addEventListener("click", (e) => {
+  const ref = e.target.closest("a.doit-ref[data-task-id]")
+  if (!ref) return
+  e.preventDefault()
+  const id = ref.dataset.taskId
+  if (!id || !document.getElementById("task-" + id)) return
+  expandRefAncestors(id)
+  // Defer a frame so just-expanded rows are laid out before scrollIntoView.
+  requestAnimationFrame(() => {
+    if (!document.getElementById("task-" + id)) return
+    if (window.DoitSelection) window.DoitSelection.set(id, {scroll: true})
+    if (window.DoitPush) window.DoitPush("select_task", {id})
+  })
+})
 
 // Optimistically pull a user's row from the pane's co-assignee list — used when
 // they're promoted to PRIMARY (a person can't be both). The list is the same
@@ -4963,8 +5099,16 @@ Hooks.TreeWidth = {
       attributeFilter: ["class"],
     })
     this.recompute()
+    // %-notation read path: render tokens -> links on mount and after every tree
+    // patch. updated() fires whenever the server patches anything in this subtree
+    // (a title/description edit, a re-number) — morphdom first resets the changed
+    // element to its raw token text, then this re-renders the links (and refreshes
+    // labels on every other row so numbers stay live). Driven off the SAME
+    // updated() TreeWidth already relies on for content patches — NOT the
+    // MutationObserver above, which would re-trigger on our own DOM writes.
+    renderTaskRefs(this.el)
   },
-  updated() { this.schedule() },
+  updated() { this.schedule(); renderTaskRefs(this.el) },
   destroyed() {
     window.removeEventListener("resize", this.onResize)
     if (this.observer) this.observer.disconnect()
@@ -6078,6 +6222,15 @@ liveSocket.connect()
 // >> liveSocket.enableLatencySim(1000)  // enabled for duration of browser session
 // >> liveSocket.disableLatencySim()
 window.liveSocket = liveSocket
+
+// Render %-references on the server-rendered (pre-connect) HTML so tokens never
+// flash raw in the dead window before the tree hook mounts. Idempotent with the
+// hook's own render on mount.
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => renderTaskRefs(document))
+} else {
+  renderTaskRefs(document)
+}
 
 // The lines below enable quality of life phoenix_live_reload
 // development features:
