@@ -3716,8 +3716,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
                         this.form.addEventListener("submit", (e) => {
                           e.preventDefault();
-                          const body = this.input.value.trim();
-                          if (!body) return;
+                          const raw = this.input.value.trim();
+                          if (!raw) return;
+                          // Resolve `%label` refs to their `%⟨id⟩` token form before the
+                          // echo + broadcast (Wave 3): the token rides the EPHEMERAL
+                          // broadcast body; each receiver renders it against its OWN tree
+                          // (an off-tree ref falls back to %?). Nothing is persisted.
+                          const body = window.DoitRefTransformForSave
+                            ? window.DoitRefTransformForSave(raw)
+                            : raw;
                           // Optimistic own-line echo (§6.7): show the sent bubble at submit
                           // instead of waiting for the PubSub broadcast to round-trip back.
                           // A client nonce ties the pending node to the real line so we can
@@ -3734,6 +3741,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                           this.input.value = "";
                           this.input.focus();
                         });
+
+                        // Render tokens -> links in any server-rendered message bodies
+                        // present at mount (Wave 3). Chat starts empty, so this is
+                        // usually a no-op; received lines render via updated() below.
+                        if (window.DoitRenderRefs) window.DoitRenderRefs(document);
                       },
                       // Build + append a pending own-message node matching the server's
                       // own-message markup (avatar from data-my-*), dimmed while pending.
@@ -3766,6 +3778,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                         row.appendChild(av);
                         row.appendChild(wrap);
                         this.log.appendChild(row);
+                        // Render the token -> link in the optimistic bubble at once
+                        // (Wave 3): a direct DOM append fires no LiveView patch, so
+                        // updated()'s renderAllRefs wouldn't otherwise catch it.
+                        if (window.DoitRenderRefs) window.DoitRenderRefs(row);
                         this.scrollToBottom();
                       },
                       // Remove any pending echo whose nonce now appears on a real
@@ -3825,6 +3841,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                         // Drop the dimmed pending bubble so the canonical line supersedes
                         // it — no duplicate, and the dimmed "pending" look clears.
                         this.reconcileEchoes();
+                        // Render tokens -> links on any newly-arrived (broadcast) message
+                        // bodies (Wave 3). Idempotent + document-wide, so it also
+                        // re-resolves chat labels after a tree re-number while shown.
+                        if (window.DoitRenderRefs) window.DoitRenderRefs(document);
                         // A new message bumps the server's monotonic chat-log id. A
                         // system line (the alone-case "nobody's here" notice) also bumps
                         // it, but it's the sender's own local notice — never pop / flash /
@@ -6676,7 +6696,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mb-2">
           Loading…
         </p>
-        <ul data-async-list data-comment-list class="space-y-2 mb-2">
+        <ul
+          id="comment-list"
+          phx-hook="CommentRefs"
+          data-async-list
+          data-comment-list
+          class="space-y-2 mb-2"
+        >
           <%!-- Open/close of the inline editor is CLIENT-OWNED (m02.09 WL3 3.3,
                §6.5): the <li> carries data-keep="comment-edit" so a list-refresh
                patch can't snap an open editor shut, and the "comment-edit"
@@ -6708,7 +6734,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 <%!-- Display block — shown when NOT editing (the applier toggles
                      `hidden` against DoitState.commentEditId). --%>
                 <div data-comment-display>
-                  <div class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap">{c.body}</div>
+                  <div
+                    data-comment-body
+                    class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap"
+                  >
+                    {c.body}
+                  </div>
                   <div class="mt-0.5 flex items-center gap-2 text-xs">
                     <button
                       :if={c.versions != []}
@@ -6758,6 +6789,8 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   class="mt-1 flex flex-col gap-1"
                 >
                   <textarea
+                    id={"edit-comment-textarea-#{c.id}"}
+                    phx-hook="CommentEditRef"
                     name="comment[body]"
                     aria-label="Edit comment"
                     rows="2"
@@ -6827,7 +6860,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   <span class="text-zinc-400 dark:text-zinc-500">
                     <.local_time value={v.inserted_at} format="%b %-d %H:%M" />
                   </span>
-                  <div class="whitespace-pre-wrap">{v.body}</div>
+                  <div data-comment-body class="whitespace-pre-wrap">{v.body}</div>
                 </li>
               </ul>
             </div>

@@ -2101,15 +2101,28 @@ function renderRefEl(el, map) {
   el.replaceChildren(frag)
 }
 
-// Re-render every title/description in `root` (defaults to the whole document).
-// Cheap + idempotent, so it's safe to re-run after every tree patch.
-function renderTaskRefs(root) {
+// Re-render every ref-bearing surface in `root` (defaults to the whole
+// document): task titles/descriptions AND comment/chat message bodies (Wave 3).
+// ONE renderer over all four surfaces — identical parse/label logic
+// (renderRefEl), so a `%⟨id⟩` token renders the same wherever it appears. Cheap
+// + idempotent, so it's safe to re-run after every tree patch, comment-list
+// refresh, or chat message.
+function renderAllRefs(root) {
   const map = buildRefLabelMap()
   ;(root || document)
-    .querySelectorAll("[data-task-title], [data-task-description]")
+    .querySelectorAll(
+      "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body]"
+    )
     .forEach((el) => renderRefEl(el, map))
 }
-window.DoitRenderTaskRefs = renderTaskRefs
+// Back-compat alias (the Wave 1/2 name) + the Wave 3 canonical name, both
+// pointing at the unified renderer so the colocated .Chat hook (a separate
+// bundle, no module scope) can drive it via window.
+window.DoitRenderTaskRefs = renderAllRefs
+window.DoitRenderRefs = renderAllRefs
+// Resolve a user-typed body (`%label`) to its stored/broadcast token form
+// (`%⟨id⟩`) for the colocated chat hook, which can't import module scope.
+window.DoitRefTransformForSave = (text) => transformForSave(text, resolveRefPath)
 
 // Expand any collapsed ancestors of a task so it can be scrolled into view —
 // derived from the DOM (walk up through the enclosing children <ul>s) and applied
@@ -2744,14 +2757,22 @@ document.addEventListener(
     const form = e.target.closest("[data-add-comment-form]")
     if (!form) return
     const input = form.querySelector("[name='comment[body]']")
-    const body = input ? input.value.trim() : ""
+    const raw = input ? input.value.trim() : ""
     if (!window.DoitPush) return // no push channel → let the native phx-submit run
     e.preventDefault()
     e.stopImmediatePropagation() // stop LiveView's own phx-submit push
-    if (!body) return // empty → nothing to send (the server would just reject it)
+    if (!raw) return // empty → nothing to send (the server would just reject it)
+    // Resolve any `%label` refs to their stored `%⟨id⟩` token BEFORE the push, so
+    // the server persists the id-anchored form (Wave 3 — no server change, no
+    // edge; the comment body is just a string the client transforms).
+    const body = transformForSave(raw, resolveRefPath)
     const list = document.querySelector("[data-comment-list]")
     const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
-    if (list) list.appendChild(buildPendingComment(echoId, body, form.dataset))
+    if (list) {
+      const li = buildPendingComment(echoId, body, form.dataset)
+      list.appendChild(li)
+      renderAllRefs(li) // show the token -> link in the optimistic bubble at once
+    }
     if (input) input.value = ""
     window.DoitPush(
       "add_comment",
@@ -2764,6 +2785,26 @@ document.addEventListener(
     )
   },
   true // capture phase: run before LiveView's bubble-phase phx-submit handler
+)
+
+// EDIT-COMMENT (Wave 3): save_comment is a native phx-submit (server-gated, and
+// left that way). In CAPTURE phase — before LiveView's bubble-phase submit
+// handler serializes the form (the same ordering the add-comment intercept
+// above and RefField's blur transform already rely on) — rewrite the textarea's
+// `%label` refs to their stored `%⟨id⟩` tokens, so the server persists the
+// id-anchored form. We do NOT preventDefault: LiveView's own phx-submit still
+// runs and saves the now-token value.
+document.addEventListener(
+  "submit",
+  (e) => {
+    const form = e.target.closest("[data-comment-edit-form]")
+    if (!form) return
+    const ta = form.querySelector("textarea[name='comment[body]']")
+    if (!ta) return
+    const next = transformForSave(ta.value, resolveRefPath)
+    if (next !== ta.value) ta.value = next
+  },
+  true // capture: precede LiveView's bubble-phase phx-submit serialization
 )
 
 // Build a dimmed pending comment <li> mirroring the rendered row (avatar +
@@ -2786,6 +2827,7 @@ function buildPendingComment(echoId, body, d) {
   head.appendChild(av)
   head.appendChild(meta)
   const bodyEl = document.createElement("div")
+  bodyEl.setAttribute("data-comment-body", "") // so renderAllRefs finds it (Wave 3)
   bodyEl.className = "text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap"
   bodyEl.textContent = body
   li.appendChild(head)
@@ -5148,9 +5190,11 @@ Hooks.TreeWidth = {
     // labels on every other row so numbers stay live). Driven off the SAME
     // updated() TreeWidth already relies on for content patches — NOT the
     // MutationObserver above, which would re-trigger on our own DOM writes.
-    renderTaskRefs(this.el)
+    // Renders DOCUMENT-WIDE (Wave 3), not just this tree, so a re-number also
+    // refreshes comment + chat ref labels while they're shown.
+    renderAllRefs(document)
   },
-  updated() { this.schedule(); renderTaskRefs(this.el) },
+  updated() { this.schedule(); renderAllRefs(document) },
   destroyed() {
     window.removeEventListener("resize", this.onResize)
     if (this.observer) this.observer.disconnect()
@@ -6101,6 +6145,36 @@ Hooks.SortRecall = {
 //
 // No `phx-update="ignore"`: the server value must keep flowing so a save reply
 // (the DB re-renders value= with the freshly stored tokens) re-drives rehydrate.
+
+// Comment READ path (Wave 3): render tokens -> links whenever the comment list
+// re-renders. mounted() = pane open; updated() = a comment add/edit/delete
+// refresh_selected patch (this hook on the <ul> fires updated() when its child
+// <li>s patch — the same container-hook behaviour TreeWidth relies on). This is
+// "the comment-list update path". renderAllRefs is idempotent + document-wide,
+// so re-running refreshes every surface's labels in place.
+Hooks.CommentRefs = {
+  mounted() { renderAllRefs(document) },
+  updated() { renderAllRefs(document) },
+}
+
+// Comment-edit textarea WRITE path (Wave 3): the server renders the stored
+// `%⟨id⟩` tokens into the box; show them as `%label` for editing (mirrors
+// RefField.rehydrate). Rehydrate on mount (the editor is rendered statically,
+// then revealed client-side) and on updated (a comment-list refresh resets
+// value= back to raw tokens). The save transform back to tokens is the
+// capture-phase submit intercept on [data-comment-edit-form], NOT a blur here.
+Hooks.CommentEditRef = {
+  mounted() { this.rehydrate() },
+  updated() { this.rehydrate() },
+  rehydrate() {
+    // U+27E8 (⟨) only appears inside a `%⟨id⟩` token, so its absence means
+    // nothing to rehydrate — a user mid-typing `%1.5` is never disturbed.
+    if (this.el.value.indexOf("⟨") === -1) return
+    const next = rehydrate(this.el.value, refLabelOf)
+    if (next !== this.el.value) this.el.value = next
+  },
+}
+
 Hooks.RefField = {
   mounted() {
     // Show %label on first paint (the server-rendered value is raw tokens).
@@ -6313,9 +6387,9 @@ window.liveSocket = liveSocket
 // flash raw in the dead window before the tree hook mounts. Idempotent with the
 // hook's own render on mount.
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", () => renderTaskRefs(document))
+  document.addEventListener("DOMContentLoaded", () => renderAllRefs(document))
 } else {
-  renderTaskRefs(document)
+  renderAllRefs(document)
 }
 
 // The lines below enable quality of life phoenix_live_reload
