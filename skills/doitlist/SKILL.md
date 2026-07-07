@@ -1,6 +1,6 @@
 ---
-name: doit-list
-description: Use when representing a code repository's roadmap, milestones, or ongoing todos as a Do It List Initiative through the doit-list MCP tools — before creating or restructuring Initiatives, tasks, comments, or their numbering.
+name: doitlist
+description: Use when representing a code repository's roadmap, milestones, or ongoing todos as a Do It List Initiative through the doitlist MCP tools — before creating or restructuring Initiatives, tasks, comments, or their numbering.
 ---
 
 # Do It List
@@ -53,7 +53,7 @@ Every level is a Task in the same tree. Use **Worklist** as the name for the lev
 
 ## Quick Reference
 
-All tools and resources below are on the `doit-list` MCP server.
+All tools and resources below are on the `doitlist` MCP server.
 
 | Intent | Tool / resource |
 |---|---|
