@@ -2172,19 +2172,13 @@ window.DoitRenderRefs = renderAllRefs
 window.DoitRefTransformForSave = (text) => transformForSave(text, resolveRefPath)
 
 // ---------------------------------------------------------------------------
-// Cross-reference save-confirm (WL3 item 3.5) — a CLIENT-SIDE confirm
-// (UX_GUARDRAILS 6.5) that surfaces what each `%` resolved to before a save
-// commits, so a valid-but-wrong path (one that lands on a real but unintended
-// task) is caught. Firing rule (option 1): only when the resolved-ref SET
-// CHANGED since the last commit — an already-confirmed field re-blurs silently.
-// The gate lives in the RefField hook (fields) and the comment submit intercepts
-// (comments); this block is the shared modal + helpers. Chat is exempt (sends
-// instantly). Suppression is pure client localStorage (no round-trip), mirroring
-// the create-flip skip.
-const REF_CONFIRM_SKIP_KEY = "doit:confirm-skip:ref-confirm"
-const refConfirmSuppressed = () => {
-  try { return localStorage.getItem(REF_CONFIRM_SKIP_KEY) === "1" } catch (_e) { return false }
-}
+// Cross-reference save toast (WL3 item 3.5) — the save is OPTIMISTIC (never
+// blocked); when a save/blur resolves a NEW/changed `%`-ref set, a non-blocking
+// toast reports what got linked ("Linked <label> — <title>, ..."), so a
+// valid-but-wrong target is *visible* without treating every valid ref as guilty.
+// Fires only when the resolved-ref SET CHANGED since the last commit (an
+// unchanged re-save is silent). Lives in the RefField hook (fields) and the
+// comment submit intercepts (comments); chat is exempt (sends instantly).
 
 // The ids a (transformed, token-bearing) string references, via the shared
 // `segments()` parse — no separate import needed.
@@ -2199,7 +2193,7 @@ function refSetKey(ids) {
 }
 
 // {id, label, title} per referenced id, read LIVE from the tree DOM (the same
-// source the renderer uses), so the confirm shows the current number + title.
+// source the renderer uses), so the toast shows the current number + title.
 function refDetails(ids) {
   const map = buildRefLabelMap()
   return [...new Set(ids)].map((id) => {
@@ -2213,70 +2207,35 @@ function refDetails(ids) {
   })
 }
 
-// Build Phoenix-nested form params from a control name: "task[title]" ->
-// {task: {title: value}}, "subtitle" -> {subtitle: value}. Used by the commit
-// pushEvent so a held save resumes without relying on a (programmatic) blur to
-// re-drive LiveView's debounce flush.
-function setNestedParam(obj, name, value) {
-  const parts = name.replace(/\]/g, "").split("[")
-  let cur = obj
-  for (let i = 0; i < parts.length - 1; i++) {
-    if (typeof cur[parts[i]] !== "object" || cur[parts[i]] === null) cur[parts[i]] = {}
-    cur = cur[parts[i]]
-  }
-  cur[parts[parts.length - 1]] = value
+// Self-dismissing toast listing what a save just linked. Pure client-side +
+// instant (the client already resolved the refs). textContent only — task titles
+// are user data, so never innerHTML. Mirrors showDragHintToast's chrome.
+function showRefToast(details) {
+  if (!details.length) return
+  const prev = document.getElementById("ref-link-toast")
+  if (prev) prev.remove()
+  const toast = document.createElement("div")
+  toast.id = "ref-link-toast"
+  toast.setAttribute("role", "status")
+  toast.className =
+    "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-xs px-3 py-2 rounded-lg " +
+    "border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 " +
+    "text-sm text-zinc-700 dark:text-zinc-200 shadow-lg whitespace-pre-line"
+  const lines = details.map((d) => (d.title ? d.label + " — " + d.title : d.label))
+  toast.textContent = "Linked " + lines.join(",\n ")
+  document.body.appendChild(toast)
+  setTimeout(() => toast.remove(), 5000)
 }
 
-// One-at-a-time modal state: {onProceed, onCancel, modal}. Proceed/Cancel are the
-// caller's commit / abort continuations, run once the user decides.
-let refConfirmState = null
-function openRefConfirm(details, onProceed, onCancel) {
-  const modal = document.getElementById("ref-confirm")
-  if (!modal) { onProceed(); return } // no modal in the DOM -> never block a save
-  const list = modal.querySelector("[data-ref-list]")
-  if (list) {
-    list.innerHTML = ""
-    details.forEach((d) => {
-      const li = document.createElement("li")
-      li.className = "truncate"
-      const label = document.createElement("span")
-      label.className = "font-semibold text-emerald-700 dark:text-emerald-400"
-      label.textContent = d.label
-      li.appendChild(label)
-      if (d.title) li.appendChild(document.createTextNode(" — " + d.title))
-      list.appendChild(li)
-    })
-  }
-  const cb = modal.querySelector("[data-ref-dont-show]")
-  if (cb) cb.checked = false
-  refConfirmState = {onProceed, onCancel, modal}
-  modal.hidden = false
-  const cancel = modal.querySelector("[data-ref-cancel]")
-  if (cancel) cancel.focus()
+// Fields/comments call this after a save whose resolved-ref set may have changed:
+// toast the current set iff it's non-empty AND differs from `prevKey`. Returns
+// the new key so the caller can store it as the committed baseline.
+function maybeToastRefs(text, prevKey) {
+  const ids = refIdsOf(text)
+  const key = refSetKey(ids)
+  if (ids.length && key !== prevKey) showRefToast(refDetails(ids))
+  return key
 }
-function closeRefConfirm(proceed) {
-  const st = refConfirmState
-  if (!st) return
-  refConfirmState = null
-  const cb = st.modal.querySelector("[data-ref-dont-show]")
-  if (proceed && cb && cb.checked) {
-    try { localStorage.setItem(REF_CONFIRM_SKIP_KEY, "1") } catch (_e) {}
-  }
-  st.modal.hidden = true
-  if (proceed) st.onProceed()
-  else st.onCancel()
-}
-document.addEventListener("click", (e) => {
-  const modal = document.getElementById("ref-confirm")
-  if (!modal || modal.hidden) return
-  if (e.target === modal || e.target.closest("[data-ref-cancel]")) { closeRefConfirm(false); return }
-  if (e.target.closest("[data-ref-proceed]")) closeRefConfirm(true)
-})
-document.addEventListener("keydown", (e) => {
-  if (e.key !== "Escape") return
-  const modal = document.getElementById("ref-confirm")
-  if (modal && !modal.hidden) closeRefConfirm(false)
-})
 
 // Expand any collapsed ancestors of a task so it can be scrolled into view —
 // derived from the DOM (walk up through the enclosing children <ul>s) and applied
@@ -3236,33 +3195,25 @@ document.addEventListener(
     // the server persists the id-anchored form (Wave 3 — no server change, no
     // edge; the comment body is just a string the client transforms).
     const body = transformForSave(raw, resolveRefPath)
-    const commit = () => {
-      const list = document.querySelector("[data-comment-list]")
-      const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
-      if (list) {
-        const li = buildPendingComment(echoId, body, form.dataset)
-        list.appendChild(li)
-        renderAllRefs(li) // show the token -> link in the optimistic bubble at once
+    const list = document.querySelector("[data-comment-list]")
+    const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+    if (list) {
+      const li = buildPendingComment(echoId, body, form.dataset)
+      list.appendChild(li)
+      renderAllRefs(li) // show the token -> link in the optimistic bubble at once
+    }
+    if (input) input.value = ""
+    window.DoitPush(
+      "add_comment",
+      {comment: {body}, echo_id: echoId},
+      (reply) => {
+        // ok → the refresh carries the real li; pull the pending stand-in.
+        // !ok → the comment was refused (permission / empty); pull it too.
+        removePendingComment((reply && reply.echo_id) || echoId)
       }
-      if (input) input.value = ""
-      window.DoitPush(
-        "add_comment",
-        {comment: {body}, echo_id: echoId},
-        (reply) => {
-          // ok → the refresh carries the real li; pull the pending stand-in.
-          // !ok → the comment was refused (permission / empty); pull it too.
-          removePendingComment((reply && reply.echo_id) || echoId)
-        }
-      )
-    }
-    // Save-confirm (item 3.5): a new comment has no committed refs, so any
-    // resolved `%` is a change — confirm before posting (client-side, §6.5).
-    const ids = refIdsOf(body)
-    if (ids.length && !refConfirmSuppressed()) {
-      openRefConfirm(refDetails(ids), commit, () => input && input.focus())
-    } else {
-      commit()
-    }
+    )
+    // A new comment has no prior refs, so any resolved `%` is newly linked (3.5).
+    maybeToastRefs(body, "")
   },
   true // capture phase: run before LiveView's bubble-phase phx-submit handler
 )
@@ -3282,36 +3233,11 @@ document.addEventListener(
     const ta = form.querySelector("textarea[name='comment[body]']")
     if (!ta) return
     const next = transformForSave(ta.value, resolveRefPath)
-    // Bypass: the confirm's Proceed re-submitted this form — anchor the tokens
-    // and let LiveView's native phx-submit run (no hold this time).
-    if (form._refConfirmed) {
-      form._refConfirmed = false
-      if (next !== ta.value) ta.value = next
-      return
-    }
-    // Save-confirm (item 3.5): fire only when the resolved-ref set CHANGED vs the
-    // comment's currently-committed refs (firing option 1). HOLD the native
-    // submit, confirm client-side, and on Proceed re-submit (bypass above).
-    const ids = refIdsOf(next)
-    if (
-      ids.length &&
-      refSetKey(ids) !== refSetKey(committedCommentRefIds(form)) &&
-      !refConfirmSuppressed()
-    ) {
-      e.preventDefault()
-      e.stopImmediatePropagation()
-      openRefConfirm(
-        refDetails(ids),
-        () => {
-          ta.value = next
-          form._refConfirmed = true
-          form.requestSubmit()
-        },
-        () => ta.focus()
-      )
-      return
-    }
     if (next !== ta.value) ta.value = next
+    // Toast what got linked iff the resolved-ref set CHANGED vs the comment's
+    // currently-committed refs (item 3.5). The save is never blocked — LiveView's
+    // own phx-submit runs and persists the now-token value.
+    maybeToastRefs(next, refSetKey(committedCommentRefIds(form)))
   },
   true // capture: precede LiveView's bubble-phase phx-submit serialization
 )
@@ -6699,33 +6625,13 @@ Hooks.RefField = {
     // `phx-debounce="blur"`); for a given event on its target, capture-phase
     // listeners fire before bubble-phase ones, so this transform lands before
     // LiveView serializes the form — the server receives `%⟨id⟩`, not `%1.5`.
-    //
-    // Save-confirm gate (item 3.5): if the blur resolves a NEW/changed ref set,
-    // HOLD LiveView's flush (stopImmediatePropagation — our capture listener runs
-    // first) and confirm client-side. Proceed commits via a direct pushEvent of
-    // this field's tokenized value (a programmatic blur does NOT re-drive
-    // LiveView's debounce flush, so we can't just re-fire it); Cancel keeps
-    // %label and returns focus, nothing committed. Unchanged/empty/suppressed sets
-    // skip the modal and let LiveView's native blur-flush commit as before.
-    this.onBlurCapture = (e) => {
+    // The save is never blocked; if the blur resolves a NEW/changed ref set we
+    // just toast what got linked (item 3.5).
+    this.onBlurCapture = () => {
       const next = transformForSave(this.el.value, resolveRefPath)
-      const ids = refIdsOf(next)
-      const key = refSetKey(ids)
-      if (ids.length === 0 || key === this.committedRefKey || refConfirmSuppressed()) {
-        if (next !== this.el.value) this.el.value = next
-        this.tokenizeSiblings()
-        this.committedRefKey = key
-        return
-      }
-      e.stopImmediatePropagation()
-      openRefConfirm(
-        refDetails(ids),
-        () => {
-          this.commitRef(next)
-          this.committedRefKey = key
-        },
-        () => this.el.focus()
-      )
+      if (next !== this.el.value) this.el.value = next
+      this.tokenizeSiblings()
+      this.committedRefKey = maybeToastRefs(next, this.committedRefKey)
     }
     this.el.addEventListener("blur", this.onBlurCapture, true)
   },
@@ -6741,27 +6647,6 @@ Hooks.RefField = {
       const t = transformForSave(f.value, resolveRefPath)
       if (t !== f.value) f.value = t
     })
-  },
-  // Commit ONLY this field (tokenized) via a direct pushEvent — used on the
-  // confirm's Proceed. Single-field so the server's changeset casts just this
-  // key and leaves untouched siblings (and their stored tokens) alone. Routes to
-  // the field's own phx-change (subtitle) or its form's (task / initiative).
-  commitRef(next) {
-    const el = this.el
-    if (next !== el.value) el.value = next
-    const own = el.getAttribute("phx-change")
-    if (own) {
-      const p = {}
-      p[el.name] = el.value
-      this.pushEvent(own, p)
-      return
-    }
-    const form = el.form
-    const ev = form && form.getAttribute("phx-change")
-    if (!ev || !el.name) return
-    const params = {}
-    setNestedParam(params, el.name, el.value)
-    this.pushEvent(ev, params)
   },
   updated() {
     // A server patch (our own save reply, or a collab edit) resets value= to raw
