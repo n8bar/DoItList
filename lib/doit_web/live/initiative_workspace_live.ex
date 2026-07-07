@@ -4337,7 +4337,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                       class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
                     />
                   </span>
-                  <span class="truncate" data-initiative-card-field>{initiative.name}</span>
+                  <span class="truncate">{initiative.name}</span>
                 </span>
                 <div class="flex items-center gap-2 flex-none">
                   <span
@@ -5313,10 +5313,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
             </span>
-            <h1
-              data-initiative-name-body
-              class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-zinc-900 dark:group-hover:text-white"
-            >
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-zinc-900 dark:group-hover:text-white">
               {@initiative.name}
             </h1>
           </span>
@@ -5325,10 +5322,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
             </span>
-            <h1
-              data-initiative-name-body
-              class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100"
-            >
+            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">
               {@initiative.name}
             </h1>
           </span>
@@ -5871,26 +5865,17 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         phx-submit="update_initiative"
         class="space-y-3"
       >
-        <%!-- %-ref support (WL3 item 3.6): RefField rehydrates/anchors tokens in
-             the input; the picker button (top-right, over the label) inserts a
-             %ref. Save-on-blur (phx-debounce="blur") so RefField's capture-phase
-             transform lands before LiveView serializes. --%>
-        <div class="relative">
-          <.input
-            field={@form[:name]}
-            type="text"
-            label="Name"
-            required
-            disabled={not @can_edit}
-            phx-debounce="blur"
-            phx-hook="RefField"
-          />
-          <.ref_picker_button
-            :if={@can_edit}
-            target="#initiative_name"
-            class="absolute top-0 right-0"
-          />
-        </div>
+        <%!-- Name takes no %-ref: it renders inside the header's click-to-edit
+             button, where a nested ref link fights the edit affordance (WL3
+             item 3.6 reversal). Subtitle/Description keep refs. --%>
+        <.input
+          field={@form[:name]}
+          type="text"
+          label="Name"
+          required
+          disabled={not @can_edit}
+          phx-debounce="600"
+        />
 
         <%!-- Subtitle is stored in the root task's title (.05.03), so it has its
              own write path rather than riding the Initiative changeset. --%>

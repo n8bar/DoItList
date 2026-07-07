@@ -2091,7 +2091,14 @@ function renderRefEl(el, map) {
     return
   }
   const segs = segments(el.textContent)
-  if (!segs.some((s) => s.type === "ref")) return
+  if (!segs.some((s) => s.type === "ref")) {
+    // No refs, but escapes still resolve at render time (\% → %, \\ → \). Only
+    // touch the DOM when that actually changes the text, so ref-less, escape-less
+    // prose stays the server's untouched text node (the fast path).
+    const resolved = segs.map((s) => s.value).join("")
+    if (resolved !== el.textContent) el.textContent = resolved
+    return
+  }
   const frag = document.createDocumentFragment()
   segs.forEach((s) => {
     frag.appendChild(
@@ -2114,7 +2121,13 @@ const REF_CARD_CLASS = "doit-ref-card text-emerald-600 dark:text-emerald-400 cur
 function renderCardRefEl(el) {
   if (el.querySelector(".doit-ref-card")) return
   const segs = segments(el.textContent)
-  if (!segs.some((s) => s.type === "ref")) return
+  if (!segs.some((s) => s.type === "ref")) {
+    // No refs, but escapes still resolve (\% → %, \\ → \); leave escape-less text
+    // as the server's untouched node.
+    const resolved = segs.map((s) => s.value).join("")
+    if (resolved !== el.textContent) el.textContent = resolved
+    return
+  }
   const frag = document.createDocumentFragment()
   segs.forEach((s) => {
     if (s.type === "text") {
@@ -2142,7 +2155,7 @@ function renderAllRefs(root) {
   const scope = root || document
   scope
     .querySelectorAll(
-      "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body], [data-initiative-name-body], [data-initiative-subtitle-body], [data-initiative-description-body]"
+      "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body], [data-initiative-subtitle-body], [data-initiative-description-body]"
     )
     .forEach((el) => renderRefEl(el, map))
   scope
@@ -2326,7 +2339,7 @@ document.addEventListener("click", (e) => {
 // wherever the add-task form teleports in the tree.
 const REF_PICKER_FIELDS =
   '#add-task-form input[name="title"], #task-field-title, #task-field-description, ' +
-  "#initiative_name, #initiative-subtitle, #initiative_description"
+  "#initiative-subtitle, #initiative_description"
 function refEligibleField(el) {
   return el && el.matches && el.matches(REF_PICKER_FIELDS) ? el : null
 }
