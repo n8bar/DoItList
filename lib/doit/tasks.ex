@@ -2356,6 +2356,58 @@ defmodule DoIt.Tasks do
   @ref_token_regex ~r/%⟨(\d+)⟩/
 
   @doc """
+  The task ids referenced by `%⟨id⟩` tokens in `text`, deduped in first-seen
+  order (m03.03). `nil` / ref-less text → `[]`. Used to detect and summarize a
+  save's cross-references.
+  """
+  def reference_ids(nil), do: []
+
+  def reference_ids(text) when is_binary(text) do
+    @ref_token_regex
+    |> Regex.scan(text)
+    |> Enum.map(fn [_, id] -> String.to_integer(id) end)
+    |> Enum.uniq()
+  end
+
+  @doc """
+  Remove `%⟨id⟩` reference tokens from `text` and collapse the whitespace they
+  leave — for display surfaces (e.g. the "Linked …" flash) where the raw token
+  must never show. The DOM renderer resolves tokens to live links; this is the
+  server-side equivalent for plain-text contexts.
+  """
+  def strip_reference_tokens(nil), do: ""
+
+  def strip_reference_tokens(text) when is_binary(text) do
+    text
+    |> String.replace(@ref_token_regex, "")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+  end
+
+  @doc """
+  Walk a loaded nested tree once → `%{task_id => %{index: label, title: title}}`,
+  resolving each task's LIVE positional index label (m02.07) + title by stable id.
+  The single lookup shared by the API serializer's cross_references and the
+  workspace's "Linked …" save flash — no re-walk, no re-query.
+  """
+  def label_index(nodes, index_style), do: build_label_index(nodes, index_style, [], %{})
+
+  defp build_label_index(nodes, index_style, parent_positions, acc) do
+    nodes
+    |> Enum.with_index()
+    |> Enum.reduce(acc, fn {%Task{} = task, position}, acc ->
+      positions = parent_positions ++ [position]
+
+      acc
+      |> Map.put(task.id, %{
+        index: DoIt.Tasks.Index.label(positions, index_style),
+        title: task.title
+      })
+      |> then(&build_label_index(task.children, index_style, positions, &1))
+    end)
+  end
+
+  @doc """
   Reconcile the cross-reference `task_links` FROM `task` with the `%⟨id⟩` tokens
   embedded in its (already-updated) title + description (m03.03).
 

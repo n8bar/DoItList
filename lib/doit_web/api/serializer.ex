@@ -218,7 +218,7 @@ defmodule DoItWeb.Api.Serializer do
     ctx = %{
       index_style: index_style,
       co_ids: co_ids,
-      label_index: build_label_index(tree, index_style, [], %{}),
+      label_index: DoIt.Tasks.label_index(tree, index_style),
       outgoing: adjacency(links, :outgoing),
       incoming: adjacency(links, :incoming)
     }
@@ -265,24 +265,6 @@ defmodule DoItWeb.Api.Serializer do
         referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
         children: task_nodes(task.children, ctx, positions, depth + 1)
       }
-    end)
-  end
-
-  # Walk the tree once, recording each task's live index label + title keyed by
-  # its stable id — the lookup that resolves a cross-reference's target/source to
-  # its CURRENT label without re-walking or re-querying.
-  defp build_label_index(nodes, index_style, parent_positions, acc) do
-    nodes
-    |> Enum.with_index()
-    |> Enum.reduce(acc, fn {%Task{} = task, position}, acc ->
-      positions = parent_positions ++ [position]
-
-      acc
-      |> Map.put(task.id, %{
-        index: DoIt.Tasks.Index.label(positions, index_style),
-        title: task.title
-      })
-      |> then(&build_label_index(task.children, index_style, positions, &1))
     end)
   end
 

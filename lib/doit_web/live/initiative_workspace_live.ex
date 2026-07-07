@@ -1140,10 +1140,14 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         {:ok, _root} ->
           # The field already shows the typed text, so the SAVE is the invisible
           # part (§6.7). Pulse a brief "Saved" tick beside the input so the
-          # debounced write is acknowledged, not silent.
+          # debounced write is acknowledged, not silent; plus a "Linked …" flash
+          # when this save added/changed a `%`-reference (item 3.5).
+          msg = ref_link_message(socket, socket.assigns.subtitle, subtitle)
+
           {:noreply,
            socket
            |> assign(:subtitle, Initiatives.subtitle(socket.assigns.initiative))
+           |> maybe_flash_links(msg)
            |> push_event("subtitle-saved", %{})}
 
         {:error, _} ->
@@ -1293,12 +1297,14 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       case Initiatives.update_initiative(initiative, params) do
         {:ok, updated} ->
           form = to_form(Initiatives.change_initiative(updated))
+          msg = ref_link_message(socket, "#{initiative.description}", "#{updated.description}")
 
           {:noreply,
            socket
            |> assign(:initiative, updated)
            |> assign(:initiative_form, form)
-           |> assign(:page_title, updated.name)}
+           |> assign(:page_title, updated.name)
+           |> maybe_flash_links(msg)}
 
         {:error, cs} ->
           {:noreply,
@@ -1420,8 +1426,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       socket.assigns.can_edit ->
         case Tasks.update_task(task, user, params) do
-          {:ok, _updated} ->
-            {:noreply, socket |> put_flash(:info, "Saved.") |> patch_task(task.id)}
+          {:ok, updated} ->
+            msg =
+              ref_link_message(
+                socket,
+                "#{task.title} #{task.description}",
+                "#{updated.title} #{updated.description}"
+              ) || "Saved."
+
+            {:noreply, socket |> put_flash(:info, msg) |> patch_task(task.id)}
 
           {:error, cs} ->
             {:noreply, put_flash(socket, :error, "Couldn't save task: #{summarize_errors(cs)}.")}
@@ -1592,7 +1605,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       case Tasks.add_comment(task, user, body) do
         {:ok, comment} ->
-          {:reply, %{ok: true, echo_id: echo_id, id: comment.id}, refresh_selected(socket)}
+          # A new comment has no prior refs, so any resolved `%` is newly linked.
+          msg = ref_link_message(socket, "", body)
+
+          {:reply, %{ok: true, echo_id: echo_id, id: comment.id},
+           maybe_flash_links(refresh_selected(socket), msg)}
 
         {:error, _cs} ->
           {:reply, %{ok: false, echo_id: echo_id},
@@ -2064,9 +2081,18 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   defp do_save_comment(socket, cid, id, body) do
     user = socket.assigns.current_user
 
+    old_body =
+      case Tasks.get_comment(cid) do
+        %{body: b} -> b
+        _ -> ""
+      end
+
     case Tasks.edit_comment(cid, user, body) do
       {:ok, _comment} ->
-        {:noreply, socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+        msg = ref_link_message(socket, old_body, body)
+
+        {:noreply,
+         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected() |> maybe_flash_links(msg)}
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
@@ -4625,6 +4651,31 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # payload. Honor an explicit id when present so the edit ALWAYS lands on its own
   # task (never the wrong one, never a silent drop); guard it to this initiative's
   # tree and fall back to the current selection for a stale/absent id.
+  # A "Linked <label> — <title>, ..." info flash when a save's resolved
+  # `%`-reference set CHANGED and is non-empty, else nil (m03.03 item 3.5 —
+  # optimistic, never blocking). Labels + titles resolve off the already-loaded
+  # `:tree` assign (no query); a dead / foreign / dropped id contributes nothing.
+  defp ref_link_message(socket, old_text, new_text) do
+    new_ids = Tasks.reference_ids(new_text)
+
+    if new_ids != [] and Enum.sort(new_ids) != Enum.sort(Tasks.reference_ids(old_text)) do
+      index = Tasks.label_index(socket.assigns.tree, socket.assigns.initiative.index_style)
+
+      parts =
+        new_ids
+        |> Enum.map(&Map.get(index, &1))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.map(fn %{index: label, title: title} ->
+          "#{label} — #{Tasks.strip_reference_tokens(title)}"
+        end)
+
+      if parts != [], do: "Linked " <> Enum.join(parts, ", ")
+    end
+  end
+
+  defp maybe_flash_links(socket, nil), do: socket
+  defp maybe_flash_links(socket, msg), do: put_flash(socket, :info, msg)
+
   defp update_task_target(socket, payload) do
     with id when not is_nil(id) <- parse_id(payload["id"]),
          %Task{} = task <- Tasks.get_task(id),

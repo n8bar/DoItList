@@ -2171,71 +2171,11 @@ window.DoitRenderRefs = renderAllRefs
 // (`%⟨id⟩`) for the colocated chat hook, which can't import module scope.
 window.DoitRefTransformForSave = (text) => transformForSave(text, resolveRefPath)
 
-// ---------------------------------------------------------------------------
-// Cross-reference save toast (WL3 item 3.5) — the save is OPTIMISTIC (never
-// blocked); when a save/blur resolves a NEW/changed `%`-ref set, a non-blocking
-// toast reports what got linked ("Linked <label> — <title>, ..."), so a
-// valid-but-wrong target is *visible* without treating every valid ref as guilty.
-// Fires only when the resolved-ref SET CHANGED since the last commit (an
-// unchanged re-save is silent). Lives in the RefField hook (fields) and the
-// comment submit intercepts (comments); chat is exempt (sends instantly).
-
-// The ids a (transformed, token-bearing) string references, via the shared
-// `segments()` parse — no separate import needed.
-function refIdsOf(text) {
-  return segments(text).filter((s) => s.type === "ref").map((s) => s.id)
-}
-
-// An order-independent key for a set of ids, so "did the ref set change since the
-// last commit?" is a string compare. Dedupes and sorts.
-function refSetKey(ids) {
-  return [...new Set(ids)].sort((a, b) => a - b).join(",")
-}
-
-// {id, label, title} per referenced id, read LIVE from the tree DOM (the same
-// source the renderer uses), so the toast shows the current number + title.
-function refDetails(ids) {
-  const map = buildRefLabelMap()
-  return [...new Set(ids)].map((id) => {
-    const li = document.getElementById("task-" + id)
-    const titleEl = li && li.querySelector("[data-task-title]")
-    return {
-      id,
-      label: map.has(id) ? map.get(id) : "↗",
-      title: titleEl ? titleEl.textContent.trim() : "",
-    }
-  })
-}
-
-// Self-dismissing toast listing what a save just linked. Pure client-side +
-// instant (the client already resolved the refs). textContent only — task titles
-// are user data, so never innerHTML. Mirrors showDragHintToast's chrome.
-function showRefToast(details) {
-  if (!details.length) return
-  const prev = document.getElementById("ref-link-toast")
-  if (prev) prev.remove()
-  const toast = document.createElement("div")
-  toast.id = "ref-link-toast"
-  toast.setAttribute("role", "status")
-  toast.className =
-    "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-xs px-3 py-2 rounded-lg " +
-    "border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 " +
-    "text-sm text-zinc-700 dark:text-zinc-200 shadow-lg whitespace-pre-line"
-  const lines = details.map((d) => (d.title ? d.label + " — " + d.title : d.label))
-  toast.textContent = "Linked " + lines.join(",\n ")
-  document.body.appendChild(toast)
-  setTimeout(() => toast.remove(), 5000)
-}
-
-// Fields/comments call this after a save whose resolved-ref set may have changed:
-// toast the current set iff it's non-empty AND differs from `prevKey`. Returns
-// the new key so the caller can store it as the committed baseline.
-function maybeToastRefs(text, prevKey) {
-  const ids = refIdsOf(text)
-  const key = refSetKey(ids)
-  if (ids.length && key !== prevKey) showRefToast(refDetails(ids))
-  return key
-}
+// The "Linked <label> — <title>" notification when a save resolves a NEW/changed
+// `%`-ref set is OWNED BY THE SERVER (WL3 item 3.5): the save handlers diff the
+// ref set and put_flash it through the app's canonical flash/toast, so there is
+// ONE toast system, not a client-side parallel. The client only transforms
+// %label → %⟨id⟩ on save (below); it no longer detects or renders the toast.
 
 // Expand any collapsed ancestors of a task so it can be scrolled into view —
 // derived from the DOM (walk up through the enclosing children <ul>s) and applied
@@ -3170,16 +3110,6 @@ document.addEventListener("submit", (e) => {
 // the pending one; on !ok the bubble must not stand (MUST NOT LIE). Registered
 // in capture phase (like #add-task-form) and stopImmediatePropagation() so
 // LiveView's bubble-phase phx-submit never double-posts.
-// The ref ids a comment currently has COMMITTED — read from its rendered display
-// body's links (data-task-id). Empty for the add form (not inside a comment li),
-// so any resolved ref on ADD counts as "changed" (firing option 1).
-function committedCommentRefIds(form) {
-  const li = form.closest("li[id^='comment-']") || form.closest("li")
-  const body = li && li.querySelector("[data-comment-display] [data-comment-body]")
-  if (!body) return []
-  return [...body.querySelectorAll(".doit-ref[data-task-id]")].map((a) => Number(a.dataset.taskId))
-}
-
 document.addEventListener(
   "submit",
   (e) => {
@@ -3212,8 +3142,8 @@ document.addEventListener(
         removePendingComment((reply && reply.echo_id) || echoId)
       }
     )
-    // A new comment has no prior refs, so any resolved `%` is newly linked (3.5).
-    maybeToastRefs(body, "")
+    // The "Linked …" flash (if this adds a ref) is put by add_comment on the
+    // server — no client toast.
   },
   true // capture phase: run before LiveView's bubble-phase phx-submit handler
 )
@@ -3234,10 +3164,8 @@ document.addEventListener(
     if (!ta) return
     const next = transformForSave(ta.value, resolveRefPath)
     if (next !== ta.value) ta.value = next
-    // Toast what got linked iff the resolved-ref set CHANGED vs the comment's
-    // currently-committed refs (item 3.5). The save is never blocked — LiveView's
-    // own phx-submit runs and persists the now-token value.
-    maybeToastRefs(next, refSetKey(committedCommentRefIds(form)))
+    // The "Linked …" flash (if the ref set changed) is put by save_comment on the
+    // server — no client toast. LiveView's own phx-submit persists the tokens.
   },
   true // capture: precede LiveView's bubble-phase phx-submit serialization
 )
@@ -6612,11 +6540,6 @@ Hooks.CommentEditRef = {
 
 Hooks.RefField = {
   mounted() {
-    // Seed the committed ref-set from the STORED tokens (before rehydrate turns
-    // them into %label) so a field loaded WITH refs doesn't fire the save-confirm
-    // on its first blur — only a newly added/changed ref does (item 3.5, firing
-    // option 1).
-    this.committedRefKey = refSetKey(refIdsOf(this.el.value))
     // Show %label on first paint (the server-rendered value is raw tokens).
     this.rehydrate()
     // Rewrite %label -> %⟨id⟩ the instant the field blurs, in the element's
@@ -6625,13 +6548,12 @@ Hooks.RefField = {
     // `phx-debounce="blur"`); for a given event on its target, capture-phase
     // listeners fire before bubble-phase ones, so this transform lands before
     // LiveView serializes the form — the server receives `%⟨id⟩`, not `%1.5`.
-    // The save is never blocked; if the blur resolves a NEW/changed ref set we
-    // just toast what got linked (item 3.5).
+    // The save is never blocked; when it adds/changes a ref, the server puts a
+    // "Linked …" flash (item 3.5) — no client toast here.
     this.onBlurCapture = () => {
       const next = transformForSave(this.el.value, resolveRefPath)
       if (next !== this.el.value) this.el.value = next
       this.tokenizeSiblings()
-      this.committedRefKey = maybeToastRefs(next, this.committedRefKey)
     }
     this.el.addEventListener("blur", this.onBlurCapture, true)
   },
@@ -6650,10 +6572,8 @@ Hooks.RefField = {
   },
   updated() {
     // A server patch (our own save reply, or a collab edit) resets value= to raw
-    // tokens; keep the committed ref-set in step with that truth (read from the
-    // tokens BEFORE rehydrate), then turn them back into %label. Only rehydrates
-    // when a token is present, so a user mid-typing `%1.5` is never disturbed.
-    this.committedRefKey = refSetKey(refIdsOf(this.el.value))
+    // tokens; turn them back into %label. Only when a token is present, so a user
+    // mid-typing `%1.5` is never disturbed.
     this.rehydrate()
   },
   destroyed() {
