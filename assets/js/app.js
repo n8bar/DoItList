@@ -3198,6 +3198,16 @@ document.addEventListener("submit", (e) => {
 // the pending one; on !ok the bubble must not stand (MUST NOT LIE). Registered
 // in capture phase (like #add-task-form) and stopImmediatePropagation() so
 // LiveView's bubble-phase phx-submit never double-posts.
+// The ref ids a comment currently has COMMITTED — read from its rendered display
+// body's links (data-task-id). Empty for the add form (not inside a comment li),
+// so any resolved ref on ADD counts as "changed" (firing option 1).
+function committedCommentRefIds(form) {
+  const li = form.closest("li[id^='comment-']") || form.closest("li")
+  const body = li && li.querySelector("[data-comment-display] [data-comment-body]")
+  if (!body) return []
+  return [...body.querySelectorAll(".doit-ref[data-task-id]")].map((a) => Number(a.dataset.taskId))
+}
+
 document.addEventListener(
   "submit",
   (e) => {
@@ -3213,23 +3223,33 @@ document.addEventListener(
     // the server persists the id-anchored form (Wave 3 — no server change, no
     // edge; the comment body is just a string the client transforms).
     const body = transformForSave(raw, resolveRefPath)
-    const list = document.querySelector("[data-comment-list]")
-    const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
-    if (list) {
-      const li = buildPendingComment(echoId, body, form.dataset)
-      list.appendChild(li)
-      renderAllRefs(li) // show the token -> link in the optimistic bubble at once
-    }
-    if (input) input.value = ""
-    window.DoitPush(
-      "add_comment",
-      {comment: {body}, echo_id: echoId},
-      (reply) => {
-        // ok → the refresh carries the real li; pull the pending stand-in.
-        // !ok → the comment was refused (permission / empty); pull it too.
-        removePendingComment((reply && reply.echo_id) || echoId)
+    const commit = () => {
+      const list = document.querySelector("[data-comment-list]")
+      const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
+      if (list) {
+        const li = buildPendingComment(echoId, body, form.dataset)
+        list.appendChild(li)
+        renderAllRefs(li) // show the token -> link in the optimistic bubble at once
       }
-    )
+      if (input) input.value = ""
+      window.DoitPush(
+        "add_comment",
+        {comment: {body}, echo_id: echoId},
+        (reply) => {
+          // ok → the refresh carries the real li; pull the pending stand-in.
+          // !ok → the comment was refused (permission / empty); pull it too.
+          removePendingComment((reply && reply.echo_id) || echoId)
+        }
+      )
+    }
+    // Save-confirm (item 3.5): a new comment has no committed refs, so any
+    // resolved `%` is a change — confirm before posting (client-side, §6.5).
+    const ids = refIdsOf(body)
+    if (ids.length && !refConfirmSuppressed()) {
+      openRefConfirm(refDetails(ids), commit, () => input && input.focus())
+    } else {
+      commit()
+    }
   },
   true // capture phase: run before LiveView's bubble-phase phx-submit handler
 )
@@ -3249,6 +3269,35 @@ document.addEventListener(
     const ta = form.querySelector("textarea[name='comment[body]']")
     if (!ta) return
     const next = transformForSave(ta.value, resolveRefPath)
+    // Bypass: the confirm's Proceed re-submitted this form — anchor the tokens
+    // and let LiveView's native phx-submit run (no hold this time).
+    if (form._refConfirmed) {
+      form._refConfirmed = false
+      if (next !== ta.value) ta.value = next
+      return
+    }
+    // Save-confirm (item 3.5): fire only when the resolved-ref set CHANGED vs the
+    // comment's currently-committed refs (firing option 1). HOLD the native
+    // submit, confirm client-side, and on Proceed re-submit (bypass above).
+    const ids = refIdsOf(next)
+    if (
+      ids.length &&
+      refSetKey(ids) !== refSetKey(committedCommentRefIds(form)) &&
+      !refConfirmSuppressed()
+    ) {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      openRefConfirm(
+        refDetails(ids),
+        () => {
+          ta.value = next
+          form._refConfirmed = true
+          form.requestSubmit()
+        },
+        () => ta.focus()
+      )
+      return
+    }
     if (next !== ta.value) ta.value = next
   },
   true // capture: precede LiveView's bubble-phase phx-submit serialization
