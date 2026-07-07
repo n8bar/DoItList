@@ -4087,6 +4087,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           <.move_flip_confirm :if={@can_edit} />
           <.cascade_confirm />
           <.cascade_sort_confirm :if={@can_edit} />
+          <.ref_confirm />
           <.delete_task_confirm :if={@can_edit} />
           <.delete_initiative_confirm :if={@can_admin} name={@initiative.name} />
           <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
@@ -4815,6 +4816,61 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           <button
             type="button"
             data-flip-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            Proceed
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Cross-reference save confirm — client-opened (app.js #ref-confirm,
+  # UX_GUARDRAILS 6.5). WL3 item 3.5: when a save/blur resolves a NEW or changed
+  # set of `%`-references (a valid-but-maybe-wrong path can land on a real but
+  # unintended task), app.js holds the save and opens THIS dialog listing each
+  # ref's live label + target title so the user can catch a mistargeted link
+  # before it commits. Proceed commits (optionally persisting the "don't ask
+  # again" skip to localStorage); Cancel returns focus to the field, nothing
+  # committed. No :if — comments can be posted without edit rights, so the modal
+  # must be present for every ref-bearing save. phx-update="ignore": the server
+  # never patches it. app.js fills the [data-ref-list] items.
+  defp ref_confirm(assigns) do
+    ~H"""
+    <div
+      id="ref-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Confirm linked tasks
+        </h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          This save links to the task(s) below. Check they're the ones you meant.
+        </p>
+        <ul
+          data-ref-list
+          class="mt-3 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+        >
+        </ul>
+        <label class="mt-4 flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 select-none">
+          <input type="checkbox" data-ref-dont-show class="checkbox checkbox-sm" />
+          Don't show this again for linked tasks
+        </label>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-ref-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-ref-proceed
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
           >
             Proceed
