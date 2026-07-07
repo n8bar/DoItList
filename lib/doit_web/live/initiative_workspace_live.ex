@@ -4336,7 +4336,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                       class="w-3 h-3 text-zinc-600 dark:text-zinc-500"
                     />
                   </span>
-                  <span class="truncate">{initiative.name}</span>
+                  <span class="truncate" data-initiative-card-field>{initiative.name}</span>
                 </span>
                 <div class="flex items-center gap-2 flex-none">
                   <span
@@ -4356,12 +4356,14 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               </div>
               <p
                 :if={subtitle_text(initiative)}
+                data-initiative-card-field
                 class="mt-1 text-sm text-zinc-600 dark:text-zinc-300 line-clamp-1"
               >
                 {subtitle_text(initiative)}
               </p>
               <p
                 :if={initiative.description}
+                data-initiative-card-field
                 class="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2"
               >
                 {initiative.description}

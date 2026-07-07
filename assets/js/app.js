@@ -2101,19 +2101,53 @@ function renderRefEl(el, map) {
   el.replaceChildren(frag)
 }
 
+// Dashboard list-mode Initiative cards (name/subtitle/description) carry the
+// STORED tokens but have NO tree loaded, so a `%⟨id⟩` can't resolve to a number
+// here — and a card's refs belong to ITS OWN initiative, never whichever one is
+// open, so resolving against the loaded tree would be wrong anyway. Rather than
+// leak the raw token, render each ref as a neutral, inert "↗" glyph ("Linked
+// task"); the detail view resolves it to the live number in full. The glyph
+// never changes, so once rendered the element is left alone (idempotent; a
+// server patch resets it to raw text and we re-parse). Backlog: real numbers on
+// cards via a server-side resolve.
+const REF_CARD_CLASS = "doit-ref-card text-emerald-600 dark:text-emerald-400 cursor-default"
+function renderCardRefEl(el) {
+  if (el.querySelector(".doit-ref-card")) return
+  const segs = segments(el.textContent)
+  if (!segs.some((s) => s.type === "ref")) return
+  const frag = document.createDocumentFragment()
+  segs.forEach((s) => {
+    if (s.type === "text") {
+      frag.appendChild(document.createTextNode(s.value))
+    } else {
+      const span = document.createElement("span")
+      span.className = REF_CARD_CLASS
+      span.title = "Linked task"
+      span.textContent = "↗"
+      frag.appendChild(span)
+    }
+  })
+  el.replaceChildren(frag)
+}
+
 // Re-render every ref-bearing surface in `root` (defaults to the whole
-// document): task titles/descriptions AND comment/chat message bodies (Wave 3).
-// ONE renderer over all four surfaces — identical parse/label logic
-// (renderRefEl), so a `%⟨id⟩` token renders the same wherever it appears. Cheap
-// + idempotent, so it's safe to re-run after every tree patch, comment-list
-// refresh, or chat message.
+// document): task titles/descriptions AND comment/chat message bodies (Wave 3),
+// initiative header fields (Wave 5), plus the neutral card glyph for dashboard
+// cards. ONE renderer over every surface — identical parse logic (segments), so
+// a `%⟨id⟩` token renders consistently wherever it appears. Cheap + idempotent,
+// so it's safe to re-run after every tree patch, comment-list refresh, chat
+// message, or dashboard update.
 function renderAllRefs(root) {
   const map = buildRefLabelMap()
-  ;(root || document)
+  const scope = root || document
+  scope
     .querySelectorAll(
       "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body], [data-initiative-name-body], [data-initiative-subtitle-body], [data-initiative-description-body]"
     )
     .forEach((el) => renderRefEl(el, map))
+  scope
+    .querySelectorAll("[data-initiative-card-field]")
+    .forEach((el) => renderCardRefEl(el))
 }
 // Back-compat alias (the Wave 1/2 name) + the Wave 3 canonical name, both
 // pointing at the unified renderer so the colocated .Chat hook (a separate
