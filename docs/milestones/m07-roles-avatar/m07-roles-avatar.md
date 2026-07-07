@@ -1,7 +1,7 @@
-# M06-Roles-Avatar
-_Status: stub · Planned start: after M05 (Prep and Launch) · Target: TBD_
+# M07-Roles-Avatar
+_Status: stub · Planned start: after M06 (Appify) · Target: TBD_
 
-> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M06 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
+> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M07 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
 ## Goal
 
@@ -36,4 +36,4 @@ _(TBD once scoped.)_
 
 ## Branch
 
-`M06-roles-avatar` (created at scoping time).
+`M07-roles-avatar` (created at scoping time).

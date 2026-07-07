@@ -5,7 +5,7 @@ _Status: stub · Planned start: after M03 (API & MCP) · Target: TBD_
 
 ## Goal
 
-Land the **last product features** before going public — the account, security, and monetization pieces that the private app has done without. After this milestone the product is **feature-complete** for launch; M05 is preparation and launch, not new functionality. (Admin role, taskmaster, and avatar upload are real features too, but they don't gate launch — they're M06, right after.)
+Land the **last product features** before going public — the account, security, and monetization pieces that the private app has done without. After this milestone the product is **feature-complete** for launch; M05 is preparation and launch, not new functionality. (Admin role, taskmaster, and avatar upload are real features too, but they don't gate launch — they're M07, just after.)
 
 ## Status
 

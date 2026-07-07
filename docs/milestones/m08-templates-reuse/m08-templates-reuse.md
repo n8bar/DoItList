@@ -1,7 +1,7 @@
-# M07-Templates-Reuse
-_Status: stub · Planned start: after M06 (Roles & Avatar) · Target: TBD_
+# M08-Templates-Reuse
+_Status: stub · Planned start: after M07 (Roles & Avatar) · Target: TBD_
 
-> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M07 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
+> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M08 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
 ## Goal
 
@@ -39,4 +39,4 @@ _(TBD once scoped.)_
 
 ## Branch
 
-`M07-templates-reuse` (created at scoping time).
+`M08-templates-reuse` (created at scoping time).

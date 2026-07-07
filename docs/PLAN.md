@@ -17,7 +17,7 @@ Decisions consciously postponed. Each entry names the trigger that should make u
 | JS test framework (vs. the homemade `assert()` in `rollup_test.html`, m03.02) | The JS test surface grows meaningfully beyond m03.02's rollup/cascade cases | Current surface is small and fixed — a framework's grouping/diffing doesn't pay for itself yet. Must be a zero-install vendored file either way; this project has no Node/npm to install one via. |
 
 ## Release Target
-No public release yet. The app won't open to the public before **M05 (Prep and Launch)** — the milestone that owns going public. M02 (UX Buildout) remains the floor for the app feeling presentable. M06 and M07 are deliberately sequenced *after* launch to keep the path there short.
+No public release yet. The app won't open to the public before **M05 (Prep and Launch)** — the milestone that owns going public. M02 (UX Buildout) remains the floor for the app feeling presentable. M06, M07, and M08 are deliberately sequenced *after* launch to keep the path there short.
 
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
@@ -26,8 +26,9 @@ No public release yet. The app won't open to the public before **M05 (Prep and L
 | [ ] | M03 | API & MCP | Programmatic API for Initiatives / Tasks / membership, designed MCP-first, plus an MCP server over it so agents can drive task trees. Arc scope and status live in the linked milestone doc's Arcs table. | TBD | [`milestones/m03-api-mcp/m03-api-mcp.md`](milestones/m03-api-mcp/m03-api-mcp.md) |
 | [ ] | M04 | Final Features | Last product features before public — email infra & invites, recovery codes, TOTP, donation. Stub. | TBD | [`milestones/m04-final-features/m04-final-features.md`](milestones/m04-final-features/m04-final-features.md) |
 | [ ] | M05 | Prep and Launch | Launch readiness (legal, onboarding, security) + go-live (hosting, deploy, observability, backups). Opens the app to the public. Stub. | TBD | [`milestones/m05-prep-launch/m05-prep-launch.md`](milestones/m05-prep-launch/m05-prep-launch.md) |
-| [ ] | M06 | Roles & Avatar | Post-launch: admin role, taskmaster (task-scoped full-control role), avatar upload. Stub. | TBD | [`milestones/m06-roles-avatar/m06-roles-avatar.md`](milestones/m06-roles-avatar/m06-roles-avatar.md) |
-| [ ] | M07 | Templates & Reuse | Post-launch: reusable task trees — Initiative templates, duplicate a non-owned Initiative, trash↔duplicate interplay. Stub. | TBD | [`milestones/m07-templates-reuse/m07-templates-reuse.md`](milestones/m07-templates-reuse/m07-templates-reuse.md) |
+| [ ] | M06 | Appify | Post-launch: wrap the web frontend as installable Android & iOS apps — app-store presence, native shell, push. Stub. | TBD | [`milestones/m06-appify/m06-appify.md`](milestones/m06-appify/m06-appify.md) |
+| [ ] | M07 | Roles & Avatar | Post-launch: admin role, taskmaster (task-scoped full-control role), avatar upload. Stub. | TBD | [`milestones/m07-roles-avatar/m07-roles-avatar.md`](milestones/m07-roles-avatar/m07-roles-avatar.md) |
+| [ ] | M08 | Templates & Reuse | Post-launch: reusable task trees — Initiative templates, duplicate a non-owned Initiative, trash↔duplicate interplay. Stub. | TBD | [`milestones/m08-templates-reuse/m08-templates-reuse.md`](milestones/m08-templates-reuse/m08-templates-reuse.md) |
 
 ## Completed Milestones
 | Status | ID | Milestone | Short intent | Completed | Doc |
