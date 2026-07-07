@@ -2111,7 +2111,7 @@ function renderAllRefs(root) {
   const map = buildRefLabelMap()
   ;(root || document)
     .querySelectorAll(
-      "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body]"
+      "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body], [data-initiative-name-body], [data-initiative-subtitle-body], [data-initiative-description-body]"
     )
     .forEach((el) => renderRefEl(el, map))
 }
@@ -2184,7 +2184,8 @@ document.addEventListener("click", (e) => {
 // The three fields that accept a %-ref. Stable selectors, so `.matches()` holds
 // wherever the add-task form teleports in the tree.
 const REF_PICKER_FIELDS =
-  '#add-task-form input[name="title"], #task-field-title, #task-field-description'
+  '#add-task-form input[name="title"], #task-field-title, #task-field-description, ' +
+  "#initiative_name, #initiative-subtitle, #initiative_description"
 function refEligibleField(el) {
   return el && el.matches && el.matches(REF_PICKER_FIELDS) ? el : null
 }

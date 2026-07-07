@@ -5255,7 +5255,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
             </span>
-            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-zinc-900 dark:group-hover:text-white">
+            <h1
+              data-initiative-name-body
+              class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100 group-hover:text-zinc-900 dark:group-hover:text-white"
+            >
               {@initiative.name}
             </h1>
           </span>
@@ -5264,7 +5267,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <span class="mt-1 text-emerald-600 dark:text-emerald-400" aria-hidden="true">
               <.botanical_icon kind={:grove} class="w-6 h-6" />
             </span>
-            <h1 class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">
+            <h1
+              data-initiative-name-body
+              class="text-2xl font-semibold text-zinc-800 dark:text-zinc-100"
+            >
               {@initiative.name}
             </h1>
           </span>
@@ -5284,6 +5290,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       <p
         :if={@subtitle != ""}
+        data-initiative-subtitle-body
         data-edit-initiative
         data-keep="editor-signifier"
         title="Click to edit"
@@ -5292,7 +5299,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         {@subtitle}
       </p>
 
-      <p :if={@initiative.description} class="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+      <p
+        :if={@initiative.description}
+        data-initiative-description-body
+        class="text-sm text-zinc-500 dark:text-zinc-400 mt-1"
+      >
         {@initiative.description}
       </p>
 
@@ -5802,14 +5813,26 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         phx-submit="update_initiative"
         class="space-y-3"
       >
-        <.input
-          field={@form[:name]}
-          type="text"
-          label="Name"
-          required
-          disabled={not @can_edit}
-          phx-debounce="600"
-        />
+        <%!-- %-ref support (WL3 item 3.6): RefField rehydrates/anchors tokens in
+             the input; the picker button (top-right, over the label) inserts a
+             %ref. Save-on-blur (phx-debounce="blur") so RefField's capture-phase
+             transform lands before LiveView serializes. --%>
+        <div class="relative">
+          <.input
+            field={@form[:name]}
+            type="text"
+            label="Name"
+            required
+            disabled={not @can_edit}
+            phx-debounce="blur"
+            phx-hook="RefField"
+          />
+          <.ref_picker_button
+            :if={@can_edit}
+            target="#initiative_name"
+            class="absolute top-0 right-0"
+          />
+        </div>
 
         <%!-- Subtitle is stored in the root task's title (.05.03), so it has its
              own write path rather than riding the Initiative changeset. --%>
@@ -5830,7 +5853,14 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             >
               <.icon name="hero-check" class="w-3 h-3" /> Saved
             </span>
+            <.ref_picker_button
+              :if={@can_edit}
+              target="#initiative-subtitle"
+              class="ml-auto"
+            />
           </div>
+          <%!-- RefField + save-on-blur (WL3 item 3.6), same as Name; keeps its own
+               update_subtitle write path (root-task title, bypasses edge-sync). --%>
           <input
             id="initiative-subtitle"
             type="text"
@@ -5840,17 +5870,27 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             class="w-full input input-bordered input-sm"
             disabled={not @can_edit}
             phx-change="update_subtitle"
-            phx-debounce="600"
+            phx-debounce="blur"
+            phx-hook="RefField"
           />
         </div>
 
-        <.input
-          field={@form[:description]}
-          type="textarea"
-          label="Description"
-          disabled={not @can_edit}
-          phx-debounce="600"
-        />
+        <%!-- %-ref support (WL3 item 3.6): RefField + picker + save-on-blur, as Name. --%>
+        <div class="relative">
+          <.input
+            field={@form[:description]}
+            type="textarea"
+            label="Description"
+            disabled={not @can_edit}
+            phx-debounce="blur"
+            phx-hook="RefField"
+          />
+          <.ref_picker_button
+            :if={@can_edit}
+            target="#initiative_description"
+            class="absolute top-0 right-0"
+          />
+        </div>
       </.form>
 
       <%!-- Per-user Archive + Hide (m02.08 worklist 4): part of the Initiative
