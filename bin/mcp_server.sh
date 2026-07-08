@@ -8,5 +8,14 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-exec docker compose exec -T -e DOITLIST_API_TOKEN -e DOITLIST_API_URL web \
-  sh -c "cd /app/mcp_server && exec mix run --no-halt --no-compile"
+# Frame log (transport debugging): keep a host-side copy of every byte this
+# connection exchanges, one .in/.out/.err triplet per connection under
+# /tmp/doitlist-mcp/. Lets us see exactly what a remote client sent when a
+# request comes back -32600, without any client-side setup.
+FRAMES=/tmp/doitlist-mcp
+mkdir -p "$FRAMES"
+BASE="$FRAMES/$(date +%Y%m%dT%H%M%S).$$"
+
+tee -a "$BASE.in" | docker compose exec -T -e DOITLIST_API_TOKEN -e DOITLIST_API_URL web \
+  sh -c "cd /app/mcp_server && exec mix run --no-halt --no-compile" \
+  2>>"$BASE.err" | tee -a "$BASE.out"
