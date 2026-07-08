@@ -66,8 +66,8 @@ The common moves — all on the `doitlist` MCP server. Full params live in each 
 | Set a leaf's progress | `update_task` — `manual_progress` |
 | Mark a task (and its subtree) done | `complete_task` |
 | Journal a move, status change, or decision | `add_comment` — the running journal, never the description |
-| Read the current tree + live labels | `initiative_tree` (resource) |
-| Read a task's comment journal | `task_comments` (resource) |
+| Read the current tree + live labels | `get_initiative_tree` |
+| Read a task's comment journal | `get_task_comments` |
 
 ## Common Mistakes
 

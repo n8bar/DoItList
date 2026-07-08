@@ -44,6 +44,14 @@ defmodule DoitMcp.Server do
   # Batch (atomic multi-op, lid forward-refs)
   component(DoitMcp.Tools.ApplyOperations)
 
+  # Reads — tool twins of the resources below, for agents that only look for
+  # reads in tools/list
+  component(DoitMcp.Tools.GetMe)
+  component(DoitMcp.Tools.ListInitiatives)
+  component(DoitMcp.Tools.GetInitiativeTree)
+  component(DoitMcp.Tools.GetInitiativeMembers)
+  component(DoitMcp.Tools.GetTaskComments)
+
   # Resources — mirror the read surface 1:1
   component(DoitMcp.Resources.Me)
   component(DoitMcp.Resources.Initiatives)
