@@ -264,3 +264,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-08  Tweak: task checkbox polish round 2 (operator calls) -- check pinned full-size via explicit mask-size (the vendor heroicons plugin hard-codes per-variant sizes; the earlier "tinier" was a css-rebuild race, watcher lags saves ~15s); dark drop-shadow on the button so the border ring AND check glyph cast together (box-shadow would show through the transparent middle), blur tightened 2px->1px per eye-pass.
 2026-07-08  Tweak: task checkbox shadow goes absolute black in dark mode (dark: variant on the drop-shadow); light mode keeps rgba(0,0,0,0.65).
 2026-07-08  Tweak: dark-mode checkbox shadow grown to 0 2px 3px pure black (per eye-pass -- bigger and bolder against the dark canvas).
+2026-07-08  Tweak: dark-mode checkbox shadow finalized per eye-pass -- 5x stacked drop-shadow (density past what one black shadow gives) at the tight 0 1px 1px geometry.
