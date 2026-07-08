@@ -1,5 +1,5 @@
 # BACKLOG
-_Last updated: 2026-07-06_
+_Last updated: 2026-07-08_
 
 Work for releases _after_ the upcoming one. The currently-targeted release and its milestones live in [`PLAN.md`](PLAN.md); this file is for everything beyond that.
 
@@ -18,3 +18,4 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 - **Initiative-level numbering offset.** A per-Initiative start number so the index begins at the real milestone number (e.g. `19.x`) without placeholder Milestone tasks — the index is purely positional today. Include API/MCP exposure so an agent can set it. Surfaced in M03 Arc 3's nitpick session; the skill uses placeholder M-tasks until this lands.
 - **Initiative-level comments (Details pane).** A comments thread scoped to the Initiative itself, shown in its Details pane — the Initiative's own discussion, separate from per-task comments. (Surfaced alongside M03.03's `%`-notation work.)
 - **Break out Initiative Settings into its own pane.** Move the Initiative Settings section out of the Details pane into a separate, collapsed-by-default pane that sits below the Initiative Details pane and appears whenever that pane is visible.
+- **GUIDs for Initiative ids.** Replace the sequential integer Initiative id with a GUID in URLs and the API/MCP surface — ids stay plumbing (agents resolve Initiatives by name), and sequential ids leak count/ordering and invite guessing. (Surfaced in M03 Arc 3's refinement drives.)
