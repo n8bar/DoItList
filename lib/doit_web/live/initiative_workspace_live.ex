@@ -5738,10 +5738,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           >
             <%!-- Check visibility keys off aria-pressed (not server-conditional
                  classes) so the optimistic leaf flip in app.js is one attribute
-                 write. Mini variant at w-4: the big, bold check. --%>
+                 write. Micro variant (tightest glyph padding) at the box's full
+                 w-5: the check fills the box. --%>
             <.icon
-              name="hero-check-mini"
-              class="w-4 h-4 hidden group-aria-pressed/check:inline-block"
+              name="hero-check-micro"
+              class="w-5 h-5 hidden group-aria-pressed/check:inline-block"
             />
           </button>
 
