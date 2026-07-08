@@ -5691,8 +5691,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             aria-label="Toggle children"
             class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 transition-colors motion-reduce:transition-none"
           >
+            <%!-- Micro variant: tightest glyph padding = the boldest chevron
+                 at this size. --%>
             <.icon
-              name="hero-chevron-down-solid"
+              name="hero-chevron-down-micro"
               class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
             />
           </button>
