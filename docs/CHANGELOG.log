@@ -266,3 +266,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-08  Tweak: dark-mode checkbox shadow grown to 0 2px 3px pure black (per eye-pass -- bigger and bolder against the dark canvas).
 2026-07-08  Tweak: dark-mode checkbox shadow finalized per eye-pass -- 5x stacked drop-shadow (density past what one black shadow gives) at the tight 0 1px 1px geometry.
 2026-07-08  Tweak: branch chevron pills get a 2px black border (operator call), both modes.
+2026-07-08  Tweak: chevron pill's 2px black border scoped to dark mode only.

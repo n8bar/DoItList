@@ -5689,7 +5689,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             data-initiative-id={@initiative_id}
             aria-controls={"children-#{@task.id}"}
             aria-label="Toggle children"
-            class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full border-2 border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 transition-colors motion-reduce:transition-none"
+            class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 transition-colors motion-reduce:transition-none"
           >
             <.icon
               name="hero-chevron-down-solid"
