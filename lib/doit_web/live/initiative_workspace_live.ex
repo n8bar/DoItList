@@ -5733,16 +5733,20 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             aria-pressed={to_string(@task.status == "done")}
             class={[
               "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
-              "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400"
+              "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400",
+              "drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]"
             ]}
           >
             <%!-- Check visibility keys off aria-pressed (not server-conditional
                  classes) so the optimistic leaf flip in app.js is one attribute
-                 write. Micro variant (tightest glyph padding) at the box's full
-                 w-5: the check fills the box. --%>
+                 write. Micro variant (tightest glyph padding) stretched to the
+                 box's full w-5 — mask-size pinned so the vendor plugin's
+                 per-variant size can't shrink it. The box's transparent middle
+                 rules out box-shadow; the button's drop-shadow filter above
+                 shadows the border ring and this glyph together. --%>
             <.icon
               name="hero-check-micro"
-              class="w-5 h-5 hidden group-aria-pressed/check:inline-block"
+              class="w-5 h-5 [mask-size:100%_100%] [-webkit-mask-size:100%_100%] hidden group-aria-pressed/check:inline-block"
             />
           </button>
 
