@@ -18,4 +18,16 @@ defmodule DoitMcp.ApplicationTest do
     # (which registers it) must already be up.
     assert server < watchdog
   end
+
+  test "real runs pin the stdio session open past anubis's 30-minute idle default" do
+    {DoitMcp.Server, opts} =
+      Enum.find(DoitMcp.Application.children(:dev), &match?({DoitMcp.Server, _}, &1))
+
+    timeout = Keyword.fetch!(opts, :session_idle_timeout)
+
+    # Big enough to outlive any real session, small enough for
+    # Process.send_after's timer ceiling (4_294_967_295 ms ≈ 49.7 days).
+    assert timeout >= to_timeout(day: 30)
+    assert timeout <= 4_294_967_295
+  end
 end

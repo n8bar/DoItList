@@ -14,7 +14,14 @@ defmodule DoitMcp.Application do
 
   def children(_env) do
     [
-      {DoitMcp.Server, transport: :stdio},
+      # Anubis expires idle sessions after 30 minutes by default, but on
+      # stdio the pipe outlives the session: a long-idle client's next
+      # request hit an uninitialized replacement session and got -32600
+      # (m03.03 item 4.3.1.8). nil is not infinity here (anubis falls back
+      # to the default), so pin the session open with a large timeout —
+      # kept under Process.send_after's ceiling of 4_294_967_295 ms
+      # (~49.7 days; larger raises badarg).
+      {DoitMcp.Server, transport: :stdio, session_idle_timeout: to_timeout(day: 49)},
       # After the server, whose supervisor registers the stdio transport —
       # the watchdog looks it up by name and exits the VM when it stops
       # (client disconnect); `mix run --no-halt` alone would leak a zombie
