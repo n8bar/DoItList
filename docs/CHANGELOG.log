@@ -269,3 +269,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-08  Tweak: chevron pill's 2px black border scoped to dark mode only.
 2026-07-08  Tweak: branch chevron glyph swapped to the micro variant -- proportionally thickest stroke at the pill's size, reads much bolder.
 2026-07-08  Tweak: branch chevron replaced with a custom inline-SVG stroke (3.5/16, round caps) -- heroicons' boldest stock glyph still read thin; a raw stroke makes the weight directly tunable.
+2026-07-08  Tweak: chevron pill gets the checkbox's light-mode shadow (0 1px 1px rgba(0,0,0,0.65)), light mode only -- dark mode keeps just the black border.

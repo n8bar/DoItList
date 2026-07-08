@@ -5689,7 +5689,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             data-initiative-id={@initiative_id}
             aria-controls={"children-#{@task.id}"}
             aria-label="Toggle children"
-            class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 transition-colors motion-reduce:transition-none"
+            class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)] dark:drop-shadow-none transition-colors motion-reduce:transition-none"
           >
             <%!-- Custom inline chevron: heroicons' micro was the boldest stock
                  glyph and still read thin — a raw stroke lets the weight be
