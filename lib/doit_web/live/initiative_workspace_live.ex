@@ -5733,13 +5733,16 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             aria-pressed={to_string(@task.status == "done")}
             class={[
               "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
-              "border-zinc-300 dark:border-zinc-600 bg-white dark:bg-zinc-900 hover:border-emerald-500",
-              "aria-pressed:border-emerald-500 aria-pressed:bg-emerald-500 aria-pressed:text-white"
+              "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400"
             ]}
           >
-            <%!-- Styling keys off aria-pressed (not server-conditional classes)
-                 so the optimistic leaf flip in app.js is one attribute write. --%>
-            <.icon name="hero-check" class="w-3 h-3 hidden group-aria-pressed/check:inline-block" />
+            <%!-- Check visibility keys off aria-pressed (not server-conditional
+                 classes) so the optimistic leaf flip in app.js is one attribute
+                 write. Mini variant at w-4: the big, bold check. --%>
+            <.icon
+              name="hero-check-mini"
+              class="w-4 h-4 hidden group-aria-pressed/check:inline-block"
+            />
           </button>
 
           <span
