@@ -5691,12 +5691,21 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             aria-label="Toggle children"
             class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 transition-colors motion-reduce:transition-none"
           >
-            <%!-- Micro variant: tightest glyph padding = the boldest chevron
-                 at this size. --%>
-            <.icon
-              name="hero-chevron-down-micro"
+            <%!-- Custom inline chevron: heroicons' micro was the boldest stock
+                 glyph and still read thin — a raw stroke lets the weight be
+                 dialed directly (3.5 of a 16 viewBox ≈ 2x micro). --%>
+            <svg
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="3.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
               class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
-            />
+            >
+              <path d="M3 5.5 L8 10.5 L13 5.5" />
+            </svg>
           </button>
 
           <%!-- Leaf count lives OUTSIDE the phx-update="ignore" button so the
