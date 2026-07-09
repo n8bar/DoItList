@@ -25,7 +25,7 @@ This skill is the *conventions*.
 
 ## The Initiative is the plan
 
-The Initiative is the **living source of truth**; docs upstream only during first ingest (Mapping, below), then authority flips:
+This skill is designed for an AI agent to treat the Initiative as the **living source of truth**: docs are upstream only during first ingest (Mapping, below), then authority flips:
 
 - **The Initiative owns execution state.** Structure, status, progress, decision journal — there and only there.
 - **The repo owns durable reference.** Specs, designs, how-tos — what DoItList doesn't hold. Docs duplicating execution state (milestone rollups, worklist checkboxes) retire or become Initiative pointers, at the operator's pace; nothing lives in both places.
@@ -51,7 +51,7 @@ Rank names are the project's own — learn them from the source's terms (a repo 
 ## Setting Up the Initiative
 
 - **Numbering on.** Every Initiative gets a label style (`index_style`) — references and cross-links need labels (product default `none`, off). Fit the project: `numerical` (`1.1.2`, the usual choice), `outline` (`I.A.1.a.i`), `roman` (`I.II.III`), or `alphabetical` (`A.B.C`). `none` only if the operator asks.
-- **Placeholder milestones.** Milestones not starting at 1 (mapping M19 onward) get placeholder Milestones `M1`…`M18` so numbering lines up: real work lands at `19.3.1`, not `1.3.1`. Numbering likely but unclear — "C3 Liquids" followed by "C4 Explosives" — is genuine numbering ambiguity: ask before proceeding.
+- **Placeholder milestones.** General rule, not an M19 special case: whenever the source's numbering starts past 1, placeholder tasks fill the gap so tree numbers match source numbers. Mapping M19 onward is just the example — placeholders `M1`…`M18` put real work at `19.3.1`, not `1.3.1`; a plan starting at M10 needs `M1`…`M9` the same way. Numbering likely but unclear — "C3 Liquids" followed by "C4 Explosives" — is genuine numbering ambiguity: ask before proceeding.
 - **Build subtrees in one atomic batch.** One `apply_operations` batch with `lid` forward-references beats looped single-task calls.
 
 ## Ingest Checkpoint
@@ -84,7 +84,7 @@ A human edits the tree too — in the app, while you work.
 
 ## Titling Tasks
 
-- **Don't repeat the auto-number.** A task numbering already labels `19.3.1` is titled by content — `CyberCreek ingest` — not `19.3.1. CyberCreek ingest`, not `1. CyberCreek ingest`. Index carries the number; title carries the content.
+- **Don't repeat the auto-number.** A task numbering already labels `19.3.1` is titled by content — `Rate limiting` — not `19.3.1. Rate limiting`, not `1. Rate limiting`. Index carries the number; title carries the content.
 - **Label ranks 1 through ~2–4 — all of them, not just rank 1.** Exception to the rule above: rank 1 *and* the next one-to-three named ranks each keep their rank word in the title — `M19 — Open Beta`, *and* `Arc 1 — Ingest`, *and* `Worklist 2 — Hardening`. Write each label the way the source already writes it — `M19` follows the example project's own `M`-for-`Milestone` shorthand; your source's convention beats your own or this skill's. Where the source has none, abbreviating is fine when the short form is easy to guess in context (`Arc` is already short as-is) — keep whichever form you pick consistent across that rank. Judgment call how far down; everything below is content-only.
 
 ## Where Information Lives
