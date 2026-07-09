@@ -2,7 +2,7 @@
 
 _Draft — pending operator approval._
 
-Copy-paste starters for the `doitlist` MCP + skill. The skill carries the conventions; a prompt is verb + source + destination. Anything more is coaching, and coaching hides skill gaps.
+Copy-paste starters for anyone adopting the `doitlist` MCP + skill. The skill carries the conventions; a prompt is verb + source + destination. Anything more is coaching, and coaching hides skill gaps — repo-aware coached prompts stay your own.
 
 ## Import an existing plan
 
