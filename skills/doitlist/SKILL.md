@@ -11,7 +11,7 @@ description: Use when representing a project's roadmap, milestones, or to-do lis
 
 Driving it over MCP means editing a real person's live workspace. Three habits follow:
 
-- **Mirror the project's actual structure** into the tree. The tree is the source of truth, not a scratch copy of your notes.
+- **Mirror the project's actual structure** into the tree. The tree is the source of truth for the project's execution state — not a scratch copy of your notes, and not a mirror of the repo's docs.
 - **Record changes as you make them**, so the human can follow what you did without re-reading the whole tree.
 - **Trust the live tree, not your memory** — the human edits it too.
 
@@ -22,6 +22,14 @@ This skill is the *conventions*; each MCP tool documents its own params.
 - Mapping a project's roadmap, milestones, or to-do list into a new Initiative — the source might be a code repo, a planning doc, or the conversation itself.
 - Restructuring, reordering, or advancing progress on an Initiative you already built.
 - Expanding, adding details, commenting on, or managing an existing Initiative.
+
+## The Initiative is the plan
+
+This skill is designed for an AI agent to treat the Initiative as the **living source of truth**. The project's docs are upstream only during first ingest (that's Mapping, below); then authority flips:
+
+- **The Initiative owns execution state.** Structure, status, progress, and the decision journal live there and only there.
+- **The repo owns durable reference.** Specs, designs, how-tos — what DoItList doesn't hold. Docs that duplicate execution state (a milestone rollup, worklist checkboxes) get retired or reduced to pointers at the Initiative, at the operator's pace; nothing is maintained in both places.
+- **Never recommend a parallel "canonical" doc tree.** A mirror kept current "as the published record" recreates the drift this tool ends — it is not a safety net.
 
 ## DoItList's structure (what you map onto)
 
