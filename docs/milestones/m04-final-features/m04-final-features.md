@@ -17,6 +17,7 @@ Stub — to be expanded. Not yet scoped into arcs.
 - **Recovery codes.** One-time codes (generated on the account page, shown once, hashed at rest) with a "use a recovery code" login path. The public-opening gate while admin resets won't scale.
 - **TOTP two-factor.** Security, not recovery — pairs with recovery codes (or the live mailer) so 2FA lockouts have an exit.
 - **GUIDs for Initiative ids.** Replace the sequential integer Initiative id with a GUID in URLs and the API/MCP surface — sequential ids leak count/ordering and invite guessing once those surfaces are public; ids stay plumbing either way (agents resolve Initiatives by name). Must land before M05 opens the API/MCP.
+- **Task Trash (Initiative-level) with 30-day hard delete.** A real trash view for soft-deleted tasks — browse and restore them beyond the undo stack — plus a retention sweep that hard-deletes at 30 days. Today a deleted task past the 500-event undo horizon is retained forever yet reachable by nothing.
 - **Donation screen.** A "support this project" page — suggested amounts + a payment-processor integration (Stripe or similar), linked from the nav / account menu. Brings a payment-processor dependency. (Only meaningful once there's a public audience, so it rides with the public-open work.)
 
 ## Optional
