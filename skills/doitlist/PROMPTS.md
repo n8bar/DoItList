@@ -6,7 +6,7 @@ Copy-paste starters for the `doitlist` MCP + skill. The skill carries the conven
 
 ## Import an existing plan
 
-> Import PLAN into doitlist.
+> Import PLAN into a new doitlist Initiative.
 
 The agent finds the plan doc, follows its references, sorts plan from reference — and asks when the split isn't obvious.
 

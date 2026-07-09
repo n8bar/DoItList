@@ -296,3 +296,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-09  Doc (m03.03): refinement drive 3 banked (4.3.3) -- doubles as the compression pass's compliance regression gate.
 2026-07-09  Doc (m03.03): prompt-suggestions doc banked (4.5) and drafted -- skills/doitlist/PROMPTS.md, uncoached copy-paste starters (import a plan, one-shot app include, plan-mode redirect, work an existing Initiative); pending operator review.
 2026-07-09  Doc (m03.03): PROMPTS.md re-cut to true floor per operator ("Import PLAN into doitlist") -- all four starters trimmed to verb + source + destination.
+2026-07-09  Doc (m03.03): PROMPTS.md import starter regains its intent words (new + Initiative) -- was over-trimmed; the concision pass otherwise stands.
