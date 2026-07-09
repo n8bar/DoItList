@@ -29,7 +29,7 @@ An **Initiative** (the Project) holds **Tasks** nested into a tree — arbitrari
 
 ## Mapping a project onto it
 
-A project's rank names are its own — DoItList has no opinion. Learn them from the source's terms (a repo already saying "Milestone" / "Sprint" / "Phase") or by asking, and apply them consistently top to bottom. Projects tend to name their top few ranks (up to 3–4: `Milestone › Arc › Worklist`) and go generic ("item") below — DoItList's branch-vs-leaf split exactly. Names live in **task titles**, not any field: the named ranks carry their label (`M19 — …`, `Arc 1 — …`, per Titling); everything below is content-only.
+A project's rank names are its own — DoItList has no opinion. Learn them from the source's terms (a repo already saying "Milestone" / "Sprint" / "Phase") or by asking, and apply them consistently top to bottom. That goes for every convention, not just rank names: **detect and follow what the source already does** — labels, abbreviations, numbering — before reaching for your own preferences or this skill's; the skill's defaults are for where the source is silent. Projects tend to name their top few ranks (up to 3–4: `Milestone › Arc › Worklist`) and go generic ("item") below — DoItList's branch-vs-leaf split exactly. Names live in **task titles**, not any field: the top ranks carry their label (`M19 — …`, `Arc 1 — …`, per Titling); deeper items are content-only.
 
 ### Ingest fidelity
 
@@ -61,7 +61,7 @@ The tree belongs to a human who edits it too — in the app, while you work.
 ## Titling Tasks
 
 - **Don't repeat the auto-number.** A task the numbering already labels `19.3.1` is titled with its content — `CyberCreek ingest` — not `19.3.1. CyberCreek ingest` and not `1. CyberCreek ingest`. The index carries the number; the title carries the content.
-- **Label every rank the source names, not just the first.** Exception to the rule above: each named rank keeps its rank word in the title — `M19 — Open Beta`, *and* `Arc 1 — Ingest`, *and* `Worklist 2 — Hardening`. `M` abbreviates `Milestone`; abbreviate a rank word the same way when the short form is easy to guess in context (`Arc` is already short as-is) and keep whichever form you pick consistent across that rank. Ranks the source leaves unnamed are content-only.
+- **Label ranks 1 through ~2–4 — all of them, not just rank 1.** Exception to the rule above: rank 1 *and* the next one-to-three named ranks each keep their rank word in the title — `M19 — Open Beta`, *and* `Arc 1 — Ingest`, *and* `Worklist 2 — Hardening`. Write each label the way the source already writes it — `M19` here because this project abbreviates `Milestone` to `M`; the source's convention beats your own or this skill's. Where the source has none, abbreviating is fine when the short form is easy to guess in context (`Arc` is already short as-is) — keep whichever form you pick consistent across that rank. Judgment call how far down; everything below is content-only.
 
 ## Where Information Lives
 
