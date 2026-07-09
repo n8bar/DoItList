@@ -300,3 +300,5 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-09  Doc (m03.03): PROMPTS.md declares its audience -- generic starters for anyone adopting the skill; repo-aware coached prompts stay operator-local.
 2026-07-09  Doc (m03.03): skills/doitlist/AUTHORING.md drafted (4.6) -- skill-centered layer roles (API enforces / MCP accesses / skill judges / prompt carries intent) + placement rule.
 2026-07-09  Doc (m03.03): AUTHORING.md redrafted per review -- placement by variance not exclusivity; skill = tested defaults for what the prompt leaves unsaid; prompt = per-ask variables + overrides (beats skill at runtime); Knob tier + migration rule added.
+2026-07-09  Doc (m03.03): batch-4 deltas banked ahead of drive 3 (4.3.3.1-2) -- plan-reference triage (completable work vs stays-true reference) and ask-once-record-forever (answers persist in AI-knobs).
+2026-07-09  Doc (m03.03): ai_knobs Initiative field banked (5.4) -- plain-text agent constants store, product stores never interprets; UI in the Initiative details settings pane; AUTHORING.md knob placement synced (per-project constant -> Initiative).
