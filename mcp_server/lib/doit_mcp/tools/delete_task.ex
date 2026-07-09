@@ -1,7 +1,8 @@
 defmodule DoitMcp.Tools.DeleteTask do
   @moduledoc """
-  Soft-delete (Trash) a task and its subtree. Reversible — this does not
-  permanently destroy data, it moves the task and its descendants to Trash.
+  Soft-delete a task and its subtree. This does not permanently destroy
+  data; it is reversible — but only through the app's Undo, and only while
+  the deletion stays within the Initiative's undo history.
   """
 
   use Anubis.Server.Component, type: :tool
