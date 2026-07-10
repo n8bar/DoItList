@@ -137,6 +137,32 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["index"] =~ ~r/^\d+\.\d+$/
     end
 
+    test "task nodes carry description verbatim and a live comment_count", ctx do
+      # Descriptions: one set, the rest untouched (null).
+      {:ok, _} = Tasks.update_task(ctx.phase1, ctx.owner, %{"description" => "how: build it"})
+
+      # Comments on Phase 2: two live, then one tombstoned — only live rows count.
+      {:ok, c1} = Tasks.add_comment(ctx.phase2, ctx.owner, "provenance: drive 3")
+      {:ok, _c2} = Tasks.add_comment(ctx.phase2, ctx.owner, "second note")
+      {:ok, _} = Tasks.delete_comment(c1.id, ctx.owner)
+
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => data} = json_response(conn, 200)
+
+      phase1 = find_node(data["tasks"], "Phase 1")
+      phase2 = find_node(data["tasks"], "Phase 2")
+      build = find_node(data["tasks"], "Build API")
+
+      assert phase1["description"] == "how: build it"
+      assert build["description"] == nil
+
+      assert phase2["comment_count"] == 1
+      assert phase1["comment_count"] == 0
+      assert build["comment_count"] == 0
+    end
+
     test "ai_knobs is surfaced verbatim in the tree envelope and the list row", ctx do
       knobs = "deploy_day: friday\nlocale: en"
       {:ok, _} = Initiatives.update_initiative(ctx.ini, %{"ai_knobs" => knobs})

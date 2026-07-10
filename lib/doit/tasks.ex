@@ -2283,6 +2283,26 @@ defmodule DoIt.Tasks do
     |> Enum.group_by(fn {task_id, _} -> task_id end, fn {_, user_id} -> user_id end)
   end
 
+  @doc """
+  Live-comment counts for an Initiative's live tasks (m03.03 item 5.5.2), as
+  `%{task_id => count}`. ONE grouped count query over the whole tree (no
+  per-task fan-out), so the API tree read can carry a `comment_count` per node.
+  Only live comments count — a tombstoned or undo-hidden comment (`deleted_at`
+  set) doesn't. Tasks with no live comments are absent from the map (the
+  serializer defaults them to `0`).
+  """
+  def comment_counts_for_initiative(initiative_id) do
+    from(c in Comment,
+      join: t in Task,
+      on: t.id == c.task_id,
+      where: t.initiative_id == ^initiative_id and is_nil(t.deleted_at) and is_nil(c.deleted_at),
+      group_by: c.task_id,
+      select: {c.task_id, count(c.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   # --- Cross-references (task->task links, m03.01 worklist 4) -----------------
 
   @doc """

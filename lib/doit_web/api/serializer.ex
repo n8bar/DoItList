@@ -68,6 +68,7 @@ defmodule DoItWeb.Api.Serializer do
       {
         "id": 101,
         "title": "Build the API",
+        "description": "how: wrap the context in a controller",
         "index": "1.2",
         "position": 1,
         "parent_id": 100,
@@ -80,6 +81,7 @@ defmodule DoItWeb.Api.Serializer do
         "priority": "high",
         "assignee_id": 7,
         "co_assignee_ids": [8, 9],
+        "comment_count": 2,
         "cross_references": [
           {"target_id": 205, "target_index": "2.1", "target_title": "Ship the SDK"}
         ],
@@ -91,6 +93,9 @@ defmodule DoItWeb.Api.Serializer do
 
   * `id` — the **stable** task id; the anchor every write op targets (it survives
     reorder/reparent).
+  * `description` — the task's how-to text, verbatim (`null` when unset). The
+    read-back of the `description` the write ops accept; the `ingest_report`
+    lint facts (m03.03 item 5.5) are computed over it adapter-side.
   * `index` — the m02.07 §1.7 positional label for the Initiative's
     `index_style`. Derived purely from sibling position, so it's correct after
     any reorder. `""` under the `none` style.
@@ -112,6 +117,9 @@ defmodule DoItWeb.Api.Serializer do
   * `assignee_id` — the primary assignee's user id, or `null`.
   * `co_assignee_ids` — the **complete** co-assignee user id list in promotion
     order (uncapped, unlike the UI's avatar chip).
+  * `comment_count` — how many **live** comments the task has (tombstones
+    excluded). A dumb count (m03.03 item 5.5.2): the reader decides what a zero
+    means; batched in one grouped query (no N+1).
   * `cross_references` — this task's **outgoing** task→task references (worklist
     4). Each entry carries the target's stable `target_id` and its **live**
     `target_index` label (computed from the current tree, so it never rots on a
@@ -213,19 +221,21 @@ defmodule DoItWeb.Api.Serializer do
   `tree` is the assembled task tree (`Tasks.initiative_task_tree/1`); `role` the
   acting user's role; `subtitle` / `progress` the Initiative header values;
   `co_ids` a `%{task_id => [user_id]}` map (`Tasks.co_assignee_ids_for_initiative/1`);
-  `links` the live cross-references as `[{source_id, target_id}]`
-  (`Tasks.list_links_for_initiative/1`).
+  `comment_counts` a `%{task_id => count}` map
+  (`Tasks.comment_counts_for_initiative/1`); `links` the live cross-references
+  as `[{source_id, target_id}]` (`Tasks.list_links_for_initiative/1`).
 
   The cross-references' target labels are computed from a single pre-pass over
   the same tree (`label_index`), so resolving every reference to its **live**
   index label adds **no** query (batched, no N+1).
   """
-  def initiative_tree(initiative, tree, role, subtitle, progress, co_ids, links) do
+  def initiative_tree(initiative, tree, role, subtitle, progress, co_ids, comment_counts, links) do
     index_style = initiative.index_style
 
     ctx = %{
       index_style: index_style,
       co_ids: co_ids,
+      comment_counts: comment_counts,
       label_index: DoIt.Tasks.label_index(tree, index_style),
       outgoing: adjacency(links, :outgoing),
       incoming: adjacency(links, :incoming)
@@ -258,6 +268,7 @@ defmodule DoItWeb.Api.Serializer do
       %{
         id: task.id,
         title: task.title,
+        description: task.description,
         index: DoIt.Tasks.Index.label(positions, ctx.index_style),
         position: position,
         parent_id: task.parent_id,
@@ -270,6 +281,7 @@ defmodule DoItWeb.Api.Serializer do
         priority: task.priority,
         assignee_id: task.assignee_id,
         co_assignee_ids: Map.get(ctx.co_ids, task.id, []),
+        comment_count: Map.get(ctx.comment_counts, task.id, 0),
         cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
         referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
         children: task_nodes(task.children, ctx, positions, depth + 1)

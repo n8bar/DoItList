@@ -45,12 +45,22 @@ defmodule DoItWeb.Api.InitiativeController do
       %{subtitle: subtitle, progress: progress} = Initiatives.header(initiative)
       tree = Tasks.initiative_task_tree(initiative.id)
       co_ids = Tasks.co_assignee_ids_for_initiative(initiative.id)
+      comment_counts = Tasks.comment_counts_for_initiative(initiative.id)
       links = Tasks.list_links_for_initiative(initiative.id)
 
       json(
         conn,
         Api.data(
-          Serializer.initiative_tree(initiative, tree, role, subtitle, progress, co_ids, links)
+          Serializer.initiative_tree(
+            initiative,
+            tree,
+            role,
+            subtitle,
+            progress,
+            co_ids,
+            comment_counts,
+            links
+          )
         )
       )
     end
