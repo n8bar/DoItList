@@ -60,7 +60,7 @@ Rank names are the project's own — learn them from the source's terms (a repo 
 
 - **Numbering on.** Every Initiative gets a label style (`index_style`) — references and cross-links need labels (product default `none`, off). Fit the project: `numerical` (`1.1.2`, the usual choice), `outline` (`I.A.1.a.i`), `roman` (`I.II.III`), or `alphabetical` (`A.B.C`). `none` only if the operator asks.
 - **Placeholder milestones.** General rule, not an M19 special case: whenever the source's numbering starts past 1, placeholder tasks fill the gap so tree numbers match source numbers. Mapping M19 onward is just the example — placeholders `M1`…`M18` put real work at `19.3.1`, not `1.3.1`; a plan starting at M10 needs `M1`…`M9` the same way. The parity is deliberate: a tree where M10 sits at number 1 lies about the plan. Numbering likely but unclear — "C3 Liquids" followed by "C4 Explosives" — is genuine numbering ambiguity: ask before proceeding.
-- **Build subtrees in one atomic batch.** One `apply_operations` batch with `lid` forward-references beats looped single-task calls — and any bulk pass rides one batch the same way: completions, comments, edits, never looped single-op calls (observed miss: ~23 sequential calls — 9 completes + 14 comments — right after batching the build).
+- **Build subtrees in one atomic batch.** One `apply_operations` batch with `lid` forward-references beats looped single-task calls — and any bulk pass rides one batch the same way: completions, comments, edits, never looped single-op calls.
 - **Chunk at the cap.** The batch cap is 150 operations; an oversized batch is rejected up front (422) before anything applies. A bigger import chunks deterministically — stable split points — with a provenance/progress comment per chunk.
 - **Idempotency key on every multi-op import.** Pass `idempotency_key` — a retry with the same key replays the stored response instead of re-applying. One key per logical import; a new payload gets a new key.
 
@@ -120,7 +120,7 @@ A human edits the tree too — in the app, while you work.
 
 ## Talking to the Operator
 
-- **In conversation, reference a task by its number** (`19.3.1`) — whenever numbering exists. Add the title on first mention or when the number alone is ambiguous. Numbering off → the title, an id accepted only as a disambiguator. (In-app text uses a `%`-reference instead — above.)
+- **In conversation, reference a task by its number** (`19.3.1`) — whenever numbering exists. Add the title on first mention or when the number alone is ambiguous. Numbering off → the title. Raw task ids never go to the operator. (In-app text uses a `%`-reference instead — above.)
 
 ## Quick Reference
 
