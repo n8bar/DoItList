@@ -235,12 +235,19 @@ defmodule DoIt.Initiatives do
   def update_initiative(%Initiative{} = initiative, attrs) do
     changeset = Initiative.changeset(initiative, stringify_keys(attrs))
     calc_changed? = Ecto.Changeset.get_change(changeset, :progress_calc) != nil
+    index_changed? = Ecto.Changeset.get_change(changeset, :index_style) != nil
 
     with {:ok, updated} <- Repo.update(changeset) do
       # A progress_calc switch invalidates every cached branch value at once;
       # recompute the whole tree so stored roll-ups don't linger in the old
       # mode until the next edit.
       if calc_changed?, do: DoIt.Tasks.recompute_initiative_tree(updated.id)
+
+      # An index_style switch re-labels every row's task number, which is
+      # derived at render — broadcast a tree change so other connected
+      # sessions reload instead of showing the old numbering until refresh.
+      if index_changed?, do: DoIt.Tasks.notify_tree_changed(updated.id, updated.root_task_id)
+
       {:ok, updated}
     end
   end

@@ -3741,6 +3741,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                         </button>
                       </form>
                     </div>
+
+                    <p class="px-3 pb-2 text-xs italic text-zinc-400 dark:text-zinc-500">
+                      Chat is live-only — messages clear when you leave.
+                    </p>
                   </div>
 
                   <script :type={Phoenix.LiveView.ColocatedHook} name=".Chat">
@@ -4546,45 +4550,45 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               <%= for a <- visible_archived(@archived, @show_hidden) do %>
                 <li
                   id={"archived-#{a.id}"}
-                  class="flex items-start sm:items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+                  class="flex flex-col gap-1 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
                 >
-                  <div class="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
-                    <span class="flex items-center gap-2 min-w-0">
-                      <.botanical_icon
-                        kind={:grove}
-                        class="w-4 h-4 text-zinc-400 dark:text-zinc-500"
-                      />
-                      <span class="truncate">{a.name}</span>
-                    </span>
+                  <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                    <.botanical_icon
+                      kind={:grove}
+                      class="w-4 h-4 text-zinc-400 dark:text-zinc-500"
+                    />
+                    <span class="truncate">{a.name}</span>
                     <span
                       :if={a.hidden? and not a.archived?}
                       class="text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded bg-zinc-200 text-zinc-600 dark:bg-zinc-700 dark:text-zinc-300"
                     >
                       hidden
                     </span>
-                  </div>
-                  <span class="flex flex-col sm:flex-row items-end sm:items-center gap-1 flex-none">
-                    <button
-                      :if={a.archived?}
-                      type="button"
-                      phx-click="unarchive_initiative"
-                      phx-value-id={a.id}
-                      data-latch="Restoring…"
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                    >
-                      <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
-                    </button>
-                    <button
-                      :if={a.hidden?}
-                      type="button"
-                      phx-click="unhide_initiative"
-                      phx-value-id={a.id}
-                      data-latch="Unhiding…"
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                    >
-                      <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
-                    </button>
                   </span>
+                  <div class="flex items-center justify-end gap-2">
+                    <span class="flex items-center gap-1 flex-none">
+                      <button
+                        :if={a.archived?}
+                        type="button"
+                        phx-click="unarchive_initiative"
+                        phx-value-id={a.id}
+                        data-latch="Restoring…"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                      >
+                        <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                      </button>
+                      <button
+                        :if={a.hidden?}
+                        type="button"
+                        phx-click="unhide_initiative"
+                        phx-value-id={a.id}
+                        data-latch="Unhiding…"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                      >
+                        <.icon name="hero-eye" class="w-3.5 h-3.5" /> Unhide
+                      </button>
+                    </span>
+                  </div>
                 </li>
               <% end %>
             </ul>
@@ -4602,41 +4606,41 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 <li
                   :for={t <- @trashed}
                   id={"trashed-#{t.id}"}
-                  class="flex items-start sm:items-center justify-between gap-2 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
+                  class="flex flex-col gap-1 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2"
                 >
-                  <div class="flex flex-col sm:flex-row sm:items-center gap-0.5 sm:gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
-                    <span class="flex items-center gap-2 min-w-0">
-                      <.botanical_icon
-                        kind={:grove}
-                        class="w-4 h-4 text-zinc-400 dark:text-zinc-500"
-                      />
-                      <span class="truncate">{t.name}</span>
-                    </span>
+                  <span class="flex items-center gap-2 min-w-0 text-sm text-zinc-600 dark:text-zinc-300">
+                    <.botanical_icon
+                      kind={:grove}
+                      class="w-4 h-4 text-zinc-400 dark:text-zinc-500"
+                    />
+                    <span class="truncate">{t.name}</span>
+                  </span>
+                  <div class="flex items-center justify-between gap-2">
                     <span class="text-xs text-zinc-400 dark:text-zinc-500 whitespace-nowrap">
                       trashed <.local_time value={t.trashed_at} format="%b %-d" />
                     </span>
+                    <span class="flex items-center gap-1 flex-none">
+                      <button
+                        type="button"
+                        phx-click="restore_initiative"
+                        phx-value-id={t.id}
+                        data-latch="Restoring…"
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                      >
+                        <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
+                      </button>
+                      <button
+                        type="button"
+                        phx-click="purge_initiative"
+                        phx-value-id={t.id}
+                        data-latch="Deleting…"
+                        data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
+                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
+                      >
+                        <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
+                      </button>
+                    </span>
                   </div>
-                  <span class="flex flex-col sm:flex-row items-end sm:items-center gap-1 flex-none">
-                    <button
-                      type="button"
-                      phx-click="restore_initiative"
-                      phx-value-id={t.id}
-                      data-latch="Restoring…"
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-                    >
-                      <.icon name="hero-arrow-uturn-left" class="w-3.5 h-3.5" /> Restore
-                    </button>
-                    <button
-                      type="button"
-                      phx-click="purge_initiative"
-                      phx-value-id={t.id}
-                      data-latch="Deleting…"
-                      data-confirm={"Permanently delete \"#{t.name}\"? This can't be undone."}
-                      class="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40"
-                    >
-                      <.icon name="hero-x-mark" class="w-3.5 h-3.5" /> Delete
-                    </button>
-                  </span>
                 </li>
               </ul>
             </div>
@@ -5051,9 +5055,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
     >
       <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
-        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">Delete initiative</h2>
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Move initiative to Trash
+        </h2>
         <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
-          Delete "{@name}" and everything in it? This can't be undone.
+          Move "{@name}" and everything in it to Trash? You can restore it from Trash for {Initiatives.trash_retention_days()} days.
         </p>
         <div class="mt-5 flex justify-end gap-2">
           <button
@@ -5068,7 +5074,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             data-delete-proceed
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
           >
-            Delete
+            Move to Trash
           </button>
         </div>
       </div>

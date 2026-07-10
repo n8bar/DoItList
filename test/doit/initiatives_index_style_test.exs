@@ -1,11 +1,12 @@
 defmodule DoIt.InitiativesIndexStyleTest do
   @moduledoc """
   m02.07 item 1.7.2 — the per-Initiative task-index style: it defaults to
-  "none", casts/validates through the changeset, and persists.
+  "none", casts/validates through the changeset, and persists. m03.03 O&C 6.1
+  — a style change broadcasts a tree change so other sessions re-label.
   """
   use DoIt.DataCase, async: true
 
-  alias DoIt.{Accounts, Initiatives}
+  alias DoIt.{Accounts, Initiatives, Tasks}
 
   defp user(name) do
     n = System.unique_integer([:positive])
@@ -43,6 +44,25 @@ defmodule DoIt.InitiativesIndexStyleTest do
       assert {:ok, %{index_style: ^style}} =
                Initiatives.update_initiative(init, %{"index_style" => style})
     end
+  end
+
+  test "a style change broadcasts a tree change on the Initiative topic" do
+    {:ok, init} = Initiatives.create_initiative(user("Eve"), %{"name" => "Five"})
+    :ok = Tasks.subscribe(init.id)
+
+    {:ok, updated} = Initiatives.update_initiative(init, %{"index_style" => "roman"})
+
+    assert_receive {:task_moved, task_id}, 1000
+    assert task_id == updated.root_task_id
+  end
+
+  test "an update that leaves the style alone broadcasts nothing" do
+    {:ok, init} = Initiatives.create_initiative(user("Fay"), %{"name" => "Six"})
+    :ok = Tasks.subscribe(init.id)
+
+    {:ok, _} = Initiatives.update_initiative(init, %{"name" => "Six, renamed"})
+
+    refute_receive {:task_moved, _}, 100
   end
 
   test "an unrecognized style is rejected" do
