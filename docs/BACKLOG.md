@@ -1,5 +1,5 @@
 # BACKLOG
-_Last updated: 2026-07-08_
+_Last updated: 2026-07-10_
 
 Work for releases _after_ the upcoming one. The currently-targeted release and its milestones live in [`PLAN.md`](PLAN.md); this file is for everything beyond that.
 
@@ -17,3 +17,4 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 - **Live-sync the Initiatives list.** Creating an Initiative (or gaining membership on one) doesn't broadcast anywhere, so another already-open Initiatives index/workspace view doesn't pick it up live — only on next visit/refresh. Found via M03's MCP testing (Arc 3), but it's a base-app gap: two browser tabs have the same behavior today.
 - **Initiative-level numbering offset.** A per-Initiative start number so the index begins at the real milestone number (e.g. `19.x`) without placeholder Milestone tasks — the index is purely positional today. Include API/MCP exposure so an agent can set it. Surfaced in M03 Arc 3's nitpick session; the skill uses placeholder M-tasks until this lands.
 - **Break out Initiative Settings into its own pane.** Move the Initiative Settings section out of the Details pane into a separate, collapsed-by-default pane that sits below the Initiative Details pane and appears whenever that pane is visible.
+- **Per-Initiative chat mute.** Silence a chosen Initiative's incoming-chat sound — follow-up to M04's session-tied chat upgrade if busy chats elsewhere get noisy.
