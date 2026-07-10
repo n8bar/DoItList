@@ -16,11 +16,10 @@ FRAMES=/tmp/doitlist-mcp
 mkdir -p "$FRAMES"
 BASE="$FRAMES/$(date +%Y%m%dT%H%M%S).$$"
 
-# Compile first, off the stdio stream: `--no-compile` on the exec below keeps
-# compiler noise out of the JSON-RPC frames, but without this step a session
-# spawned after an mcp_server/ edit serves the last-compiled (stale) schema.
-docker compose exec -T web sh -c "cd /app/mcp_server && mix compile" </dev/null >>"$BASE.err" 2>&1
-
-tee -a "$BASE.in" | docker compose exec -T -e DOITLIST_API_TOKEN -e DOITLIST_API_URL web \
-  sh -c "cd /app/mcp_server && exec mix run --no-halt --no-compile" \
+# Compile happens in-boot, in the same mix boot as the server: MIX_QUIET
+# keeps mix's compile chatter ("Compiling N files") off stdout, which is the
+# JSON-RPC channel. A separate pre-compile pass would cost a second ~13s mix
+# boot and push spawn-to-ready past stdio clients' init deadlines.
+tee -a "$BASE.in" | docker compose exec -T -e DOITLIST_API_TOKEN -e DOITLIST_API_URL -e MIX_QUIET=1 web \
+  sh -c "cd /app/mcp_server && exec mix run --no-halt" \
   2>>"$BASE.err" | tee -a "$BASE.out"
