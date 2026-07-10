@@ -16,6 +16,11 @@ FRAMES=/tmp/doitlist-mcp
 mkdir -p "$FRAMES"
 BASE="$FRAMES/$(date +%Y%m%dT%H%M%S).$$"
 
+# Compile first, off the stdio stream: `--no-compile` on the exec below keeps
+# compiler noise out of the JSON-RPC frames, but without this step a session
+# spawned after an mcp_server/ edit serves the last-compiled (stale) schema.
+docker compose exec -T web sh -c "cd /app/mcp_server && mix compile" >>"$BASE.err" 2>&1
+
 tee -a "$BASE.in" | docker compose exec -T -e DOITLIST_API_TOKEN -e DOITLIST_API_URL web \
   sh -c "cd /app/mcp_server && exec mix run --no-halt --no-compile" \
   2>>"$BASE.err" | tee -a "$BASE.out"
