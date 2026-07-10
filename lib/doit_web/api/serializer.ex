@@ -21,12 +21,15 @@ defmodule DoItWeb.Api.Serializer do
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
         "role": "owner",
-        "progress": 42
+        "progress": 42,
+        "ai_knobs": null
       }
 
   `role` is the acting user's role on the Initiative (`owner` | `editor` |
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
-  system root task's `computed_progress`, 0..100).
+  system root task's `computed_progress`, 0..100). `ai_knobs` is the
+  per-Initiative constants store for AI agents — plain text the product stores
+  but never interprets (m03.03 item 5.4).
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
 
@@ -40,6 +43,7 @@ defmodule DoItWeb.Api.Serializer do
         "progress": 42,
         "progress_calc": "leaf_average",
         "index_style": "numerical",
+        "ai_knobs": "deploy_day: friday",
         "root_task_id": 100,
         "tasks": [ <task node>, ... ]
       }
@@ -49,6 +53,9 @@ defmodule DoItWeb.Api.Serializer do
     unit). The agent needs this to predict the effect of a progress write.
   * `index_style` — the positional index style the labels below are rendered in
     (`none` | `outline` | `numerical` | `roman` | `alphabetical`).
+  * `ai_knobs` — the per-Initiative constants store for AI agents, surfaced
+    verbatim (plain text the product stores but never interprets; `null` when
+    unset).
   * `root_task_id` — the id of the Initiative's system root task. It is **not** a
     node in `tasks` (the tree starts at its children), but it's the `parent_id`
     every top-level task carries — so to add a task at the top level (worklist 3),
@@ -195,7 +202,8 @@ defmodule DoItWeb.Api.Serializer do
       name: initiative.name,
       subtitle: blank_to_empty(initiative.subtitle),
       role: role,
-      progress: progress || 0
+      progress: progress || 0,
+      ai_knobs: initiative.ai_knobs
     }
   end
 
@@ -231,6 +239,7 @@ defmodule DoItWeb.Api.Serializer do
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
       index_style: index_style,
+      ai_knobs: initiative.ai_knobs,
       root_task_id: initiative.root_task_id,
       tasks: task_nodes(tree, ctx, [], 0)
     }

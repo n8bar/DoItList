@@ -1,8 +1,8 @@
 defmodule DoitMcp.Tools.UpdateInitiative do
   @moduledoc """
   Content-only edit of an Initiative's fields (name, description, subtitle,
-  progress calc, index style, auto-promote co-assignees, viewer+). This
-  tool does NOT touch state (archived/hidden/trashed — see
+  progress calc, index style, AI knobs, auto-promote co-assignees, viewer+).
+  This tool does NOT touch state (archived/hidden/trashed — see
   `set_initiative_state`) or ownership — those are rejected here or
   handled elsewhere.
   """
@@ -18,6 +18,13 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     field(:subtitle, :string, required: false)
     field(:progress_calc, :string, required: false)
     field(:index_style, :string, required: false)
+
+    field(:ai_knobs, :string,
+      required: false,
+      description:
+        "Per-project agent settings store — plain text the product stores but never interprets"
+    )
+
     field(:auto_promote_co_assignees, :boolean, required: false)
     field(:viewer_plus, :boolean, required: false)
   end
@@ -31,6 +38,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
         :subtitle,
         :progress_calc,
         :index_style,
+        :ai_knobs,
         :auto_promote_co_assignees,
         :viewer_plus
       ])

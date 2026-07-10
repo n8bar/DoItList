@@ -580,6 +580,24 @@ defmodule DoItWeb.Api.OperationsTest do
       assert Initiatives.get_role(ini_id, ctx.owner.id) == "owner"
     end
 
+    test "initiative: update sets ai_knobs (edit-gated) and echoes it in the result", ctx do
+      knobs = "deploy_day: friday\nlocale: en"
+
+      {status, body} =
+        post_ops(ctx.editor, [
+          %{
+            "op" => "update",
+            "type" => "initiative",
+            "id" => ctx.ini.id,
+            "data" => %{"ai_knobs" => knobs}
+          }
+        ])
+
+      assert status == 200
+      assert Enum.at(body["results"], 0)["data"]["ai_knobs"] == knobs
+      assert Repo.get(DoIt.Initiatives.Initiative, ctx.ini.id).ai_knobs == knobs
+    end
+
     test "task: set the full co-assignee list", ctx do
       task = top_task(ctx.owner, ctx.ini, "Shared")
 

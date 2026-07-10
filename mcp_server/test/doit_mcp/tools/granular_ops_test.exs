@@ -51,6 +51,13 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"co_assignee_ids" => [1, 2, 3]}}},
     {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, name: "New name"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"name" => "New name"}}},
+    {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, ai_knobs: "deploy_day: friday"},
+     %{
+       "op" => "update",
+       "type" => "initiative",
+       "id" => 3,
+       "data" => %{"ai_knobs" => "deploy_day: friday"}
+     }},
     {DoitMcp.Tools.UpdateMemberRole, %{initiative_id: 3, user_id: 7, role: "viewer"},
      %{
        "op" => "update",
@@ -60,6 +67,13 @@ defmodule DoitMcp.Tools.GranularOpsTest do
     {DoitMcp.Tools.UpdateTask, %{task_id: 6, title: "New title"},
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"title" => "New title"}}}
   ]
+
+  test "update_initiative exposes the optional ai_knobs param in its input schema" do
+    schema = DoitMcp.Tools.UpdateInitiative.input_schema()
+
+    assert %{"type" => "string"} = schema["properties"]["ai_knobs"]
+    refute "ai_knobs" in Map.get(schema, "required", [])
+  end
 
   test "each granular tool builds its expected single op and relays the reply/frame through" do
     for {module, params, expected_op} <- @cases do

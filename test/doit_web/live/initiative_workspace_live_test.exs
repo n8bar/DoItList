@@ -107,6 +107,21 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     refute has_element?(view, "#task-#{a_task.id}")
   end
 
+  test "detail mode renders the AI-knobs setting; a change saves it", %{
+    conn: conn,
+    alpha: alpha
+  } do
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
+
+    assert has_element?(view, "textarea#ai-knobs")
+
+    view
+    |> element("#ai-knobs-form")
+    |> render_change(%{"ai_knobs" => "deploy_day: friday"})
+
+    assert Initiatives.get_initiative(alpha.id).ai_knobs == "deploy_day: friday"
+  end
+
   test "entering a detail subscribes; a live task broadcast updates the tree", %{
     conn: conn,
     owner: owner,

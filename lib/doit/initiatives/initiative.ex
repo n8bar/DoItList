@@ -20,6 +20,9 @@ defmodule DoIt.Initiatives.Initiative do
     # m02.07 item 1.7: positional task-index style for this tree (per-Initiative,
     # not per-account). "none" = no index shown (default). See DoIt.Tasks.Index.
     field :index_style, :string, default: "none"
+    # m03.03 item 5.4: per-Initiative constants store for AI agents — plain text
+    # the product stores but never interprets.
+    field :ai_knobs, :string
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
     field :trashed_at, :utc_datetime
     field :my_role, :string, virtual: true
@@ -59,6 +62,7 @@ defmodule DoIt.Initiatives.Initiative do
       :auto_promote_co_assignees,
       :viewer_plus,
       :index_style,
+      :ai_knobs,
       :owner_id
     ])
     |> validate_required([:name, :owner_id])
@@ -66,5 +70,6 @@ defmodule DoIt.Initiatives.Initiative do
     |> validate_inclusion(:index_style, DoIt.Tasks.Index.styles())
     |> validate_length(:name, min: 1, max: 120)
     |> validate_length(:description, max: 4000)
+    |> validate_length(:ai_knobs, max: 10_000)
   end
 end

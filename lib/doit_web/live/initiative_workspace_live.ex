@@ -1256,6 +1256,28 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
+  # m03.03 item 5.4: the per-Initiative AI-knobs store — plain text the product
+  # stores but never interprets, so nothing else re-renders on a change. The
+  # typed text is already visible client-side; the debounced save is acked with
+  # the same pulsed "Saved" tick as the subtitle (§6.7).
+  def handle_event("set_ai_knobs", %{"ai_knobs" => value}, socket) do
+    if not socket.assigns.can_edit do
+      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
+    else
+      case Initiatives.update_initiative(socket.assigns.initiative, %{"ai_knobs" => value}) do
+        {:ok, updated} ->
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> push_event("ai-knobs-saved", %{})}
+
+        {:error, cs} ->
+          {:noreply,
+           put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
   # m02.05 item 12.6: owner-only — it's a permission policy. Re-notify the tree
   # so any viewer+ lead's edit-ability re-evaluates live for open views.
   def handle_event("set_viewer_plus", params, socket) do
@@ -2926,6 +2948,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                     const box = document.querySelector("input[name='viewer_plus']");
                     if (box) { clearTimeout(box._vpTimer); box.disabled = false; }
                     if (window.DoitSavedTick) window.DoitSavedTick("viewer-plus-saved-tick");
+                  });
+                  this.handleEvent("ai-knobs-saved", () => {
+                    if (window.DoitSavedTick) window.DoitSavedTick("ai-knobs-saved-tick");
                   });
                   // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
                   // client-owned (DoitState.commentEditId), but SAVE is server-gated.
@@ -6098,6 +6123,41 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 </option>
               </select>
             </form>
+          </div>
+
+          <%!-- m03.03 item 5.4: per-Initiative constants store for AI agents —
+               plain text the product stores but never interprets. Debounced
+               save-on-blur; the "Saved" tick pulsed on "ai-knobs-saved" is the
+               ack for the otherwise-invisible write (§6.7, same as subtitle). --%>
+          <div>
+            <div class="flex items-center gap-2">
+              <label for="ai-knobs" class="text-xs text-zinc-500 dark:text-zinc-400">
+                AI knobs
+              </label>
+              <span
+                id="ai-knobs-saved-tick"
+                hidden
+                class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+              >
+                <.icon name="hero-check" class="w-3 h-3" /> Saved
+              </span>
+            </div>
+            <form id="ai-knobs-form" phx-change="set_ai_knobs">
+              <.input
+                type="textarea"
+                id="ai-knobs"
+                name="ai_knobs"
+                value={@initiative.ai_knobs}
+                rows="4"
+                placeholder="plain-text notes and settings for AI agents"
+                disabled={not @can_edit}
+                phx-debounce="blur"
+              />
+            </form>
+            <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+              A settings store for AI agents working this initiative — stored as
+              plain text, never interpreted by the app.
+            </p>
           </div>
 
           <%!-- m02.05 item 12.6: owner-only, since it's a permission policy. --%>

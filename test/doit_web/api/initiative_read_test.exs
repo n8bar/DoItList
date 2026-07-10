@@ -136,6 +136,20 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       # A leaf's index nests under its parent (two dotted segments).
       assert build["index"] =~ ~r/^\d+\.\d+$/
     end
+
+    test "ai_knobs is surfaced verbatim in the tree envelope and the list row", ctx do
+      knobs = "deploy_day: friday\nlocale: en"
+      {:ok, _} = Initiatives.update_initiative(ctx.ini, %{"ai_knobs" => knobs})
+
+      tree =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert json_response(tree, 200)["data"]["ai_knobs"] == knobs
+
+      list = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives")
+      row = json_response(list, 200)["data"] |> Enum.find(&(&1["id"] == ctx.ini.id))
+      assert row["ai_knobs"] == knobs
+    end
   end
 
   describe "GET /api/v1/initiatives (list)" do
