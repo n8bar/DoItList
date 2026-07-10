@@ -306,3 +306,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-09  Feat (m03.03): ai_knobs Initiative field (5.4) -- per-project agent constants store; migration + API ops/reads + MCP update_initiative param + settings-pane textarea with Saved-tick ack; full suite 462/0.
 2026-07-09  Feat (m03.03): skill deltas 4.3.3.1-2 implemented -- plan-reference triage (completable work vs stays-true reference) and ask-once-record-forever (check/write ai_knobs, opt-in setup interview); Quick Reference row + Knobs section point per-project values at ai_knobs; drift-guard green.
 2026-07-09  Feat (m03.03): skill delta 4.3.3.3 -- knobs stay terse (one line per settled answer; a paragraph means miscategorized content).
+2026-07-09  Doc (m03.03): O&C 6.4 Initiative-level comments (moved from BACKLOG.md; drive 3 put provenance in subtitle/description for want of it) + 6.5 chat-box ephemerality explainer.
