@@ -33,11 +33,12 @@ This skill is designed for an AI agent to treat the Initiative as the **living s
 
 - **The Initiative owns execution state.** Structure, status, progress, decision journal — there and only there.
 - **The repo owns durable reference.** Specs, designs, how-tos — what DoItList doesn't hold. Docs duplicating execution state (milestone rollups, worklist checkboxes) retire or become Initiative pointers, at the operator's pace; nothing lives in both places.
+- **The authority flip covers repo doc-governance itself.** A repo rule mandating canonical docs stay in sync is the operator's own superseded instruction — upstream content with a retirement date, not a competing authority. Finding one → note it to the operator as a retire-or-pointer candidate; never treat it as overriding the Initiative, never soften this skill to accommodate it.
 - **Never recommend a parallel "canonical" doc tree.** A mirror kept current "as the published record" recreates the drift this tool ends — not a safety net.
 
 ## DoItList's structure (what you map onto)
 
-An **Initiative** (the Project) holds **Tasks** nested arbitrarily deep, in one or several top-level trees (**Lists**). A task with children is a **branch**; its Progress rolls up from descendant **leaves**, whose progress is set directly. That's all DoItList knows.
+An **Initiative** (the Project) holds **Tasks** nested arbitrarily deep, in one or several top-level trees (**Lists**). A task with children is a **branch**; its Progress rolls up from descendant **leaves**, whose progress is set directly. Rollup is leaf-driven: setting `manual_progress` on a branch is never the move — a branch advances only through its leaves. That's all DoItList knows.
 
 ## Mapping a project onto it
 
@@ -46,9 +47,10 @@ Rank names are the project's own — learn them from the source's terms (a repo 
 ### Ingest fidelity
 
 - **Carry the content, not just the titles.** Source item's *how* → task **description**; *decisions and outcomes* → **comments**; never reduce an item to its title. Where-Information-Lives applies to source content at ingest, not only later authoring.
-- **Match the source's grain.** Map every level the source spells out; add none it doesn't, drop none it does. No condensing into a "roadmap"; no collapsing or inventing levels.
+- **Match the source's grain.** Map every level the source spells out; add none it doesn't, drop none it does. No condensing into a "roadmap"; no collapsing or inventing levels. Narrative and preamble prose maps to descriptions and comments, not invented task layers — while every completable level still becomes tasks: no shallow-import loophole, the depth requirements stand.
 - **Ingest the whole plan by default.** Completed milestones come as real subtrees marked done — roll up 100, keep numbering honest. Scope to the active lane only when the operator asks. Completed work isn't noise — it's the denominator that makes roll-up progress real.
-- **Triage the plan's references.** A referenced doc ingests only if it's completable work — worklists, milestone breakdowns, action items. Docs stating what must stay true — guardrails, standards, behavioral/UX specs — are reference, not plan: leave them in the repo; cite one in a description or comment where a task depends on it. Unsure → that's a scope question.
+- **Triage the plan's references.** A referenced doc ingests only if it's completable work — worklists, milestone breakdowns, action items. Docs stating what must stay true — guardrails, standards, behavioral/UX specs — are reference, not plan: leave them in the repo; cite one in a description or comment where a task depends on it. Triage applies per-item *inside* a doc too: standing criteria — release gates, policies — are Initiative info (description), not checkoffable tasks; a genuinely completable line (a named blocker) still is one. Duplicate standing criteria into per-release checklist tasks only on request or after asking. Unsure → that's a scope question.
+- **Current-focus lines map to the journal.** A source's "Next Action" / "current focus" line becomes a journal comment on the Initiative thread with a `%`-reference — never a pointer task, and no status field: next-action is derivable from the tree (first open milestone); a field would be duplicate state.
 - **Expansion follows sibling precedent.** In an existing Initiative, match sibling subtrees' depth — nest where content has natural sub-steps; no flat list beside deeply nested siblings.
 - **Ask sparingly — but spend the questions.** On genuine scope, grain, structure, or numbering ambiguity, ask. The budget is two or three questions (five when the ingest will run past ~30 items) — small so it gets spent on the biggest unknowns, never saved down to zero. **Scope is question #1:** whether completed work and side lanes come along is never settled by your own silent assumption. On a big ingest it's a judgment call whether the last question is one more clarification or the meta-question — "ask more, or proceed on best judgment?" An explicit depth or "summarize" instruction overrides; out of questions, default to the source's grain. (The numeric budget is deliberate: "the fewest needed" read as zero in three straight drives.)
 - **Ask once, record forever.** Check the Initiative's `ai_knobs` (its per-project agent settings, carried in the initiative read) before asking; write settled answers back (`update_initiative`) — a question is asked once ever, not once per session. On a big ingest, offer a short setup interview up front — the question budget spent deliberately — and record the answers. Knobs stay terse — one line per settled answer; if it needs a paragraph, it isn't a knob: it's a comment, a description, or repo reference.
@@ -58,11 +60,15 @@ Rank names are the project's own — learn them from the source's terms (a repo 
 
 - **Numbering on.** Every Initiative gets a label style (`index_style`) — references and cross-links need labels (product default `none`, off). Fit the project: `numerical` (`1.1.2`, the usual choice), `outline` (`I.A.1.a.i`), `roman` (`I.II.III`), or `alphabetical` (`A.B.C`). `none` only if the operator asks.
 - **Placeholder milestones.** General rule, not an M19 special case: whenever the source's numbering starts past 1, placeholder tasks fill the gap so tree numbers match source numbers. Mapping M19 onward is just the example — placeholders `M1`…`M18` put real work at `19.3.1`, not `1.3.1`; a plan starting at M10 needs `M1`…`M9` the same way. The parity is deliberate: a tree where M10 sits at number 1 lies about the plan. Numbering likely but unclear — "C3 Liquids" followed by "C4 Explosives" — is genuine numbering ambiguity: ask before proceeding.
-- **Build subtrees in one atomic batch.** One `apply_operations` batch with `lid` forward-references beats looped single-task calls.
+- **Build subtrees in one atomic batch.** One `apply_operations` batch with `lid` forward-references beats looped single-task calls — and any bulk pass rides one batch the same way: completions, comments, edits, never looped single-op calls (observed miss: ~23 sequential calls — 9 completes + 14 comments — right after batching the build).
+- **Chunk at the cap.** The batch cap is 150 operations; an oversized batch is rejected up front (422) before anything applies. A bigger import chunks deterministically — stable split points — with a provenance/progress comment per chunk.
+- **Idempotency key on every multi-op import.** Pass `idempotency_key` — a retry with the same key replays the stored response instead of re-applying. One key per logical import; a new payload gets a new key.
 
 ## Ingest Checkpoint
 
 Rules read at session start don't fire mid-build. Run this at the moment of action.
+
+**Pre-apply readback:** before a bulk apply, state the import shape in one message — top ranks, worklist expansion in or out, non-milestone sections in or out, completed-work handling. A statement, not a permission ask; open ambiguities in the readback are where the question budget gets spent.
 
 **Before applying an ingest batch, verify:**
 
@@ -72,8 +78,11 @@ Rules read at session start don't fire mid-build. Run this at the moment of acti
 4. Grain matches — every source level mapped, none invented.
 5. Top ranks labeled, in the source's own convention.
 6. Any check you resolved by your own assumption rather than the source or the operator → that's one of your questions. Ask it before applying.
+7. Referenced docs accounted for — each one ingested, cited, or asked about; none silently dropped.
+8. Your authored text scanned for task names in prose → converted to `%`-references.
+9. Question count — zero questions on a >30-item or non-default project is a failure, not a virtue.
 
-**After the batch lands:** leave a provenance comment on each top-rank task naming its source doc, then re-read this skill and audit the tree against it — fix gaps before reporting done.
+**After the batch lands:** leave a provenance comment on each top-rank task naming its source doc, then audit in writing: run `ingest_report`, re-read this skill, and post per-rule pass/fail — quoting the report's facts — as a comment on the Initiative thread (comments on its root task; `root_task_id` rides the initiative read). Grade the build against each rule *as written*: the object is the artifact, the standard is the skill; rule critique is out of scope — disagreements go to the operator separately. Written gets done; silent gets skipped. Fix gaps before reporting done.
 
 ## Accessing an Existing Initiative for the first time
 
@@ -99,6 +108,8 @@ A human edits the tree too — in the app, while you work.
 - **Journal both ends of a move.** A reparent comments the task it left *and* the one it landed on — not just the destination.
 - **Comments are tight.** One or two sentences: what changed and why. No fluff.
 - **Description → how-to / overflow.** How-to, concise overflow the title can't hold, or action subitems. **Never** a change journal.
+- **Subtitle carries identity.** The subtitle (the root task's title) says what the Initiative *is*; provenance and journaling go on the Initiative thread — comments on its root task (`add_comment`) — never the subtitle, never duplicated into the description.
+- **Repo paths are provenance.** A file path is citation, not content — it lives in the provenance comment, not in a description a Do It List reader can't follow anywhere.
 
 ## `%`-references
 
@@ -109,7 +120,7 @@ A human edits the tree too — in the app, while you work.
 
 ## Talking to the Operator
 
-- **In conversation, reference a task by its number** (`19.3.1`) — always. Add the title on first mention or when the number alone is ambiguous. (In-app text uses a `%`-reference instead — above.)
+- **In conversation, reference a task by its number** (`19.3.1`) — whenever numbering exists. Add the title on first mention or when the number alone is ambiguous. Numbering off → the title, an id accepted only as a disambiguator. (In-app text uses a `%`-reference instead — above.)
 
 ## Quick Reference
 
@@ -118,7 +129,7 @@ All on the `doitlist` MCP server; full params in each tool's schema (`tools/list
 | Intent | Tool |
 |---|---|
 | Create an Initiative | `create_initiative` — `index_style` (`numerical` / `outline` / `roman` / `alphabetical`) turns numbering on |
-| Build or reshape a whole subtree | `apply_operations` — one atomic batch; `lid` forward-refs beat single-call loops |
+| Build a subtree or run any bulk pass | `apply_operations` — one atomic batch (builds, completions, comments, edits), never looped single-op calls; `lid` forward-refs; `idempotency_key` per logical import |
 | Add one task | `create_task` |
 | Reparent or reorder | `move_task` — `reorder` for explicit sibling reorder |
 | Set a leaf's progress | `update_task` — `manual_progress` |
@@ -127,6 +138,7 @@ All on the `doitlist` MCP server; full params in each tool's schema (`tools/list
 | Find an Initiative by name | `list_initiatives` — resolve the operator's wording; don't ask for an id |
 | Read the current tree + live labels | `get_initiative_tree` |
 | Read a task's comment journal | `get_task_comments` |
+| Post-build lint facts for the audit | `ingest_report` — counts, ids, matched substrings; facts, never verdicts |
 | Record a settled per-project answer | `update_initiative` — `ai_knobs`, the Initiative-resident settings store |
 
 ## Common Mistakes
@@ -136,6 +148,7 @@ All on the `doitlist` MCP server; full params in each tool's schema (`tools/list
 - Ingesting only titles → a source item's *how* belongs in the description, its decisions and outcomes in comments.
 - Committing to the first plausible match when several Initiatives share a name → inspect and eliminate, or ask.
 - Stripping a `%⟨id⟩` token as junk → it's a live cross-reference; leave it — and write your own when your text names a task.
+- Setting `manual_progress` on a branch to advance it → rollup is leaf-driven; a branch moves only through its leaves.
 
 ## Knobs (per-project overrides)
 

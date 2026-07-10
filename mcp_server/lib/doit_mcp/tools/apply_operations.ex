@@ -11,6 +11,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
   A batch is capped at **150 operations**; a larger batch is rejected up front
   with a `422` (naming the count and the limit) before any of it is applied.
 
+  Before applying a bulk ingest or edit batch: if the doitlist skill is
+  loaded, run its Ingest Checkpoint now — this is the moment of action. And
+  batch the WHOLE pass — bulk completions, comments, and edits belong in this
+  one batch too, not looped single-op calls to the per-op tools.
+
   Each element of `operations` must be a JSON object matching the wire
   format:
 

@@ -5,6 +5,9 @@ defmodule DoitMcp.Tools.UpdateTask do
   (`complete_task`), moves (`move_task`), and co-assignees
   (`set_task_co_assignees`) are separate tools, matching the API's
   "one concern per update" rule.
+
+  Editing more than a couple of tasks in one pass → use `apply_operations`
+  as one batch instead of looping this tool.
   """
 
   use Anubis.Server.Component, type: :tool

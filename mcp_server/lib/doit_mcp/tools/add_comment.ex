@@ -4,6 +4,9 @@ defmodule DoitMcp.Tools.AddComment do
 
   The Initiative's own thread is its root task's comments: to comment on the
   Initiative itself, pass `task_id` = the Initiative payload's `root_task_id`.
+
+  Commenting on more than a couple of tasks in one pass → use
+  `apply_operations` as one batch instead of looping this tool.
   """
 
   use Anubis.Server.Component, type: :tool
