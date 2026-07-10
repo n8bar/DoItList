@@ -120,7 +120,7 @@ A human edits the tree too — in the app, while you work.
 
 ## Talking to the Operator
 
-- **In conversation, reference a task by its number** (`19.3.1`) — whenever numbering exists. Add the title on first mention or when the number alone is ambiguous. Numbering off → the title. Raw task ids never go to the operator. (In-app text uses a `%`-reference instead — above.)
+- **In conversation, reference a task by its number** (`19.3.1`) — whenever numbering exists. Add the title on first mention or when the number alone is ambiguous. Numbering off → the title; discovered ambiguity is the cue to offer turning numbering on. Raw task ids never go to the operator. (In-app text uses a `%`-reference instead — above.)
 
 ## Quick Reference
 
