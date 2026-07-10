@@ -244,9 +244,10 @@ defmodule DoIt.Initiatives do
       if calc_changed?, do: DoIt.Tasks.recompute_initiative_tree(updated.id)
 
       # An index_style switch re-labels every row's task number, which is
-      # derived at render — broadcast a tree change so other connected
-      # sessions reload instead of showing the old numbering until refresh.
-      if index_changed?, do: DoIt.Tasks.notify_tree_changed(updated.id, updated.root_task_id)
+      # derived at render from @initiative — broadcast the Initiative update
+      # so other connected sessions re-fetch it and re-render with the new
+      # style. Not a tree change: the tasks didn't move, so no tree reload.
+      if index_changed?, do: DoIt.Tasks.notify_initiative_updated(updated.id)
 
       {:ok, updated}
     end

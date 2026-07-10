@@ -2645,6 +2645,23 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
+  # The Initiative record itself changed (O&C 6.1: an index_style switch via
+  # web, API, or MCP). Task-number labels derive from @initiative.index_style
+  # at render, so re-fetch just the Initiative — same loader the detail-enter
+  # path uses (Initiatives.get_initiative/1), so the assign keeps its shape —
+  # and re-assign it. No tree reload: the tasks didn't change. A stray delivery
+  # in list mode or for another Initiative no-ops; the acting session's
+  # redundant re-fetch is harmless. A vanished row (deleted mid-flight) is
+  # ignored — the delete broadcast handles ejection.
+  def handle_info({:initiative_updated, id}, socket) do
+    with %{id: ^id} <- socket.assigns[:initiative],
+         %Initiatives.Initiative{} = initiative <- Initiatives.get_initiative(id) do
+      {:noreply, assign(socket, :initiative, initiative)}
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
   # Task-tree broadcasts are guarded against a stray in-flight delivery after we
   # unsubscribed on leave/switch: @initiative nil → ignore (the list isn't a
   # tree), AND a message whose task belongs to a DIFFERENT Initiative is dropped.
@@ -3791,7 +3808,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                     </div>
 
                     <p class="px-3 pb-2 text-xs italic text-zinc-400 dark:text-zinc-500">
-                      Chat is live-only — messages clear when you leave.
+                      Chat is live-only; messages clear when you leave.
                     </p>
                   </div>
 

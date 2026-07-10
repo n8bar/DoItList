@@ -5,6 +5,8 @@ defmodule DoItWeb.InitiativeShowCollabTest do
   end-to-end real-time path is presence/PubSub — verified [Human] in-browser;
   here we cover what's drivable server-side: messages fan out to viewers and
   are not persisted, and the author-only comment controls + tombstone render.
+  Also home to the m03.03 O&C 6.1 regression: an index-style change in one
+  session re-labels another live session's tree.
   """
   use DoItWeb.ConnCase, async: true
 
@@ -237,6 +239,44 @@ defmodule DoItWeb.InitiativeShowCollabTest do
 
       assert has_element?(view, "#initiative-comment-list #comment-#{comment.id}")
       assert render(view) =~ "hello from mate"
+    end
+  end
+
+  describe "index-style live propagation (m03.03 O&C 6.1)" do
+    test "a style change in one session re-labels another live session's tree", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      t1 = new_task(owner, ini, %{"title" => "First"})
+      t2 = new_task(owner, ini, %{"title" => "Second"})
+
+      {:ok, view_a, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+      {:ok, view_b, _} = live(log_in(build_conn(), owner), ~p"/initiatives/#{ini.id}")
+
+      # Default style is "none": neither session renders any index label.
+      refute has_element?(view_a, "[data-task-index]")
+      refute has_element?(view_b, "[data-task-index]")
+
+      # Session A switches the numbering style ("none" -> "numerical").
+      view_a
+      |> element("form[phx-change='set_index_style']")
+      |> render_change(%{"index_style" => "numerical"})
+
+      # Session B re-renders with the NEW style live — no refresh. This is the
+      # regression: B's tree reloaded but its stale @initiative kept the old
+      # style, so no labels appeared.
+      assert has_element?(view_b, "#task-#{t1.id} [data-task-index]")
+      assert has_element?(view_b, "#task-#{t2.id} [data-task-index]")
+      assert has_element?(view_b, "[data-copy-index='1']")
+      assert has_element?(view_b, "[data-copy-index='2']")
+      # B's own settings dropdown reflects the re-fetched @initiative too.
+      assert has_element?(view_b, "#index-style option[value='numerical'][selected]")
+
+      # The acting session shows the new labels as well.
+      assert has_element?(view_a, "#task-#{t1.id} [data-task-index]")
+      assert has_element?(view_a, "[data-copy-index='1']")
+      assert has_element?(view_a, "[data-copy-index='2']")
     end
   end
 

@@ -3314,6 +3314,15 @@ defmodule DoIt.Tasks do
   def notify_tree_changed(initiative_id, task_id),
     do: broadcast_change(initiative_id, {:task_moved, task_id})
 
+  @doc """
+  Broadcast that the Initiative record itself changed (a render-affecting
+  setting like `index_style`) so members re-fetch `@initiative` — no tree
+  reload; the tasks didn't change. Rides the same transaction-aware queue as
+  the task broadcasts.
+  """
+  def notify_initiative_updated(initiative_id),
+    do: broadcast_change(initiative_id, {:initiative_updated, initiative_id})
+
   # --- PubSub ----------------------------------------------------------------
 
   def subscribe(initiative_id) do
