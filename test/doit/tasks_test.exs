@@ -1281,5 +1281,27 @@ defmodule DoIt.TasksTest do
       {:ok, _} = Tasks.delete_comment(comment.id, owner)
       assert_receive {:comment_changed, ^task_id}
     end
+
+    test "a root-task comment — the Initiative's own thread (m03.03 item 6.4) — lists and records activity",
+         ctx do
+      %{user: owner, initiative: initiative} = ctx
+      root = Tasks.get_task(initiative.root_task_id)
+
+      {:ok, comment} = Tasks.add_comment(root, owner, "initiative-level note")
+
+      # The thread reads back off the root task id — no special casing.
+      assert [listed] = Tasks.list_comments(initiative.root_task_id)
+      assert listed.id == comment.id
+      assert listed.body == "initiative-level note"
+
+      # And the "commented" event lands in the Initiative's activity rollup,
+      # stamped with the root task id.
+      %{events: events} = Tasks.list_initiative_activity(initiative.id)
+
+      assert Enum.any?(
+               events,
+               &(&1.kind == "commented" and &1.task_id == initiative.root_task_id)
+             )
+    end
   end
 end

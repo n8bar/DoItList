@@ -4,6 +4,9 @@ defmodule DoitMcp.Tools.GetTaskComments do
   `GET /api/v1/initiatives/:id/tasks/:task_id/comments`. Tool twin of
   `DoitMcp.Resources.TaskComments`, for agents that only look for reads in
   `tools/list`.
+
+  The Initiative's own thread is its root task's comments: to read it, pass
+  `task_id` = the Initiative payload's `root_task_id`.
   """
 
   use Anubis.Server.Component, type: :tool

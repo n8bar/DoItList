@@ -3125,7 +3125,12 @@ document.addEventListener(
     // the server persists the id-anchored form (Wave 3 — no server change, no
     // edge; the comment body is just a string the client transforms).
     const body = transformForSave(raw, resolveRefPath)
-    const list = document.querySelector("[data-comment-list]")
+    // The echo bubble lands in THIS form's own thread — the task pane and the
+    // Initiative-details pane (item 6.4) each wrap their list + form in a
+    // [data-comments-block], so scope the lookup to the submitting form's block.
+    const list = (form.closest("[data-comments-block]") || document).querySelector(
+      "[data-comment-list]"
+    )
     const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
     if (list) {
       const li = buildPendingComment(echoId, body, form.dataset)
@@ -3133,9 +3138,13 @@ document.addEventListener(
       renderAllRefs(li) // show the token -> link in the optimistic bubble at once
     }
     if (input) input.value = ""
+    // The Initiative-details form names its thread (task_id = the root task,
+    // item 6.4); the task pane's form carries none and means the selection.
+    const payload = {comment: {body}, echo_id: echoId}
+    if (form.dataset.taskId) payload.task_id = form.dataset.taskId
     window.DoitPush(
       "add_comment",
-      {comment: {body}, echo_id: echoId},
+      payload,
       (reply) => {
         // ok → the refresh carries the real li; pull the pending stand-in.
         // !ok → the comment was refused (permission / empty); pull it too.

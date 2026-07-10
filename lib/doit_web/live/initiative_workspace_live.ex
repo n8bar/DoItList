@@ -188,8 +188,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # Client hook events (e.g. DragReorder's "move_task") send ids as JSON
   # numbers, not strings — accept a valid in-range integer id as-is so the
   # "never crash, reply not_found" guard doesn't silently reject every move.
-  defp parse_id(value) when is_integer(value) and value >= @pg_bigint_min and value <= @pg_bigint_max,
-    do: value
+  defp parse_id(value)
+       when is_integer(value) and value >= @pg_bigint_min and value <= @pg_bigint_max,
+       do: value
 
   defp parse_id(_), do: nil
 
@@ -251,6 +252,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:selected_staff_pool, nil)
     |> assign(:comments, [])
     |> assign(:activity, [])
+    # The Initiative-details thread (item 6.4): the Initiative's own comments
+    # ARE its root task's comments (doc 6.4.1). Loaded up front — the details
+    # pane is pre-rendered (revealed client-side), so the thread must be ready.
+    |> assign(:initiative_comments, Tasks.list_comments(initiative.root_task_id))
     |> assign(:chat_messages, [])
     |> assign(:chat_log_id, 0)
     |> assign(
@@ -335,6 +340,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:direct_assignee_ids, MapSet.new())
     |> assign(:comments, [])
     |> assign(:activity, [])
+    |> assign(:initiative_comments, [])
     |> assign(:chat_messages, [])
     |> assign(:chat_log_id, 0)
     |> assign(:online_ids, MapSet.new())
@@ -904,6 +910,45 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             |> assign(:comments, Tasks.list_comments(id))
             |> assign(:activity, Tasks.list_task_activity(id))
         end
+    end
+  end
+
+  # Which thread an add-comment targets (item 6.4): the Initiative-details form
+  # posts task_id = the root task — its thread IS the root task's comments
+  # (doc 6.4.1) — while the task pane's form sends none and means the current
+  # selection. Only the root id is honored (the two forms offer no other
+  # target), so a stale or foreign id falls back to the selection.
+  defp comment_target(socket, task_id) do
+    case socket.assigns[:initiative] do
+      %{root_task_id: root_id} ->
+        if parse_id(task_id) == root_id,
+          do: Tasks.get_task(root_id),
+          else: socket.assigns.selected_task
+
+      _ ->
+        socket.assigns.selected_task
+    end
+  end
+
+  # Refresh whichever pane(s) render this task's thread: the task pane when it's
+  # the open selection, and the Initiative-details thread when it's the root
+  # task (item 6.4 — that thread IS the root task's comments). nil — a comment
+  # already gone by the time we looked — falls back to the selected pane, the
+  # pre-6.4 behavior for those terminal branches.
+  defp refresh_comment_panes(socket, nil), do: refresh_selected(socket)
+
+  defp refresh_comment_panes(socket, task_id) do
+    socket =
+      if socket.assigns.selected_task_id == task_id,
+        do: refresh_selected(socket),
+        else: socket
+
+    case socket.assigns[:initiative] do
+      %{root_task_id: ^task_id} ->
+        assign(socket, :initiative_comments, Tasks.list_comments(task_id))
+
+      _ ->
+        socket
     end
   end
 
@@ -1615,7 +1660,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   def handle_event("add_comment", params, socket) do
     %{"comment" => %{"body" => body}} = params
     echo_id = params["echo_id"]
-    task = socket.assigns.selected_task
+    task = comment_target(socket, params["task_id"])
 
     if not (task && can_progress?(socket, task.id)) do
       # Reply ok:false so the client pulls its optimistic bubble — a rejected
@@ -1631,7 +1676,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           msg = ref_link_message(socket, "", body)
 
           {:reply, %{ok: true, echo_id: echo_id, id: comment.id},
-           maybe_flash_links(refresh_selected(socket), msg)}
+           socket |> refresh_comment_panes(task.id) |> maybe_flash_links(msg)}
 
         {:error, _cs} ->
           {:reply, %{ok: false, echo_id: echo_id},
@@ -1677,8 +1722,8 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       cid ->
         case Tasks.delete_comment(cid, user) do
-          {:ok, _comment} ->
-            {:noreply, refresh_selected(socket)}
+          {:ok, comment} ->
+            {:noreply, refresh_comment_panes(socket, comment.task_id)}
 
           {:error, :unauthorized} ->
             {:noreply, put_flash(socket, :error, "You can only delete your own comments.")}
@@ -2103,10 +2148,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   defp do_save_comment(socket, cid, id, body) do
     user = socket.assigns.current_user
 
-    old_body =
+    # task_id names the comment's thread so the refresh lands on the right
+    # pane(s) — the root task's comments render in the Initiative details
+    # (item 6.4), not the task pane.
+    {old_body, task_id} =
       case Tasks.get_comment(cid) do
-        %{body: b} -> b
-        _ -> ""
+        %{body: b, task_id: tid} -> {b, tid}
+        _ -> {"", nil}
       end
 
     case Tasks.edit_comment(cid, user, body) do
@@ -2114,13 +2162,17 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         msg = ref_link_message(socket, old_body, body)
 
         {:noreply,
-         socket |> push_event("comment-saved", %{id: id}) |> refresh_selected() |> maybe_flash_links(msg)}
+         socket
+         |> push_event("comment-saved", %{id: id})
+         |> refresh_comment_panes(task_id)
+         |> maybe_flash_links(msg)}
 
       {:error, :unauthorized} ->
         {:noreply, put_flash(socket, :error, "You can only edit your own comments.")}
 
       {:error, :not_found} ->
-        {:noreply, socket |> push_event("comment-saved", %{id: id}) |> refresh_selected()}
+        {:noreply,
+         socket |> push_event("comment-saved", %{id: id}) |> refresh_comment_panes(task_id)}
 
       {:error, _cs} ->
         {:noreply, put_flash(socket, :error, "Comment cannot be empty.")}
@@ -2615,24 +2667,20 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
          else: socket
        )}
 
-  # A comment landed in the Initiative (item 14.3): refresh the pane only for a
-  # viewer who has that task open, so the comment appears live for them without
-  # every other viewer needlessly reloading their own selected pane. In list mode
-  # selected_task_id is nil, so this is a safe no-op there.
-  def handle_info({:comment_added, task_id}, socket) do
-    if socket.assigns.selected_task_id == task_id,
-      do: {:noreply, refresh_selected(socket)},
-      else: {:noreply, socket}
-  end
+  # A comment landed in the Initiative (item 14.3): refresh only the pane(s)
+  # showing that task's thread — the open selection, or the Initiative-details
+  # thread when it's the root task (item 6.4) — so the comment appears live
+  # without every other viewer needlessly reloading their own selected pane.
+  # In list mode selected_task_id and @initiative are nil, so it's a safe
+  # no-op there.
+  def handle_info({:comment_added, task_id}, socket),
+    do: {:noreply, refresh_comment_panes(socket, task_id)}
 
   # An author edited or deleted a comment (m02.08 worklist 3 item 2.2/2.3):
-  # refresh the pane live for any viewer who has that task open, like a new
+  # refresh the pane live for any viewer who has that thread open, like a new
   # comment landing.
-  def handle_info({:comment_changed, task_id}, socket) do
-    if socket.assigns.selected_task_id == task_id,
-      do: {:noreply, refresh_selected(socket)},
-      else: {:noreply, socket}
-  end
+  def handle_info({:comment_changed, task_id}, socket),
+    do: {:noreply, refresh_comment_panes(socket, task_id)}
 
   # Live chat (item 3.1): a message arrived for this Initiative. Append to the
   # capped in-socket list (oldest dropped past @chat_cap) and bump a monotonic
@@ -4057,6 +4105,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                       root_task={@root_task}
                       subtitle={@subtitle}
                       am_owner={@current_user.id == @initiative.owner_id}
+                      comments={@initiative_comments}
+                      current_user={@current_user}
+                      online_ids={@online_ids}
+                      can_comment={
+                        @can_edit or MapSet.member?(@led_task_ids, @initiative.root_task_id)
+                      }
                     />
                   </div>
 
@@ -5773,14 +5827,16 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             data-complete-toggle
             aria-label={if @task.status == "done", do: "Reopen task", else: "Mark task completed"}
             aria-pressed={to_string(@task.status == "done")}
-            class={[
-              "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
-              "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400",
-              "drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]",
-              # Dark mode: one drop-shadow can't get denser past full black,
-              # so stack the same shadow 5x (filter functions compose).
-              "dark:[filter:drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))]"
-            ]}
+            class={
+              [
+                "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+                "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400",
+                "drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]",
+                # Dark mode: one drop-shadow can't get denser past full black,
+                # so stack the same shadow 5x (filter functions compose).
+                "dark:[filter:drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))]"
+              ]
+            }
           >
             <%!-- Check visibility keys off aria-pressed (not server-conditional
                  classes) so the optimistic leaf flip in app.js is one attribute
@@ -5882,6 +5938,224 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     """
   end
 
+  attr :comment, :map, required: true
+  attr :current_user, :map, required: true
+  attr :online_ids, :any, required: true
+
+  @doc """
+  One comment row — shared verbatim by the task pane's thread and the
+  Initiative-details thread (item 6.4), so the two can't diverge. DOM ids stay
+  keyed by the comment id alone (`comment-<id>`): a comment renders in exactly
+  one thread, and all the client-owned edit/versions/delete machinery (the
+  appliers, "comment-saved", the delete capture) resolves rows by these ids.
+  """
+  def comment_item(assigns) do
+    ~H"""
+    <%!-- Open/close of the inline editor is CLIENT-OWNED (m02.09 WL3 3.3,
+         §6.5): the <li> carries data-keep="comment-edit" so a list-refresh
+         patch can't snap an open editor shut, and the "comment-edit"
+         applier reads DoitState.commentEditId to show the display block or
+         the author's form. Both render statically; the form is hidden by
+         default and revealed at click with no round trip. --%>
+    <li id={"comment-#{@comment.id}"} data-keep="comment-edit" class="group/comment text-sm">
+      <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
+        <.avatar
+          :if={@comment.user}
+          user={@comment.user}
+          online={@comment.user && MapSet.member?(@online_ids, @comment.user.id)}
+          class="w-4 h-4 text-[8px]"
+        />
+        {@comment.user && @comment.user.name} ·
+        <.local_time value={@comment.inserted_at} format="%b %-d %H:%M" />
+      </div>
+
+      <%= cond do %>
+        <% Tasks.comment_deleted?(@comment) -> %>
+          <%!-- Tombstone (item 2.3): the row survives so thread shape +
+               references hold, shown as deleted. --%>
+          <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
+        <% true -> %>
+          <%!-- Display block — shown when NOT editing (the applier toggles
+               `hidden` against DoitState.commentEditId). --%>
+          <div data-comment-display>
+            <div
+              data-comment-body
+              class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap"
+            >
+              {@comment.body}
+            </div>
+            <div class="mt-0.5 flex items-center gap-2 text-xs">
+              <button
+                :if={@comment.versions != []}
+                type="button"
+                data-comment-versions-open
+                phx-value-id={@comment.id}
+                class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
+              >
+                edited · history
+              </button>
+              <%= if comment_author?(@comment, @current_user) do %>
+                <button
+                  type="button"
+                  id={"edit-comment-btn-#{@comment.id}"}
+                  data-comment-edit-open
+                  phx-value-id={@comment.id}
+                  class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  id={"delete-comment-btn-#{@comment.id}"}
+                  data-comment-delete
+                  phx-click="delete_comment"
+                  phx-value-id={@comment.id}
+                  data-confirm="Delete this comment? It will be marked as deleted."
+                  class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
+                >
+                  Delete
+                </button>
+              <% end %>
+            </div>
+          </div>
+          <%!-- Inline editor (item 2.2) — author-only, rendered hidden;
+               the "comment-edit" applier reveals it when this comment is
+               the client-owned commentEditId. Save stays server-owned; the
+               context re-checks authorship. The Edit button seeds + focuses
+               the textarea at click (app.js), so a stale value never shows. --%>
+          <form
+            :if={comment_author?(@comment, @current_user)}
+            id={"edit-comment-form-#{@comment.id}"}
+            data-comment-edit-form
+            hidden
+            phx-submit="save_comment"
+            phx-value-id={@comment.id}
+            class="mt-1 flex flex-col gap-1"
+          >
+            <textarea
+              id={"edit-comment-textarea-#{@comment.id}"}
+              phx-hook="CommentEditRef"
+              name="comment[body]"
+              aria-label="Edit comment"
+              rows="2"
+              class="w-full textarea textarea-bordered textarea-sm"
+            ><%= @comment.body %></textarea>
+            <div class="flex items-center gap-2">
+              <button
+                type="submit"
+                data-latch="Saving…"
+                class="text-xs px-2.5 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+              >
+                Save
+              </button>
+              <button
+                type="button"
+                data-comment-edit-cancel
+                class="text-xs px-2.5 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+      <% end %>
+
+      <%!-- Prior-versions popup (item 2.2): a minimal inline panel listing
+           earlier bodies, NEWEST FIRST (the `versions` preload is ordered
+           desc in list_comments/1). Open/close is CLIENT-OWNED (m02.09 WL3
+           3.3, §6.5): rendered statically + hidden, carries
+           data-keep="comment-versions" so a patch can't snap it shut, and
+           the "comment-versions" applier reveals it when this comment is the
+           client-owned commentVersionsId — no round trip on open or close. --%>
+      <div
+        :if={not Tasks.comment_deleted?(@comment) and @comment.versions != []}
+        id={"comment-versions-#{@comment.id}"}
+        data-keep="comment-versions"
+        hidden
+        class="mt-1 rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 p-2"
+      >
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs font-medium text-zinc-600 dark:text-zinc-300">
+            Edit history
+          </span>
+          <button
+            type="button"
+            data-comment-versions-cancel
+            aria-label="Close history"
+            class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+          >
+            <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <ul class="space-y-1">
+          <%!-- Forward-compatible lazy-load hook: a future fetch-on-open
+               can reveal this while versions stream in. Hidden today —
+               versions render inline from the preload. --%>
+          <li
+            data-versions-loading
+            hidden
+            class="text-xs italic text-zinc-400 dark:text-zinc-500"
+          >
+            Loading…
+          </li>
+          <li
+            :for={v <- @comment.versions}
+            class="text-xs text-zinc-600 dark:text-zinc-300"
+          >
+            <span class="text-zinc-400 dark:text-zinc-500">
+              <.local_time value={v.inserted_at} format="%b %-d %H:%M" />
+            </span>
+            <div data-comment-body class="whitespace-pre-wrap">{v.body}</div>
+          </li>
+        </ul>
+      </div>
+    </li>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :current_user, :map, required: true
+  attr :task_id, :any, default: nil
+
+  @doc """
+  The add-comment form, shared by both threads (item 6.4). The task pane's
+  instance sends no task_id and means the current selection; the
+  Initiative-details instance names its thread with task_id = the root task —
+  the hidden input rides the native phx-submit, data-task-id rides the
+  optimistic DoitPush path (app.js), so both arrive as params["task_id"].
+  The data-my-* dataset seeds the optimistic echo bubble's avatar/header.
+  """
+  def add_comment_form(assigns) do
+    ~H"""
+    <form
+      id={@id}
+      phx-submit="add_comment"
+      data-add-comment-form
+      data-task-id={@task_id}
+      data-my-name={@current_user.name}
+      data-my-initials={initials(@current_user)}
+      data-my-bg={avatar_bg(@current_user)}
+      data-my-fg={avatar_fg(@current_user)}
+      class="flex gap-2"
+    >
+      <input :if={@task_id} type="hidden" name="task_id" value={@task_id} />
+      <input
+        type="text"
+        name="comment[body]"
+        placeholder="Write a comment..."
+        aria-label="Comment text"
+        class="flex-1 input input-bordered input-sm"
+      />
+      <button
+        type="submit"
+        phx-disable-with="Posting..."
+        class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
+      >
+        Post
+      </button>
+    </form>
+    """
+  end
+
   attr :form, :map, required: true
   attr :can_edit, :boolean, required: true
   attr :can_admin, :boolean, required: true
@@ -5889,6 +6163,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   attr :root_task, :map, required: true
   attr :subtitle, :string, required: true
   attr :am_owner, :boolean, required: true
+  attr :comments, :list, required: true
+  attr :current_user, :map, required: true
+  attr :online_ids, :any, required: true
+  attr :can_comment, :boolean, required: true
 
   def initiative_editor(assigns) do
     ~H"""
@@ -6020,6 +6298,34 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       </div>
 
       <.sort_menu task={@root_task} can_edit={@can_edit} label="Sort lists by" scope="init" />
+
+      <%!-- The Initiative's own thread (item 6.4): its comments ARE the root
+           task's comments (doc 6.4.1) — same rows, same events as the task
+           pane's thread; the form names the thread via task_id = the root
+           task. Markup shared through comment_item / add_comment_form so the
+           two threads can't diverge. --%>
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3" data-comments-block>
+        <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
+        <ul
+          id="initiative-comment-list"
+          phx-hook="CommentRefs"
+          data-comment-list
+          class="space-y-2 mb-2"
+        >
+          <.comment_item
+            :for={c <- @comments}
+            comment={c}
+            current_user={@current_user}
+            online_ids={@online_ids}
+          />
+        </ul>
+        <.add_comment_form
+          :if={@can_comment}
+          id="initiative-comment-form"
+          current_user={@current_user}
+          task_id={@initiative.root_task_id}
+        />
+      </div>
 
       <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
            behavior that isn't day-to-day editing. data-keep="open" preserves
@@ -6888,7 +7194,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         </div>
       </div>
 
-      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3">
+      <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3" data-comments-block>
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mb-2">
           Loading…
@@ -6900,194 +7206,14 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           data-comment-list
           class="space-y-2 mb-2"
         >
-          <%!-- Open/close of the inline editor is CLIENT-OWNED (m02.09 WL3 3.3,
-               §6.5): the <li> carries data-keep="comment-edit" so a list-refresh
-               patch can't snap an open editor shut, and the "comment-edit"
-               applier reads DoitState.commentEditId to show the display block or
-               the author's form. Both render statically; the form is hidden by
-               default and revealed at click with no round trip. --%>
-          <li
+          <.comment_item
             :for={c <- @comments}
-            id={"comment-#{c.id}"}
-            data-keep="comment-edit"
-            class="group/comment text-sm"
-          >
-            <div class="text-xs text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
-              <.avatar
-                :if={c.user}
-                user={c.user}
-                online={c.user && MapSet.member?(@online_ids, c.user.id)}
-                class="w-4 h-4 text-[8px]"
-              />
-              {c.user && c.user.name} · <.local_time value={c.inserted_at} format="%b %-d %H:%M" />
-            </div>
-
-            <%= cond do %>
-              <% Tasks.comment_deleted?(c) -> %>
-                <%!-- Tombstone (item 2.3): the row survives so thread shape +
-                     references hold, shown as deleted. --%>
-                <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
-              <% true -> %>
-                <%!-- Display block — shown when NOT editing (the applier toggles
-                     `hidden` against DoitState.commentEditId). --%>
-                <div data-comment-display>
-                  <div
-                    data-comment-body
-                    class="text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap"
-                  >
-                    {c.body}
-                  </div>
-                  <div class="mt-0.5 flex items-center gap-2 text-xs">
-                    <button
-                      :if={c.versions != []}
-                      type="button"
-                      data-comment-versions-open
-                      phx-value-id={c.id}
-                      class="text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 italic"
-                    >
-                      edited · history
-                    </button>
-                    <%= if comment_author?(c, @current_user) do %>
-                      <button
-                        type="button"
-                        id={"edit-comment-btn-#{c.id}"}
-                        data-comment-edit-open
-                        phx-value-id={c.id}
-                        class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-200"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        id={"delete-comment-btn-#{c.id}"}
-                        data-comment-delete
-                        phx-click="delete_comment"
-                        phx-value-id={c.id}
-                        data-confirm="Delete this comment? It will be marked as deleted."
-                        class="opacity-0 group-hover/comment:opacity-100 focus:opacity-100 text-red-400 dark:text-red-500 hover:text-red-600 dark:hover:text-red-400"
-                      >
-                        Delete
-                      </button>
-                    <% end %>
-                  </div>
-                </div>
-                <%!-- Inline editor (item 2.2) — author-only, rendered hidden;
-                     the "comment-edit" applier reveals it when this comment is
-                     the client-owned commentEditId. Save stays server-owned; the
-                     context re-checks authorship. The Edit button seeds + focuses
-                     the textarea at click (app.js), so a stale value never shows. --%>
-                <form
-                  :if={comment_author?(c, @current_user)}
-                  id={"edit-comment-form-#{c.id}"}
-                  data-comment-edit-form
-                  hidden
-                  phx-submit="save_comment"
-                  phx-value-id={c.id}
-                  class="mt-1 flex flex-col gap-1"
-                >
-                  <textarea
-                    id={"edit-comment-textarea-#{c.id}"}
-                    phx-hook="CommentEditRef"
-                    name="comment[body]"
-                    aria-label="Edit comment"
-                    rows="2"
-                    class="w-full textarea textarea-bordered textarea-sm"
-                  ><%= c.body %></textarea>
-                  <div class="flex items-center gap-2">
-                    <button
-                      type="submit"
-                      data-latch="Saving…"
-                      class="text-xs px-2.5 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
-                    >
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      data-comment-edit-cancel
-                      class="text-xs px-2.5 py-1 rounded border border-zinc-300 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-            <% end %>
-
-            <%!-- Prior-versions popup (item 2.2): a minimal inline panel listing
-                 earlier bodies, NEWEST FIRST (the `versions` preload is ordered
-                 desc in list_comments/1). Open/close is CLIENT-OWNED (m02.09 WL3
-                 3.3, §6.5): rendered statically + hidden, carries
-                 data-keep="comment-versions" so a patch can't snap it shut, and
-                 the "comment-versions" applier reveals it when this comment is the
-                 client-owned commentVersionsId — no round trip on open or close. --%>
-            <div
-              :if={not Tasks.comment_deleted?(c) and c.versions != []}
-              id={"comment-versions-#{c.id}"}
-              data-keep="comment-versions"
-              hidden
-              class="mt-1 rounded border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/60 p-2"
-            >
-              <div class="flex items-center justify-between mb-1">
-                <span class="text-xs font-medium text-zinc-600 dark:text-zinc-300">
-                  Edit history
-                </span>
-                <button
-                  type="button"
-                  data-comment-versions-cancel
-                  aria-label="Close history"
-                  class="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
-                >
-                  <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
-                </button>
-              </div>
-              <ul class="space-y-1">
-                <%!-- Forward-compatible lazy-load hook: a future fetch-on-open
-                     can reveal this while versions stream in. Hidden today —
-                     versions render inline from the preload. --%>
-                <li
-                  data-versions-loading
-                  hidden
-                  class="text-xs italic text-zinc-400 dark:text-zinc-500"
-                >
-                  Loading…
-                </li>
-                <li
-                  :for={v <- c.versions}
-                  class="text-xs text-zinc-600 dark:text-zinc-300"
-                >
-                  <span class="text-zinc-400 dark:text-zinc-500">
-                    <.local_time value={v.inserted_at} format="%b %-d %H:%M" />
-                  </span>
-                  <div data-comment-body class="whitespace-pre-wrap">{v.body}</div>
-                </li>
-              </ul>
-            </div>
-          </li>
-        </ul>
-        <form
-          :if={@can_progress}
-          phx-submit="add_comment"
-          data-add-comment-form
-          data-my-name={@current_user.name}
-          data-my-initials={initials(@current_user)}
-          data-my-bg={avatar_bg(@current_user)}
-          data-my-fg={avatar_fg(@current_user)}
-          class="flex gap-2"
-        >
-          <input
-            type="text"
-            name="comment[body]"
-            placeholder="Write a comment..."
-            aria-label="Comment text"
-            class="flex-1 input input-bordered input-sm"
+            comment={c}
+            current_user={@current_user}
+            online_ids={@online_ids}
           />
-          <button
-            type="submit"
-            phx-disable-with="Posting..."
-            class="text-xs px-3 py-1 rounded bg-zinc-700 text-white hover:bg-zinc-800"
-          >
-            Post
-          </button>
-        </form>
+        </ul>
+        <.add_comment_form :if={@can_progress} id="add-comment-form" current_user={@current_user} />
       </div>
 
       <%!-- Hideable per user preference (m02.04 §2.4); collapsed by default,

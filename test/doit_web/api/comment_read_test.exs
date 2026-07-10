@@ -122,4 +122,20 @@ defmodule DoItWeb.Api.CommentReadTest do
 
     assert %{"error" => %{"status" => 404}} = json_response(conn, 404)
   end
+
+  test "the root task is admitted — its comments are the Initiative's own thread (m03.03 item 6.4)",
+       ctx do
+    root = Tasks.get_task(ctx.ini.root_task_id)
+    {:ok, _} = Tasks.add_comment(root, ctx.owner, "initiative-level note")
+
+    conn =
+      build_conn()
+      |> bearer(token(ctx.owner))
+      |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/tasks/#{ctx.ini.root_task_id}/comments")
+
+    assert %{"data" => [comment]} = json_response(conn, 200)
+    assert comment["body"] == "initiative-level note"
+    assert comment["task_id"] == ctx.ini.root_task_id
+    assert comment["deleted"] == false
+  end
 end

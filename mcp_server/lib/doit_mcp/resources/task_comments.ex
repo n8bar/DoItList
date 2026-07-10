@@ -1,7 +1,9 @@
 defmodule DoitMcp.Resources.TaskComments do
   @moduledoc """
   Comments on one task, including soft-delete tombstones — mirrors
-  `GET /api/v1/initiatives/:id/tasks/:task_id/comments`.
+  `GET /api/v1/initiatives/:id/tasks/:task_id/comments`. The Initiative's own
+  thread is its root task's comments: read it with `task_id` = the Initiative
+  payload's `root_task_id`.
 
   Two path variables (`id`, `task_id`) via one `uri_template` — RFC 6570
   Level 1 simple expansion supports multiple `{var}` segments separated by

@@ -671,6 +671,23 @@ defmodule DoItWeb.Api.OperationsTest do
       assert Tasks.comment_deleted?(tombstone)
     end
 
+    test "comment: add admits the root task — the Initiative's own thread (m03.03 item 6.4)",
+         ctx do
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "comment",
+            "data" => %{"task_id" => ctx.ini.root_task_id, "body" => "initiative-level note"}
+          }
+        ])
+
+      assert status == 200
+      comment_id = Enum.at(body["results"], 0)["data"]["id"]
+      assert %Comment{body: "initiative-level note"} = comment = Repo.get(Comment, comment_id)
+      assert comment.task_id == ctx.ini.root_task_id
+    end
+
     test "comment: a non-author edit is forbidden (author-only enforced by the context)", ctx do
       task = top_task(ctx.owner, ctx.ini, "Owner Task")
       {:ok, comment} = Tasks.add_comment(task, ctx.owner, "owner's comment")

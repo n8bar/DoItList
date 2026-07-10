@@ -189,6 +189,15 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert is_integer(row["progress"])
     end
 
+    test "list rows carry root_task_id — the Initiative's own comment thread (m03.03 item 6.4)",
+         ctx do
+      conn = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives")
+
+      assert %{"data" => list} = json_response(conn, 200)
+      row = Enum.find(list, &(&1["id"] == ctx.ini.id))
+      assert row["root_task_id"] == ctx.ini.root_task_id
+    end
+
     test "does not leak Initiatives the user isn't a member of", ctx do
       conn = build_conn() |> bearer(token(ctx.stranger)) |> get(~p"/api/v1/initiatives")
 

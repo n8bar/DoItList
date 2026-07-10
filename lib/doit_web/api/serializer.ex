@@ -22,14 +22,17 @@ defmodule DoItWeb.Api.Serializer do
         "subtitle": "ship the new dashboard",
         "role": "owner",
         "progress": 42,
-        "ai_knobs": null
+        "ai_knobs": null,
+        "root_task_id": 100
       }
 
   `role` is the acting user's role on the Initiative (`owner` | `editor` |
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
   system root task's `computed_progress`, 0..100). `ai_knobs` is the
   per-Initiative constants store for AI agents — plain text the product stores
-  but never interprets (m03.03 item 5.4).
+  but never interprets (m03.03 item 5.4). `root_task_id` is the Initiative's
+  system root task — the Initiative's own comment thread lives on it (item
+  6.4): read/write comments with `task_id = root_task_id`.
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
 
@@ -59,7 +62,8 @@ defmodule DoItWeb.Api.Serializer do
   * `root_task_id` — the id of the Initiative's system root task. It is **not** a
     node in `tasks` (the tree starts at its children), but it's the `parent_id`
     every top-level task carries — so to add a task at the top level (worklist 3),
-    create it under `root_task_id`.
+    create it under `root_task_id`. The Initiative's own comment thread also
+    lives on it (item 6.4): read/write comments with `task_id = root_task_id`.
   * `tasks` — the top-level tasks (the children of the system root), each a
     **task node**.
 
@@ -211,7 +215,8 @@ defmodule DoItWeb.Api.Serializer do
       subtitle: blank_to_empty(initiative.subtitle),
       role: role,
       progress: progress || 0,
-      ai_knobs: initiative.ai_knobs
+      ai_knobs: initiative.ai_knobs,
+      root_task_id: initiative.root_task_id
     }
   end
 

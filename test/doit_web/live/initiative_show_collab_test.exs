@@ -185,6 +185,61 @@ defmodule DoItWeb.InitiativeShowCollabTest do
     end
   end
 
+  describe "Initiative-level comments (m03.03 item 6.4)" do
+    test "the details pane renders the root task's thread; only a can-comment role gets the form",
+         %{conn: conn, owner: owner, ini: ini} do
+      viewer = user("watcher")
+      {:ok, _} = Initiatives.add_member(ini.id, viewer.id, "viewer")
+      root = Tasks.get_task(ini.root_task_id)
+      {:ok, comment} = Tasks.add_comment(root, owner, "initiative-level note")
+
+      {:ok, owner_view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+      # The thread renders inside the Initiative details pane, off the root task.
+      assert has_element?(owner_view, "#initiative-comment-list #comment-#{comment.id}")
+      assert has_element?(owner_view, "#initiative-comment-form")
+
+      # A plain viewer reads the thread but gets no add form (mirrors the task
+      # pane's can_progress gate).
+      {:ok, viewer_view, _} = live(log_in(build_conn(), viewer), ~p"/initiatives/#{ini.id}")
+      assert has_element?(viewer_view, "#initiative-comment-list #comment-#{comment.id}")
+      refute has_element?(viewer_view, "#initiative-comment-form")
+    end
+
+    test "posting through the details-pane form lands on the root task and renders in its thread",
+         %{conn: conn, owner: owner, ini: ini} do
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+
+      # The form carries a hidden task_id = root_task_id, so the shared
+      # add_comment event routes this post to the Initiative's own thread.
+      view
+      |> element("#initiative-comment-form")
+      |> render_submit(%{"comment" => %{"body" => "kickoff note"}})
+
+      assert [comment] = Tasks.list_comments(ini.root_task_id)
+      assert comment.body == "kickoff note"
+      assert has_element?(view, "#initiative-comment-list #comment-#{comment.id}")
+    end
+
+    test "another member's root-task comment appears live in the details pane", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      member = user("mate")
+      {:ok, _} = Initiatives.add_member(ini.id, member.id, "editor")
+
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+
+      # The {:comment_added, root_task_id} broadcast refreshes the Initiative
+      # thread (not just a selected task's pane).
+      root = Tasks.get_task(ini.root_task_id)
+      {:ok, comment} = Tasks.add_comment(root, member, "hello from mate")
+
+      assert has_element?(view, "#initiative-comment-list #comment-#{comment.id}")
+      assert render(view) =~ "hello from mate"
+    end
+  end
+
   # First byte offset of `needle` in `haystack` (for document-order assertions).
   defp pos(haystack, needle) do
     [{start, _len} | _] = :binary.matches(haystack, needle)
