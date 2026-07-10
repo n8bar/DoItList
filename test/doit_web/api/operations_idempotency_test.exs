@@ -125,7 +125,8 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
     assert count_tasks("NoKey") == 1
 
     # No idempotency row recorded for this user.
-    assert Repo.aggregate(from(r in IdempotencyKey, where: r.user_id == ^ctx.owner.id), :count) == 0
+    assert Repo.aggregate(from(r in IdempotencyKey, where: r.user_id == ^ctx.owner.id), :count) ==
+             0
   end
 
   test "different keys both execute", ctx do

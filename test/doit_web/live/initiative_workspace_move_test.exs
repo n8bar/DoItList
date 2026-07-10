@@ -29,18 +29,28 @@ defmodule DoItWeb.InitiativeWorkspaceMoveTest do
       })
 
     {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "M"})
-    conn = conn |> Phoenix.ConnTest.init_test_session(%{}) |> Plug.Conn.put_session(:user_id, owner.id)
+
+    conn =
+      conn |> Phoenix.ConnTest.init_test_session(%{}) |> Plug.Conn.put_session(:user_id, owner.id)
+
     %{conn: conn, owner: owner, ini: ini}
   end
 
   defp task(owner, ini, attrs) do
     {:ok, t} =
-      Tasks.create_task(owner, attrs |> Map.put("initiative_id", ini.id) |> Map.put_new("parent_id", ini.root_task_id))
+      Tasks.create_task(
+        owner,
+        attrs |> Map.put("initiative_id", ini.id) |> Map.put_new("parent_id", ini.root_task_id)
+      )
 
     t
   end
 
-  test "a move_task with NUMERIC ids (as the drag hook sends) persists", %{conn: conn, owner: owner, ini: ini} do
+  test "a move_task with NUMERIC ids (as the drag hook sends) persists", %{
+    conn: conn,
+    owner: owner,
+    ini: ini
+  } do
     a = task(owner, ini, %{"title" => "A"})
     c = task(owner, ini, %{"title" => "C"})
     d = task(owner, ini, %{"title" => "D", "parent_id" => c.id})
@@ -48,7 +58,12 @@ defmodule DoItWeb.InitiativeWorkspaceMoveTest do
     {:ok, view, _} = live(conn, ~p"/initiatives/#{ini.id}")
 
     # Integer task_id / parent_id — the exact shape DragReorder pushes.
-    render_hook(view, "move_task", %{"task_id" => d.id, "parent_id" => a.id, "position" => nil, "reorder" => false})
+    render_hook(view, "move_task", %{
+      "task_id" => d.id,
+      "parent_id" => a.id,
+      "position" => nil,
+      "reorder" => false
+    })
 
     assert Repo.get!(Task, d.id).parent_id == a.id,
            "drag move should persist D under A; got parent #{Repo.get!(Task, d.id).parent_id}"
@@ -62,7 +77,12 @@ defmodule DoItWeb.InitiativeWorkspaceMoveTest do
     {:ok, view, _} = live(conn, ~p"/initiatives/#{ini.id}")
 
     # Reorder Y to the front of P's children (position 0).
-    render_hook(view, "move_task", %{"task_id" => y.id, "parent_id" => p.id, "position" => 0, "reorder" => true})
+    render_hook(view, "move_task", %{
+      "task_id" => y.id,
+      "parent_id" => p.id,
+      "position" => 0,
+      "reorder" => true
+    })
 
     order = p.id |> Tasks.ordered_child_ids()
     assert order == [y.id, x.id], "reorder should place Y before X; got #{inspect(order)}"

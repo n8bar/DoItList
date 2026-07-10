@@ -36,7 +36,11 @@ defmodule DoIt.SkillReferenceTest do
   # `component(DoitMcp.Tools.CreateInitiative)` -> "create_initiative"
   defp known_component_names do
     File.read!(@server)
-    |> then(&Regex.scan(~r/component\(DoitMcp\.(?:Tools|Resources)\.(\w+)\)/, &1, capture: :all_but_first))
+    |> then(
+      &Regex.scan(~r/component\(DoitMcp\.(?:Tools|Resources)\.(\w+)\)/, &1,
+        capture: :all_but_first
+      )
+    )
     |> Enum.map(fn [mod] -> Macro.underscore(mod) end)
     |> MapSet.new()
   end
@@ -53,7 +57,9 @@ defmodule DoIt.SkillReferenceTest do
   end
 
   defp quick_reference_section(markdown) do
-    case Regex.run(~r/^## Quick Reference\n(.*?)(?=\n## |\z)/ms, markdown, capture: :all_but_first) do
+    case Regex.run(~r/^## Quick Reference\n(.*?)(?=\n## |\z)/ms, markdown,
+           capture: :all_but_first
+         ) do
       [section] -> section
       _ -> ""
     end
