@@ -14,3 +14,10 @@ Each layer owns one question. Placement is by how often content changes, not by 
 **Placement rule:** enforceable → API; per-verb → MCP schema; cross-project default → skill; per-project constant → the Initiative (AI-knobs); varies per ask → prompt.
 
 **Migration rule** (placement's dynamic counterpart): content moves by observed frequency. Said twice across prompts → promote to the skill (every delta so far was this). A rule that keeps needing per-project override → demote to a knob. A knob nobody turns → fold into the rule. Constants sink as they stabilize — prompt → skill → Initiative → product column; `index_style` completed the whole journey.
+
+## Drive protocol — closing instruments
+
+End every refinement drive with two prompts, run separately:
+
+- **Behavior audit:** "Consider the work you just ran. Re-read each rule of the skill, then summarize what you'd do differently — without judgment of the rules themselves." The frame is load-bearing: object is the artifact, standard is the skill as written, rule critique is out of scope. Anchor claims to facts (`ingest_report`, the live tree), never the agent's recollection — memory-based self-audit produces lobbying, not auditing.
+- **Hypocrisy diff:** separately invite the rule-by-rule critique, then diff its keeps/changes against its actual violations. Endorsed-and-broken → the rule needs a mechanical hook (checkpoint line, tool-description pointer). Contested-and-broken → the rule needs carried rationale and the Standing contract. Its factual finds are harvest; its rule lobbying is data, not direction.
