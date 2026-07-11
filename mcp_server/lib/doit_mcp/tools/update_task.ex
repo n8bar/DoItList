@@ -1,7 +1,8 @@
 defmodule DoitMcp.Tools.UpdateTask do
   @moduledoc """
   Edit a task's plain fields (title, description, priority, assignee,
-  manual progress). This tool only edits plain fields — completion
+  manual progress); `title` and `description` accept `%<task_id>`
+  cross-reference tokens. This tool only edits plain fields — completion
   (`complete_task`), moves (`move_task`), and co-assignees
   (`set_task_co_assignees`) are separate tools, matching the API's
   "one concern per update" rule.

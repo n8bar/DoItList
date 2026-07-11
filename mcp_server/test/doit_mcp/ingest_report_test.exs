@@ -61,13 +61,13 @@ defmodule DoitMcp.IngestReportTest do
         "id" => 2,
         "title" => "M12 kickoff",
         "index" => "2",
-        "description" => "already linked %⟨5⟩ here",
+        "description" => "already linked %<5> here",
         "comment_count" => 0,
         "children" => []
       },
       %{
         "id" => 3,
-        "title" => "Ship %⟨9⟩ now",
+        "title" => "Ship %<9> now",
         "index" => "3",
         "description" => nil,
         "comment_count" => 0,
@@ -134,7 +134,7 @@ defmodule DoitMcp.IngestReportTest do
              ]
     end
 
-    test "text inside a %⟨id⟩ token is never a candidate" do
+    test "text inside a %<id> token is never a candidate" do
       # A field whose only reference-shaped content is the resolved token
       # (tasks 2's description, 3's title in @tree) contributes nothing —
       # covered by the exact list above. Sharper: a candidate-shaped string
@@ -145,9 +145,9 @@ defmodule DoitMcp.IngestReportTest do
         "tasks" => [
           %{
             "id" => 5,
-            "title" => "M4 next to %⟨41⟩",
+            "title" => "M4 next to %<41>",
             "index" => "1",
-            "description" => "1.%⟨2⟩ stays un-matched; literal %1.2 does not",
+            "description" => "1.%<2> stays un-matched; literal %1.2 does not",
             "comment_count" => 0,
             "children" => []
           }

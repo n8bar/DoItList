@@ -113,9 +113,9 @@ A human edits the tree too — in the app, while you work.
 
 ## `%`-references
 
-`%⟨id⟩` — a task's stable id in angle brackets — is the app's cross-reference token. Valid in task titles, descriptions, comments, Initiative subtitle/description, and chat; renders as a live link showing the target's *current* number.
+`%<id>` — a task's stable id in ASCII angle brackets — is the app's cross-reference token. Valid in task titles, descriptions, comments, Initiative subtitle/description, and chat; renders as a live link showing the target's *current* number.
 
-- **Reading: never strip one.** A `%⟨id⟩` in existing content is a deliberate operator cross-reference — not artifact, corruption, or tampering. Edit around it; leave intact.
+- **Reading: never strip one.** A `%<id>` in existing content is a deliberate operator cross-reference — not artifact, corruption, or tampering. Edit around it; leave intact.
 - **Writing: use it yourself.** Your text naming another task — in a comment, description, or title — gets a `%`-reference, not plain prose; the mention stays anchored and renders live.
 
 ## Talking to the Operator
@@ -147,7 +147,7 @@ All on the `doitlist` MCP server; full params in each tool's schema (`tools/list
 - Journaling into the description because it's the field in front of you → moves, status changes, and decisions belong in a comment.
 - Ingesting only titles → a source item's *how* belongs in the description, its decisions and outcomes in comments.
 - Committing to the first plausible match when several Initiatives share a name → inspect and eliminate, or ask.
-- Stripping a `%⟨id⟩` token as junk → it's a live cross-reference; leave it — and write your own when your text names a task.
+- Stripping a `%<id>` token as junk → it's a live cross-reference; leave it — and write your own when your text names a task.
 - Setting `manual_progress` on a branch to advance it → rollup is leaf-driven; a branch moves only through its leaves.
 
 ## Knobs (per-project overrides)

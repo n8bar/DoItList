@@ -1,6 +1,6 @@
 defmodule DoIt.ReferenceLinksTest do
   @moduledoc """
-  Edge-sync for the `%⟨id⟩` cross-reference notation (m03.03): the `task_links`
+  Edge-sync for the `%<id>` cross-reference notation (m03.03): the `task_links`
   edges FROM a task mirror the reference tokens embedded in its title +
   description. `DoIt.Tasks.sync_reference_links/1` reconciles the two — adding an
   edge per newly-referenced valid target, removing edges for targets no longer
@@ -62,7 +62,7 @@ defmodule DoIt.ReferenceLinksTest do
       # then drive the diff off an in-memory retitle — these cases isolate the
       # add/remove delta; create-path syncing has its own describe block below.
       source = new_task(user, ini, %{"title" => "plain"})
-      referencing = %{source | title: "Fix the %⟨#{target.id}⟩ bug"}
+      referencing = %{source | title: "Fix the %<#{target.id}> bug"}
 
       assert {:ok, %{added: [added_id], removed: []}} = Tasks.sync_reference_links(referencing)
       assert added_id == target.id
@@ -77,8 +77,8 @@ defmodule DoIt.ReferenceLinksTest do
 
       referencing = %{
         source
-        | title: "See %⟨#{a.id}⟩",
-          description: "and also %⟨#{b.id}⟩ for context"
+        | title: "See %<#{a.id}>",
+          description: "and also %<#{b.id}> for context"
       }
 
       assert {:ok, %{added: added, removed: []}} = Tasks.sync_reference_links(referencing)
@@ -89,7 +89,7 @@ defmodule DoIt.ReferenceLinksTest do
     test "re-sync after a token is removed removes that edge", %{user: user, initiative: ini} do
       target = new_task(user, ini, %{"title" => "Target"})
       source = new_task(user, ini, %{"title" => "plain"})
-      referencing = %{source | title: "See %⟨#{target.id}⟩"}
+      referencing = %{source | title: "See %<#{target.id}>"}
 
       assert {:ok, %{added: [_], removed: []}} = Tasks.sync_reference_links(referencing)
       assert link_targets(source) == [target.id]
@@ -105,7 +105,7 @@ defmodule DoIt.ReferenceLinksTest do
     test "a duplicate token for the same target yields one edge", %{user: user, initiative: ini} do
       target = new_task(user, ini, %{"title" => "Target"})
       source = new_task(user, ini, %{"title" => "plain"})
-      referencing = %{source | title: "See %⟨#{target.id}⟩ and again %⟨#{target.id}⟩"}
+      referencing = %{source | title: "See %<#{target.id}> and again %<#{target.id}>"}
 
       assert {:ok, %{added: [added_id], removed: []}} = Tasks.sync_reference_links(referencing)
       assert added_id == target.id
@@ -116,7 +116,7 @@ defmodule DoIt.ReferenceLinksTest do
       {:ok, other} = Initiatives.create_initiative(user, %{"name" => "Other initiative"})
       foreign = new_task(user, other, %{"title" => "Foreign"})
 
-      source = new_task(user, ini, %{"title" => "See %⟨#{foreign.id}⟩"})
+      source = new_task(user, ini, %{"title" => "See %<#{foreign.id}>"})
 
       assert {:ok, %{added: [], removed: []}} = Tasks.sync_reference_links(source)
       assert link_targets(source) == []
@@ -124,14 +124,14 @@ defmodule DoIt.ReferenceLinksTest do
 
     test "a self-reference token earns no edge", %{user: user, initiative: ini} do
       source = new_task(user, ini, %{"title" => "placeholder"})
-      selfie = %{source | title: "See %⟨#{source.id}⟩"}
+      selfie = %{source | title: "See %<#{source.id}>"}
 
       assert {:ok, %{added: [], removed: []}} = Tasks.sync_reference_links(selfie)
       assert link_targets(source) == []
     end
 
     test "a nonexistent id token earns no edge and never crashes", %{user: user, initiative: ini} do
-      source = new_task(user, ini, %{"title" => "See %⟨999999999⟩ which is gone"})
+      source = new_task(user, ini, %{"title" => "See %<999999999> which is gone"})
 
       assert {:ok, %{added: [], removed: []}} = Tasks.sync_reference_links(source)
       assert link_targets(source) == []
@@ -141,7 +141,7 @@ defmodule DoIt.ReferenceLinksTest do
       dead = new_task(user, ini, %{"title" => "Doomed"})
       {:ok, _} = Tasks.delete_task(dead, user)
 
-      source = new_task(user, ini, %{"title" => "See %⟨#{dead.id}⟩"})
+      source = new_task(user, ini, %{"title" => "See %<#{dead.id}>"})
 
       assert {:ok, %{added: [], removed: []}} = Tasks.sync_reference_links(source)
       assert link_targets(source) == []
@@ -155,13 +155,13 @@ defmodule DoIt.ReferenceLinksTest do
       add = new_task(user, ini, %{"title" => "Add"})
 
       source = new_task(user, ini, %{"title" => "plain"})
-      referencing = %{source | title: "See %⟨#{keep.id}⟩"}
+      referencing = %{source | title: "See %<#{keep.id}>"}
       assert {:ok, %{added: [_], removed: []}} = Tasks.sync_reference_links(referencing)
 
       [original] = Repo.all(from l in TaskLink, where: l.source_task_id == ^source.id)
 
       # Now reference BOTH keep and add.
-      grown = %{source | title: "See %⟨#{keep.id}⟩ and %⟨#{add.id}⟩"}
+      grown = %{source | title: "See %<#{keep.id}> and %<#{add.id}>"}
       assert {:ok, %{added: [added_id], removed: []}} = Tasks.sync_reference_links(grown)
       assert added_id == add.id
 
@@ -177,6 +177,23 @@ defmodule DoIt.ReferenceLinksTest do
     end
   end
 
+  describe "legacy Unicode token form" do
+    test "the abandoned %⟨id⟩ form is inert — no edge, not stripped", %{
+      user: user,
+      initiative: ini
+    } do
+      # A live, same-initiative target — only the bracket syntax makes it inert.
+      target = new_task(user, ini, %{"title" => "Target"})
+      source = new_task(user, ini, %{"title" => "See %⟨#{target.id}⟩"})
+
+      assert {:ok, %{added: [], removed: []}} = Tasks.sync_reference_links(source)
+      assert link_targets(source) == []
+
+      assert Tasks.reference_ids(source.title) == []
+      assert Tasks.strip_reference_tokens(source.title) == source.title
+    end
+  end
+
   describe "Tasks.update_task/4 wiring" do
     test "a title update syncs reference edges at the context boundary", %{
       user: user,
@@ -187,7 +204,7 @@ defmodule DoIt.ReferenceLinksTest do
       assert link_targets(source) == []
 
       {:ok, updated} =
-        Tasks.update_task(source, user, %{"title" => "See %⟨#{target.id}⟩"})
+        Tasks.update_task(source, user, %{"title" => "See %<#{target.id}>"})
 
       assert link_targets(source) == [target.id]
 
@@ -201,7 +218,7 @@ defmodule DoIt.ReferenceLinksTest do
       source = new_task(user, ini, %{"title" => "Source"})
 
       {:ok, _} =
-        Tasks.update_task(source, user, %{"description" => "context: %⟨#{target.id}⟩"})
+        Tasks.update_task(source, user, %{"description" => "context: %<#{target.id}>"})
 
       assert link_targets(source) == [target.id]
     end
@@ -213,7 +230,7 @@ defmodule DoIt.ReferenceLinksTest do
       initiative: ini
     } do
       target = new_task(user, ini, %{"title" => "Target"})
-      source = new_task(user, ini, %{"title" => "New work re %⟨#{target.id}⟩"})
+      source = new_task(user, ini, %{"title" => "New work re %<#{target.id}>"})
 
       assert link_targets(source) == [target.id]
     end
@@ -225,7 +242,7 @@ defmodule DoIt.ReferenceLinksTest do
       target = new_task(user, ini, %{"title" => "Target"})
 
       source =
-        new_task(user, ini, %{"title" => "Fresh task", "description" => "see %⟨#{target.id}⟩"})
+        new_task(user, ini, %{"title" => "Fresh task", "description" => "see %<#{target.id}>"})
 
       assert link_targets(source) == [target.id]
     end
@@ -239,7 +256,7 @@ defmodule DoIt.ReferenceLinksTest do
 
       source =
         new_task(user, ini, %{
-          "title" => "Refs %⟨#{foreign.id}⟩ and %⟨888888888⟩"
+          "title" => "Refs %<#{foreign.id}> and %<888888888>"
         })
 
       assert link_targets(source) == []

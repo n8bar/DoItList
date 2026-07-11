@@ -4,11 +4,14 @@
 // three text shapes we deal with:
 //
 //   * user-typed text : prose + `%path` refs + `\`-escapes + literal `%`
-//   * stored text     : prose + `%⟨id⟩` resolved tokens + `\`-escapes
+//   * stored text     : prose + `%<id>` resolved tokens + `\`-escapes
 //   * edit-box text    : rehydrated stored text (tokens shown as `%path`)
 //
-// A resolved reference is stored/broadcast as `%⟨<id>⟩` where the brackets are
-// U+27E8 (⟨) and U+27E9 (⟩) and `<id>` is an integer task id, e.g. `%⟨272⟩`.
+// A resolved reference is stored/broadcast as `%<id>` where the brackets are
+// ASCII `<` / `>` and `id` is an integer task id, e.g. `%<272>`.
+// The ASCII form is typable, so user-typed text CAN contain a literal `%<id>`;
+// `<` is not a path char, so it passes through save verbatim — and then reads
+// back as a live token. Typing the raw token form IS writing a ref by id.
 //
 // Escaping is a recursive backslash: `\` makes the NEXT char literal, but is
 // only significant before `%` or `\`. Before any other char the backslash is
@@ -16,9 +19,8 @@
 // verbatim in stored/edit text and only resolved to literal chars at render
 // time (see `segments`).
 
-// U+27E8 MATHEMATICAL LEFT ANGLE BRACKET / U+27E9 RIGHT.
-const OPEN = "⟨"; // ⟨
-const CLOSE = "⟩"; // ⟩
+const OPEN = "<";
+const CLOSE = ">";
 
 // A dotted-decimal reference path: `\d+(?:\.\d+)*`, anchored at `pos`.
 // Returns the matched path string, or null if there is no path at `pos`.
@@ -29,7 +31,8 @@ function matchPathAt(text, pos) {
   return m ? m[0] : null;
 }
 
-// A resolved-token body `⟨<id>⟩`, anchored at `pos` (the char just after `%`).
+// A resolved-token body `<id>` (brackets included), anchored at `pos` (the
+// char just after `%`).
 // Returns `{ id, length }` (length of the bracketed body) or null.
 function matchTokenAt(text, pos) {
   const re = new RegExp(OPEN + "(\\d+)" + CLOSE, "y");
@@ -54,8 +57,8 @@ function verbatimEscape(text, i) {
 /**
  * transformForSave(text, resolve)
  *
- * `text` is user-typed (no `%⟨id⟩` tokens). For each UNescaped `%path`, call
- * `resolve(path)`; a returned id replaces `%path` with `%⟨id⟩`, a null leaves
+ * `text` is user-typed. For each UNescaped `%path`, call
+ * `resolve(path)`; a returned id replaces `%path` with `%<id>`, a null leaves
  * the literal `%path` verbatim. Escaped sequences and non-ref `%` are left
  * verbatim (backslashes preserved).
  *
@@ -94,10 +97,10 @@ export function transformForSave(text, resolve) {
 /**
  * rehydrate(text, labelOf)
  *
- * `text` is stored (may contain `%⟨id⟩` tokens + escapes + prose). Replace each
- * `%⟨id⟩` with `%` + labelOf(id); when labelOf(id) is null (target gone) use
+ * `text` is stored (may contain `%<id>` tokens + escapes + prose). Replace each
+ * `%<id>` with `%` + labelOf(id); when labelOf(id) is null (target gone) use
  * `%?` (a visible, editable placeholder — the raw id is never exposed). Escapes
- * and prose are left verbatim. An escaped `\%⟨id⟩` is a literal percent, not a
+ * and prose are left verbatim. An escaped `\%<id>` is a literal percent, not a
  * token, and is preserved as-is.
  *
  * @param {string} text
@@ -170,7 +173,7 @@ export function collectRefs(text) {
  *
  * `text` is stored (tokens + escapes + prose). Returns an ordered array of
  * `{ type: 'text', value }` literal runs (escapes RESOLVED: `\%`→`%`, `\\`→`\`,
- * `\x`→`\x`) and `{ type: 'ref', id }` for each `%⟨id⟩`. A bare literal `%` is
+ * `\x`→`\x`) and `{ type: 'ref', id }` for each `%<id>`. A bare literal `%` is
  * part of a text run. This is the DOM-free basis a renderer builds on.
  *
  * @param {string} text

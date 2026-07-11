@@ -265,7 +265,7 @@ defmodule DoIt.Tasks do
   end
 
   # After a successful create/update, mirror the cross-reference `task_links`
-  # FROM the task to the `%⟨id⟩` tokens in its just-saved title/description
+  # FROM the task to the `%<id>` tokens in its just-saved title/description
   # (m03.03). Runs post-commit, and only when a title/description was in play
   # (edges derive from those two fields alone) so a move/done/progress-only
   # touch skips the extra work. Both the create and update paths — across every
@@ -2371,12 +2371,12 @@ defmodule DoIt.Tasks do
     |> Repo.all()
   end
 
-  # Reference tokens embedded by the %-notation editor: `%⟨<id>⟩`, with the
-  # U+27E8/U+27E9 angle brackets wrapping an integer task id.
-  @ref_token_regex ~r/%⟨(\d+)⟩/
+  # Reference tokens embedded by the %-notation editor: `%<id>`, with ASCII
+  # angle brackets wrapping an integer task id.
+  @ref_token_regex ~r/%<(\d+)>/
 
   @doc """
-  The task ids referenced by `%⟨id⟩` tokens in `text`, deduped in first-seen
+  The task ids referenced by `%<id>` tokens in `text`, deduped in first-seen
   order (m03.03). `nil` / ref-less text → `[]`. Used to detect and summarize a
   save's cross-references.
   """
@@ -2390,7 +2390,7 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Remove `%⟨id⟩` reference tokens from `text` and collapse the whitespace they
+  Remove `%<id>` reference tokens from `text` and collapse the whitespace they
   leave — for display surfaces (e.g. the "Linked …" flash) where the raw token
   must never show. The DOM renderer resolves tokens to live links; this is the
   server-side equivalent for plain-text contexts.
@@ -2428,7 +2428,7 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Reconcile the cross-reference `task_links` FROM `task` with the `%⟨id⟩` tokens
+  Reconcile the cross-reference `task_links` FROM `task` with the `%<id>` tokens
   embedded in its (already-updated) title + description (m03.03).
 
   `task` must carry its current title + description — sync reads them off the

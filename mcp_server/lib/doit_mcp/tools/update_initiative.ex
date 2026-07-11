@@ -2,6 +2,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   @moduledoc """
   Content-only edit of an Initiative's fields (name, description, subtitle,
   progress calc, index style, AI knobs, auto-promote co-assignees, viewer+).
+  `description` and `subtitle` accept `%<task_id>` cross-reference tokens.
   This tool does NOT touch state (archived/hidden/trashed — see
   `set_initiative_state`) or ownership — those are rejected here or
   handled elsewhere.

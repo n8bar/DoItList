@@ -22,4 +22,4 @@ Append to the build prompt:
 
 ## Work an existing Initiative
 
-> Work from ⟨name⟩ in doitlist.
+> Work from <name> in doitlist.

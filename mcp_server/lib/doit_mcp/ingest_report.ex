@@ -18,7 +18,7 @@ defmodule DoitMcp.IngestReport do
       tasks whose `comment_count` is zero.
     * un-anchored reference candidates — `unanchored_reference_candidates`:
       substrings in titles/descriptions shaped like `M<n>`, a dotted index path
-      (2+ segments), or `task <n>`, outside `%⟨id⟩` tokens, as
+      (2+ segments), or `task <n>`, outside `%<id>` tokens, as
       `%{task_id, field, matched_text}`. Heuristic; false positives expected.
     * path-like strings — `path_like_strings`: slash-separated path shapes in
       descriptions, as `%{task_id, matched_text}`.
@@ -34,11 +34,11 @@ defmodule DoitMcp.IngestReport do
   # module attributes — plain functions instead.
 
   # A resolved cross-reference token as the %-notation editor persists it:
-  # `%⟨<id>⟩` with U+27E8/U+27E9 brackets (see assets/js/refs.js in the main
+  # `%<id>` with ASCII angle brackets (see assets/js/refs.js in the main
   # app). Replaced with a single space before the reference scan, so token
   # content is never a candidate and the removal can't merge adjacent digits
   # into a fabricated match.
-  defp ref_token, do: ~r/%⟨\d+⟩/u
+  defp ref_token, do: ~r/%<\d+>/
 
   # Reference-shaped strings that are NOT id-anchored: a milestone tag `M<n>`,
   # a dotted index path with 2+ segments, or a literal "task <n>".
@@ -105,7 +105,7 @@ defmodule DoitMcp.IngestReport do
   end
 
   defp scan_candidates(text) do
-    # Strip resolved `%⟨id⟩` tokens first — an anchored reference is exactly
+    # Strip resolved `%<id>` tokens first — an anchored reference is exactly
     # what a candidate is not.
     stripped = Regex.replace(ref_token(), text, " ")
 

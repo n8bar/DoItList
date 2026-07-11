@@ -1,6 +1,7 @@
 defmodule DoitMcp.Tools.AddComment do
   @moduledoc """
   Add a comment to a task — mirrors `add comment` in the Arc 1 op table.
+  The `body` accepts `%<task_id>` cross-reference tokens.
 
   The Initiative's own thread is its root task's comments: to comment on the
   Initiative itself, pass `task_id` = the Initiative payload's `root_task_id`.

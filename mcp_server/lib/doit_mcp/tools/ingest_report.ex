@@ -8,7 +8,7 @@ defmodule DoitMcp.Tools.IngestReport do
   Facts: shape (task count, depth histogram, leaf/branch counts, top-level
   index range); description coverage (with/without + ids lacking one);
   top-rank (depth 0) tasks with zero comments; un-anchored reference
-  candidates (`M<n>`, dotted index paths, `task <n>` outside `%⟨id⟩` tokens)
+  candidates (`M<n>`, dotted index paths, `task <n>` outside `%<id>` tokens)
   in titles and descriptions; path-like strings in descriptions; whether
   `ai_knobs` is set. The reference/path scans are heuristic — expect false
   positives. Long lists carry the first 20 entries plus an `"and N more"`

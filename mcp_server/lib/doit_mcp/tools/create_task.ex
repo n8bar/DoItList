@@ -2,7 +2,8 @@ defmodule DoitMcp.Tools.CreateTask do
   @moduledoc """
   Create a task. Give `parent_id` to nest under an existing task, or
   `initiative_id` alone to create it top-level (parented to that Initiative's
-  root task) — mirrors `add task` in the Arc 1 op table.
+  root task) — mirrors `add task` in the Arc 1 op table. `title` and
+  `description` accept `%<task_id>` cross-reference tokens.
   """
 
   use Anubis.Server.Component, type: :tool

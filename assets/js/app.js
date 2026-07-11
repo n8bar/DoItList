@@ -1990,9 +1990,11 @@ window.DoitRowEcho = applyRowEcho
 // ---------------------------------------------------------------------------
 // Cross-reference (%-notation) READ path — Wave 1: render + navigate.
 //
-// Titles/descriptions are STORED with resolved tokens `%⟨<id>⟩` (angle brackets
-// U+27E8/U+27E9) and the server renders that raw string straight into
-// [data-task-title] / [data-task-description]. Here we turn each token into a
+// Titles/descriptions are STORED with resolved tokens `%<id>` (ASCII angle
+// brackets) and the server renders that raw string straight into
+// [data-task-title] / [data-task-description] — HEEx {}-interpolation escapes
+// the `<`/`>`, so the browser parses a literal text node (never a tag) and
+// el.textContent reads back the exact token. Here we turn each token into a
 // live link labelled with the referenced task's CURRENT tree number, and a click
 // selects + scrolls to it. Pure `segments()` (refs.js) does the parse; the DOM is
 // the sole source of truth for id -> label (read live from each row's
@@ -2047,7 +2049,7 @@ function refLabelOf(id) {
   return label == null ? null : label
 }
 
-// The DOM node for one `%⟨id⟩` token, given a prebuilt id->label map:
+// The DOM node for one `%<id>` token, given a prebuilt id->label map:
 //   * resolvable label     -> clickable <a> showing the number (e.g. "1.5.1")
 //   * live row, no label   -> clickable <a> showing "↗"  (numbering off)
 //   * unresolved (no row)  -> muted, inert <span> showing "%?"
@@ -2109,7 +2111,7 @@ function renderRefEl(el, map) {
 }
 
 // Dashboard list-mode Initiative cards (name/subtitle/description) carry the
-// STORED tokens but have NO tree loaded, so a `%⟨id⟩` can't resolve to a number
+// STORED tokens but have NO tree loaded, so a `%<id>` can't resolve to a number
 // here — and a card's refs belong to ITS OWN initiative, never whichever one is
 // open, so resolving against the loaded tree would be wrong anyway. Rather than
 // leak the raw token, render each ref as a neutral, inert "↗" glyph ("Linked
@@ -2147,7 +2149,7 @@ function renderCardRefEl(el) {
 // document): task titles/descriptions AND comment/chat message bodies (Wave 3),
 // initiative header fields (Wave 5), plus the neutral card glyph for dashboard
 // cards. ONE renderer over every surface — identical parse logic (segments), so
-// a `%⟨id⟩` token renders consistently wherever it appears. Cheap + idempotent,
+// a `%<id>` token renders consistently wherever it appears. Cheap + idempotent,
 // so it's safe to re-run after every tree patch, comment-list refresh, chat
 // message, or dashboard update.
 function renderAllRefs(root) {
@@ -2168,14 +2170,14 @@ function renderAllRefs(root) {
 window.DoitRenderTaskRefs = renderAllRefs
 window.DoitRenderRefs = renderAllRefs
 // Resolve a user-typed body (`%label`) to its stored/broadcast token form
-// (`%⟨id⟩`) for the colocated chat hook, which can't import module scope.
+// (`%<id>`) for the colocated chat hook, which can't import module scope.
 window.DoitRefTransformForSave = (text) => transformForSave(text, resolveRefPath)
 
 // The "Linked <label> — <title>" notification when a save resolves a NEW/changed
 // `%`-ref set is OWNED BY THE SERVER (WL3 item 3.5): the save handlers diff the
 // ref set and put_flash it through the app's canonical flash/toast, so there is
 // ONE toast system, not a client-side parallel. The client only transforms
-// %label → %⟨id⟩ on save (below); it no longer detects or renders the toast.
+// %label → %<id> on save (below); it no longer detects or renders the toast.
 
 // Expand any collapsed ancestors of a task so it can be scrolled into view —
 // derived from the DOM (walk up through the enclosing children <ul>s) and applied
@@ -2225,7 +2227,7 @@ document.addEventListener("click", (e) => {
 // opens instantly with NO round trip (the picker is an optional aid — typing
 // `%label` directly already works). Choosing a task inserts `%<label>` at the
 // caret of the last-focused eligible field. The picker only inserts TEXT — the
-// field's existing RefField save-transform anchors `%label` -> `%⟨id⟩` on blur
+// field's existing RefField save-transform anchors `%label` -> `%<id>` on blur
 // (add-task on submit), so nothing here resolves or stores.
 //
 // Numbering-off choice: labels come from each row's [data-copy-index], which is
@@ -2458,7 +2460,7 @@ function closeRefPicker(returnFocus) {
 // Insert `%<label>` at the tracked caret of the target field, restore focus,
 // place the caret AFTER the insert, and fire `input` so the row echo + any
 // validation update. RefField's blur transform (or the add-task submit) later
-// anchors the `%label` to its `%⟨id⟩` token — we never store here.
+// anchors the `%label` to its `%<id>` token — we never store here.
 function chooseRef(label) {
   refPopover.hidden = true
   refPickerTrigger = null
@@ -3121,7 +3123,7 @@ document.addEventListener(
     e.preventDefault()
     e.stopImmediatePropagation() // stop LiveView's own phx-submit push
     if (!raw) return // empty → nothing to send (the server would just reject it)
-    // Resolve any `%label` refs to their stored `%⟨id⟩` token BEFORE the push, so
+    // Resolve any `%label` refs to their stored `%<id>` token BEFORE the push, so
     // the server persists the id-anchored form (Wave 3 — no server change, no
     // edge; the comment body is just a string the client transforms).
     const body = transformForSave(raw, resolveRefPath)
@@ -3161,7 +3163,7 @@ document.addEventListener(
 // left that way). In CAPTURE phase — before LiveView's bubble-phase submit
 // handler serializes the form (the same ordering the add-comment intercept
 // above and RefField's blur transform already rely on) — rewrite the textarea's
-// `%label` refs to their stored `%⟨id⟩` tokens, so the server persists the
+// `%label` refs to their stored `%<id>` tokens, so the server persists the
 // id-anchored form. We do NOT preventDefault: LiveView's own phx-submit still
 // runs and saves the now-token value.
 document.addEventListener(
@@ -6511,7 +6513,7 @@ Hooks.SortRecall = {
 
 // Cross-reference (%-notation) WRITE path — Wave 2: the two Details-pane inputs
 // (#task-field-title / #task-field-description). The server renders value= as the
-// RAW stored string (with `%⟨id⟩` tokens); we keep the EDIT box showing `%label`
+// RAW stored string (with `%<id>` tokens); we keep the EDIT box showing `%label`
 // (never the raw id) and, on save, rewrite the box back to id-anchored tokens so
 // update_task stores by id — a re-number never rots the reference.
 //
@@ -6530,7 +6532,7 @@ Hooks.CommentRefs = {
 }
 
 // Comment-edit textarea WRITE path (Wave 3): the server renders the stored
-// `%⟨id⟩` tokens into the box; show them as `%label` for editing (mirrors
+// `%<id>` tokens into the box; show them as `%label` for editing (mirrors
 // RefField.rehydrate). Rehydrate on mount (the editor is rendered statically,
 // then revealed client-side) and on updated (a comment-list refresh resets
 // value= back to raw tokens). The save transform back to tokens is the
@@ -6539,9 +6541,10 @@ Hooks.CommentEditRef = {
   mounted() { this.rehydrate() },
   updated() { this.rehydrate() },
   rehydrate() {
-    // U+27E8 (⟨) only appears inside a `%⟨id⟩` token, so its absence means
-    // nothing to rehydrate — a user mid-typing `%1.5` is never disturbed.
-    if (this.el.value.indexOf("⟨") === -1) return
+    // No `%<id>` token means nothing to rehydrate — a user mid-typing `%1.5`
+    // is never disturbed. (A bare `<` is ordinary prose, so test the full
+    // token shape, not one char.)
+    if (!/%<\d+>/.test(this.el.value)) return
     const next = rehydrate(this.el.value, refLabelOf)
     if (next !== this.el.value) this.el.value = next
   },
@@ -6551,12 +6554,12 @@ Hooks.RefField = {
   mounted() {
     // Show %label on first paint (the server-rendered value is raw tokens).
     this.rehydrate()
-    // Rewrite %label -> %⟨id⟩ the instant the field blurs, in the element's
+    // Rewrite %label -> %<id> the instant the field blurs, in the element's
     // CAPTURE phase. LiveView reads the value from its OWN `blur` listener
     // (dom_default.debounce, registered in the BUBBLE phase on this element by
     // `phx-debounce="blur"`); for a given event on its target, capture-phase
     // listeners fire before bubble-phase ones, so this transform lands before
-    // LiveView serializes the form — the server receives `%⟨id⟩`, not `%1.5`.
+    // LiveView serializes the form — the server receives `%<id>`, not `%1.5`.
     // The save is never blocked; when it adds/changes a ref, the server puts a
     // "Linked …" flash (item 3.5) — no client toast here.
     this.onBlurCapture = () => {
@@ -6591,9 +6594,9 @@ Hooks.RefField = {
     }
   },
   rehydrate() {
-    // U+27E8 (⟨) only appears inside a `%⟨id⟩` token, so its absence means there
-    // is nothing to rehydrate — leave the box (and any in-progress typing) alone.
-    if (this.el.value.indexOf("⟨") === -1) return
+    // No `%<id>` token means there is nothing to rehydrate — leave the box
+    // (and any in-progress typing, `<` in prose included) alone.
+    if (!/%<\d+>/.test(this.el.value)) return
     const next = rehydrate(this.el.value, refLabelOf)
     if (next !== this.el.value) this.el.value = next
   },

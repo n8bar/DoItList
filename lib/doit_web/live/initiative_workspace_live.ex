@@ -3838,7 +3838,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                           e.preventDefault();
                           const raw = this.input.value.trim();
                           if (!raw) return;
-                          // Resolve `%label` refs to their `%⟨id⟩` token form before the
+                          // Resolve `%label` refs to their `%<id>` token form before the
                           // echo + broadcast (Wave 3): the token rides the EPHEMERAL
                           // broadcast body; each receiver renders it against its OWN tree
                           // (an off-tree ref falls back to %?). Nothing is persisted.
