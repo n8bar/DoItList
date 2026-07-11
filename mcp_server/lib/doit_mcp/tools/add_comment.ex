@@ -6,6 +6,9 @@ defmodule DoitMcp.Tools.AddComment do
   The Initiative's own thread is its root task's comments: to comment on the
   Initiative itself, pass `task_id` = the Initiative payload's `root_task_id`.
 
+  A journal comment is one or two tight sentences — what changed and why;
+  detail that matters lives on the task, not in the comment.
+
   Commenting on more than a couple of tasks in one pass → use
   `apply_operations` as one batch instead of looping this tool.
   """

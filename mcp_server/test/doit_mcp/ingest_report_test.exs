@@ -1,9 +1,10 @@
 defmodule DoitMcp.IngestReportTest do
   @moduledoc """
   The `ingest_report` lint facts (m03.03 item 5.5) — the pure computation
-  (`DoitMcp.IngestReport.build/1`) over a fixture tree-read JSON, one case per
-  fact class, plus the tool wrapper (`DoitMcp.Tools.IngestReport`): compose the
-  tree read, reply with the report, register under `ingest_report`.
+  (`DoitMcp.IngestReport.build/2`) over a fixture tree-read JSON plus fixture
+  comments, one case per fact class, plus the tool wrapper
+  (`DoitMcp.Tools.IngestReport`): compose the tree read and the comment-thread
+  reads, reply with the report, register under `ingest_report`.
 
   Facts only — every assertion is a count, an id, or a matched substring;
   the module under test carries no verdicts or thresholds.
@@ -100,6 +101,8 @@ defmodule DoitMcp.IngestReportTest do
       assert report.top_rank_no_comment_task_ids == []
       assert report.unanchored_reference_candidates == []
       assert report.path_like_strings == []
+      assert report.journal_markers_in_descriptions == []
+      assert report.long_comments == []
     end
   end
 
@@ -174,6 +177,93 @@ defmodule DoitMcp.IngestReportTest do
     end
   end
 
+  describe "build/2 — journal markers in descriptions" do
+    test "flags each marker at line start or after whitespace, uniq per task, in tree order" do
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "tasks" => [
+          %{
+            "id" => 5,
+            "title" => "Decision: markers in titles don't count",
+            "index" => "1",
+            "description" => "Decision: batch it.\nVerified: green. Decision: again.",
+            "comment_count" => 0,
+            "children" => []
+          },
+          %{
+            "id" => 6,
+            "title" => "Beta",
+            "index" => "2",
+            "description" => "Locked decisions: cap at 150. See Verification: notes.",
+            "comment_count" => 0,
+            "children" => []
+          }
+        ]
+      }
+
+      report = IngestReport.build(tree)
+
+      assert report.journal_markers_in_descriptions == [
+               %{task_id: 5, matched_text: "Decision:"},
+               %{task_id: 5, matched_text: "Verified:"},
+               %{task_id: 6, matched_text: "Locked decisions:"},
+               %{task_id: 6, matched_text: "Verification:"}
+             ]
+    end
+
+    test "case-sensitive and never mid-word" do
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "tasks" => [
+          %{
+            "id" => 7,
+            "title" => "Gamma",
+            "index" => "1",
+            "description" => "decision: lowercase, Redecision: mid-word, indecisions everywhere",
+            "comment_count" => 0,
+            "children" => []
+          }
+        ]
+      }
+
+      assert IngestReport.build(tree).journal_markers_in_descriptions == []
+    end
+  end
+
+  describe "build/2 — long comments" do
+    test "lists comment id + task id past 300 characters; tombstone nil bodies never measure" do
+      comments = [
+        %{"id" => 31, "task_id" => 100, "body" => String.duplicate("a", 301)},
+        %{"id" => 32, "task_id" => 1, "body" => String.duplicate("b", 300)},
+        %{"id" => 33, "task_id" => 12, "body" => nil},
+        %{"id" => 34, "task_id" => 12, "body" => String.duplicate("c", 500)}
+      ]
+
+      report = IngestReport.build(@tree, comments)
+
+      assert report.long_comments == [
+               %{comment_id: 31, task_id: 100},
+               %{comment_id: 34, task_id: 12}
+             ]
+    end
+
+    test "without a comments list the fact is empty, never absent" do
+      assert IngestReport.build(@tree).long_comments == []
+    end
+  end
+
+  describe "comment_thread_ids/1" do
+    test "root task first, then commented tree tasks in tree order" do
+      assert IngestReport.comment_thread_ids(@tree) == [100, 1, 12]
+    end
+
+    test "no root id, no commented tasks — empty" do
+      assert IngestReport.comment_thread_ids(%{"id" => 7, "tasks" => []}) == []
+    end
+  end
+
   describe "build/1 — context facts" do
     test "ai_knobs presence is a boolean, never the content" do
       assert IngestReport.build(@tree).ai_knobs_set == false
@@ -214,12 +304,31 @@ defmodule DoitMcp.IngestReportTest do
   end
 
   describe "the ingest_report tool" do
-    test "composes the tree read and replies with the report JSON" do
+    test "composes the tree read plus the comment-thread reads and replies with the report JSON" do
       Req.Test.stub(DoitMcp.Client, fn conn ->
         assert conn.method == "GET"
-        assert conn.request_path == "/api/v1/initiatives/42"
 
-        Req.Test.json(conn, %{"data" => @tree})
+        case conn.request_path do
+          "/api/v1/initiatives/42" ->
+            Req.Test.json(conn, %{"data" => @tree})
+
+          # `comment_thread_ids(@tree)` — root task 100, commented tasks 1, 12.
+          "/api/v1/initiatives/42/tasks/100/comments" ->
+            Req.Test.json(conn, %{
+              "data" => [%{"id" => 900, "task_id" => 100, "body" => String.duplicate("a", 301)}]
+            })
+
+          "/api/v1/initiatives/42/tasks/1/comments" ->
+            Req.Test.json(conn, %{
+              "data" => [
+                %{"id" => 901, "task_id" => 1, "body" => "short"},
+                %{"id" => 902, "task_id" => 1, "body" => "also short"}
+              ]
+            })
+
+          "/api/v1/initiatives/42/tasks/12/comments" ->
+            Req.Test.json(conn, %{"data" => [%{"id" => 903, "task_id" => 12, "body" => "ok"}]})
+        end
       end)
 
       frame = %{test: true}
@@ -236,7 +345,31 @@ defmodule DoitMcp.IngestReportTest do
       assert report["task_count"] == 6
       assert report["depth_histogram"] == %{"0" => 3, "1" => 2, "2" => 1}
       assert report["no_description_task_ids"] == [11, 12, 3]
+      assert report["long_comments"] == [%{"comment_id" => 900, "task_id" => 100}]
       assert report["ai_knobs_set"] == false
+    end
+
+    test "surfaces a failed comment-thread read as a tool error, never a partial report" do
+      Req.Test.stub(DoitMcp.Client, fn conn ->
+        case conn.request_path do
+          "/api/v1/initiatives/42" ->
+            Req.Test.json(conn, %{"data" => @tree})
+
+          _comments ->
+            conn
+            |> Plug.Conn.put_status(403)
+            |> Req.Test.json(%{"error" => %{"code" => "forbidden", "message" => "forbidden"}})
+        end
+      end)
+
+      frame = %{test: true}
+
+      assert {:reply, response, ^frame} =
+               DoitMcp.Tools.IngestReport.execute(%{initiative_id: 42}, frame)
+
+      protocol = Response.to_protocol(response)
+      assert protocol["isError"] == true
+      assert protocol["content"] == [%{"type" => "text", "text" => "(403) forbidden"}]
     end
 
     test "surfaces an API error as a tool error" do

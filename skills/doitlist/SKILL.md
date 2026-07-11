@@ -61,14 +61,14 @@ Rank names are the project's own — learn them from the source's terms (a repo 
 - **Numbering on.** Every Initiative gets a label style (`index_style`) — references and cross-links need labels (product default `none`, off). Fit the project: `numerical` (`1.1.2`, the usual choice), `outline` (`I.A.1.a.i`), `roman` (`I.II.III`), or `alphabetical` (`A.B.C`). `none` only if the operator asks.
 - **Placeholder milestones.** General rule, not an M19 special case: whenever the source's numbering starts past 1, placeholder tasks fill the gap so tree numbers match source numbers. Mapping M19 onward is just the example — placeholders `M1`…`M18` put real work at `19.3.1`, not `1.3.1`; a plan starting at M10 needs `M1`…`M9` the same way. The parity is deliberate: a tree where M10 sits at number 1 lies about the plan. Numbering likely but unclear — "C3 Liquids" followed by "C4 Explosives" — is genuine numbering ambiguity: ask before proceeding.
 - **Build subtrees in one atomic batch.** One `apply_operations` batch with `lid` forward-references beats looped single-task calls — and any bulk pass rides one batch the same way: completions, comments, edits, never looped single-op calls.
-- **Chunk at the cap.** The batch cap is 150 operations; an oversized batch is rejected up front (422) before anything applies. A bigger import chunks deterministically — stable split points — with a provenance/progress comment per chunk.
+- **Chunk at the cap.** The batch cap is 150 operations; oversized is rejected up front (422). An import chunks only past the cap — ceil(ops/150) chunks filled toward it, a provenance/progress comment each; sub-cap self-chunking is out.
 - **Idempotency key on every multi-op import.** Pass `idempotency_key` — a retry with the same key replays the stored response instead of re-applying. One key per logical import; a new payload gets a new key.
 
 ## Ingest Checkpoint
 
 Rules read at session start don't fire mid-build. Run this at the moment of action.
 
-**Pre-apply readback:** before a bulk apply, state the import shape in one message — top ranks, worklist expansion in or out, non-milestone sections in or out, completed-work handling. A statement, not a permission ask; open ambiguities in the readback are where the question budget gets spent.
+**Pre-apply readback:** state the import shape in one message — top ranks, worklist expansion in or out, non-milestone sections in or out, completed-work handling, plus any dimension the import raises — each tagged source-settled, knob-settled, or assumption. A statement, not a permission ask. Assumptions route by uncertainty: near-given defaults stay stated in the readback; genuine unknowns become the questions — where the budget goes. Settled answers write back to `ai_knobs`.
 
 **Before applying an ingest batch, verify:**
 
@@ -80,7 +80,6 @@ Rules read at session start don't fire mid-build. Run this at the moment of acti
 6. Any check you resolved by your own assumption rather than the source or the operator → that's one of your questions. Ask it before applying.
 7. Referenced docs accounted for — each one ingested, cited, or asked about; none silently dropped.
 8. Your authored text scanned for task names in prose → converted to `%`-references.
-9. Question count — zero questions on a >30-item or non-default project is a failure, not a virtue.
 
 **After the batch lands:** leave a provenance comment on each top-rank task naming its source doc, then audit in writing: run `ingest_report`, re-read this skill, and post per-rule pass/fail — quoting the report's facts — as a comment on the Initiative thread (comments on its root task; `root_task_id` rides the initiative read). Grade the build against each rule *as written*: the object is the artifact, the standard is the skill; rule critique is out of scope — disagreements go to the operator separately. Written gets done; silent gets skipped. Fix gaps before reporting done.
 

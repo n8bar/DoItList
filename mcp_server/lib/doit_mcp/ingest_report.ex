@@ -1,13 +1,15 @@
 defmodule DoitMcp.IngestReport do
   @moduledoc """
   The `ingest_report` lint facts (m03.03 item 5.5), computed as a pure function
-  over one decoded Initiative tree read (`GET /api/v1/initiatives/:id`) — no
-  HTTP in here, so the whole report is unit-testable off a fixture map.
+  over one decoded Initiative tree read (`GET /api/v1/initiatives/:id`) plus
+  the flat list of decoded comments the tool composes from the per-task
+  comment reads (`comment_thread_ids/1` names the threads to fetch) — no
+  HTTP in here, so the whole report is unit-testable off fixture maps.
 
   Facts only: counts, ids, and matched substrings. No verdicts, no thresholds —
   the tool measures, the companion skill judges, the product never interprets.
 
-  Fact classes (`build/1` output, flat):
+  Fact classes (`build/2` output, flat):
 
     * shape — `task_count`, `depth_histogram` (`%{"depth" => count}`),
       `leaf_count` / `branch_count`, `top_level_index_range` (`"first..last"`,
@@ -22,6 +24,14 @@ defmodule DoitMcp.IngestReport do
       `%{task_id, field, matched_text}`. Heuristic; false positives expected.
     * path-like strings — `path_like_strings`: slash-separated path shapes in
       descriptions, as `%{task_id, matched_text}`.
+    * journal markers in descriptions — `journal_markers_in_descriptions`:
+      descriptions carrying a journal marker (`Decision:`, `Verified:`,
+      `Locked decisions:`, `Verification:` — case-sensitive, at line start or
+      after whitespace), as `%{task_id, matched_text}`. Journaling belongs in
+      comments; the marker list is a heuristic floor, not a grammar.
+    * long comments — `long_comments`: comments whose body exceeds
+      #{300} characters, as `%{comment_id, task_id}`. Nothing is excluded —
+      the audit explains sanctioned long ones (like itself).
     * context — `ai_knobs_set` (boolean, never the content), `initiative_id`.
 
   Every id/entry list is capped: the first #{20} items plus an `"and N more"`
@@ -29,6 +39,7 @@ defmodule DoitMcp.IngestReport do
   """
 
   @cap 20
+  @long_comment_chars 300
 
   # Compiled regexes hold a runtime reference (OTP 28+), so they can't live in
   # module attributes — plain functions instead.
@@ -53,8 +64,19 @@ defmodule DoitMcp.IngestReport do
   # A slash-separated path shape.
   defp path_pattern, do: ~r|[\w.\-]+\/[\w.\/\-]+|
 
-  @doc "Compute the full fact report over a decoded tree-read body (string keys)."
-  def build(tree) when is_map(tree) do
+  # Journal markers that belong in comments, not descriptions (drive-4 fix 4).
+  # Case-sensitive, at line start or after whitespace; a heuristic floor, not
+  # a grammar — mid-word or lowercase forms deliberately don't match.
+  defp journal_marker_pattern do
+    ~r/(?:^|\s)(Decision:|Verified:|Locked decisions:|Verification:)/m
+  end
+
+  @doc """
+  Compute the full fact report over a decoded tree-read body (string keys)
+  and the flat list of decoded comments fetched for `comment_thread_ids/1`
+  (string keys; tombstones carry a `nil` body and never measure as long).
+  """
+  def build(tree, comments \\ []) when is_map(tree) and is_list(comments) do
     top = Map.get(tree, "tasks") || []
     # [{task, depth}] in tree order (depth-first, pre-order).
     flat = flatten(top, 0)
@@ -75,8 +97,32 @@ defmodule DoitMcp.IngestReport do
       top_rank_no_comment_task_ids: flat |> top_rank_without_comments() |> cap(),
       unanchored_reference_candidates: flat |> Enum.flat_map(&reference_candidates/1) |> cap(),
       path_like_strings: flat |> Enum.flat_map(&path_like/1) |> cap(),
+      journal_markers_in_descriptions: flat |> Enum.flat_map(&journal_markers/1) |> cap(),
+      long_comments:
+        comments
+        |> Enum.filter(&long_comment?/1)
+        |> Enum.map(&%{comment_id: &1["id"], task_id: &1["task_id"]})
+        |> cap(),
       ai_knobs_set: present?(tree["ai_knobs"])
     }
+  end
+
+  @doc """
+  Task ids whose comment threads feed the long-comment fact: the Initiative's
+  root task first (its own thread — the tree read never lists the root node),
+  then every tree task with a non-zero `comment_count`, in tree order.
+  """
+  def comment_thread_ids(tree) when is_map(tree) do
+    commented =
+      (Map.get(tree, "tasks") || [])
+      |> flatten(0)
+      |> Enum.filter(fn {task, _} -> (task["comment_count"] || 0) > 0 end)
+      |> Enum.map(fn {task, _} -> task["id"] end)
+
+    case tree["root_task_id"] do
+      nil -> commented
+      root_id -> [root_id | commented]
+    end
   end
 
   defp flatten(nodes, depth) do
@@ -126,6 +172,24 @@ defmodule DoitMcp.IngestReport do
       _ ->
         []
     end
+  end
+
+  defp journal_markers({task, _depth}) do
+    case task["description"] do
+      text when is_binary(text) ->
+        journal_marker_pattern()
+        |> Regex.scan(text, capture: :all_but_first)
+        |> List.flatten()
+        |> Enum.uniq()
+        |> Enum.map(&%{task_id: task["id"], matched_text: &1})
+
+      _ ->
+        []
+    end
+  end
+
+  defp long_comment?(comment) do
+    is_binary(comment["body"]) and String.length(comment["body"]) > @long_comment_chars
   end
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""

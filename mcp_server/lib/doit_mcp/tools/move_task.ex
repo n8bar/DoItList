@@ -5,6 +5,9 @@ defmodule DoitMcp.Tools.MoveTask do
   pinning the destination to manual sort; omit it for a plain reparent
   that just appends. At least one of `parent_id`, `position`, `reorder`
   must be given — the underlying API rejects an update with zero fields.
+
+  Moving or restructuring more than a couple of tasks in one pass → use
+  `apply_operations` as one batch instead of looping this tool.
   """
 
   use Anubis.Server.Component, type: :tool
