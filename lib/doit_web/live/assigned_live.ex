@@ -60,6 +60,12 @@ defmodule DoItWeb.AssignedLive do
             mounted() {
               this._livePush = (ev, payload, cb) => this.pushEvent(ev, payload, cb);
               window.DoitRegisterLivePush(this._livePush);
+              // %-reference READ path (m03.03 item 5.10): document, not this.el —
+              // the assigned list is a SIBLING of this shell div.
+              window.DoitRenderRefs(document);
+            },
+            updated() {
+              window.DoitRenderRefs(document);
             },
             destroyed() {
               window.DoitUnregisterLivePush(this._livePush);

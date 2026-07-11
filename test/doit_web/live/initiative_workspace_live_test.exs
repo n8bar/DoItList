@@ -60,6 +60,31 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     refute has_element?(view, "[id^=\"initiative-show-root\"]")
   end
 
+  test "index cards never render a literal %< token and carry the CardRefs hook", %{
+    conn: conn,
+    owner: owner,
+    alpha: alpha
+  } do
+    task = new_task(owner, alpha, %{"title" => "Referenced task"})
+
+    {:ok, _} =
+      Initiatives.update_initiative(alpha, %{
+        "description" => "Blocked on %<#{task.id}> landing first."
+      })
+
+    {:ok, view, html} = live(conn, ~p"/initiatives")
+
+    # The stored token reaches the card HTML-escaped (never literal `%<`), so
+    # the browser parses a text node — the precondition for the client-side
+    # renderer (CardRefs -> renderCardRefEl) to read the token back and swap
+    # it for the neutral glyph.
+    refute html =~ "%<"
+    assert html =~ "%&lt;#{task.id}&gt;"
+
+    # The renderer is wired: the card container carries the CardRefs hook.
+    assert has_element?(view, "#initiatives[phx-hook='CardRefs']")
+  end
+
   test "list<->detail is a push_patch on ONE kept-mounted process (no remount)", %{
     conn: conn,
     alpha: alpha

@@ -6531,6 +6531,18 @@ Hooks.CommentRefs = {
   updated() { renderAllRefs(document) },
 }
 
+// Initiatives-index card READ path (m03.03 item 5.10): the index has no task
+// tree, so nothing invoked renderAllRefs and card subtitles/descriptions showed
+// raw `%<id>` tokens. This hook rides the card-list stream container —
+// mounted() = index open; updated() fires when a card streams in or patches
+// (the same container-hook behaviour CommentRefs relies on). Scoped to this.el:
+// the card fields are its only ref surface, and with no tree loaded they render
+// the neutral ↗ glyph (renderCardRefEl), never a raw id.
+Hooks.CardRefs = {
+  mounted() { renderAllRefs(this.el) },
+  updated() { renderAllRefs(this.el) },
+}
+
 // Comment-edit textarea WRITE path (Wave 3): the server renders the stored
 // `%<id>` tokens into the box; show them as `%label` for editing (mirrors
 // RefField.rehydrate). Rehydrate on mount (the editor is rendered statically,

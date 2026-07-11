@@ -4422,7 +4422,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
              chrome) covers it, so it hides and the center shows a "pick an
              Initiative" prompt; the "Assigned to Me" pane rides the layout's
              right pane (a sibling of the left rail, via <:rail_right> below). --%>
-        <div id="initiatives" phx-update="stream" class="space-y-2 3xl:hidden">
+        <div id="initiatives" phx-update="stream" phx-hook="CardRefs" class="space-y-2 3xl:hidden">
           <div
             :for={{dom_id, initiative} <- @streams.initiatives}
             id={dom_id}
