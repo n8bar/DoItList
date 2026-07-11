@@ -2160,8 +2160,10 @@ function renderAllRefs(root) {
       "[data-task-title], [data-task-description], [data-comment-body], [data-chat-body], [data-initiative-subtitle-body], [data-initiative-description-body]"
     )
     .forEach((el) => renderRefEl(el, map))
+  // [data-card-ref-field] (5.10.3): the same label-less card treatment for
+  // non-initiative surfaces with no tree loaded — e.g. /assigned task titles.
   scope
-    .querySelectorAll("[data-initiative-card-field]")
+    .querySelectorAll("[data-initiative-card-field], [data-card-ref-field]")
     .forEach((el) => renderCardRefEl(el))
 }
 // Back-compat alias (the Wave 1/2 name) + the Wave 3 canonical name, both
@@ -3136,7 +3138,10 @@ document.addEventListener(
     const echoId = "c" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
     if (list) {
       const li = buildPendingComment(echoId, body, form.dataset)
-      list.appendChild(li)
+      // Top of the list: the panes render newest-first (O&C 6.6), so the echo
+      // lands exactly where the server's real row will. Reconcile is untouched
+      // — removePendingComment pulls by echo_id, position-independent.
+      list.prepend(li)
       renderAllRefs(li) // show the token -> link in the optimistic bubble at once
     }
     if (input) input.value = ""

@@ -6,13 +6,15 @@ defmodule DoItWeb.InitiativeShowCollabTest do
   here we cover what's drivable server-side: messages fan out to viewers and
   are not persisted, and the author-only comment controls + tombstone render.
   Also home to the m03.03 O&C 6.1 regression: an index-style change in one
-  session re-labels another live session's tree.
+  session re-labels another live session's tree, and the O&C 6.6 comment-pane
+  contract: the add form sits above the list, comments render newest-first.
   """
   use DoItWeb.ConnCase, async: true
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
-  alias DoIt.{Accounts, Initiatives, Tasks}
+  alias DoIt.{Accounts, Initiatives, Repo, Tasks}
 
   defp user(name) do
     {:ok, u} =
@@ -242,6 +244,50 @@ defmodule DoItWeb.InitiativeShowCollabTest do
     end
   end
 
+  describe "comment panes: form on top, newest-first (m03.03 O&C 6.6)" do
+    test "task pane: the add form precedes the list; comments render newest-first", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      task = new_task(owner, ini, %{"title" => "T"})
+      {:ok, older} = Tasks.add_comment(task, owner, "older-pane-note")
+      backdate(older, 120)
+      {:ok, _newer} = Tasks.add_comment(task, owner, "newer-pane-note")
+
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+      render_hook(view, "select_task", %{"id" => to_string(task.id)})
+
+      html = render(view)
+
+      # The add form renders ABOVE the thread.
+      assert pos(html, ~s(id="add-comment-form")) < pos(html, ~s(id="comment-list")),
+             "expected the add-comment form above the task pane's comment list"
+
+      # Newest-first: the fresh comment precedes the backdated one.
+      assert pos(html, "newer-pane-note") < pos(html, "older-pane-note"),
+             "expected task-pane comments newest-first, got oldest-first"
+    end
+
+    test "initiative details pane: the add form precedes the list; comments render newest-first",
+         %{conn: conn, owner: owner, ini: ini} do
+      root = Tasks.get_task(ini.root_task_id)
+      {:ok, older} = Tasks.add_comment(root, owner, "older-kickoff-note")
+      backdate(older, 120)
+      {:ok, _newer} = Tasks.add_comment(root, owner, "newer-kickoff-note")
+
+      {:ok, view, _} = live(log_in(conn, owner), ~p"/initiatives/#{ini.id}")
+      html = render(view)
+
+      assert pos(html, ~s(id="initiative-comment-form")) <
+               pos(html, ~s(id="initiative-comment-list")),
+             "expected the add-comment form above the Initiative pane's comment list"
+
+      assert pos(html, "newer-kickoff-note") < pos(html, "older-kickoff-note"),
+             "expected Initiative-pane comments newest-first, got oldest-first"
+    end
+  end
+
   describe "index-style live propagation (m03.03 O&C 6.1)" do
     test "a style change in one session re-labels another live session's tree", %{
       conn: conn,
@@ -284,5 +330,18 @@ defmodule DoItWeb.InitiativeShowCollabTest do
   defp pos(haystack, needle) do
     [{start, _len} | _] = :binary.matches(haystack, needle)
     start
+  end
+
+  # Shift a comment's inserted_at into the past: the second-precision
+  # utc_datetime timestamps tie for comments added back-to-back, which would
+  # leave the newest-first order unspecified.
+  defp backdate(comment, seconds) do
+    past =
+      DateTime.utc_now()
+      |> DateTime.add(-seconds, :second)
+      |> DateTime.truncate(:second)
+
+    from(c in DoIt.Tasks.Comment, where: c.id == ^comment.id)
+    |> Repo.update_all(set: [inserted_at: past])
   end
 end

@@ -255,7 +255,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     # The Initiative-details thread (item 6.4): the Initiative's own comments
     # ARE its root task's comments (doc 6.4.1). Loaded up front — the details
     # pane is pre-rendered (revealed client-side), so the thread must be ready.
-    |> assign(:initiative_comments, Tasks.list_comments(initiative.root_task_id))
+    |> assign(:initiative_comments, pane_comments(initiative.root_task_id))
     |> assign(:chat_messages, [])
     |> assign(:chat_log_id, 0)
     |> assign(
@@ -907,11 +907,17 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           task ->
             socket
             |> assign_selected(task)
-            |> assign(:comments, Tasks.list_comments(id))
+            |> assign(:comments, pane_comments(id))
             |> assign(:activity, Tasks.list_task_activity(id))
         end
     end
   end
+
+  # The panes' one comment-load seam (O&C 6.6): newest-first for display, so
+  # the freshest comment sits at the top, right under the add form. Reverses
+  # rather than re-queries — Tasks.list_comments/1 keeps its oldest-first
+  # storage order for its other callers (API reads, MCP).
+  defp pane_comments(task_id), do: task_id |> Tasks.list_comments() |> Enum.reverse()
 
   # Which thread an add-comment targets (item 6.4): the Initiative-details form
   # posts task_id = the root task — its thread IS the root task's comments
@@ -945,7 +951,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
     case socket.assigns[:initiative] do
       %{root_task_id: ^task_id} ->
-        assign(socket, :initiative_comments, Tasks.list_comments(task_id))
+        assign(socket, :initiative_comments, pane_comments(task_id))
 
       _ ->
         socket
@@ -1148,7 +1154,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                socket
                |> assign(:selected_task_id, tid)
                |> assign_selected(task)
-               |> assign(:comments, Tasks.list_comments(tid))
+               |> assign(:comments, pane_comments(tid))
                |> assign(:activity, Tasks.list_task_activity(tid))
                |> update_presence(tid)}
 
@@ -6323,11 +6329,19 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
            two threads can't diverge. --%>
       <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3" data-comments-block>
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
+        <%!-- Form ABOVE the list, list newest-first (O&C 6.6): composing and
+             the freshest comment share the top of the pane. --%>
+        <.add_comment_form
+          :if={@can_comment}
+          id="initiative-comment-form"
+          current_user={@current_user}
+          task_id={@initiative.root_task_id}
+        />
         <ul
           id="initiative-comment-list"
           phx-hook="CommentRefs"
           data-comment-list
-          class="space-y-2 mb-2"
+          class="space-y-2 mt-2"
         >
           <.comment_item
             :for={c <- @comments}
@@ -6336,12 +6350,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             online_ids={@online_ids}
           />
         </ul>
-        <.add_comment_form
-          :if={@can_comment}
-          id="initiative-comment-form"
-          current_user={@current_user}
-          task_id={@initiative.root_task_id}
-        />
       </div>
 
       <%!-- Settings (.03.07.07): collapsed by default; initiative-wide
@@ -7213,7 +7221,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       <div class="border-t border-zinc-100 dark:border-zinc-700 pt-3" data-comments-block>
         <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-2">Comments</h4>
-        <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mb-2">
+        <%!-- Form ABOVE the list, list newest-first (O&C 6.6): composing and
+             the freshest comment share the top of the pane. --%>
+        <.add_comment_form :if={@can_progress} id="add-comment-form" current_user={@current_user} />
+        <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic mt-2">
           Loading…
         </p>
         <ul
@@ -7221,7 +7232,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           phx-hook="CommentRefs"
           data-async-list
           data-comment-list
-          class="space-y-2 mb-2"
+          class="space-y-2 mt-2"
         >
           <.comment_item
             :for={c <- @comments}
@@ -7230,7 +7241,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             online_ids={@online_ids}
           />
         </ul>
-        <.add_comment_form :if={@can_progress} id="add-comment-form" current_user={@current_user} />
       </div>
 
       <%!-- Hideable per user preference (m02.04 §2.4); collapsed by default,

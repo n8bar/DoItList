@@ -65,6 +65,31 @@ defmodule DoItWeb.AssignedLiveTest do
     assert has_element?(view, "#assigned-task-#{task.id}")
   end
 
+  test "a title's %<id> token never renders literal; the row carries the ref attribute", %{
+    conn: conn,
+    owner: owner,
+    ini: ini
+  } do
+    target = new_task(owner, ini, %{"title" => "Referenced task"})
+
+    task =
+      new_task(owner, ini, %{
+        "title" => "Blocked on %<#{target.id}> landing",
+        "assignee_id" => current_id(conn)
+      })
+
+    {:ok, view, html} = live(conn, ~p"/assigned")
+
+    # The stored token reaches the row HTML-escaped (never literal `%<`), so the
+    # browser parses a text node — the precondition for the client-side renderer
+    # (.AssignedLive -> renderCardRefEl) to swap it for the neutral glyph (5.10.3).
+    refute html =~ "%<"
+    assert html =~ "%&lt;#{target.id}&gt;"
+
+    # The title span carries the attribute renderAllRefs' card selector routes on.
+    assert has_element?(view, "#assigned-task-#{task.id} [data-card-ref-field]")
+  end
+
   test "completed tasks hidden by default, revealed by the toggle", %{
     conn: conn,
     owner: owner,

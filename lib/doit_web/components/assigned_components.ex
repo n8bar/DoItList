@@ -174,7 +174,13 @@ defmodule DoItWeb.AssignedComponents do
       </span>
 
       <span class="min-w-0 flex-1">
-        <span class="block truncate text-sm text-zinc-800 dark:text-zinc-100">
+        <%!-- data-card-ref-field (5.10.3): a `%<id>` token in the title gets the
+             label-less card treatment (renderCardRefEl — neutral glyph, escape
+             resolution), never a raw id. --%>
+        <span
+          data-card-ref-field
+          class="block truncate text-sm text-zinc-800 dark:text-zinc-100"
+        >
           {@task.title}
         </span>
         <%!-- WL3 3.2: always rendered; .assigned-row-subtitle is hidden by CSS
