@@ -291,8 +291,11 @@ defmodule DoItWeb.Api.Operations do
       # member, AND notification broadcasts all route through DoIt.Broadcast)
       # fires now on commit, or is dropped on rollback — the all-or-nothing
       # guarantee extends to PubSub side effects, none escaping a rolled-back
-      # batch or leaking pre-commit.
-      Broadcast.flush(transaction_ok?(result))
+      # batch or leaking pre-commit. Coalesced per batch (item 5.8.2): N per-op
+      # task messages would trigger N full tree reloads in every open
+      # workspace — O(batch x tree) subscriber work; the coalescer collapses
+      # them to per-batch signals with identical converged state.
+      Broadcast.flush(transaction_ok?(result), &Tasks.coalesce_task_broadcasts/1)
       render(result, count)
     after
       # An op may RAISE inside the transaction (a DB constraint / Postgrex /

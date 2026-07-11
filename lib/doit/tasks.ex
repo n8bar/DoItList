@@ -3346,6 +3346,74 @@ defmodule DoIt.Tasks do
   defp broadcast_change(initiative_id, message),
     do: DoIt.Broadcast.broadcast(topic(initiative_id), message)
 
+  # The task-message kinds whose workspace reaction is a FULL tree reload
+  # (`InitiativeWorkspaceLive.handle_info` → `load_tree`). One such message per
+  # kind converges a subscriber exactly as N of them do.
+  @tree_reload_kinds [:task_created, :task_moved, :task_deleted]
+
+  @doc """
+  Collapse a committed batch's queued broadcasts (m03.03 item 5.8.2) so
+  subscribers pay per BATCH, not per op — a 150-op import fired ~150
+  `{:task_created, id}` messages at every open workspace, each answered with a
+  full tree reload: O(batch x tree) subscriber work that grew with the tree and
+  was the dominant amplification behind drive 4's 2.6s -> 14.6s batch climb.
+
+  For `DoIt.Broadcast.flush/2`'s `coalesce` — entries arrive in fire order.
+  Per topic:
+
+    * `:task_created` / `:task_moved` / `:task_deleted` — every one triggers
+      the same full `load_tree`; keep the FIRST of each kind (kinds kept
+      distinct: deleted/moved also refresh the selection), drop the rest.
+    * `:task_updated` — row-scoped patches. When the topic also carries a
+      reload kind above, the full reload supersedes every patch: drop them
+      all. Otherwise dedupe by task id (identical patches are idempotent).
+    * `:comment_added` / `:comment_changed` — pane refreshes; dedupe by task.
+    * Everything else (`:members_changed`, `:initiative_updated`,
+      notifications, `:after_commit` markers) passes through untouched, in
+      order — each carries content or a distinct side effect.
+
+  Every handler re-reads current DB state, so subscribers converge to exactly
+  the same state as with the uncoalesced stream.
+  """
+  def coalesce_task_broadcasts(entries) do
+    reload_topics =
+      for {topic, {kind, _id}} <- entries,
+          kind in @tree_reload_kinds,
+          into: MapSet.new(),
+          do: topic
+
+    {kept, _seen} =
+      Enum.reduce(entries, {[], MapSet.new()}, fn entry, {acc, seen} ->
+        case coalesce_key(entry, reload_topics) do
+          :keep ->
+            {[entry | acc], seen}
+
+          :drop ->
+            {acc, seen}
+
+          key ->
+            if MapSet.member?(seen, key),
+              do: {acc, seen},
+              else: {[entry | acc], MapSet.put(seen, key)}
+        end
+      end)
+
+    Enum.reverse(kept)
+  end
+
+  defp coalesce_key({topic, {kind, _id}}, _reload_topics) when kind in @tree_reload_kinds,
+    do: {topic, kind}
+
+  defp coalesce_key({topic, {:task_updated, id}}, reload_topics) do
+    if MapSet.member?(reload_topics, topic), do: :drop, else: {topic, :task_updated, id}
+  end
+
+  defp coalesce_key({topic, {kind, task_id}}, _reload_topics)
+       when kind in [:comment_added, :comment_changed],
+       do: {topic, kind, task_id}
+
+  defp coalesce_key(_entry, _reload_topics), do: :keep
+
   # No-op while still inside a transaction (an outer mutator will flush). Sends
   # the queue on a successful result; drops it otherwise (rollback).
   defp flush_broadcasts(result), do: DoIt.Broadcast.flush(result)

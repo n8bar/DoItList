@@ -64,9 +64,17 @@ defmodule DoIt.Broadcast do
     * `{:ok, _}` — fire the queued messages in enqueue order, then clear it;
     * anything else — drop the queue (a rolled-back batch broadcasts nothing).
 
+  `coalesce` (optional) maps the enqueue-ordered entry list to the list
+  actually fired, on the commit path only — so a multi-op batch can collapse
+  its per-op messages into per-batch ones (`DoIt.Tasks.coalesce_task_broadcasts/1`)
+  instead of fanning N identical reload signals at every subscriber. The
+  entries are `{topic, message}` tuples plus `{:after_commit, fun}` markers; a
+  coalescer must pass anything it doesn't understand through untouched. This
+  module stays domain-agnostic — the message vocabulary lives with the caller.
+
   Returns `result` unchanged so it can sit in a pipe.
   """
-  def flush(result) do
+  def flush(result, coalesce \\ &Function.identity/1) do
     cond do
       Repo.in_transaction?() ->
         result
@@ -75,7 +83,7 @@ defmodule DoIt.Broadcast do
         pending = Process.get(@pending, [])
         Process.delete(@pending)
 
-        for entry <- Enum.reverse(pending) do
+        for entry <- pending |> Enum.reverse() |> coalesce.() do
           case entry do
             {:after_commit, fun} -> fun.()
             {topic, message} -> Phoenix.PubSub.broadcast(DoIt.PubSub, topic, message)
