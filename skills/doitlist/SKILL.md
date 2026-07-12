@@ -69,7 +69,7 @@ Rank names are the project's own — learn them from the source's terms (a repo 
 
 Rules read at session start don't fire mid-build. Run this at the moment of action.
 
-**Pre-apply readback:** state the import shape in one message — top ranks, worklist expansion in or out, non-milestone sections in or out, completed-work handling, progress-calc fit, plus any dimension the import raises — each tagged source-settled, knob-settled, or assumption. A finished milestone with no source breakdown is a genuine unknown: done leaf (near-invisible under `leaf_average`) or a pointer to its real breakdown. A statement, not a permission ask. Assumptions route by uncertainty: near-given defaults stay stated in the readback; genuine unknowns become the questions — where the budget goes. Settled answers write back to `ai_knobs`.
+**Pre-apply readback:** state the import shape in one message — top ranks, worklist expansion in or out, non-milestone sections in or out, completed-work handling, progress-calc fit, plus any dimension the import raises — each tagged source-settled, knob-settled, or assumption. A finished milestone with no source breakdown is a genuine unknown: done leaf (near-invisible under `leaf_average`) or a pointer to its real breakdown. The readback gates: wait for the operator's confirm before applying — unless every dimension is asked-and-answered or knob-settled, where the statement stands on its own. Assumptions route by uncertainty: near-given defaults stay stated in the readback; genuine unknowns become the questions — where the budget goes. Settled answers write back to `ai_knobs`.
 
 **Before applying an ingest batch, verify:**
 
