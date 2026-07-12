@@ -67,20 +67,176 @@ defmodule DoitMcp.Tools.ApplyOperations do
   safe: it is forwarded as the `Idempotency-Key` header, so if a first attempt
   already committed but its response was lost (e.g. a timeout), a retry with the
   same key replays that stored response instead of re-applying the batch.
+
+  ## Import gate — big batch into a knob-less Initiative
+
+  The gate ships dark — it evaluates only when `DOITLIST_IMPORT_GATE=on` —
+  because the stdio transport serializes read/dispatch: the operator's
+  elicitation answer can't be read while the tool call blocks. Flips on when
+  the transport work lands.
+
+  A batch with more than 30 task-adds targeting an Initiative whose
+  `ai_knobs` is still empty (created in this same batch, or fetched and found
+  blank) is held for the operator when your client supports elicitation.
+  Without a `readback` it is rejected unapplied — re-call with `readback`
+  (your one-paragraph statement of the import shape you're about to build)
+  and `assumptions` (your assumption-tagged decisions, one string each).
+  Those are then shown to the operator to confirm or correct: confirm applies
+  the batch normally; corrections (or a refusal) come back as the tool result
+  with NOTHING applied — revise the batch to match and record the settled
+  answers in the Initiative's `ai_knobs`, which stops this gate firing again
+  for that project. No answer within 5 minutes → nothing applied; retry when
+  the operator is available. Clients without elicitation support skip the
+  gate entirely.
   """
 
   use Anubis.Server.Component, type: :tool
 
-  alias DoitMcp.{Client, ToolResult}
+  alias Anubis.Server.Response
+  alias DoitMcp.{Client, Elicitation, ImportGate, ToolResult}
+
+  # A human is reading the readback — give them a generous window.
+  @confirm_timeout to_timeout(minute: 5)
+
+  @confirm_schema %{
+    "type" => "object",
+    "properties" => %{
+      "confirm" => %{
+        "type" => "boolean",
+        "description" => "true applies the import as read back; false holds it"
+      },
+      "corrections" => %{
+        "type" => "string",
+        "description" => "What to change instead — leaves the batch unapplied"
+      }
+    },
+    "required" => ["confirm"]
+  }
+
+  @knobs_note "Import confirmed by the operator. Record the now-settled answers " <>
+                "(the readback and assumptions as confirmed) in this Initiative's " <>
+                "ai_knobs so this gate never fires again for this project."
 
   schema do
     field(:operations, {:list, :map}, required: true)
     field(:idempotency_key, :string, required: false)
+    field(:readback, :string, required: false)
+    field(:assumptions, {:list, :string}, required: false)
   end
 
   def execute(params, frame) do
-    params.operations
-    |> Client.operations(idempotency_key: Map.get(params, :idempotency_key))
-    |> then(&ToolResult.reply_batch(frame, &1))
+    gate =
+      ImportGate.evaluate(params.operations,
+        elicitation?: &Elicitation.client_supports_elicitation?/0,
+        fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end
+      )
+
+    case gate do
+      :pass -> apply_batch(params, frame)
+      {:gate, info} -> hold_for_confirmation(params, info, frame)
+    end
   end
+
+  defp apply_batch(params, frame, opts \\ []) do
+    result =
+      Client.operations(params.operations, idempotency_key: Map.get(params, :idempotency_key))
+
+    {:reply, response, frame} = ToolResult.reply_batch(frame, result)
+
+    response =
+      case {result, opts[:note]} do
+        {{:ok, _}, note} when is_binary(note) -> Response.text(response, note)
+        _ -> response
+      end
+
+    {:reply, response, frame}
+  end
+
+  defp hold_for_confirmation(params, info, frame) do
+    case presence(Map.get(params, :readback)) do
+      nil ->
+        {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
+
+      readback ->
+        confirm_with_operator(params, readback, frame)
+    end
+  end
+
+  defp confirm_with_operator(params, readback, frame) do
+    message = confirmation_message(readback, Map.get(params, :assumptions) || [])
+
+    case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
+      {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
+        handle_answer(params, content, frame)
+
+      {:ok, %{"action" => "decline"}} ->
+        not_applied(frame, %{
+          message:
+            "Operator declined the import — batch NOT applied. Ask what to change, " <>
+              "settle the answers in the Initiative's ai_knobs, then re-apply."
+        })
+
+      _timeout_cancel_or_error ->
+        not_applied(frame, %{
+          message: "Operator did not respond; batch not applied — retry when they're available."
+        })
+    end
+  end
+
+  defp handle_answer(params, content, frame) do
+    case {presence(content["corrections"]), content["confirm"]} do
+      {nil, true} ->
+        apply_batch(params, frame, note: @knobs_note)
+
+      {nil, _} ->
+        not_applied(frame, %{
+          message:
+            "Operator answered confirm=false with no corrections — batch NOT applied. " <>
+              "Ask what to change, update the Initiative's ai_knobs, then re-apply."
+        })
+
+      {corrections, _} ->
+        not_applied(frame, %{
+          corrections: corrections,
+          message:
+            "Operator supplied corrections — batch NOT applied. Revise the batch to " <>
+              "match and record the settled answers in the Initiative's ai_knobs, then re-apply."
+        })
+    end
+  end
+
+  defp not_applied(frame, extra) do
+    payload = Map.merge(%{ok: false, applied: false, gate: "import_readback_confirm"}, extra)
+    response = Response.json(Response.tool(), payload)
+    {:reply, %{response | isError: true}, frame}
+  end
+
+  defp readback_required_message(%{task_adds: task_adds}) do
+    "Import gate: this batch adds #{task_adds} tasks to an Initiative whose ai_knobs " <>
+      "is still empty, so the operator must confirm it before it applies. Nothing was " <>
+      "applied. Re-call apply_operations with the same operations plus `readback` — " <>
+      "your one-paragraph statement of the import shape you're about to build — and " <>
+      "`assumptions` — your assumption-tagged decisions, one string each. The operator " <>
+      "will confirm or correct them; record the settled answers in the Initiative's ai_knobs."
+  end
+
+  defp confirmation_message(readback, assumptions) do
+    assumptions_block =
+      case assumptions do
+        [] -> "Assumptions: none stated."
+        list -> "Assumptions:\n" <> Enum.map_join(list, "\n", &("- " <> &1))
+      end
+
+    "#{readback}\n\n#{assumptions_block}\n\nConfirm to apply this import, or supply corrections."
+  end
+
+  defp confirm_timeout do
+    Application.get_env(:doit_mcp, :import_gate_confirm_timeout, @confirm_timeout)
+  end
+
+  defp presence(value) when is_binary(value) do
+    if String.trim(value) == "", do: nil, else: value
+  end
+
+  defp presence(_), do: nil
 end

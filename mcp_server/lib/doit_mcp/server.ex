@@ -63,4 +63,13 @@ defmodule DoitMcp.Server do
   component(DoitMcp.Resources.InitiativeActivity)
   component(DoitMcp.Resources.InitiativeMembers)
   component(DoitMcp.Resources.TaskComments)
+
+  # Elicitation answers (import gate, m03.03 fix 10) — Anubis dispatches the
+  # client's answer here, in the session process; forward it to the tool task
+  # parked in DoitMcp.Elicitation.request/3.
+  @impl true
+  def handle_elicitation(result, _request_id, frame) do
+    DoitMcp.Elicitation.deliver(result)
+    {:noreply, frame}
+  end
 end
