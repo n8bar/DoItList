@@ -23,7 +23,8 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     field(:ai_knobs, :string,
       required: false,
       description:
-        "Per-project agent settings store — plain text the product stores but never interprets"
+        "Per-project agent settings store — structure/scope/style knobs for this Initiative " <>
+          "only; plain text the product stores but never interprets"
     )
 
     field(:auto_promote_co_assignees, :boolean, required: false)
