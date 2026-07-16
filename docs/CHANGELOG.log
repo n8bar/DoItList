@@ -359,3 +359,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-13  Fix: stack now survives host reboot — restart policy in compose.yaml (db had none, stayed down) and start.sh clears stale mix locks an unclean shutdown leaves behind.
 2026-07-16  Feat (m03.03): fixes 11-12 -- ingest_report gains duplicate_descriptions and top_rank_counts facts; skill audit form becomes count reconciliation against the server numbers.
 2026-07-16  Feat (m03.03): fix 13 -- chunk rule retuned (operator call); sub-cap chunking sanctioned in skill + moduledoc, server cap stays the enforcement; 5.11.2 gains the cumulative gate trigger.
+2026-07-16  Doc (m03.03): fixes 14-16 banked from the skill-less probe -- ai_knobs off the list read, knob legitimacy in moduledocs, two-stage skill diet (744->2976 words needs reversing).
