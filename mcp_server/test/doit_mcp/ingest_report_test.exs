@@ -98,6 +98,8 @@ defmodule DoitMcp.IngestReportTest do
       assert report.depth_histogram == %{}
       assert report.top_level_index_range == nil
       assert report.no_description_task_ids == []
+      assert report.duplicate_descriptions == []
+      assert report.top_rank_counts == []
       assert report.top_rank_no_comment_task_ids == []
       assert report.unanchored_reference_candidates == []
       assert report.path_like_strings == []
@@ -113,6 +115,122 @@ defmodule DoitMcp.IngestReportTest do
       assert report.with_description == 3
       assert report.without_description == 3
       assert report.no_description_task_ids == [11, 12, 3]
+    end
+  end
+
+  describe "build/1 — duplicate descriptions" do
+    test "groups exact repeats: preview + count + tree-order ids, sorted by count descending" do
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "tasks" => [
+          leaf(1, "other"),
+          leaf(2, "same"),
+          leaf(3, "unique"),
+          leaf(4, "same"),
+          leaf(5, "other"),
+          leaf(6, "same"),
+          # Exact-string grouping — a trailing space is a different string.
+          leaf(7, "other ")
+        ]
+      }
+
+      assert IngestReport.build(tree).duplicate_descriptions == [
+               %{description: "same", count: 3, task_ids: [2, 4, 6]},
+               %{description: "other", count: 2, task_ids: [1, 5]}
+             ]
+    end
+
+    test "nil, empty, and whitespace-only descriptions never group" do
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "tasks" => [
+          leaf(1, nil),
+          leaf(2, nil),
+          leaf(3, ""),
+          leaf(4, ""),
+          leaf(5, "   "),
+          leaf(6, "   ")
+        ]
+      }
+
+      assert IngestReport.build(tree).duplicate_descriptions == []
+    end
+
+    test "no duplicates measures as an empty list" do
+      assert IngestReport.build(@tree).duplicate_descriptions == []
+    end
+
+    test "long repeated strings preview to 120 characters" do
+      long = String.duplicate("x", 150)
+      tree = %{"id" => 1, "ai_knobs" => nil, "tasks" => [leaf(1, long), leaf(2, long)]}
+
+      assert [%{description: preview, count: 2, task_ids: [1, 2]}] =
+               IngestReport.build(tree).duplicate_descriptions
+
+      assert preview == String.duplicate("x", 120) <> "…"
+    end
+
+    test "the entry list and each entry's id list are capped" do
+      # One description shared by 25 tasks plus 21 distinct pair-duplicates:
+      # the big group sorts first with capped ids, and the 22-entry list
+      # itself caps at 20 + tail. Pair ties keep tree order.
+      crowd = for i <- 1..25, do: leaf(1000 + i, "swamped")
+      pairs = for i <- 1..21, j <- 0..1, do: leaf(i * 10 + j, "dup #{i}")
+
+      report = IngestReport.build(%{"id" => 9, "ai_knobs" => nil, "tasks" => crowd ++ pairs})
+
+      assert [first | _] = report.duplicate_descriptions
+
+      assert first == %{
+               description: "swamped",
+               count: 25,
+               task_ids: Enum.map(1..20, &(1000 + &1)) ++ ["and 5 more"]
+             }
+
+      assert Enum.at(report.duplicate_descriptions, 1) ==
+               %{description: "dup 1", count: 2, task_ids: [10, 11]}
+
+      assert length(report.duplicate_descriptions) == 21
+      assert List.last(report.duplicate_descriptions) == "and 2 more"
+    end
+  end
+
+  describe "build/1 — top-rank counts" do
+    test "one entry per top-rank task: subtree size + done count, tree order" do
+      # @tree carries no done flags — everything counts as not done.
+      assert IngestReport.build(@tree).top_rank_counts == [
+               %{task_id: 1, title: "Alpha", subtree_task_count: 4, subtree_done_count: 0},
+               %{task_id: 2, title: "M12 kickoff", subtree_task_count: 1, subtree_done_count: 0},
+               %{task_id: 3, title: "Ship %<9> now", subtree_task_count: 1, subtree_done_count: 0}
+             ]
+    end
+
+    test "done counts the wire done flag across the whole subtree, the top task included" do
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "tasks" => [
+          leaf(1, nil, %{
+            "title" => "Alpha",
+            "done" => true,
+            "children" => [
+              leaf(11, nil, %{"done" => true}),
+              leaf(12, nil, %{
+                "done" => false,
+                "children" => [leaf(121, nil, %{"done" => true})]
+              })
+            ]
+          }),
+          leaf(2, nil, %{"title" => "Beta", "done" => false})
+        ]
+      }
+
+      assert IngestReport.build(tree).top_rank_counts == [
+               %{task_id: 1, title: "Alpha", subtree_task_count: 4, subtree_done_count: 3},
+               %{task_id: 2, title: "Beta", subtree_task_count: 1, subtree_done_count: 0}
+             ]
     end
   end
 
@@ -294,6 +412,13 @@ defmodule DoitMcp.IngestReportTest do
       assert report.no_description_task_ids == Enum.to_list(1..20) ++ ["and 5 more"]
       assert report.top_rank_no_comment_task_ids == Enum.to_list(1..20) ++ ["and 5 more"]
 
+      assert length(report.top_rank_counts) == 21
+
+      assert List.first(report.top_rank_counts) ==
+               %{task_id: 1, title: "M1 thing", subtree_task_count: 1, subtree_done_count: 0}
+
+      assert List.last(report.top_rank_counts) == "and 5 more"
+
       assert length(report.unanchored_reference_candidates) == 21
 
       assert Enum.take(report.unanchored_reference_candidates, 20) ==
@@ -345,6 +470,16 @@ defmodule DoitMcp.IngestReportTest do
       assert report["task_count"] == 6
       assert report["depth_histogram"] == %{"0" => 3, "1" => 2, "2" => 1}
       assert report["no_description_task_ids"] == [11, 12, 3]
+      assert report["duplicate_descriptions"] == []
+
+      assert List.first(report["top_rank_counts"]) ==
+               %{
+                 "task_id" => 1,
+                 "title" => "Alpha",
+                 "subtree_task_count" => 4,
+                 "subtree_done_count" => 0
+               }
+
       assert report["long_comments"] == [%{"comment_id" => 900, "task_id" => 100}]
       assert report["ai_knobs_set"] == false
     end
@@ -394,5 +529,20 @@ defmodule DoitMcp.IngestReportTest do
 
       assert "ingest_report" in Enum.map(DoitMcp.Server.__components__(:tool), & &1.name)
     end
+  end
+
+  # A leaf-task wire map; `extra` overrides any key (including "children").
+  defp leaf(id, description, extra \\ %{}) do
+    Map.merge(
+      %{
+        "id" => id,
+        "title" => "Task #{id}",
+        "index" => "#{id}",
+        "description" => description,
+        "comment_count" => 0,
+        "children" => []
+      },
+      extra
+    )
   end
 end

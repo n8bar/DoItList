@@ -16,6 +16,14 @@ defmodule DoitMcp.IngestReport do
       `nil` for an empty tree).
     * description coverage — `with_description` / `without_description` counts
       (blank counts as without) + `no_description_task_ids`.
+    * duplicate descriptions — `duplicate_descriptions`: description strings
+      repeated verbatim across 2+ tasks (blank never groups), as
+      `%{description, count, task_ids}` with the string previewed to
+      #{120} characters, sorted by count descending.
+    * top-rank counts — `top_rank_counts`: one entry per top-rank (depth 0)
+      task, as `%{task_id, title, subtree_task_count, subtree_done_count}` —
+      the subtree is the task plus all descendants; done is the wire `done`
+      flag (the product's `status == "done"`).
     * provenance coverage — `top_rank_no_comment_task_ids`: top-rank (depth 0)
       tasks whose `comment_count` is zero.
     * un-anchored reference candidates — `unanchored_reference_candidates`:
@@ -35,11 +43,13 @@ defmodule DoitMcp.IngestReport do
     * context — `ai_knobs_set` (boolean, never the content), `initiative_id`.
 
   Every id/entry list is capped: the first #{20} items plus an `"and N more"`
-  string tail when longer. List order is tree order (depth-first, pre-order).
+  string tail when longer. List order is tree order (depth-first, pre-order),
+  except `duplicate_descriptions` (count descending, ties in tree order).
   """
 
   @cap 20
   @long_comment_chars 300
+  @preview_chars 120
 
   # Compiled regexes hold a runtime reference (OTP 28+), so they can't live in
   # module attributes — plain functions instead.
@@ -94,6 +104,8 @@ defmodule DoitMcp.IngestReport do
       with_description: length(with_desc),
       without_description: length(without_desc),
       no_description_task_ids: without_desc |> Enum.map(fn {task, _} -> task["id"] end) |> cap(),
+      duplicate_descriptions: duplicate_descriptions(flat),
+      top_rank_counts: top |> top_rank_counts() |> cap(),
       top_rank_no_comment_task_ids: flat |> top_rank_without_comments() |> cap(),
       unanchored_reference_candidates: flat |> Enum.flat_map(&reference_candidates/1) |> cap(),
       path_like_strings: flat |> Enum.flat_map(&path_like/1) |> cap(),
@@ -138,6 +150,55 @@ defmodule DoitMcp.IngestReport do
 
   defp top_rank_without_comments(flat) do
     for {task, 0} <- flat, (task["comment_count"] || 0) == 0, do: task["id"]
+  end
+
+  # Group tasks by their exact description string (blank never groups); keep
+  # the repeats. `Enum.group_by/2` preserves in-group order, so each group's
+  # head carries the first occurrence's tree position for the tie-break.
+  defp duplicate_descriptions(flat) do
+    for(
+      {{task, _depth}, pos} <- Enum.with_index(flat),
+      desc = task["description"],
+      present?(desc),
+      do: {desc, task["id"], pos}
+    )
+    |> Enum.group_by(fn {desc, _id, _pos} -> desc end)
+    |> Map.values()
+    |> Enum.filter(fn group -> length(group) >= 2 end)
+    |> Enum.sort_by(fn [{_desc, _id, pos} | _] = group -> {-length(group), pos} end)
+    |> Enum.map(fn [{desc, _id, _pos} | _] = group ->
+      %{
+        description: preview(desc),
+        count: length(group),
+        task_ids: group |> Enum.map(fn {_desc, id, _pos} -> id end) |> cap()
+      }
+    end)
+    |> cap()
+  end
+
+  # One entry per top-rank task over its whole subtree (the task itself plus
+  # all descendants). "Done" is the wire `done` flag — the API serializer's
+  # `task.status == "done"`, the product's own completion predicate (the same
+  # one `Doit.Tasks.Progress.leaf_value/1` snaps to 100).
+  defp top_rank_counts(top) do
+    Enum.map(top, fn task ->
+      subtree = flatten([task], 0)
+
+      %{
+        task_id: task["id"],
+        title: task["title"],
+        subtree_task_count: length(subtree),
+        subtree_done_count: Enum.count(subtree, fn {t, _depth} -> t["done"] == true end)
+      }
+    end)
+  end
+
+  defp preview(text) do
+    if String.length(text) > @preview_chars do
+      String.slice(text, 0, @preview_chars) <> "…"
+    else
+      text
+    end
   end
 
   defp reference_candidates({task, _depth}) do

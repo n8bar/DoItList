@@ -82,7 +82,7 @@ Rules read at session start don't fire mid-build. Run this at the moment of acti
 7. Referenced docs accounted for — each one ingested, cited, or asked about; none silently dropped.
 8. Your authored text scanned for task names in prose → converted to `%`-references.
 
-**After the batch lands:** leave a provenance comment on each top-rank task naming its source doc, then audit in writing: run `ingest_report`, re-read this skill, and post per-rule pass/fail — quoting the report's facts — as a comment on the Initiative thread (comments on its root task; `root_task_id` rides the initiative read). Grade the build against each rule *as written*: the object is the artifact, the standard is the skill; rule critique is out of scope — disagreements go to the operator separately. Written gets done; silent gets skipped. Fix gaps before reporting done.
+**After the batch lands:** leave a provenance comment on each top-rank task naming its source doc, then audit in writing: run `ingest_report`, re-read this skill, and post the audit as a comment on the Initiative thread (comments on its root task; `root_task_id` rides the initiative read). Required form: per top-rank task, your own count of source items reconciled against the report's `top_rank_counts` task and done counts — numbers, each delta explained line by line — then per-rule pass/fail quoting the report's facts. Grade the build against each rule *as written*: the object is the artifact, the standard is the skill; rule critique is out of scope — disagreements go to the operator separately. Written gets done; silent gets skipped. Fix gaps before reporting done.
 
 ## Accessing an Existing Initiative for the first time
 
