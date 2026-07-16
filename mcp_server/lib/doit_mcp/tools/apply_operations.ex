@@ -13,11 +13,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   Before applying a bulk ingest or edit batch: if the doitlist skill is
   loaded, run its Ingest Checkpoint now — this is the moment of action. And
-  batch the WHOLE pass — bulk completions, comments, and edits belong in this
-  one batch too, not looped single-op calls to the per-op tools. Chunk only
-  past the cap: an import over 150 ops splits into ceil(n/150) chunks, each
-  filled toward the cap. Under the cap the whole pass is ONE batch — never
-  self-chunk into smaller ones (per-milestone batches are the failure mode).
+  batch the WHOLE pass — bulk completions, comments, and edits belong in
+  batches too, not looped single-op calls to the per-op tools (that is the
+  failure mode). Past the cap, split into chunks filled toward it; sub-cap
+  chunking is fine — but lids resolve within one batch only, so reference
+  across chunks by real id.
 
   Each element of `operations` must be a JSON object matching the wire
   format:
