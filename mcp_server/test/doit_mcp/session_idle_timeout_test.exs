@@ -36,8 +36,8 @@ defmodule DoitMcp.SessionIdleTimeoutTest do
   end
 
   test "the wired stdio timeout is accepted by a session and lands in its state" do
-    {DoitMcp.Server, opts} =
-      Enum.find(DoitMcp.Application.children(:dev), &match?({DoitMcp.Server, _}, &1))
+    {DoitMcp.Stdio.Supervisor, opts} =
+      Enum.find(DoitMcp.Application.children(:dev), &match?({DoitMcp.Stdio.Supervisor, _}, &1))
 
     timeout = Keyword.fetch!(opts, :session_idle_timeout)
     session = start_session(timeout, :"#{__MODULE__}.PinnedSession")

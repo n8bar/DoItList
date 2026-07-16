@@ -32,12 +32,31 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   @threshold ImportGate.threshold()
   @frame %{test: true}
 
-  # The gate ships dark (DOITLIST_IMPORT_GATE=on arms it); arm it for these
-  # behavior tests.
+  # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on here
+  # so these behavior tests stay deterministic against the container's
+  # ambient environment.
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
     on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_enabled) end)
     :ok
+  end
+
+  # The cumulative describe starts one; everything else runs counter-less
+  # (DoitMcp.ImportGate.Counter degrades to zero/no-op), i.e. single-batch
+  # semantics.
+  defp start_counter do
+    name = :"#{__MODULE__}.Counter"
+    start_supervised!({DoitMcp.ImportGate.Counter, name: name})
+
+    previous = Application.fetch_env(:doit_mcp, :import_gate_counter)
+    Application.put_env(:doit_mcp, :import_gate_counter, name)
+
+    on_exit(fn ->
+      case previous do
+        {:ok, value} -> Application.put_env(:doit_mcp, :import_gate_counter, value)
+        :error -> Application.delete_env(:doit_mcp, :import_gate_counter)
+      end
+    end)
   end
 
   defp fake_session(capabilities) do
@@ -92,6 +111,25 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     protocol = Response.to_protocol(response)
     assert [%{"type" => "text", "text" => text} | rest] = protocol["content"]
     {protocol, Jason.decode!(text), rest}
+  end
+
+  defp stub_get_and_apply(knobs) do
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/v1/initiatives/7"} ->
+          Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
+
+        {"POST", "/api/v1/operations"} ->
+          Req.Test.json(conn, %{"results" => []})
+      end
+    end)
+  end
+
+  defp execute_ok(ops) do
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+    {protocol, decoded, _rest} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["ok"] == true
   end
 
   test "a batch at the threshold applies straight through, no elicitation" do
@@ -298,5 +336,66 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert Response.to_protocol(response)["isError"] == true
     refute_received {:send_elicitation_request, _, _, _}
+  end
+
+  describe "cumulative trigger across chunks (m03.03 item 5.11.2)" do
+    test "two sub-threshold chunks crossing the line fire the gate" do
+      start_counter()
+      elicitation_capable()
+      stub_get_and_apply(nil)
+
+      # Chunk 1: 20 adds — under the line, applies silently and is recorded.
+      execute_ok(existing_initiative_batch(20, 7))
+      refute_received {:send_elicitation_request, _, _, _}
+
+      # Chunk 2: 15 more — 35 this session crosses 30; held for a readback.
+      ops = existing_initiative_batch(15, 7)
+      assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+
+      protocol = Response.to_protocol(response)
+      assert protocol["isError"] == true
+      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+      assert text =~ "15 tasks"
+      assert text =~ "35 this session"
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+
+    test "post-confirm silence: later chunks into a confirmed Initiative never re-ask" do
+      start_counter()
+      elicitation_capable()
+      stub_get_and_apply(nil)
+
+      task =
+        Task.async(fn ->
+          ApplyOperations.execute(
+            %{
+              operations: existing_initiative_batch(@threshold + 1, 7),
+              readback: "Importing 31 tasks."
+            },
+            @frame
+          )
+        end)
+
+      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      Elicitation.deliver(%{"action" => "accept", "content" => %{"confirm" => true}})
+      assert {:reply, _response, @frame} = Task.await(task, 5_000)
+
+      # ai_knobs is STILL empty and the counter far over the line — but the
+      # operator already confirmed this Initiative this session.
+      execute_ok(existing_initiative_batch(15, 7))
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+
+    test "post-knobs silence: once ai_knobs is settled, an over-the-line session stays quiet" do
+      start_counter()
+      elicitation_capable()
+      stub_get_and_apply("deploy_day: friday")
+
+      execute_ok(existing_initiative_batch(25, 7))
+
+      # 35 this session — over the line, but the fetch finds settled knobs.
+      execute_ok(existing_initiative_batch(10, 7))
+      refute_received {:send_elicitation_request, _, _, _}
+    end
   end
 end
