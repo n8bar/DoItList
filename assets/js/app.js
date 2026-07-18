@@ -877,12 +877,17 @@ const DoitSelection = {
     // Ref-bearing title/description (Wave 2): after the read-path render, the
     // row's textContent is link LABEL text ("1.5", no leading `%`, escapes
     // resolved) — an optimistic fill would put a mis-formatted, mis-saveable
-    // value in the box. Skip those; the server value + RefField.rehydrate()
-    // supply the correct `%label` a beat later. Ref-free fields keep the instant
+    // value in the box. A NOT-yet-rendered row is just as unsafe: its text is
+    // still the raw `%<id>` token (a mid-patch fill can run before the render
+    // pass). Skip both; the server value + RefField.rehydrate() supply the
+    // correct `%label` a beat later. Ref-free fields keep the instant
     // optimistic fill.
     const hasRef = (sel) => {
       const el = row.querySelector(sel)
-      return !!(el && el.querySelector(".doit-ref, .doit-ref-dead"))
+      return !!(
+        el &&
+        (el.querySelector(".doit-ref, .doit-ref-dead") || /%<\d+>/.test(el.textContent))
+      )
     }
     if (!hasRef("[data-task-title]")) {
       set(pane.querySelector("#task-field-title"), text("[data-task-title]"))
@@ -2175,6 +2180,34 @@ window.DoitRenderRefs = renderAllRefs
 // (`%<id>`) for the colocated chat hook, which can't import module scope.
 window.DoitRefTransformForSave = (text) => transformForSave(text, resolveRefPath)
 
+// Post-patch rehydrate pass over every %-ref EDIT BOX (O&C 4.7). Two holes the
+// per-hook lifecycle can't cover:
+//   * morphdom's INPUT/TEXTAREA special handlers reset the value PROPERTY to
+//     the raw stored `%<id>` text whenever a patch visits the element, while
+//     LiveView fires the hook's updated() only when the server CONTENT changed
+//     (the isEqualNode gate compares attributes/child text, never the
+//     property) — so an unrelated patch silently swaps a rehydrated `%label`
+//     back to the raw token with no callback to fix it.
+//   * a re-number changes labels with NO patch to the field at all — the box
+//     holds a stale `%label` containing no token, so a value-based rehydrate
+//     has nothing left to re-resolve.
+// Re-derive each box from el.defaultValue — the value attribute / child text
+// morphdom KEEPS synced to the server's stored raw text — so every patch
+// settles with fresh labels, pre-paint. Never touches the focused box, and
+// never a box holding uncommitted user edits (a value matching neither the raw
+// stored text nor the box's last derived display, el.doitRefShown).
+function rehydrateRefFields() {
+  document.querySelectorAll('[phx-hook="RefField"]').forEach((el) => {
+    if (el === document.activeElement) return
+    const raw = el.defaultValue
+    if (typeof raw !== "string" || !/%<\d+>/.test(raw)) return
+    if (el.value !== raw && el.value !== el.doitRefShown) return
+    const next = rehydrate(raw, refLabelOf)
+    if (el.value !== next) el.value = next
+    el.doitRefShown = next
+  })
+}
+
 // The "Linked <label> — <title>" notification when a save resolves a NEW/changed
 // `%`-ref set is OWNED BY THE SERVER (WL3 item 3.5): the save handlers diff the
 // ref set and put_flash it through the app's canonical flash/toast, so there is
@@ -3162,6 +3195,45 @@ document.addEventListener(
     // server — no client toast.
   },
   true // capture phase: run before LiveView's bubble-phase phx-submit handler
+)
+
+// ANY form holding RefFields (the task pane + initiative editor): a submit
+// (Enter) serializes every field's DISPLAYED value — the rehydrated `%label`,
+// not the stored `%<id>` token — so an unintercepted submit would re-save the
+// labels literally, destroying the stored references (O&C 4.7/4.9). In CAPTURE
+// phase (before LiveView's bubble-phase submit serialization, same ordering as
+// the intercepts around this): anchor every ref field in the submitting form
+// back to token form. Change-event flushes are covered server-side (`_target`
+// scoping) plus RefField's own blur transform; this closes the submit path.
+document.addEventListener(
+  "submit",
+  (e) => {
+    const form = e.target
+    if (!form || !form.querySelectorAll) return
+    const touched = []
+    form.querySelectorAll('[phx-hook="RefField"]').forEach((f) => {
+      const next = transformForSave(f.value, resolveRefPath)
+      if (next !== f.value) {
+        f.value = next
+        touched.push(f)
+      }
+    })
+    // LiveView serializes synchronously in its bubble listener, so once this
+    // event settles the tokens are captured — flip the boxes straight back to
+    // label form (the box must show labels, never ids; an Enter-submit keeps
+    // focus in the field, which the post-patch pass deliberately skips).
+    if (touched.length) {
+      setTimeout(() => {
+        touched.forEach((f) => {
+          if (!/%<\d+>/.test(f.value)) return
+          const back = rehydrate(f.value, refLabelOf)
+          if (back !== f.value) f.value = back
+          f.doitRefShown = back
+        })
+      }, 0)
+    }
+  },
+  true // capture: precede LiveView's bubble-phase phx-submit serialization
 )
 
 // EDIT-COMMENT (Wave 3): save_comment is a native phx-submit (server-gated, and
@@ -6616,6 +6688,10 @@ Hooks.RefField = {
     if (!/%<\d+>/.test(this.el.value)) return
     const next = rehydrate(this.el.value, refLabelOf)
     if (next !== this.el.value) this.el.value = next
+    // Remember what the box shows so the post-patch pass (rehydrateRefFields)
+    // can tell a stale derived display (safe to refresh) from the user's
+    // uncommitted edits (never touched).
+    this.el.doitRefShown = next
   },
 }
 
@@ -6670,6 +6746,13 @@ const liveSocket = new LiveSocket("/live", Socket, {
       // reorder hold, structural like applyPendingMove, so it lives here rather
       // than in a per-element data-keep kind.
       applyPendingInitiativeOrder()
+      // %-references settle WITH the patch (O&C 4.7/4.9): re-render every
+      // ref-bearing display surface — a patch resets a changed element to raw
+      // token text, and some surfaces (the initiative header fields) have no
+      // re-rendering hook of their own; running it post-patch, pre-paint also
+      // kills the raw-token flash on save. Before the pane fill below, so the
+      // fill sees rendered rows.
+      renderAllRefs(document)
       // Re-fill the Details pane from the SURVIVING client selection on the
       // SETTLED DOM (WL7.3.2.6). The pane's `pane` data-keep applier reconciles
       // its `hidden` per-element, but the row-derived field fill must run AFTER
@@ -6681,6 +6764,10 @@ const liveSocket = new LiveSocket("/live", Socket, {
       // a deliberately-closed pane (selectedId nil) stays hidden, and only an
       // in-flight / just-reconnected selection re-opens + row-fills the pane.
       if (window.DoitSelection) window.DoitSelection.syncPaneSkeleton()
+      // …and re-derive every %-ref EDIT BOX from its server-synced raw text
+      // (fresh labels after a re-number, raw ids never linger). After the pane
+      // fill above, so a raw-row fill heals in the same pass.
+      rehydrateRefFields()
       // While a confirm modal is up, its maybe-write hue is server-held
       // (pending_saving_ids) — disarm the client's 1.5s safety timer so it
       // can't strip the pink mid-decision. The patch that renders the modal is

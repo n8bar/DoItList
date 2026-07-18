@@ -1360,12 +1360,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  def handle_event("update_initiative", %{"initiative" => params}, socket) do
+  def handle_event("update_initiative", %{"initiative" => params} = payload, socket) do
     if not socket.assigns.can_edit do
       {:noreply,
        socket |> put_flash(:error, "You don't have permission to edit this initiative.") |> bonk()}
     else
       initiative = socket.assigns.initiative
+      params = scope_params_to_target(params, payload["_target"], "initiative")
 
       case Initiatives.update_initiative(initiative, params) do
         {:ok, updated} ->
@@ -1489,6 +1490,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   def handle_event("update_task", %{"task" => params} = payload, socket) do
     task = update_task_target(socket, payload)
     user = socket.assigns.current_user
+    params = scope_params_to_target(params, payload["_target"], "task")
 
     cond do
       # Stale captured id + no live selection (e.g. the target was deleted before
@@ -1500,12 +1502,18 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       socket.assigns.can_edit ->
         case Tasks.update_task(task, user, params) do
           {:ok, updated} ->
+            # ONE toast per save (O&C 4.8): the linked fact rides the "Saved."
+            # ack instead of competing for the single :info flash slot. The ref
+            # diff is per-field, so a description ref counts as newly linked
+            # even when the title already references the same task.
             msg =
-              ref_link_message(
-                socket,
-                "#{task.title} #{task.description}",
-                "#{updated.title} #{updated.description}"
-              ) || "Saved."
+              case ref_link_parts(socket, [
+                     {task.title, updated.title},
+                     {task.description, updated.description}
+                   ]) do
+                nil -> "Saved."
+                parts -> "Saved — linked " <> parts
+              end
 
             {:noreply, socket |> put_flash(:info, msg) |> patch_task(task.id)}
 
@@ -4757,30 +4765,64 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # payload. Honor an explicit id when present so the edit ALWAYS lands on its own
   # task (never the wrong one, never a silent drop); guard it to this initiative's
   # tree and fall back to the current selection for a stale/absent id.
-  # A "Linked <label> — <title>, ..." info flash when a save's resolved
-  # `%`-reference set CHANGED and is non-empty, else nil (m03.03 item 3.5 —
-  # optimistic, never blocking). Labels + titles resolve off the already-loaded
-  # `:tree` assign (no query); a dead / foreign / dropped id contributes nothing.
-  defp ref_link_message(socket, old_text, new_text) do
-    new_ids = Tasks.reference_ids(new_text)
+  # "<label> — <title>, ..." for the refs of each `{old, new}` text pair whose
+  # resolved `%`-reference set CHANGED and is non-empty, else nil (m03.03 item
+  # 3.5 — optimistic, never blocking). Per-pair diffing lets a caller pass each
+  # field separately, so a ref added to one field announces even when a sibling
+  # field already references the same task. Labels + titles resolve off the
+  # already-loaded `:tree` assign (no query); a dead / foreign / dropped id
+  # contributes nothing.
+  defp ref_link_parts(socket, pairs) do
+    changed_ids =
+      pairs
+      |> Enum.flat_map(fn {old_text, new_text} ->
+        new_ids = Tasks.reference_ids("#{new_text}")
 
-    if new_ids != [] and Enum.sort(new_ids) != Enum.sort(Tasks.reference_ids(old_text)) do
+        if new_ids != [] and
+             Enum.sort(new_ids) != Enum.sort(Tasks.reference_ids("#{old_text}")),
+           do: new_ids,
+           else: []
+      end)
+      |> Enum.uniq()
+
+    if changed_ids != [] do
       index = Tasks.label_index(socket.assigns.tree, socket.assigns.initiative.index_style)
 
       parts =
-        new_ids
+        changed_ids
         |> Enum.map(&Map.get(index, &1))
         |> Enum.reject(&is_nil/1)
         |> Enum.map(fn %{index: label, title: title} ->
           "#{label} — #{Tasks.strip_reference_tokens(title)}"
         end)
 
-      if parts != [], do: "Linked " <> Enum.join(parts, ", ")
+      if parts != [], do: Enum.join(parts, ", ")
+    end
+  end
+
+  # The standalone "Linked …" flash for saves that carry no "Saved." ack of
+  # their own (comments, subtitle, initiative description).
+  defp ref_link_message(socket, old_text, new_text) do
+    case ref_link_parts(socket, [{old_text, new_text}]) do
+      nil -> nil
+      parts -> "Linked " <> parts
     end
   end
 
   defp maybe_flash_links(socket, nil), do: socket
   defp maybe_flash_links(socket, msg), do: put_flash(socket, :info, msg)
+
+  # A phx-change flush serializes the WHOLE form, so a change to one field
+  # arrives with every sibling field's DISPLAYED value — for a `%`-ref field
+  # that's the rehydrated `%label`, not the stored `%<id>` token, and an
+  # unscoped apply re-saves that label literally, destroying the stored
+  # reference (O&C 4.7/4.9). Scope a change-event save to the `_target` field;
+  # a submit (no `_target`) applies the full form, which the client tokenizes
+  # before serialization.
+  defp scope_params_to_target(params, [form, field], form) when is_map_key(params, field),
+    do: Map.take(params, [field])
+
+  defp scope_params_to_target(params, _target, _form), do: params
 
   defp update_task_target(socket, payload) do
     with id when not is_nil(id) <- parse_id(payload["id"]),
