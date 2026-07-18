@@ -364,3 +364,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-16  Doc (m03.03): 5.12 banked -- per-Initiative agent-access flag, off by default (operator call); Initiative-is-the-plan section restored to the skill (operator call).
 2026-07-16  Doc (m03.03): 5.12 gains the member-trust confirm -- once per (admin, initiative), client-opened, on member-add/promote to viewer+ or access-enable with viewer+ present.
 2026-07-16  Doc (m05): MCP-goes-public gains release packaging -- ship the adapter as a mix release; per-session BEAM boot cost retires with the stdio model.
+2026-07-17  Doc (m03.03): 5.13 banked -- revoked-token recovery ladder (operator call): elicit-refresh where the client can, actionable 401 where it cannot, launcher token-file fallback.
