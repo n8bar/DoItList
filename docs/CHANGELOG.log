@@ -378,3 +378,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Fix (m03.03 O&C 4.7): blur-path tokenize gets the submit-path restore -- a no-op save (no patch) left sibling ref boxes stuck showing raw tokens; verified live via CDP (no-op blur, real save, dangling label, renumber).
 2026-07-18  Doc (m03): Arc 3 (m03.03) complete -- final eye passes green (merged link toast, description ref); all five worklists closed.
 2026-07-18  Doc (m03.04): fix 19 banked -- question budget sizes on the biggest plausible import shape, not the agent recommendation (operator call); hold option remains the enforced backstop.
+2026-07-18  Feat (m03.04): fix 19 -- skill budget line judges the ~30-item threshold on the biggest plausible shape, not the agent recommendation.
