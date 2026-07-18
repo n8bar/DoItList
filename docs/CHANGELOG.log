@@ -379,3 +379,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Doc (m03): Arc 3 (m03.03) complete -- final eye passes green (merged link toast, description ref); all five worklists closed.
 2026-07-18  Doc (m03.04): fix 19 banked -- question budget sizes on the biggest plausible import shape, not the agent recommendation (operator call); hold option remains the enforced backstop.
 2026-07-18  Feat (m03.04): fix 19 -- skill budget line judges the ~30-item threshold on the biggest plausible shape, not the agent recommendation.
+2026-07-18  Doc (m03.04): fixes 20-21 banked -- idempotency keys bind to payload (server hash check); long-comment lint exempts the root-thread audit home.
