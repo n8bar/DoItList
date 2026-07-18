@@ -169,6 +169,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert [%{"type" => "text", "text" => text}] = protocol["content"]
     assert text =~ "readback"
     assert text =~ "assumptions"
+    assert text =~ "settled"
     assert text =~ "#{@threshold + 1} tasks"
     refute_received {:send_elicitation_request, _, _, _}
   end
@@ -191,20 +192,26 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert_receive {:send_elicitation_request, params, schema, timeout}, 2_000
 
-    # Message: readback verbatim, assumptions as a list, then the confirm line.
+    # Message: readback verbatim, assumptions as a list, then the decision
+    # line naming all three choices. No `settled` passed → no Settled block.
     assert params["message"] ==
              readback <>
                "\n\nAssumptions:\n- Depth taken from markdown heading levels\n" <>
                "- Struck-through items skipped\n\n" <>
-               "Confirm to apply this import, or supply corrections."
+               "Decide: apply — apply this import as read back; correct — don't apply, " <>
+               "your corrections say what to change; hold — don't apply, have the agent " <>
+               "ask you more questions first."
+
+    refute params["message"] =~ "Settled"
 
     assert params["requestedSchema"] == schema
-    assert %{"type" => "object", "required" => ["confirm"], "properties" => props} = schema
-    assert props["confirm"]["type"] == "boolean"
+    assert %{"type" => "object", "required" => ["decision"], "properties" => props} = schema
+    assert props["decision"]["type"] == "string"
+    assert props["decision"]["enum"] == ["apply", "correct", "hold"]
     assert props["corrections"]["type"] == "string"
     assert timeout == to_timeout(minute: 5)
 
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"confirm" => true}})
+    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
 
     assert {:reply, response, @frame} = Task.await(task, 5_000)
     {protocol, decoded, rest} = decode_json_content(response)
@@ -230,7 +237,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     Elicitation.deliver(%{
       "action" => "accept",
-      "content" => %{"confirm" => true, "corrections" => "Milestones as top-level tasks"}
+      "content" => %{"decision" => "correct", "corrections" => "Milestones as top-level tasks"}
     })
 
     assert {:reply, response, @frame} = Task.await(task, 5_000)
@@ -240,7 +247,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["corrections"] == "Milestones as top-level tasks"
   end
 
-  test "confirm=false without corrections holds the batch" do
+  test "decision correct without corrections text holds the batch" do
     elicitation_capable()
 
     task =
@@ -252,13 +259,64 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       end)
 
     assert_receive {:send_elicitation_request, _, _, _}, 2_000
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"confirm" => false}})
+    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "correct"}})
 
     assert {:reply, response, @frame} = Task.await(task, 5_000)
     {protocol, decoded, _} = decode_json_content(response)
     assert protocol["isError"] == true
     assert decoded["applied"] == false
-    assert decoded["message"] =~ "confirm=false"
+    assert decoded["message"] =~ "no corrections"
+  end
+
+  test "decision hold withholds the apply and asks for the interview" do
+    elicitation_capable()
+
+    task =
+      Task.async(fn ->
+        ApplyOperations.execute(
+          %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
+          @frame
+        )
+      end)
+
+    assert_receive {:send_elicitation_request, _, _, _}, 2_000
+    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "hold"}})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    {protocol, decoded, _} = decode_json_content(response)
+    assert protocol["isError"] == true
+    assert decoded["applied"] == false
+    assert decoded["message"] =~ "hold"
+    assert decoded["message"] =~ "questions"
+    refute_received {:send_elicitation_request, _, _, _}
+  end
+
+  test "settled dimensions are echoed as their own block for the operator's veto" do
+    elicitation_capable()
+
+    task =
+      Task.async(fn ->
+        ApplyOperations.execute(
+          %{
+            operations: new_initiative_batch(@threshold + 1),
+            readback: "Importing 31 tasks.",
+            settled: ["Depth: two levels (operator's ask)", "Scope: whole plan (knobs)"]
+          },
+          @frame
+        )
+      end)
+
+    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
+
+    assert params["message"] =~
+             "Settled (operator-instructed or knobs):\n" <>
+               "- Depth: two levels (operator's ask)\n- Scope: whole plan (knobs)"
+
+    Elicitation.deliver(%{"action" => "decline"})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    {_, decoded, _} = decode_json_content(response)
+    assert decoded["applied"] == false
   end
 
   test "decline and cancel both hold the batch" do
@@ -377,7 +435,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
         end)
 
       assert_receive {:send_elicitation_request, _, _, _}, 2_000
-      Elicitation.deliver(%{"action" => "accept", "content" => %{"confirm" => true}})
+      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
       assert {:reply, _response, @frame} = Task.await(task, 5_000)
 
       # ai_knobs is STILL empty and the counter far over the line — but the

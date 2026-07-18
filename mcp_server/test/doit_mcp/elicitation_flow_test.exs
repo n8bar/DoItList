@@ -112,8 +112,9 @@ defmodule DoitMcp.ElicitationFlowTest do
 
     assert message =~ "Importing PLAN.md as 31 tasks"
     assert message =~ "- Depth taken from markdown heading levels"
-    assert message =~ "Confirm to apply this import, or supply corrections."
-    assert schema["required"] == ["confirm"]
+    assert message =~ "Decide: apply"
+    assert schema["required"] == ["decision"]
+    assert schema["properties"]["decision"]["enum"] == ["apply", "correct", "hold"]
 
     # 4. The operator supplies corrections — Anubis validates the content
     # against the requested schema, dispatches handle_elicitation, and the
@@ -124,7 +125,7 @@ defmodule DoitMcp.ElicitationFlowTest do
       "id" => request_id,
       "result" => %{
         "action" => "accept",
-        "content" => %{"confirm" => false, "corrections" => "Milestones as top-level tasks"}
+        "content" => %{"decision" => "correct", "corrections" => "Milestones as top-level tasks"}
       }
     }
 

@@ -80,16 +80,22 @@ defmodule DoitMcp.Tools.ApplyOperations do
   empty (created in this same batch, or fetched and found blank), the batch
   is held for the operator when your client supports elicitation. Without a
   `readback` it is rejected unapplied — re-call with `readback` (your
-  one-paragraph statement of the import shape you're about to build) and
-  `assumptions` (your assumption-tagged decisions, one string each). Those
-  are then shown to the operator to confirm or correct: confirm applies the
-  batch normally and settles that Initiative for the rest of the session;
-  corrections (or a refusal) come back as the tool result with NOTHING
-  applied — revise the batch to match and record the settled answers in the
-  Initiative's `ai_knobs`, which stops this gate firing again for that
-  project in any session. No answer within 5 minutes → nothing applied;
-  retry when the operator is available. Clients without elicitation support
-  skip the gate entirely.
+  one-paragraph statement of the import shape you're about to build),
+  `assumptions` (your assumption-tagged decisions, one string each), and
+  `settled` (dimensions already settled by the operator's own ask — an
+  explicit depth, a "summarize" instruction — or by existing knobs, one
+  string each; operator-instructed dimensions go in `settled`, never
+  `assumptions`, and are displayed so the operator can veto a misclaimed
+  tag). The operator answers with one of three decisions: **apply** applies
+  the batch normally and settles that Initiative for the rest of the
+  session; **correct** (or any corrections text) comes back as the tool
+  result with NOTHING applied — revise the batch to match and record the
+  settled answers in the Initiative's `ai_knobs`, which stops this gate
+  firing again for that project in any session; **hold** means the operator
+  wants to be interviewed first — ask your remaining questions, settle the
+  answers in `ai_knobs`, then re-apply. No answer within 5 minutes → nothing
+  applied; retry when the operator is available. Clients without elicitation
+  support skip the gate entirely.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -104,16 +110,20 @@ defmodule DoitMcp.Tools.ApplyOperations do
   @confirm_schema %{
     "type" => "object",
     "properties" => %{
-      "confirm" => %{
-        "type" => "boolean",
-        "description" => "true applies the import as read back; false holds it"
+      "decision" => %{
+        "type" => "string",
+        "enum" => ["apply", "correct", "hold"],
+        "description" =>
+          "apply = apply the import as read back; correct = don't apply, my corrections " <>
+            "say what to change; hold = don't apply, I want the agent to ask me more " <>
+            "questions first"
       },
       "corrections" => %{
         "type" => "string",
         "description" => "What to change instead — leaves the batch unapplied"
       }
     },
-    "required" => ["confirm"]
+    "required" => ["decision"]
   }
 
   @knobs_note "Import confirmed by the operator. Record the now-settled answers " <>
@@ -125,6 +135,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     field(:idempotency_key, :string, required: false)
     field(:readback, :string, required: false)
     field(:assumptions, {:list, :string}, required: false)
+    field(:settled, {:list, :string}, required: false)
   end
 
   def execute(params, frame) do
@@ -174,7 +185,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   defp confirm_with_operator(params, readback, info, frame) do
-    message = confirmation_message(readback, Map.get(params, :assumptions) || [])
+    message =
+      confirmation_message(
+        readback,
+        Map.get(params, :assumptions) || [],
+        Map.get(params, :settled) || []
+      )
 
     case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
       {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
@@ -195,8 +211,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   defp handle_answer(params, content, info, frame) do
-    case {presence(content["corrections"]), content["confirm"]} do
-      {nil, true} ->
+    corrections = presence(content["corrections"])
+    decision = content["decision"]
+
+    cond do
+      decision == "apply" and is_nil(corrections) ->
         # The operator's confirm settles this Initiative for the rest of the
         # session — later chunks must not re-ask, even before the agent has
         # recorded ai_knobs (marked before the apply so a failed apply's
@@ -204,19 +223,27 @@ defmodule DoitMcp.Tools.ApplyOperations do
         Counter.mark_confirmed(info.target)
         apply_batch(params, frame, note: @knobs_note)
 
-      {nil, _} ->
-        not_applied(frame, %{
-          message:
-            "Operator answered confirm=false with no corrections — batch NOT applied. " <>
-              "Ask what to change, update the Initiative's ai_knobs, then re-apply."
-        })
-
-      {corrections, _} ->
+      is_binary(corrections) ->
         not_applied(frame, %{
           corrections: corrections,
           message:
             "Operator supplied corrections — batch NOT applied. Revise the batch to " <>
               "match and record the settled answers in the Initiative's ai_knobs, then re-apply."
+        })
+
+      decision == "hold" ->
+        not_applied(frame, %{
+          message:
+            "Operator chose hold — batch NOT applied. They want to be interviewed before " <>
+              "this import: ask your remaining questions now (the question budget), settle " <>
+              "the answers in the Initiative's ai_knobs, then re-apply."
+        })
+
+      true ->
+        not_applied(frame, %{
+          message:
+            "Operator did not choose apply and supplied no corrections — batch NOT applied. " <>
+              "Ask what to change, update the Initiative's ai_knobs, then re-apply."
         })
     end
   end
@@ -232,19 +259,37 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "chunks included) to an Initiative whose ai_knobs is still empty, so the operator " <>
       "must confirm it before it applies. Nothing was " <>
       "applied. Re-call apply_operations with the same operations plus `readback` — " <>
-      "your one-paragraph statement of the import shape you're about to build — and " <>
-      "`assumptions` — your assumption-tagged decisions, one string each. The operator " <>
+      "your one-paragraph statement of the import shape you're about to build — " <>
+      "`assumptions` — your assumption-tagged decisions, one string each — and " <>
+      "`settled` — dimensions the operator's own ask or existing knobs already settled, " <>
+      "one string each. The operator " <>
       "will confirm or correct them; record the settled answers in the Initiative's ai_knobs."
   end
 
-  defp confirmation_message(readback, assumptions) do
+  defp confirmation_message(readback, assumptions, settled) do
     assumptions_block =
       case assumptions do
         [] -> "Assumptions: none stated."
         list -> "Assumptions:\n" <> Enum.map_join(list, "\n", &("- " <> &1))
       end
 
-    "#{readback}\n\n#{assumptions_block}\n\nConfirm to apply this import, or supply corrections."
+    settled_block =
+      case settled do
+        [] ->
+          nil
+
+        list ->
+          "Settled (operator-instructed or knobs):\n" <> Enum.map_join(list, "\n", &("- " <> &1))
+      end
+
+    closing =
+      "Decide: apply — apply this import as read back; correct — don't apply, " <>
+        "your corrections say what to change; hold — don't apply, have the agent " <>
+        "ask you more questions first."
+
+    [readback, settled_block, assumptions_block, closing]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join("\n\n")
   end
 
   defp confirm_timeout do

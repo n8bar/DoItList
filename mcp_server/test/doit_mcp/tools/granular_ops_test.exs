@@ -75,6 +75,16 @@ defmodule DoitMcp.Tools.GranularOpsTest do
     refute "ai_knobs" in Map.get(schema, "required", [])
   end
 
+  test "create_initiative's schema carries no progress_calc — creation lands the default" do
+    schema = DoitMcp.Tools.CreateInitiative.input_schema()
+
+    refute Map.has_key?(schema["properties"], "progress_calc")
+
+    # The setting moves only via update_initiative, where the gate lives.
+    update_schema = DoitMcp.Tools.UpdateInitiative.input_schema()
+    assert %{"type" => "string"} = update_schema["properties"]["progress_calc"]
+  end
+
   test "each granular tool builds its expected single op and relays the reply/frame through" do
     for {module, params, expected_op} <- @cases do
       Req.Test.stub(DoitMcp.Client, fn conn ->

@@ -368,3 +368,5 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Doc (m03.03): fix 17 banked -- leaf_average prevails absent a human request (operator call): no calc param at create, elicitation-gated calc change, moment-of-action prose, skill line tightened.
 2026-07-18  Doc (m03.03): fix 18 banked -- diet-overcut ask doctrine restored with hooks: gate form gains hold-for-more-questions, prompt instructions route asked-and-answered + knob write-back.
 2026-07-18  Feat (m03.03): 5.11 merged -- concurrent stdio transport (reader/dispatch split, serialized writes) + import gate armed by default with chunk-proof cumulative trigger; live e2e rides the next drive.
+2026-07-18  Feat (m03.03): fix 17 -- leaf_average prevails: progress_calc dropped from create_initiative, non-default calc change on update_initiative elicitation-gated (once per Initiative), trigger+anti-rationale in param prose and skill line.
+2026-07-18  Feat (m03.03): fix 18 -- gate confirm form gains apply/correct/hold decision, settled dimensions echoed for veto; skill restores ask-doctrine pointers and readback rule hands off to the enforcing gate.

@@ -235,7 +235,7 @@ defmodule DoitMcp.StdioTransportTest do
       "id" => elicitation_id,
       "result" => %{
         "action" => "accept",
-        "content" => %{"confirm" => false, "corrections" => "Milestones as top-level tasks"}
+        "content" => %{"decision" => "correct", "corrections" => "Milestones as top-level tasks"}
       }
     })
 
@@ -262,7 +262,7 @@ defmodule DoitMcp.StdioTransportTest do
     send_frame(device, %{
       "jsonrpc" => "2.0",
       "id" => elicitation_id,
-      "result" => %{"action" => "accept", "content" => %{"confirm" => true}}
+      "result" => %{"action" => "accept", "content" => %{"decision" => "apply"}}
     })
 
     assert %{"id" => 2, "result" => result} = recv_frame()
