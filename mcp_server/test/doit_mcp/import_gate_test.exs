@@ -6,9 +6,10 @@ defmodule DoitMcp.ImportGateTest do
 
   @threshold ImportGate.threshold()
 
-  # The gate ships dark (DOITLIST_IMPORT_GATE=on arms it); arm it here so the
-  # decision tests exercise the armed path. The "kill switch" describe drops
-  # this override to test the env-var semantics themselves.
+  # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on here
+  # so the decision tests stay deterministic against the container's ambient
+  # environment. The "kill switch" describe drops this override to test the
+  # env-var semantics themselves.
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
     on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_enabled) end)
@@ -39,22 +40,9 @@ defmodule DoitMcp.ImportGateTest do
   end
 
   describe "evaluate/2 kill switch (condition 0)" do
-    test "unset (the default) passes even a batch everything else would gate, counting nothing" do
+    test "unset (the default) arms the gate" do
       Application.delete_env(:doit_mcp, :import_gate_enabled)
       System.delete_env("DOITLIST_IMPORT_GATE")
-
-      refute ImportGate.enabled?()
-
-      assert ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-               elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch()
-             ) == :pass
-    end
-
-    test "DOITLIST_IMPORT_GATE=on arms the gate; any other value leaves it off" do
-      Application.delete_env(:doit_mcp, :import_gate_enabled)
-      System.put_env("DOITLIST_IMPORT_GATE", "on")
-      on_exit(fn -> System.delete_env("DOITLIST_IMPORT_GATE") end)
 
       assert ImportGate.enabled?()
 
@@ -63,13 +51,28 @@ defmodule DoitMcp.ImportGateTest do
                  elicitation?: yes_elicitation(),
                  fetch_initiative: never_fetch()
                )
+    end
 
+    test "DOITLIST_IMPORT_GATE=off opts out, counting nothing; any other value stays armed" do
+      Application.delete_env(:doit_mcp, :import_gate_enabled)
       System.put_env("DOITLIST_IMPORT_GATE", "off")
+      on_exit(fn -> System.delete_env("DOITLIST_IMPORT_GATE") end)
+
+      refute ImportGate.enabled?()
 
       assert ImportGate.evaluate(new_initiative_batch(@threshold + 1),
                elicitation?: never_elicitation(),
                fetch_initiative: never_fetch()
              ) == :pass
+
+      System.put_env("DOITLIST_IMPORT_GATE", "on")
+      assert ImportGate.enabled?()
+
+      assert {:gate, %{target: {:in_batch, "i"}}} =
+               ImportGate.evaluate(new_initiative_batch(@threshold + 1),
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: never_fetch()
+               )
     end
   end
 
@@ -173,6 +176,97 @@ defmodule DoitMcp.ImportGateTest do
                elicitation?: yes_elicitation(),
                fetch_initiative: never_fetch()
              ) == :pass
+    end
+  end
+
+  describe "evaluate/2 cumulative trigger (m03.03 item 5.11.2)" do
+    test "a sub-threshold batch gates once the session counter pushes its target over the line" do
+      ops = task_adds(10, %{"initiative_id" => 7})
+      fetch = fn _id -> {:ok, %{"ai_knobs" => nil}} end
+
+      assert {:gate, %{task_adds: 10, cumulative: 35, target: {:existing, 7}}} =
+               ImportGate.evaluate(ops,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: fetch,
+                 cumulative: fn {:existing, 7} -> 25 end
+               )
+    end
+
+    test "landing exactly ON the threshold passes — the gate needs a crossing" do
+      ops = task_adds(10, %{"initiative_id" => 7})
+
+      assert ImportGate.evaluate(ops,
+               elicitation?: never_elicitation(),
+               fetch_initiative: never_fetch(),
+               cumulative: fn _ -> @threshold - 10 end
+             ) == :pass
+    end
+
+    test "counts are per Initiative — only the crossing target gates, and only it is fetched" do
+      ops =
+        task_adds(5, %{"initiative_id" => 7}) ++
+          for i <- 1..5 do
+            %{
+              "op" => "add",
+              "type" => "task",
+              "lid" => "other#{i}",
+              "data" => %{"initiative_id" => 8, "title" => "task #{i}"}
+            }
+          end
+
+      parent = self()
+
+      fetch = fn id ->
+        send(parent, {:fetched, id})
+        {:ok, %{"id" => id, "ai_knobs" => nil}}
+      end
+
+      history = fn
+        {:existing, 8} -> @threshold
+        {:existing, 7} -> 0
+      end
+
+      expected_total = @threshold + 5
+
+      assert {:gate, %{task_adds: 5, cumulative: ^expected_total, target: {:existing, 8}}} =
+               ImportGate.evaluate(ops,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: fetch,
+                 cumulative: history
+               )
+
+      assert_received {:fetched, 8}
+      refute_received {:fetched, _}
+    end
+
+    test "an operator-confirmed target never re-gates, even far over the line" do
+      ops = task_adds(10, %{"initiative_id" => 7})
+
+      assert ImportGate.evaluate(ops,
+               elicitation?: yes_elicitation(),
+               fetch_initiative: never_fetch(),
+               cumulative: fn _ -> 100 end,
+               confirmed?: fn {:existing, 7} -> true end
+             ) == :pass
+    end
+  end
+
+  describe "count_by_target/1" do
+    test "sums task-adds per resolved Initiative in first-seen batch order" do
+      ops =
+        task_adds(2, %{"initiative_id" => 9}) ++
+          [
+            %{
+              "op" => "add",
+              "type" => "task",
+              "lid" => "x",
+              "data" => %{"initiative_lid" => "i"}
+            },
+            %{"op" => "add", "type" => "task", "lid" => "y", "data" => %{"initiative_id" => 9}},
+            %{"op" => "add", "type" => "task", "lid" => "z", "data" => %{"parent_id" => 42}}
+          ]
+
+      assert ImportGate.count_by_target(ops) == [{{:existing, 9}, 3}, {{:in_batch, "i"}, 1}]
     end
   end
 

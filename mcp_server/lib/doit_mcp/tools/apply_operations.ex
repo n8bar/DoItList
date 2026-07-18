@@ -68,32 +68,35 @@ defmodule DoitMcp.Tools.ApplyOperations do
   already committed but its response was lost (e.g. a timeout), a retry with the
   same key replays that stored response instead of re-applying the batch.
 
-  ## Import gate — big batch into a knob-less Initiative
+  ## Import gate — big import into a knob-less Initiative
 
-  The gate ships dark — it evaluates only when `DOITLIST_IMPORT_GATE=on` —
-  because the stdio transport serializes read/dispatch: the operator's
-  elicitation answer can't be read while the tool call blocks. Flips on when
-  the transport work lands.
+  The gate is armed by default (`DOITLIST_IMPORT_GATE=off` opts out) and its
+  trigger is CUMULATIVE per Initiative across the session: chunking a big
+  import under the cap doesn't slip past it — every applied batch's task-adds
+  are recorded per target (`DoitMcp.ImportGate.Counter`), and the session
+  total including the current batch is what crosses the 30-task threshold.
 
-  A batch with more than 30 task-adds targeting an Initiative whose
-  `ai_knobs` is still empty (created in this same batch, or fetched and found
-  blank) is held for the operator when your client supports elicitation.
-  Without a `readback` it is rejected unapplied — re-call with `readback`
-  (your one-paragraph statement of the import shape you're about to build)
-  and `assumptions` (your assumption-tagged decisions, one string each).
-  Those are then shown to the operator to confirm or correct: confirm applies
-  the batch normally; corrections (or a refusal) come back as the tool result
-  with NOTHING applied — revise the batch to match and record the settled
-  answers in the Initiative's `ai_knobs`, which stops this gate firing again
-  for that project. No answer within 5 minutes → nothing applied; retry when
-  the operator is available. Clients without elicitation support skip the
-  gate entirely.
+  When the total crosses it for an Initiative whose `ai_knobs` is still
+  empty (created in this same batch, or fetched and found blank), the batch
+  is held for the operator when your client supports elicitation. Without a
+  `readback` it is rejected unapplied — re-call with `readback` (your
+  one-paragraph statement of the import shape you're about to build) and
+  `assumptions` (your assumption-tagged decisions, one string each). Those
+  are then shown to the operator to confirm or correct: confirm applies the
+  batch normally and settles that Initiative for the rest of the session;
+  corrections (or a refusal) come back as the tool result with NOTHING
+  applied — revise the batch to match and record the settled answers in the
+  Initiative's `ai_knobs`, which stops this gate firing again for that
+  project in any session. No answer within 5 minutes → nothing applied;
+  retry when the operator is available. Clients without elicitation support
+  skip the gate entirely.
   """
 
   use Anubis.Server.Component, type: :tool
 
   alias Anubis.Server.Response
   alias DoitMcp.{Client, Elicitation, ImportGate, ToolResult}
+  alias DoitMcp.ImportGate.Counter
 
   # A human is reading the readback — give them a generous window.
   @confirm_timeout to_timeout(minute: 5)
@@ -128,7 +131,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
     gate =
       ImportGate.evaluate(params.operations,
         elicitation?: &Elicitation.client_supports_elicitation?/0,
-        fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end
+        fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end,
+        cumulative: &Counter.cumulative/1,
+        confirmed?: &Counter.confirmed?/1
       )
 
     case gate do
@@ -140,6 +145,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
   defp apply_batch(params, frame, opts \\ []) do
     result =
       Client.operations(params.operations, idempotency_key: Map.get(params, :idempotency_key))
+
+    # The counter is the gate's session memory: every batch that actually
+    # applied feeds the cumulative trigger, so sub-threshold chunks add up.
+    with {:ok, _} <- result do
+      Counter.record(ImportGate.count_by_target(params.operations))
+    end
 
     {:reply, response, frame} = ToolResult.reply_batch(frame, result)
 
@@ -158,16 +169,16 @@ defmodule DoitMcp.Tools.ApplyOperations do
         {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
 
       readback ->
-        confirm_with_operator(params, readback, frame)
+        confirm_with_operator(params, readback, info, frame)
     end
   end
 
-  defp confirm_with_operator(params, readback, frame) do
+  defp confirm_with_operator(params, readback, info, frame) do
     message = confirmation_message(readback, Map.get(params, :assumptions) || [])
 
     case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
       {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
-        handle_answer(params, content, frame)
+        handle_answer(params, content, info, frame)
 
       {:ok, %{"action" => "decline"}} ->
         not_applied(frame, %{
@@ -183,9 +194,14 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  defp handle_answer(params, content, frame) do
+  defp handle_answer(params, content, info, frame) do
     case {presence(content["corrections"]), content["confirm"]} do
       {nil, true} ->
+        # The operator's confirm settles this Initiative for the rest of the
+        # session — later chunks must not re-ask, even before the agent has
+        # recorded ai_knobs (marked before the apply so a failed apply's
+        # retry doesn't re-elicit an already-granted confirmation).
+        Counter.mark_confirmed(info.target)
         apply_batch(params, frame, note: @knobs_note)
 
       {nil, _} ->
@@ -211,9 +227,10 @@ defmodule DoitMcp.Tools.ApplyOperations do
     {:reply, %{response | isError: true}, frame}
   end
 
-  defp readback_required_message(%{task_adds: task_adds}) do
-    "Import gate: this batch adds #{task_adds} tasks to an Initiative whose ai_knobs " <>
-      "is still empty, so the operator must confirm it before it applies. Nothing was " <>
+  defp readback_required_message(%{task_adds: task_adds, cumulative: cumulative}) do
+    "Import gate: this batch adds #{task_adds} tasks (#{cumulative} this session, " <>
+      "chunks included) to an Initiative whose ai_knobs is still empty, so the operator " <>
+      "must confirm it before it applies. Nothing was " <>
       "applied. Re-call apply_operations with the same operations plus `readback` — " <>
       "your one-paragraph statement of the import shape you're about to build — and " <>
       "`assumptions` — your assumption-tagged decisions, one string each. The operator " <>

@@ -5,23 +5,28 @@ defmodule DoitMcp.ApplicationTest do
     assert DoitMcp.Application.children(:test) == []
   end
 
-  test "real runs wire the transport watchdog after the server" do
+  test "real runs wire the transport watchdog after the stdio tree" do
     children = DoitMcp.Application.children(:dev)
 
-    server = Enum.find_index(children, &match?({DoitMcp.Server, _}, &1))
+    counter = Enum.find_index(children, &(&1 == DoitMcp.ImportGate.Counter))
+    stdio = Enum.find_index(children, &match?({DoitMcp.Stdio.Supervisor, _}, &1))
     watchdog = Enum.find_index(children, &match?({DoitMcp.TransportWatchdog, _}, &1))
 
-    assert server, "expected DoitMcp.Server in children"
+    assert stdio, "expected DoitMcp.Stdio.Supervisor in children"
     assert watchdog, "expected DoitMcp.TransportWatchdog in children"
 
-    # The watchdog resolves the transport by registered name, so the server
-    # (which registers it) must already be up.
-    assert server < watchdog
+    # The gate's session counter must never race a tool call.
+    assert counter, "expected DoitMcp.ImportGate.Counter in children"
+    assert counter < stdio
+
+    # The watchdog resolves the transport by registered name, so the stdio
+    # tree (which registers it) must already be up.
+    assert stdio < watchdog
   end
 
   test "real runs pin the stdio session open past anubis's 30-minute idle default" do
-    {DoitMcp.Server, opts} =
-      Enum.find(DoitMcp.Application.children(:dev), &match?({DoitMcp.Server, _}, &1))
+    {DoitMcp.Stdio.Supervisor, opts} =
+      Enum.find(DoitMcp.Application.children(:dev), &match?({DoitMcp.Stdio.Supervisor, _}, &1))
 
     timeout = Keyword.fetch!(opts, :session_idle_timeout)
 

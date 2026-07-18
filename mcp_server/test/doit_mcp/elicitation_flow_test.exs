@@ -12,10 +12,11 @@ defmodule DoitMcp.ElicitationFlowTest do
   # client's answer routed back through DoitMcp.Server.handle_elicitation/3,
   # and the parked tool resuming with the operator's decision. The test
   # process stands in as the transport (STDIO's send_message/3 is a
-  # GenServer.call it can answer directly), which sidesteps the real stdio
-  # transport's serial read loop — see the arc doc on that limitation.
+  # GenServer.call it can answer directly); the same flow over the real
+  # concurrent transport lives in DoitMcp.StdioTransportTest.
 
-  # The gate ships dark (DOITLIST_IMPORT_GATE=on arms it); arm it for the flow.
+  # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on for
+  # determinism against the container's ambient environment.
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
     on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_enabled) end)
