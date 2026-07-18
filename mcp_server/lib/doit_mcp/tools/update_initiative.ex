@@ -7,7 +7,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   `set_initiative_state`) or ownership — those are rejected here or
   handled elsewhere.
 
-  ## Progress-calc gate (m03.03 fix 17)
+  ## Progress-calc gate (m03.04 fix 17)
 
   A `progress_calc` CHANGE to a non-default value is held for the operator's
   confirm before it applies: the server elicits a yes/no from the operator

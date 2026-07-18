@@ -44,7 +44,7 @@ defmodule DoitMcp.Client do
         # multi-second backoff-and-retry on a transient error.
         retry: false,
         # A cushion over the server's fixed worst case (a cap-sized batch is
-        # bounded by the 15s transaction timeout; m03.03 item 5.8.3), not a
+        # bounded by the 15s transaction timeout; m03.04 item 2.8.3), not a
         # mask for a slow server — Req's ~15s default sat exactly ON that
         # bound and turned drive 4's 14.6s batch into a spurious timeout.
         receive_timeout: 30_000

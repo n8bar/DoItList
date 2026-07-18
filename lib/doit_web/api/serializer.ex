@@ -30,7 +30,7 @@ defmodule DoItWeb.Api.Serializer do
   system root task's `computed_progress`, 0..100). `root_task_id` is the
   Initiative's system root task — the Initiative's own comment thread lives on
   it (item 6.4): read/write comments with `task_id = root_task_id`. `ai_knobs`
-  is deliberately **not** here (m03.03 fix 14) — it's per-Initiative context,
+  is deliberately **not** here (m03.04 fix 14) — it's per-Initiative context,
   read it from the tree response.
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
@@ -98,7 +98,7 @@ defmodule DoItWeb.Api.Serializer do
     reorder/reparent).
   * `description` — the task's how-to text, verbatim (`null` when unset). The
     read-back of the `description` the write ops accept; the `ingest_report`
-    lint facts (m03.03 item 5.5) are computed over it adapter-side.
+    lint facts (m03.04 item 2.5) are computed over it adapter-side.
   * `index` — the m02.07 §1.7 positional label for the Initiative's
     `index_style`. Derived purely from sibling position, so it's correct after
     any reorder. `""` under the `none` style.
@@ -121,7 +121,7 @@ defmodule DoItWeb.Api.Serializer do
   * `co_assignee_ids` — the **complete** co-assignee user id list in promotion
     order (uncapped, unlike the UI's avatar chip).
   * `comment_count` — how many **live** comments the task has (tombstones
-    excluded). A dumb count (m03.03 item 5.5.2): the reader decides what a zero
+    excluded). A dumb count (m03.04 item 2.5.2): the reader decides what a zero
     means; batched in one grouped query (no N+1).
   * `cross_references` — this task's **outgoing** task→task references (worklist
     4). Each entry carries the target's stable `target_id` and its **live**

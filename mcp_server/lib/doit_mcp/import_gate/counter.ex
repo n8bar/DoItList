@@ -1,7 +1,7 @@
 defmodule DoitMcp.ImportGate.Counter do
   @moduledoc """
   Session-lifetime memory behind the import gate's cumulative trigger
-  (m03.03 item 5.11.2): task-adds applied per Initiative, plus the
+  (m03.04 item 2.11.2): task-adds applied per Initiative, plus the
   Initiatives whose import the operator already confirmed this session.
 
   Sub-cap chunking is sanctioned, so no single batch tells the whole story —

@@ -2284,7 +2284,7 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
-  Live-comment counts for an Initiative's live tasks (m03.03 item 5.5.2), as
+  Live-comment counts for an Initiative's live tasks (m03.04 item 2.5.2), as
   `%{task_id => count}`. ONE grouped count query over the whole tree (no
   per-task fan-out), so the API tree read can carry a `comment_count` per node.
   Only live comments count — a tombstoned or undo-hidden comment (`deleted_at`
@@ -3352,7 +3352,7 @@ defmodule DoIt.Tasks do
   @tree_reload_kinds [:task_created, :task_moved, :task_deleted]
 
   @doc """
-  Collapse a committed batch's queued broadcasts (m03.03 item 5.8.2) so
+  Collapse a committed batch's queued broadcasts (m03.04 item 2.8.2) so
   subscribers pay per BATCH, not per op — a 150-op import fired ~150
   `{:task_created, id}` messages at every open workspace, each answered with a
   full tree reload: O(batch x tree) subscriber work that grew with the tree and

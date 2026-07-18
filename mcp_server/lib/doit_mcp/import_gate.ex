@@ -1,6 +1,6 @@
 defmodule DoitMcp.ImportGate do
   @moduledoc """
-  Pure decision logic for `apply_operations`' import gate (m03.03 fix 10):
+  Pure decision logic for `apply_operations`' import gate (m03.04 fix 10):
   a first big import into an Initiative whose `ai_knobs` is still unsettled
   gets held for the operator's readback confirmation instead of applying
   blind.
@@ -8,10 +8,10 @@ defmodule DoitMcp.ImportGate do
   The gate ships ARMED: `enabled?/0` — `DOITLIST_IMPORT_GATE=off` opts out;
   any other value, including unset, arms it — is `evaluate/2`'s very first,
   cheapest check, before anything is counted or fetched. (It shipped dark
-  until the concurrent stdio transport landed, m03.03 item 5.11.1 — the old
+  until the concurrent stdio transport landed, m03.04 item 2.11.1 — the old
   serial transport could never read the operator's answer.)
 
-  The trigger is CUMULATIVE across the session (m03.03 item 5.11.2): sub-cap
+  The trigger is CUMULATIVE across the session (m03.04 item 2.11.2): sub-cap
   chunking is sanctioned, so no single batch tells the whole story. Each
   batch's task-adds are resolved per target Initiative and summed with the
   session counter (`DoitMcp.ImportGate.Counter`, recorded on successful

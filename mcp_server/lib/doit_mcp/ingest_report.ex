@@ -1,6 +1,6 @@
 defmodule DoitMcp.IngestReport do
   @moduledoc """
-  The `ingest_report` lint facts (m03.03 item 5.5), computed as a pure function
+  The `ingest_report` lint facts (m03.04 item 2.5), computed as a pure function
   over one decoded Initiative tree read (`GET /api/v1/initiatives/:id`) plus
   the flat list of decoded comments the tool composes from the per-task
   comment reads (`comment_thread_ids/1` names the threads to fetch) — no

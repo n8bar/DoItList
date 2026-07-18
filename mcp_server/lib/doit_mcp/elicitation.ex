@@ -1,7 +1,7 @@
 defmodule DoitMcp.Elicitation do
   @moduledoc """
   Thin wiring between a tool and the Anubis session process for
-  server-initiated `elicitation/create` requests (m03.03 fix 10).
+  server-initiated `elicitation/create` requests (m03.04 fix 10).
 
   Anubis runs a tool's `execute/2` in a per-request Task, and its own
   `Anubis.Server.send_elicitation_request/3` targets `self()` — the session
