@@ -6652,23 +6652,47 @@ Hooks.RefField = {
     // The save is never blocked; when it adds/changes a ref, the server puts a
     // "Linked …" flash (item 3.5) — no client toast here.
     this.onBlurCapture = () => {
+      const touched = []
       const next = transformForSave(this.el.value, resolveRefPath)
-      if (next !== this.el.value) this.el.value = next
-      this.tokenizeSiblings()
+      if (next !== this.el.value) {
+        this.el.value = next
+        touched.push(this.el)
+      }
+      this.tokenizeSiblings(touched)
+      // LiveView's blur flush serializes in its own handling of this same
+      // event, so once the task settles the tokens are captured — flip every
+      // box we tokenized straight back to label form (same pattern as the
+      // submit intercept). Without this, a NO-OP save — which produces no
+      // patch and therefore no rehydrate — leaves a box showing its raw
+      // token indefinitely (O&C 4.7, the stuck-subtitle case).
+      if (touched.length) {
+        setTimeout(() => {
+          touched.forEach((f) => {
+            if (!/%<\d+>/.test(f.value)) return
+            const back = rehydrate(f.value, refLabelOf)
+            if (back !== f.value) f.value = back
+            f.doitRefShown = back
+          })
+        }, 0)
+      }
     }
     this.el.addEventListener("blur", this.onBlurCapture, true)
   },
   // Before LiveView's whole-form blur-flush serializes the form, anchor any
   // SIBLING ref field's rehydrated `%label` back to its token — otherwise the
   // flush would re-save that sibling as literal `%label`, destroying its stored
-  // reference (the edited field is already tokenized above).
-  tokenizeSiblings() {
+  // reference (the edited field is already tokenized above). Boxes changed here
+  // join `touched` so the blur handler's post-serialization restore covers them.
+  tokenizeSiblings(touched) {
     const form = this.el.form
     if (!form) return
     form.querySelectorAll('[phx-hook="RefField"]').forEach((f) => {
       if (f === this.el) return
       const t = transformForSave(f.value, resolveRefPath)
-      if (t !== f.value) f.value = t
+      if (t !== f.value) {
+        f.value = t
+        touched.push(f)
+      }
     })
   },
   updated() {
