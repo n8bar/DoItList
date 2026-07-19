@@ -383,3 +383,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Doc (m03.04): fixes 22-25 banked from the subdocs drive -- overflow doctrine, operator-confirmed first knob-write, embedded-checklist rule+lint, knob hygiene.
 2026-07-18  Doc (m03.04): 2.14 banked -- initiative payloads carry a server-composed web url; operator-facing references are url or name, never raw ids.
 2026-07-18  Doc (m03.04): worklist 1 rebanked -- skill archived untracked (repo carries no skill until the rewrite); drive 5 and loop-probe re-run retired; new sequence: skill-less baseline (RED) -> provenance ledger -> from-zero rewrite -> regression drive.
+2026-07-18  Doc (m03.04): open-item scrub -- retired skill-half subitems absorbed into the rewrite; stale-complete boxes ticked (2.5, 2.6, probes); every remaining open box is planned work.
