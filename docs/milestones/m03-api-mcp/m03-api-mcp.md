@@ -37,7 +37,7 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
 | 2 — Roll-up progress & completion | [`m03.02-rollup-progress.md`](m03.02-rollup-progress.md) | Backend lazy computation · Live collaborator updates · Client-side prediction · Testing | complete |
 | 3 — MCP server | [`m03.03-mcp-server.md`](m03.03-mcp-server.md) | MCP server · Batch reliability · Task cross-reference UI · Omissions & Corrections · Testing and Verification | complete |
-| 4 — Companion skill & MCP refinement | [`m03.04-companion-skill+mcp-refinement.md`](m03.04-companion-skill+mcp-refinement.md) | Companion skill · MCP server fixes & features · Testing and Verification | in progress |
+| 4 — Companion skill & MCP refinement | [`m03.04-companion-skill+mcp-refinement.md`](m03.04-companion-skill+mcp-refinement.md) | Companion skill (v1 history) · MCP server fixes & features · Baseline-first skill rewrite · Testing and Verification | in progress |
 | 5 — Documentation & maintenance | [`m03.05-documentation+maintenance.md`](m03.05-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
