@@ -16,6 +16,16 @@ defmodule DoIt.SkillReferenceTest do
   @skill Path.expand("../skills/doitlist/SKILL.md", __DIR__)
 
   test "the skill's Quick Reference names only real MCP tools/resources" do
+    # The skill is archived pending the from-zero rewrite (m03.04 item 1.3.7);
+    # the guard re-arms automatically when SKILL.md returns at this path.
+    if not File.exists?(@skill) do
+      assert true
+    else
+      run_drift_guard()
+    end
+  end
+
+  defp run_drift_guard do
     known = known_component_names()
     referenced = quick_reference_refs()
 
