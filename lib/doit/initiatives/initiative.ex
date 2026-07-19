@@ -20,7 +20,7 @@ defmodule DoIt.Initiatives.Initiative do
     # m02.07 item 1.7: positional task-index style for this tree (per-Initiative,
     # not per-account). "none" = no index shown (default). See DoIt.Tasks.Index.
     field :index_style, :string, default: "none"
-    # m03.04 item 2.4: per-Initiative constants store for AI agents — plain text
+    # m03.04 item 3.4: per-Initiative constants store for AI agents — plain text
     # the product stores but never interprets.
     field :ai_knobs, :string
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.

@@ -1307,7 +1307,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  # m03.04 item 2.4: the per-Initiative AI-knobs store — plain text the product
+  # m03.04 item 3.4: the per-Initiative AI-knobs store — plain text the product
   # stores but never interprets, so nothing else re-renders on a change. The
   # typed text is already visible client-side; the debounced save is acked with
   # the same pulsed "Saved" tick as the subtitle (§6.7).
@@ -6504,7 +6504,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </form>
           </div>
 
-          <%!-- m03.04 item 2.4: per-Initiative constants store for AI agents —
+          <%!-- m03.04 item 3.4: per-Initiative constants store for AI agents —
                plain text the product stores but never interprets. Debounced
                save-on-blur; the "Saved" tick pulsed on "ai-knobs-saved" is the
                ack for the otherwise-invisible write (§6.7, same as subtitle). --%>

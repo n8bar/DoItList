@@ -1,6 +1,6 @@
 defmodule DoitMcp.Stdio.Transport do
   @moduledoc """
-  Concurrent read/dispatch stdio transport (m03.04 item 2.11.1), replacing
+  Concurrent read/dispatch stdio transport (m03.04 item 3.11.1), replacing
   Anubis 1.6's stock `Anubis.Server.Transport.STDIO` for this adapter.
 
   The stock transport reads stdin and dispatches each request as a BLOCKING

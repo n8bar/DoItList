@@ -52,7 +52,7 @@ defmodule DoitMcp.Server do
   component(DoitMcp.Tools.GetInitiativeMembers)
   component(DoitMcp.Tools.GetTaskComments)
 
-  # Lint read (m03.04 item 2.5) — mechanical facts over the tree read for the
+  # Lint read (m03.04 item 3.5) — mechanical facts over the tree read for the
   # post-build audit; facts in the tool, judgment in the skill
   component(DoitMcp.Tools.IngestReport)
 

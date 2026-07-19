@@ -8,10 +8,10 @@ defmodule DoitMcp.ImportGate do
   The gate ships ARMED: `enabled?/0` — `DOITLIST_IMPORT_GATE=off` opts out;
   any other value, including unset, arms it — is `evaluate/2`'s very first,
   cheapest check, before anything is counted or fetched. (It shipped dark
-  until the concurrent stdio transport landed, m03.04 item 2.11.1 — the old
+  until the concurrent stdio transport landed, m03.04 item 3.11.1 — the old
   serial transport could never read the operator's answer.)
 
-  The trigger is CUMULATIVE across the session (m03.04 item 2.11.2): sub-cap
+  The trigger is CUMULATIVE across the session (m03.04 item 3.11.2): sub-cap
   chunking is sanctioned, so no single batch tells the whole story. Each
   batch's task-adds are resolved per target Initiative and summed with the
   session counter (`DoitMcp.ImportGate.Counter`, recorded on successful

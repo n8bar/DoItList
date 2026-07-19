@@ -1,6 +1,6 @@
 defmodule DoitMcp.Stdio.Supervisor do
   @moduledoc """
-  The adapter's stdio tree (m03.04 item 2.11.1): the anubis Session plus
+  The adapter's stdio tree (m03.04 item 3.11.1): the anubis Session plus
   `DoitMcp.Stdio.Transport`, assembled by hand.
 
   Anubis 1.6's `Anubis.Server.Supervisor` hardwires the transport module
