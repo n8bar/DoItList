@@ -386,3 +386,5 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Doc (m03.04): open-item scrub -- retired skill-half subitems absorbed into the rewrite; stale-complete boxes ticked (2.5, 2.6, probes); every remaining open box is planned work.
 2026-07-18  Doc (m03.04): worklist 2 "Active queue" inserted -- fixes 20-25, baseline, ledger, rewrite, regression drive, prompts graduate out of the closed worklist-1 history; old worklists shift to 3/4; code citations reswept.
 2026-07-18  Doc (m03.04): worklists 2/3 swapped -- all remaining server scope (incl. fixes 20-25) lands before the skill rebuild so the RED baseline grades the finished server; "Active queue" renamed "Baseline-first skill rewrite"; cross-refs reswept.
+2026-07-18  Feat (m03.04): fix 21 -- long-comment lint exempts the Initiative root thread (the audit's long-form home); add_comment description carries the split.
+2026-07-18  Feat (m03.04): fix 24 -- ingest_report gains checkbox_lines_in_descriptions fact (embedded-checklist floor for the shallow-import tell).

@@ -37,9 +37,15 @@ defmodule DoitMcp.IngestReport do
       `Locked decisions:`, `Verification:` — case-sensitive, at line start or
       after whitespace), as `%{task_id, matched_text}`. Journaling belongs in
       comments; the marker list is a heuristic floor, not a grammar.
+    * embedded checklists — `checkbox_lines_in_descriptions`: markdown
+      checkbox lines (`- [ ]` / `- [x]` / `* [ ]` / `* [x]`, case-insensitive
+      x, leading whitespace allowed) in task descriptions, as
+      `%{task_id, count}`, plus an uncapped `checkbox_line_total`. A floor,
+      not a definition — unmarked lists stay a judgment call.
     * long comments — `long_comments`: comments whose body exceeds
-      #{300} characters, as `%{comment_id, task_id}`. Nothing is excluded —
-      the audit explains sanctioned long ones (like itself).
+      #{300} characters, as `%{comment_id, task_id}`. The root task's thread
+      is exempt — the required post-import audit lives there and is
+      necessarily long; every other thread still measures.
     * context — `ai_knobs_set` (boolean, never the content), `initiative_id`.
 
   Every id/entry list is capped: the first #{20} items plus an `"and N more"`
@@ -90,6 +96,8 @@ defmodule DoitMcp.IngestReport do
     top = Map.get(tree, "tasks") || []
     # [{task, depth}] in tree order (depth-first, pre-order).
     flat = flatten(top, 0)
+    root_id = tree["root_task_id"]
+    checkbox_counts = Enum.flat_map(flat, &checkbox_lines/1)
 
     {with_desc, without_desc} =
       Enum.split_with(flat, fn {task, _} -> present?(task["description"]) end)
@@ -110,9 +118,13 @@ defmodule DoitMcp.IngestReport do
       unanchored_reference_candidates: flat |> Enum.flat_map(&reference_candidates/1) |> cap(),
       path_like_strings: flat |> Enum.flat_map(&path_like/1) |> cap(),
       journal_markers_in_descriptions: flat |> Enum.flat_map(&journal_markers/1) |> cap(),
+      checkbox_lines_in_descriptions: cap(checkbox_counts),
+      checkbox_line_total: checkbox_counts |> Enum.map(& &1.count) |> Enum.sum(),
       long_comments:
         comments
-        |> Enum.filter(&long_comment?/1)
+        |> Enum.filter(fn comment ->
+          long_comment?(comment) and not on_root_thread?(comment, root_id)
+        end)
         |> Enum.map(&%{comment_id: &1["id"], task_id: &1["task_id"]})
         |> cap(),
       ai_knobs_set: present?(tree["ai_knobs"])
@@ -251,6 +263,26 @@ defmodule DoitMcp.IngestReport do
 
   defp long_comment?(comment) do
     is_binary(comment["body"]) and String.length(comment["body"]) > @long_comment_chars
+  end
+
+  # The tree read's `root_task_id` names the Initiative's system root — never
+  # a node under "tasks" (see the main app's Api.Serializer), but its thread
+  # is the Initiative's own: the sanctioned home of the long post-import audit.
+  defp on_root_thread?(_comment, nil), do: false
+  defp on_root_thread?(comment, root_id), do: comment["task_id"] == root_id
+
+  # A markdown checkbox line: `- [ ]` / `- [x]` / `* [ ]` / `* [x]`,
+  # case-insensitive x, leading whitespace allowed. A floor for embedded
+  # checklists, not a definition — unmarked lists don't match on purpose.
+  defp checkbox_line_pattern, do: ~r/^[ \t]*[-*][ \t]+\[[ xX]\]/m
+
+  defp checkbox_lines({task, _depth}) do
+    with text when is_binary(text) <- task["description"],
+         count when count > 0 <- length(Regex.scan(checkbox_line_pattern(), text)) do
+      [%{task_id: task["id"], count: count}]
+    else
+      _ -> []
+    end
   end
 
   defp present?(value), do: is_binary(value) and String.trim(value) != ""

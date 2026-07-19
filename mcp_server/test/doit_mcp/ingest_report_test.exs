@@ -104,6 +104,8 @@ defmodule DoitMcp.IngestReportTest do
       assert report.unanchored_reference_candidates == []
       assert report.path_like_strings == []
       assert report.journal_markers_in_descriptions == []
+      assert report.checkbox_lines_in_descriptions == []
+      assert report.checkbox_line_total == 0
       assert report.long_comments == []
     end
   end
@@ -350,21 +352,86 @@ defmodule DoitMcp.IngestReportTest do
     end
   end
 
+  describe "build/1 — checkbox lines in descriptions" do
+    test "counts checkbox lines per description; non-checkbox list lines never count" do
+      description =
+        Enum.join(
+          [
+            "Plan:",
+            "- [ ] unchecked dash",
+            "- [x] checked dash",
+            "- [X] checked dash, uppercase",
+            "  * [ ] indented star",
+            "\t* [x] tab-indented star",
+            "- plain dash bullet",
+            "* plain star bullet",
+            "-[ ] no space after the bullet",
+            "- [y] not a checkbox state",
+            "1. [ ] numbered, not a bullet",
+            "[ ] bare brackets"
+          ],
+          "\n"
+        )
+
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "root_task_id" => 100,
+        "tasks" => [leaf(1, description), leaf(2, "no list here"), leaf(3, "- [ ] one box")]
+      }
+
+      report = IngestReport.build(tree)
+
+      assert report.checkbox_lines_in_descriptions == [
+               %{task_id: 1, count: 5},
+               %{task_id: 3, count: 1}
+             ]
+
+      assert report.checkbox_line_total == 6
+    end
+
+    test "the entry list caps at 20; the total still counts every line" do
+      tasks = for i <- 1..25, do: leaf(i, "- [ ] a\n- [x] b")
+
+      report = IngestReport.build(%{"id" => 9, "ai_knobs" => nil, "tasks" => tasks})
+
+      assert report.checkbox_lines_in_descriptions ==
+               Enum.map(1..20, &%{task_id: &1, count: 2}) ++ ["and 5 more"]
+
+      assert report.checkbox_line_total == 50
+    end
+  end
+
   describe "build/2 — long comments" do
     test "lists comment id + task id past 300 characters; tombstone nil bodies never measure" do
       comments = [
-        %{"id" => 31, "task_id" => 100, "body" => String.duplicate("a", 301)},
         %{"id" => 32, "task_id" => 1, "body" => String.duplicate("b", 300)},
         %{"id" => 33, "task_id" => 12, "body" => nil},
         %{"id" => 34, "task_id" => 12, "body" => String.duplicate("c", 500)}
       ]
 
-      report = IngestReport.build(@tree, comments)
+      assert IngestReport.build(@tree, comments).long_comments ==
+               [%{comment_id: 34, task_id: 12}]
+    end
 
-      assert report.long_comments == [
-               %{comment_id: 31, task_id: 100},
-               %{comment_id: 34, task_id: 12}
-             ]
+    test "the root task's thread is exempt; an equally long comment on a tree task still flags" do
+      long = String.duplicate("a", 301)
+
+      comments = [
+        %{"id" => 31, "task_id" => 100, "body" => long},
+        %{"id" => 35, "task_id" => 1, "body" => long}
+      ]
+
+      # @tree's root_task_id is 100 — the audit's home never measures as long.
+      assert IngestReport.build(@tree, comments).long_comments ==
+               [%{comment_id: 35, task_id: 1}]
+    end
+
+    test "a tree read without a root_task_id exempts nothing" do
+      comments = [%{"id" => 31, "task_id" => 100, "body" => String.duplicate("a", 301)}]
+
+      assert IngestReport.build(Map.delete(@tree, "root_task_id"), comments).long_comments ==
+               [%{comment_id: 31, task_id: 100}]
     end
 
     test "without a comments list the fact is empty, never absent" do
@@ -452,7 +519,9 @@ defmodule DoitMcp.IngestReportTest do
             })
 
           "/api/v1/initiatives/42/tasks/12/comments" ->
-            Req.Test.json(conn, %{"data" => [%{"id" => 903, "task_id" => 12, "body" => "ok"}]})
+            Req.Test.json(conn, %{
+              "data" => [%{"id" => 903, "task_id" => 12, "body" => String.duplicate("c", 301)}]
+            })
         end
       end)
 
@@ -480,7 +549,10 @@ defmodule DoitMcp.IngestReportTest do
                  "subtree_done_count" => 0
                }
 
-      assert report["long_comments"] == [%{"comment_id" => 900, "task_id" => 100}]
+      # Comment 900 sits on root task 100 — long but exempt; 903 still flags.
+      assert report["long_comments"] == [%{"comment_id" => 903, "task_id" => 12}]
+      assert report["checkbox_lines_in_descriptions"] == []
+      assert report["checkbox_line_total"] == 0
       assert report["ai_knobs_set"] == false
     end
 
