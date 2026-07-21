@@ -11,7 +11,7 @@ defmodule DoIt.Initiatives do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
-  alias DoIt.Initiatives.{Initiative, InitiativeMember, Collaborator}
+  alias DoIt.Initiatives.{AgentAccessAck, Initiative, InitiativeMember, Collaborator}
   alias DoIt.Notifications
   alias DoIt.Tasks.{Task, TaskCoAssignee}
 
@@ -24,10 +24,18 @@ defmodule DoIt.Initiatives do
   archived or hidden drops from their **active** list — both flags live on the
   caller's own membership row, so this never affects anyone else's view. The
   archived ones resurface via `list_archived_initiatives/1`.
+
+  `agent_access_only: true` (m03.04 item 2.12.2) additionally filters to
+  Initiatives with agent access on — the /api/v1 list uses it so an agent's
+  token never even enumerates a flagged-off Initiative. The web UI never passes
+  it, so the human's dashboard is unaffected.
   """
-  def list_visible_initiatives(%User{id: user_id}) do
+  def list_visible_initiatives(%User{id: user_id}, opts \\ []) do
+    agent_only? = Keyword.get(opts, :agent_access_only, false)
+
     from(i in Initiative,
       where: is_nil(i.trashed_at),
+      where: ^if(agent_only?, do: dynamic([i], i.agent_access == true), else: true),
       join: m in InitiativeMember,
       on: m.initiative_id == i.id and m.user_id == ^user_id,
       where: is_nil(m.archived_at) and is_nil(m.hidden_at),
@@ -171,8 +179,13 @@ defmodule DoIt.Initiatives do
   Create an Initiative and make the creator its owner. The owner's "My
   Initiative Defaults" (m02.04 §2.2) seed the progress calc and the root
   task's sort — explicit attrs still win.
+
+  `agent_access: true` (m03.04 item 2.12.1) grants agent access at creation —
+  the API/MCP create path passes it (an agent creating an Initiative can
+  obviously reach it); it's applied server-side as a struct-level change, never
+  cast from `attrs`. UI-created Initiatives omit it and land off.
   """
-  def create_initiative(%User{} = owner, attrs) do
+  def create_initiative(%User{} = owner, attrs, opts \\ []) do
     prefs = DoIt.Accounts.get_preferences(owner)
 
     attrs =
@@ -182,8 +195,13 @@ defmodule DoIt.Initiatives do
       |> Map.put_new("auto_promote_co_assignees", prefs.initiative_auto_promote)
       |> Map.put_new("viewer_plus", prefs.initiative_viewer_plus)
 
+    changeset =
+      %Initiative{}
+      |> Initiative.changeset(attrs)
+      |> maybe_grant_agent_access(opts)
+
     Repo.transaction(fn ->
-      with {:ok, initiative} <- %Initiative{} |> Initiative.changeset(attrs) |> Repo.insert(),
+      with {:ok, initiative} <- Repo.insert(changeset),
            {:ok, _member} <-
              %InitiativeMember{}
              |> InitiativeMember.changeset(%{
@@ -200,6 +218,16 @@ defmodule DoIt.Initiatives do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  # agent_access is deliberately NOT in the changeset's cast list; the API
+  # create path grants it here, server-side (m03.04 item 2.12.1).
+  defp maybe_grant_agent_access(changeset, opts) do
+    if Keyword.get(opts, :agent_access, false) do
+      Ecto.Changeset.change(changeset, agent_access: true)
+    else
+      changeset
+    end
   end
 
   defp maybe_default_progress_calc(attrs, %{initiative_progress_calc: nil}), do: attrs
@@ -814,6 +842,108 @@ defmodule DoIt.Initiatives do
 
   def can_admin?("owner"), do: true
   def can_admin?(_), do: false
+
+  # --- Agent access (m03.04 item 2.12) ---------------------------------------
+  #
+  # A token exposes every Initiative its user can see, and other members'
+  # content is a prompt-injection surface — so agent access is per-Initiative,
+  # off by default, and the human's checkbox is the trust approval,
+  # server-enforced ahead of any agent reading a byte (the /api/v1 surface
+  # reads a flagged-off Initiative as not-found; see DoItWeb.Api.Authz).
+
+  @doc """
+  Turn the Initiative's agent access on or off (owner-only; the caller
+  enforces the actor). Applied as a struct-level change — `agent_access` is
+  never cast from params. Broadcasts the Initiative update so other open
+  sessions re-render the knobs control's derived state live.
+  """
+  def set_agent_access(%Initiative{} = initiative, on) when is_boolean(on) do
+    with {:ok, updated} <-
+           initiative |> Ecto.Changeset.change(agent_access: on) |> Repo.update() do
+      DoIt.Tasks.notify_initiative_updated(updated.id)
+      {:ok, updated}
+    end
+  end
+
+  @doc "Whether this admin has acknowledged the agent-trust confirm for this Initiative."
+  def agent_trust_acked?(user_id, initiative_id) do
+    Repo.exists?(
+      from(a in AgentAccessAck,
+        where: a.user_id == ^user_id and a.initiative_id == ^initiative_id
+      )
+    )
+  end
+
+  @doc """
+  Record the admin's one-time agent-trust acknowledgement for this Initiative
+  (m03.04 item 2.12.4) — after it the trust confirm never shows again for this
+  (admin, Initiative), across sessions. Ids are set programmatically (never
+  cast); idempotent via the unique index.
+  """
+  def record_agent_trust_ack(%User{id: user_id}, %Initiative{id: initiative_id}) do
+    now = now()
+
+    Repo.insert_all(
+      AgentAccessAck,
+      [%{user_id: user_id, initiative_id: initiative_id, inserted_at: now, updated_at: now}],
+      on_conflict: :nothing
+    )
+
+    :ok
+  end
+
+  @doc "Any member besides `user_id` on the Initiative (every member holds viewer or higher)."
+  def other_members?(initiative_id, user_id) do
+    Repo.exists?(
+      from(m in InitiativeMember,
+        where: m.initiative_id == ^initiative_id and m.user_id != ^user_id
+      )
+    )
+  end
+
+  @doc """
+  Whether `admin`'s next `action` on `initiative` needs the one-time
+  agent-trust confirm (m03.04 item 2.12.4). Never once the admin has
+  acknowledged for this Initiative. Actions:
+
+    * `:enable_agent_access` — turning the flag on while members besides the
+      admin already exist (their content becomes agent-readable at the flip).
+    * `{:add_member, role}` — adding a member at viewer or higher (every role
+      is viewer or higher) to an agent-accessible Initiative.
+    * `{:promote_member, old_role, new_role}` — raising an existing member to
+      a higher role, at viewer or higher, on an agent-accessible Initiative.
+  """
+  def agent_trust_confirm_required?(%User{id: admin_id}, %Initiative{} = initiative, action) do
+    not agent_trust_acked?(admin_id, initiative.id) and
+      agent_trust_trigger?(initiative, admin_id, action)
+  end
+
+  defp agent_trust_trigger?(
+         %Initiative{agent_access: false} = initiative,
+         admin_id,
+         :enable_agent_access
+       ) do
+    other_members?(initiative.id, admin_id)
+  end
+
+  defp agent_trust_trigger?(%Initiative{} = initiative, _admin_id, {:add_member, role}) do
+    initiative.agent_access and can_view?(role)
+  end
+
+  defp agent_trust_trigger?(
+         %Initiative{} = initiative,
+         _admin_id,
+         {:promote_member, old_role, new_role}
+       ) do
+    initiative.agent_access and can_view?(new_role) and role_outranks?(new_role, old_role)
+  end
+
+  defp agent_trust_trigger?(_initiative, _admin_id, _action), do: false
+
+  @role_rank %{"viewer" => 1, "editor" => 2, "owner" => 3}
+
+  defp role_outranks?(new_role, old_role),
+    do: Map.get(@role_rank, new_role, 0) > Map.get(@role_rank, old_role, 0)
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn

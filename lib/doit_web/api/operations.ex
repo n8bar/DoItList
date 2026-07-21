@@ -118,6 +118,12 @@ defmodule DoItWeb.Api.Operations do
   ever touch the caller's own membership row); a notification op authorizes by
   ownership. A single unauthorized op fails the **whole** batch.
 
+  **Agent access** (m03.04 item 2.12.2): every per-op authorize runs through
+  `Authz.fetch_initiative/3`, so an op targeting an Initiative with agent access
+  **off** fails `not_found` before any work — masked to the op's own target
+  shape (a task/comment inside it reads as "no such task/comment"), so the
+  response never confirms a flagged-off Initiative or its contents exist.
+
   ## Irreversible ops — rejected
 
   Permanent delete / empty-Trash, transfer of ownership, and account
@@ -481,14 +487,14 @@ defmodule DoItWeb.Api.Operations do
 
   defp dispatch(user, "update", "task", op, changes) do
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit) do
+         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
       update_task_by_concern(user, task, data(op), changes)
     end
   end
 
   defp dispatch(user, "remove", "task", op, changes) do
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit) do
+         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
       case Tasks.delete_task(task, user) do
         {:ok, deleted} ->
           ok(nil, deleted.id, "task", Map.put(task_result(deleted), :deleted, true))
@@ -507,7 +513,10 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, lid} <- register_lid(op, changes) do
       attrs = take(data, @initiative_content_fields)
 
-      case Initiatives.create_initiative(user, attrs) do
+      # API/MCP-created Initiatives are agent-accessible from birth (m03.04
+      # item 2.12.1) — granted server-side by the context, never cast from the
+      # op's data (agent_access isn't an accepted key above).
+      case Initiatives.create_initiative(user, attrs, agent_access: true) do
         {:ok, initiative} ->
           with :ok <- maybe_set_subtitle(initiative, data) do
             ok(lid, initiative.id, "initiative", initiative_result(initiative))
@@ -556,7 +565,7 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, lid} <- register_lid(op, changes),
          {:ok, task_id} <- resolve_ref_field(data, "task", changes, "task", required: true),
          {:ok, %Task{} = task} <- load_task(task_id),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit) do
+         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
       case Tasks.add_comment(task, user, data["body"]) do
         {:ok, comment} -> ok(lid, comment.id, "comment", comment_result(comment))
         {:error, reason} -> {:error, context_error(reason)}
@@ -705,7 +714,8 @@ defmodule DoItWeb.Api.Operations do
 
     with {:ok, lid} <- register_lid(op, changes),
          {:ok, source} <- resolve_link_endpoint(data, "source", changes),
-         {:ok, _initiative} <- authorize(user, source.initiative_id, :edit),
+         {:ok, _initiative} <-
+           authorize(user, source.initiative_id, :edit, task_not_found(source.id)),
          {:ok, target} <- resolve_link_endpoint(data, "target", changes),
          :ok <- distinct_link_endpoints(source, target),
          :ok <- same_initiative_link(source, target) do
@@ -720,7 +730,8 @@ defmodule DoItWeb.Api.Operations do
     data = data(op)
 
     with {:ok, source} <- resolve_link_endpoint_any(data, "source", changes),
-         {:ok, _initiative} <- authorize(user, source.initiative_id, :edit),
+         {:ok, _initiative} <-
+           authorize(user, source.initiative_id, :edit, task_not_found(source.id)),
          {:ok, target} <- resolve_link_endpoint_any(data, "target", changes) do
       case Tasks.remove_link(source, target) do
         {:ok, link} ->
@@ -1341,14 +1352,22 @@ defmodule DoItWeb.Api.Operations do
 
   # Resolve the Initiative and run the capability check through the SAME role
   # predicates the LiveView uses. fetch_initiative returns :not_found (unknown
-  # id) or :forbidden (role denies); map both onto per-op errors.
-  defp authorize(%User{} = user, initiative_id, capability) do
+  # id, or agent access off — m03.04 item 2.12.2) or :forbidden (role denies);
+  # map both onto per-op errors. `not_found_override` masks the not-found for
+  # task/comment-targeted ops: a target inside a flagged-off Initiative must
+  # fail EXACTLY like a nonexistent target (same code + message as load_task /
+  # fetch_comment_target), never confirming it exists or naming its Initiative.
+  defp authorize(user, initiative_id, capability, not_found_override \\ nil)
+
+  defp authorize(%User{} = user, initiative_id, capability, not_found_override) do
     case Authz.fetch_initiative(user, initiative_id, capability) do
       {:ok, %Initiative{} = initiative} ->
         {:ok, initiative}
 
       {:error, :not_found} ->
-        {:error, err(:not_found, "No such Initiative with id #{initiative_id}.", 422)}
+        {:error,
+         not_found_override ||
+           err(:not_found, "No such Initiative with id #{initiative_id}.", 422)}
 
       {:error, :forbidden} ->
         {:error,
@@ -1360,6 +1379,9 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  defp task_not_found(id), do: err(:not_found, "No such task with id #{id}.", 422)
+  defp comment_not_found(id), do: err(:not_found, "No such comment with id #{id}.", 422)
+
   defp authorize_comment(%User{} = user, %Comment{} = comment, capability) do
     query = from(t in Task, where: t.id == ^comment.task_id, select: t.initiative_id)
 
@@ -1369,7 +1391,7 @@ defmodule DoItWeb.Api.Operations do
          err(:not_found, "The comment's task (id #{comment.task_id}) no longer exists.", 422)}
 
       initiative_id ->
-        authorize(user, initiative_id, capability)
+        authorize(user, initiative_id, capability, comment_not_found(comment.id))
     end
   end
 
@@ -1552,14 +1574,31 @@ defmodule DoItWeb.Api.Operations do
   defp first_changeset_error(changeset) do
     changeset
     |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
+      interpolated =
+        Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
+          opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+        end)
+
+      {interpolated, opts}
     end)
-    |> Enum.find_value({"is invalid", nil}, fn {field, [first | _]} ->
-      {"#{field} #{first}", to_string(field)}
+    |> Enum.find_value({"is invalid", nil}, fn {field, [{first, opts} | _]} ->
+      {error_message(field, first, opts), to_string(field)}
     end)
   end
+
+  # The description-length 422 carries the overflow doctrine (m03.04 fix 22),
+  # read at the exact moment an agent would otherwise invent continuation
+  # tasks. Matched on field + validation, not message text.
+  defp error_message(:description, message, opts) do
+    if opts[:validation] == :length and opts[:kind] == :max do
+      "description #{message} — trim the prose and cite the source doc path in the " <>
+        "provenance comment; do not split the remainder into continuation tasks."
+    else
+      "description #{message}"
+    end
+  end
+
+  defp error_message(field, message, _opts), do: "#{field} #{message}"
 
   defp humanize(reason), do: reason |> to_string() |> String.replace("_", " ")
 end

@@ -10,6 +10,12 @@ defmodule DoIt.Api.Idempotency do
   before executing: on a hit it replays the stored response; on a miss it runs
   the batch and stores the exact response it sends.
 
+  The key **binds to its exact payload** (m03.04 fix 20): a hash of the decoded
+  operations is stored beside the key, and a same-key request whose payload
+  hashes differently is a `:payload_conflict` — the controller rejects it
+  instead of replaying, so a reused key can never silently mask a changed
+  batch. A revised batch takes a new key.
+
   Pure business logic over `DoIt.Api.IdempotencyKey` — no controller/Plug deps —
   so it is unit-testable in isolation.
 
@@ -32,15 +38,30 @@ defmodule DoIt.Api.Idempotency do
   @retention_hours 24
 
   @doc """
-  Look up the stored response for `(user, key)`.
+  The hash that binds an idempotency key to its payload (m03.04 fix 20).
 
-  Returns `{status, body}` when a row exists AND its `inserted_at` is within the
-  retention window; otherwise `nil` (a miss, or an expired row that no longer
-  matches). `body` comes back with string keys (jsonb round-trip), which is what
-  the controller re-encodes to JSON.
+  SHA-256 over the decoded operations' Erlang external term form: equal decoded
+  payloads hash equal, any changed op differs. Same-VM comparison only, so
+  `term_to_binary`'s map encoding is stable enough here.
   """
-  @spec fetch(User.t(), String.t()) :: {integer(), map()} | nil
-  def fetch(%User{} = user, key) when is_binary(key) do
+  @spec payload_hash(term()) :: binary()
+  def payload_hash(operations),
+    do: :crypto.hash(:sha256, :erlang.term_to_binary(operations))
+
+  @doc """
+  Look up the stored response for `(user, key)`, checking `payload_hash`.
+
+  Returns `{:replay, {status, body}}` when a row exists, its `inserted_at` is
+  within the retention window, AND its stored hash matches (a nil stored hash —
+  a row predating the hash column — matches anything); `:payload_conflict` when
+  the row matches but its hash differs (a reused key with a changed payload);
+  otherwise `nil` (a miss, or an expired row that no longer matches). `body`
+  comes back with string keys (jsonb round-trip), which is what the controller
+  re-encodes to JSON.
+  """
+  @spec fetch(User.t(), String.t(), binary()) ::
+          {:replay, {integer(), map()}} | :payload_conflict | nil
+  def fetch(%User{} = user, key, payload_hash) when is_binary(key) do
     cutoff = DateTime.add(DateTime.utc_now(), -@retention_hours, :hour)
 
     query =
@@ -48,24 +69,35 @@ defmodule DoIt.Api.Idempotency do
         where:
           r.user_id == ^user.id and r.idempotency_key == ^key and
             r.inserted_at >= ^cutoff,
-        select: {r.response_status, r.response_body}
+        select: {r.response_status, r.response_body, r.payload_hash}
 
-    Repo.one(query)
+    case Repo.one(query) do
+      nil ->
+        nil
+
+      {status, body, stored_hash} when is_nil(stored_hash) or stored_hash == payload_hash ->
+        {:replay, {status, body}}
+
+      _mismatch ->
+        :payload_conflict
+    end
   end
 
   @doc """
-  Record the response `(status, body)` for `(user, key)`.
+  Record the response `(status, body)` for `(user, key)`, bound to
+  `payload_hash`.
 
   Returns `:ok`. A concurrent request may have stored the same key first; the
   unique index on `(user_id, idempotency_key)` then makes this a no-op via
   `on_conflict: :nothing` — the key is recorded either way, so a losing race is
   still a success.
   """
-  @spec store(User.t(), String.t(), integer(), map()) :: :ok
-  def store(%User{} = user, key, status, body) when is_binary(key) do
+  @spec store(User.t(), String.t(), binary(), integer(), map()) :: :ok
+  def store(%User{} = user, key, payload_hash, status, body) when is_binary(key) do
     %IdempotencyKey{user_id: user.id}
     |> IdempotencyKey.changeset(%{
       "idempotency_key" => key,
+      "payload_hash" => payload_hash,
       "response_status" => status,
       "response_body" => body
     })

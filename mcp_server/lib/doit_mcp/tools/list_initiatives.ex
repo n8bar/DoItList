@@ -6,6 +6,9 @@ defmodule DoitMcp.Tools.ListInitiatives do
 
   Each item carries `root_task_id` — the Initiative's system root task, whose
   comments are the Initiative's own thread.
+
+  Each item's `url` is the operator-facing handle: when telling the operator
+  about an Initiative, hand them the URL or the name, never a raw id.
   """
 
   use Anubis.Server.Component, type: :tool

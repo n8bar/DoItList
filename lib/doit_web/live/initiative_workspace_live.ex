@@ -246,6 +246,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:role, role)
     |> assign(:can_edit, Initiatives.can_edit?(role))
     |> assign(:can_admin, Initiatives.can_admin?(role))
+    # m03.04 item 2.12.4: whether THIS admin already acknowledged the
+    # agent-trust confirm here — the client reads it (via #agent-trust-state)
+    # to decide at click whether the confirm opens. Per (admin, Initiative),
+    # so it survives sessions and never re-shows once true.
+    |> assign(:agent_trust_acked, Initiatives.agent_trust_acked?(user.id, initiative.id))
     |> assign(:members, Initiatives.list_members(initiative.id))
     |> assign(:selected_task_id, nil)
     |> assign(:selected_task, nil)
@@ -325,6 +330,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:role, nil)
     |> assign(:can_edit, false)
     |> assign(:can_admin, false)
+    |> assign(:agent_trust_acked, false)
     |> assign(:members, [])
     |> assign(:selected_task_id, nil)
     |> assign(:selected_task, nil)
@@ -1310,22 +1316,30 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # m03.04 item 3.4: the per-Initiative AI-knobs store — plain text the product
   # stores but never interprets, so nothing else re-renders on a change. The
   # typed text is already visible client-side; the debounced save is acked with
-  # the same pulsed "Saved" tick as the subtitle (§6.7).
+  # the same pulsed "Saved" tick as the subtitle (§6.7). Usable only while
+  # agent access is on (item 2.12.3) — the control renders disabled when off;
+  # this guard is the server-side backstop for a stale client.
   def handle_event("set_ai_knobs", %{"ai_knobs" => value}, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
-    else
-      case Initiatives.update_initiative(socket.assigns.initiative, %{"ai_knobs" => value}) do
-        {:ok, updated} ->
-          {:noreply,
-           socket
-           |> assign(:initiative, updated)
-           |> push_event("ai-knobs-saved", %{})}
+    cond do
+      not socket.assigns.can_edit ->
+        {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
 
-        {:error, cs} ->
-          {:noreply,
-           put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
-      end
+      not socket.assigns.initiative.agent_access ->
+        {:noreply,
+         socket |> put_flash(:error, "Turn on AI access to use the AI knobs.") |> bonk()}
+
+      true ->
+        case Initiatives.update_initiative(socket.assigns.initiative, %{"ai_knobs" => value}) do
+          {:ok, updated} ->
+            {:noreply,
+             socket
+             |> assign(:initiative, updated)
+             |> push_event("ai-knobs-saved", %{})}
+
+          {:error, cs} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+        end
     end
   end
 
@@ -1356,6 +1370,44 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         {:error, cs} ->
           {:noreply,
            put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
+  # m03.04 item 2.12.3: the owner's AI-access switch. The checkbox flips
+  # client-side at click (instant optimistic ack, §6; app.js holds the flip
+  # behind the client-opened trust confirm when enabling over existing
+  # members) and settles on the "agent-access-saved" push_event — saved tick
+  # on success, honest revert of the box on refusal/failure (§6, must not
+  # lie). Enabling over existing members records the one-time agent-trust
+  # acknowledgement (item 2.12.4): the client showed the confirm for exactly
+  # that predicate, so the commit is the acceptance.
+  def handle_event("set_agent_access", params, socket) do
+    if not socket.assigns.can_admin do
+      {:noreply, socket |> put_flash(:error, "Only the owner can change AI access.") |> bonk()}
+    else
+      user = socket.assigns.current_user
+      initiative = socket.assigns.initiative
+      on = params["agent_access"] in ["true", "on"]
+
+      ack? =
+        on and Initiatives.agent_trust_confirm_required?(user, initiative, :enable_agent_access)
+
+      case Initiatives.set_agent_access(initiative, on) do
+        {:ok, updated} ->
+          if ack?, do: Initiatives.record_agent_trust_ack(user, updated)
+
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or ack?)
+           |> push_event("agent-access-saved", %{on: updated.agent_access, ok: true})}
+
+        {:error, _cs} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Couldn't change AI access.")
+           |> push_event("agent-access-saved", %{on: initiative.agent_access, ok: false})}
       end
     end
   end
@@ -2060,12 +2112,26 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
     if not is_nil(uid) and socket.assigns.can_admin and uid != initiative.owner_id and
          role in ~w(editor viewer) do
-      {:ok, _} =
-        Initiatives.update_member_role(initiative.id, uid, role, socket.assigns.current_user)
+      actor = socket.assigns.current_user
+
+      # m03.04 item 2.12.4: a promotion on an agent-accessible Initiative was
+      # gated by the client-opened trust confirm — the committed change is the
+      # acceptance, so persist the one-time acknowledgement.
+      ack? =
+        Initiatives.agent_trust_confirm_required?(
+          actor,
+          initiative,
+          {:promote_member, Initiatives.get_role(initiative.id, uid), role}
+        )
+
+      {:ok, _} = Initiatives.update_member_role(initiative.id, uid, role, actor)
+
+      if ack?, do: Initiatives.record_agent_trust_ack(actor, initiative)
 
       {:noreply,
        socket
        |> assign(:members, Initiatives.list_members(initiative.id))
+       |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or ack?)
        |> refresh_rail_initiatives()
        |> put_flash(:info, "Role updated.")}
     else
@@ -2087,8 +2153,21 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           {:noreply, put_flash(socket, :error, "No user with that email or username.")}
 
         user ->
+          # m03.04 item 2.12.4: a member add on an agent-accessible Initiative
+          # was gated by the client-opened trust confirm — the committed add is
+          # the acceptance, so persist the one-time acknowledgement.
+          ack? =
+            Initiatives.agent_trust_confirm_required?(
+              socket.assigns.current_user,
+              initiative,
+              {:add_member, role}
+            )
+
           case Initiatives.add_member(initiative.id, user.id, role, socket.assigns.current_user) do
             {:ok, _} ->
+              if ack?,
+                do: Initiatives.record_agent_trust_ack(socket.assigns.current_user, initiative)
+
               # Close the add-member form on success (it opened client-side via a
               # data-keep="open" <details>); close-details collapses it AND evicts
               # its preserved open-state so the preserve path can't re-open it on
@@ -2098,6 +2177,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                socket
                |> put_flash(:info, "Added #{user.name}.")
                |> assign(:members, Initiatives.list_members(initiative.id))
+               |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or ack?)
                |> refresh_rail_initiatives()
                |> push_event("close-details", %{id: "members-desktop-form"})
                |> push_event("close-details", %{id: "members-mobile-form"})}
@@ -3030,6 +3110,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   });
                   this.handleEvent("ai-knobs-saved", () => {
                     if (window.DoitSavedTick) window.DoitSavedTick("ai-knobs-saved-tick");
+                  });
+                  // AI-access settle (m03.04 item 2.12.3): the checkbox flipped
+                  // client-side at click; the server replies with the persisted
+                  // state — re-assert it (the honest revert when refused) and
+                  // tick Saved only on a real success (never lie).
+                  this.handleEvent("agent-access-saved", ({on, ok}) => {
+                    const box = document.getElementById("agent-access-toggle");
+                    if (box) box.checked = !!on;
+                    if (ok && window.DoitSavedTick) window.DoitSavedTick("agent-access-saved-tick");
                   });
                   // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
                   // client-owned (DoitState.commentEditId), but SAVE is server-gated.
@@ -4232,6 +4321,21 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
           <.archive_confirm />
           <.remove_member_confirm :if={@can_admin} />
+          <%!-- m03.04 item 2.12.4: render-known state the client reads at click
+               time to decide whether the agent-trust confirm must open (fresh
+               DOM, no round trip — UX_GUARDRAILS 6.5). Lives OUTSIDE the
+               ignored dialog below so it patches as the flag / members / the
+               ack change. --%>
+          <div
+            :if={@can_admin}
+            id="agent-trust-state"
+            hidden
+            data-acked={to_string(@agent_trust_acked)}
+            data-agent-access={to_string(@initiative.agent_access)}
+            data-other-members={to_string(Enum.any?(@members, &(&1.user_id != @current_user.id)))}
+          >
+          </div>
+          <.agent_trust_confirm :if={@can_admin} />
           <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
           <div
             :if={@pending_handoff}
@@ -5233,6 +5337,55 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
           >
             Remove
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # Agent-trust confirm (m03.04 item 2.12.4) — client-opened (UX_GUARDRAILS
+  # 6.5): app.js decides from #agent-trust-state at the click and opens this
+  # with no round trip, holding the intercepted action (enable-access flip,
+  # member add, promote) until Proceed re-dispatches it. Shown at most once per
+  # (admin, Initiative): the server records the acknowledgement when the
+  # confirmed action commits, and data-acked flips true for good.
+  defp agent_trust_confirm(assigns) do
+    ~H"""
+    <div
+      id="agent-trust-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Trust this initiative's members with AI access?
+        </h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          AI agents working this initiative read everything its members write —
+          content from current <span class="font-medium">and future</span>
+          members alike. Anything a member writes can steer an agent that reads
+          it (prompt injection). Proceed only if you trust this initiative's
+          members, present and future, with your AI agents.
+        </p>
+        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          Asked once per initiative — you won't see this again here.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-trust-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-trust-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            I trust these members
           </button>
         </div>
       </div>
@@ -6504,10 +6657,46 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </form>
           </div>
 
+          <%!-- m03.04 item 2.12.3: per-Initiative AI access, owner-only, off by
+               default. The checkbox flips client-side at click (§6 optimistic
+               ack; app.js holds the flip behind the client-opened trust confirm
+               when enabling over existing members) and settles on the
+               "agent-access-saved" reply — saved tick on success, honest revert
+               on failure. Server-enforced: off = the /api/v1 surface reads this
+               Initiative as not-found. --%>
+          <div :if={@can_admin}>
+            <form phx-change="set_agent_access">
+              <label class="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 select-none">
+                <input
+                  type="checkbox"
+                  id="agent-access-toggle"
+                  name="agent_access"
+                  value="true"
+                  checked={@initiative.agent_access}
+                  class="checkbox checkbox-sm"
+                /> AI access — agents may read and work this initiative
+                <span
+                  id="agent-access-saved-tick"
+                  hidden
+                  class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+                >
+                  <.icon name="hero-check" class="w-3 h-3" /> Saved
+                </span>
+              </label>
+              <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                Off: AI agents can't see this initiative at all. On: agents acting
+                for any member read everything members write here.
+              </p>
+            </form>
+          </div>
+
           <%!-- m03.04 item 3.4: per-Initiative constants store for AI agents —
                plain text the product stores but never interprets. Debounced
                save-on-blur; the "Saved" tick pulsed on "ai-knobs-saved" is the
-               ack for the otherwise-invisible write (§6.7, same as subtitle). --%>
+               ack for the otherwise-invisible write (§6.7, same as subtitle).
+               Usable only while AI access is on (item 2.12.3): the derived
+               state reads in the control itself — disabled textarea + swapped
+               copy — not a separate badge. --%>
           <div>
             <div class="flex items-center gap-2">
               <label for="ai-knobs" class="text-xs text-zinc-500 dark:text-zinc-400">
@@ -6528,14 +6717,23 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 name="ai_knobs"
                 value={@initiative.ai_knobs}
                 rows="4"
-                placeholder="plain-text notes and settings for AI agents"
-                disabled={not @can_edit}
+                placeholder={
+                  if @initiative.agent_access,
+                    do: "plain-text notes and settings for AI agents",
+                    else: "off — AI access is off for this initiative"
+                }
+                disabled={not @can_edit or not @initiative.agent_access}
                 phx-debounce="blur"
               />
             </form>
             <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
-              A settings store for AI agents working this initiative — stored as
-              plain text, never interpreted by the app.
+              <%= if @initiative.agent_access do %>
+                A settings store for AI agents working this initiative — stored as
+                plain text, never interpreted by the app.
+              <% else %>
+                AI access is off, so agents can't see this initiative — the knobs
+                unlock when the owner turns AI access on.
+              <% end %>
             </p>
           </div>
 

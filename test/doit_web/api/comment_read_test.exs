@@ -35,7 +35,9 @@ defmodule DoItWeb.Api.CommentReadTest do
     viewer = user("viewer")
     stranger = user("stranger")
 
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"})
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"}, agent_access: true)
+
     {:ok, _} = Initiatives.add_member(ini.id, viewer.id, "viewer")
 
     {:ok, task} =
@@ -50,7 +52,8 @@ defmodule DoItWeb.Api.CommentReadTest do
     {:ok, _} = Tasks.delete_comment(doomed.id, owner)
 
     # A foreign task in another Initiative the owner can't reach through this one.
-    {:ok, other} = Initiatives.create_initiative(stranger, %{"name" => "Other"})
+    {:ok, other} =
+      Initiatives.create_initiative(stranger, %{"name" => "Other"}, agent_access: true)
 
     {:ok, foreign} =
       Tasks.create_task(stranger, %{

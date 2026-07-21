@@ -7,6 +7,12 @@ defmodule DoitMcp.Tools.GranularOpsTest do
   works — it does not re-test `Client` or `ToolResult` themselves (see
   `client_test.exs`).
 
+  One sanctioned exception to "the first request is the POST": an
+  `update_initiative` call carrying `ai_knobs` first GETs the initiative —
+  the fix 23 first-write gate checks whether its knobs are still empty. The
+  stub serves that read with already-set knobs so the write stays ungated
+  here; the gate's own behavior lives in `update_initiative_gate_test.exs`.
+
   `apply_operations`, `mark_notification_read`, and `get_initiative_activity`
   are covered by their own test files and are intentionally excluded here.
   """
@@ -87,18 +93,27 @@ defmodule DoitMcp.Tools.GranularOpsTest do
 
   test "each granular tool builds its expected single op and relays the reply/frame through" do
     for {module, params, expected_op} <- @cases do
+      # Only the ai_knobs-carrying update may read before posting (fix 23
+      # gate); every other tool's first and only request stays the POST.
+      knobs_read_allowed? = Map.has_key?(params, :ai_knobs)
+
       Req.Test.stub(DoitMcp.Client, fn conn ->
-        assert conn.method == "POST"
-        assert conn.request_path == "/api/v1/operations"
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/v1/initiatives/" <> _} when knobs_read_allowed? ->
+            # Already-set knobs — the write is ungated, keeping this table
+            # about op-building, not the gate.
+            Req.Test.json(conn, %{"data" => %{"id" => 3, "ai_knobs" => "deploy_day: thursday"}})
 
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
+          {"POST", "/api/v1/operations"} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
 
-        assert Jason.decode!(body) == %{"operations" => [expected_op]},
-               "#{inspect(module)} built the wrong op"
+            assert Jason.decode!(body) == %{"operations" => [expected_op]},
+                   "#{inspect(module)} built the wrong op"
 
-        Req.Test.json(conn, %{
-          "results" => [%{"index" => 0, "status" => "ok", "data" => %{"id" => 1}}]
-        })
+            Req.Test.json(conn, %{
+              "results" => [%{"index" => 0, "status" => "ok", "data" => %{"id" => 1}}]
+            })
+        end
       end)
 
       frame = %{test: true}

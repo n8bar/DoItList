@@ -67,7 +67,9 @@ defmodule DoItWeb.Api.InitiativeReadTest do
     viewer = user("viewer")
     stranger = user("stranger")
 
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"})
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"}, agent_access: true)
+
     {:ok, ini} = Initiatives.update_initiative(ini, %{"index_style" => "numerical"})
     {:ok, _} = Initiatives.update_subtitle(ini, "ship the dashboard")
     {:ok, _} = Initiatives.add_member(ini.id, editor.id, "editor")
@@ -83,7 +85,9 @@ defmodule DoItWeb.Api.InitiativeReadTest do
     {:ok, _} = Tasks.update_task(docs, owner, %{"manual_progress" => 100})
 
     # A second Initiative owned by the stranger, to source a foreign task id.
-    {:ok, other} = Initiatives.create_initiative(stranger, %{"name" => "Other"})
+    {:ok, other} =
+      Initiatives.create_initiative(stranger, %{"name" => "Other"}, agent_access: true)
+
     foreign = top_task(stranger, other, "Foreign")
 
     %{
@@ -208,7 +212,10 @@ defmodule DoItWeb.Api.InitiativeReadTest do
 
     test "a blank subtitle reads as \"\" in the list, matching the tree", _ctx do
       solo = user("solo")
-      {:ok, blank} = Initiatives.create_initiative(solo, %{"name" => "No Subtitle"})
+
+      {:ok, blank} =
+        Initiatives.create_initiative(solo, %{"name" => "No Subtitle"}, agent_access: true)
+
       tok = token(solo)
 
       list = build_conn() |> bearer(tok) |> get(~p"/api/v1/initiatives")

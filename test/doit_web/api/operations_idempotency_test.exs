@@ -2,10 +2,13 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
   @moduledoc """
   Idempotent retries on `POST /api/v1/operations` (m03.03 worklist 2.2).
 
-  A repeat request carrying the same `Idempotency-Key` replays the first
-  attempt's stored response and does NOT re-execute — proven by the side effect
-  happening exactly once. Covers a committed batch, a rolled-back batch, the
-  no-key baseline (unchanged, nothing stored), and distinct keys (both execute).
+  A repeat request carrying the same `Idempotency-Key` and the same payload
+  replays the first attempt's stored response and does NOT re-execute — proven
+  by the side effect happening exactly once. The key binds to its payload
+  (m03.04 fix 20): a same-key request with a changed payload is a 422 naming
+  the key conflict, and a rolled-back batch stores nothing, so an honest retry
+  after a rollback re-executes. Also covers the no-key baseline (unchanged,
+  nothing stored) and distinct keys (both execute).
 
   Each `post_ops` mints a fresh token, so the per-token rate limit (5/window in
   `config/test.exs`) never bites across a test's few requests. Idempotency is
@@ -72,11 +75,15 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
 
   setup do
     owner = user("owner")
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"})
+
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"}, agent_access: true)
+
     %{owner: owner, ini: ini}
   end
 
-  test "same key replays the committed response and does not execute twice", ctx do
+  test "same key + same payload replays the committed response and does not execute twice",
+       ctx do
     key = "idem-#{System.unique_integer([:positive])}"
     ops = [add_task(ctx.ini, "OnceOnly")]
 
@@ -94,26 +101,53 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
     assert [%{"data" => %{"id" => ^id}}] = b2["results"]
   end
 
-  test "a rolled-back batch's 4xx is stored and replayed too", ctx do
+  test "same key + changed payload is a 422 naming the key conflict, not a replay", ctx do
+    key = "idem-#{System.unique_integer([:positive])}"
+
+    {s1, b1} = post_ops(ctx.owner, [add_task(ctx.ini, "FirstPayload")], key)
+    assert s1 == 200
+    assert count_tasks("FirstPayload") == 1
+
+    # Same key, different batch: rejected — neither replayed nor executed.
+    {s2, b2} = post_ops(ctx.owner, [add_task(ctx.ini, "ChangedPayload")], key)
+    assert s2 == 422
+    assert b2["error"]["code"] == "unprocessable_entity"
+    assert b2["error"]["message"] =~ "Idempotency-Key conflict"
+    assert b2["error"]["message"] =~ "new Idempotency-Key"
+    assert count_tasks("ChangedPayload") == 0
+
+    # The stored response is untouched — the original payload still replays.
+    {s3, b3} = post_ops(ctx.owner, [add_task(ctx.ini, "FirstPayload")], key)
+    assert s3 == 200
+    assert b3 == b1
+    assert count_tasks("FirstPayload") == 1
+  end
+
+  test "a rolled-back batch stores nothing — an honest retry on the same key re-executes",
+       ctx do
     key = "idem-#{System.unique_integer([:positive])}"
 
     # op 0 would create a task; op 1 targets a non-existent task, so the WHOLE
-    # batch rolls back with a 422 — nothing persists.
-    ops = [
+    # batch rolls back with a 422 — nothing persists, and nothing is stored.
+    bad_ops = [
       add_task(ctx.ini, "RolledBack"),
       %{"op" => "update", "type" => "task", "id" => 999_999_999, "data" => %{"done" => true}}
     ]
 
-    {s1, b1} = post_ops(ctx.owner, ops, key)
+    {s1, b1} = post_ops(ctx.owner, bad_ops, key)
     assert s1 == 422
     assert b1["error"]["status"] == 422
     assert count_tasks("RolledBack") == 0
 
-    # Retry with the same key replays the identical 422 — still nothing created.
-    {s2, b2} = post_ops(ctx.owner, ops, key)
-    assert s2 == 422
-    assert b2 == b1
-    assert count_tasks("RolledBack") == 0
+    assert Repo.aggregate(from(r in IdempotencyKey, where: r.user_id == ^ctx.owner.id), :count) ==
+             0
+
+    # The honest retry — same key, batch revised to drop the bad op — really
+    # re-executes (a stored 422 would have replayed or key-conflicted instead).
+    {s2, b2} = post_ops(ctx.owner, [add_task(ctx.ini, "RolledBack")], key)
+    assert s2 == 200
+    assert [%{"status" => "ok"}] = b2["results"]
+    assert count_tasks("RolledBack") == 1
   end
 
   test "no key: behavior unchanged and nothing is stored", ctx do

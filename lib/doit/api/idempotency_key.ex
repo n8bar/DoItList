@@ -5,7 +5,10 @@ defmodule DoIt.Api.IdempotencyKey do
 
   Records what the FIRST attempt of a request produced — its HTTP status and
   JSON body — so a retry carrying the same client-supplied `Idempotency-Key`
-  replays that response verbatim instead of re-applying the batch. `inserted_at`
+  replays that response verbatim instead of re-applying the batch.
+  `payload_hash` binds the key to the exact payload it was first used with
+  (m03.04 fix 20): a same-key request whose payload hashes differently is
+  rejected, not replayed (nil only on rows predating the column). `inserted_at`
   anchors the retention window (see `DoIt.Api.Idempotency`); rows are write-once,
   so there is no `updated_at`.
 
@@ -16,6 +19,7 @@ defmodule DoIt.Api.IdempotencyKey do
 
   schema "api_idempotency_keys" do
     field :idempotency_key, :string
+    field :payload_hash, :binary
     field :response_status, :integer
     field :response_body, :map
 
@@ -30,8 +34,8 @@ defmodule DoIt.Api.IdempotencyKey do
   """
   def changeset(record, attrs) do
     record
-    |> cast(attrs, [:idempotency_key, :response_status, :response_body])
-    |> validate_required([:idempotency_key, :response_status, :response_body])
+    |> cast(attrs, [:idempotency_key, :payload_hash, :response_status, :response_body])
+    |> validate_required([:idempotency_key, :payload_hash, :response_status, :response_body])
     |> unique_constraint([:user_id, :idempotency_key])
   end
 end

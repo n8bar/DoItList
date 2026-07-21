@@ -93,7 +93,11 @@ defmodule DoItWeb.Api.CrossReferenceTest do
     stranger = user("stranger")
 
     {:ok, ini} =
-      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch", "index_style" => "numerical"})
+      Initiatives.create_initiative(
+        owner,
+        %{"name" => "Q3 Launch", "index_style" => "numerical"},
+        agent_access: true
+      )
 
     {:ok, _} = Initiatives.add_member(ini.id, editor.id, "editor")
     {:ok, _} = Initiatives.add_member(ini.id, viewer.id, "viewer")
@@ -387,7 +391,9 @@ defmodule DoItWeb.Api.CrossReferenceTest do
     } do
       a = top_task(owner, ini, "A")
 
-      {:ok, other} = Initiatives.create_initiative(owner, %{"name" => "Other"})
+      {:ok, other} =
+        Initiatives.create_initiative(owner, %{"name" => "Other"}, agent_access: true)
+
       foreign = top_task(owner, other, "Foreign")
 
       {status, body} =

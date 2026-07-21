@@ -391,3 +391,10 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-21  Feat (m03.04): 2.11.2 -- import gate ships default-on; fresh-initiative counts and confirms survive the lid->id chunk boundary; live stdio e2e proves confirm-form -> apply.
 2026-07-21  Feat (m03.04): fix 23 -- first ai_knobs write is operator-confirmed via elicitation (verbatim text; decline leaves the import gate armed; non-elicitation refusal names the in-app control).
 2026-07-21  Feat (m03.04): 2.13 -- revoked-token recovery: launcher token-file precedence (newest file wins, files beat client-config env); first 401 elicits a fresh token with one retry, persisted across the container boundary; incapable/declined clients get an actionable error naming the token file.
+2026-07-21  Feat (m03.04): 2.12 -- per-Initiative agent access lands off-by-default: API 404s flagged-off initiatives with no existence leak (masked to the op target), owner checkbox optimistic per §6, knobs control derives from the flag, trust confirm once per (admin, initiative).
+2026-07-21  Feat (m03.04): 2.14 -- initiative payloads carry the server-composed web url; MCP reads name it the operator-facing handle (url or name, never a raw id).
+2026-07-21  Feat (m03.04): fix 20 -- idempotency keys bind to their payload (sha256 over decoded ops; reused key with changed payload 422s; rollbacks store nothing so honest retries re-execute).
+2026-07-21  Feat (m03.04): fix 22 -- description-length 422 appends the overflow doctrine (trim + cite the source path; no continuation tasks).
+2026-07-21  Feat (m03.04): fix 25 -- knob-hygiene boundary in the ai_knobs param and knob-legitimacy moduledoc (a knob never duplicates a first-class setting).
+2026-07-21  Doc (m03.04): 2.16 banked -- rail collaborator-add is a third member-add path the 2.12.4 trust confirm misses (surfaced during the 2.12 build).
+2026-07-21  Doc (m03.04): 2.17 banked -- explicit transaction timeout on the operations batch; the driver 15s connection-hold default trips on a busy host (scale test red even at its birth commit; bisect exonerated the code).

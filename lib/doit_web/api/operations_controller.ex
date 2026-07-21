@@ -21,14 +21,17 @@ defmodule DoItWeb.Api.OperationsController do
   ## Idempotent retries (m03.03 worklist 2.2)
 
   A client may send an `Idempotency-Key` request header (Stripe's convention).
-  On the first request for a `(user, key)` the batch runs normally and its
-  response is stored; a later request carrying the **same** key **replays** that
-  stored response verbatim instead of re-applying the batch — so a retry after a
-  client-side timeout can't double-apply. Only real **execution** outcomes are
-  stored (a commit or a per-op-error rollback); the pre-execution rejections
-  (batch-too-large, malformed body) commit nothing, so they're never stored and
-  a retry is already safe. With no header, behavior is exactly as above. The key
-  itself is enforced server-side here; the MCP tool merely forwards it.
+  On the first request for a `(user, key)` the batch runs normally and, when it
+  **commits**, its response is stored beside a hash of the decoded payload; a
+  later request carrying the **same** key **and the same payload** **replays**
+  that stored response verbatim instead of re-applying the batch — so a retry
+  after a client-side timeout can't double-apply. The key binds to its exact
+  payload (m03.04 fix 20): a same-key request whose payload differs gets a `422`
+  naming the key conflict — a revised batch takes a new key. Only a commit is
+  stored: a rolled-back batch and the pre-execution rejections (batch-too-large,
+  malformed body) commit nothing and store nothing, so an honest retry of them
+  re-executes. With no header, behavior is exactly as above. The key itself is
+  enforced server-side here; the MCP tool merely forwards it.
   """
   use DoItWeb, :controller
 
@@ -43,14 +46,19 @@ defmodule DoItWeb.Api.OperationsController do
         render_outcome(conn, Operations.apply_batch(user, operations))
 
       key ->
-        case Idempotency.fetch(user, key) do
-          {status, body} ->
+        payload_hash = Idempotency.payload_hash(operations)
+
+        case Idempotency.fetch(user, key, payload_hash) do
+          {:replay, {status, body}} ->
             # Replay the first attempt's stored response — no re-execution.
             conn |> put_status(status) |> json(body)
 
+          :payload_conflict ->
+            key_conflict(conn)
+
           nil ->
             outcome = Operations.apply_batch(user, operations)
-            store_if_execution(user, key, outcome)
+            store_if_committed(user, key, payload_hash, outcome)
             render_outcome(conn, outcome)
         end
     end
@@ -67,17 +75,17 @@ defmodule DoItWeb.Api.OperationsController do
     end
   end
 
-  # Persist ONLY execution outcomes (a commit, or a per-op-error rollback) —
-  # both are captured through the SAME {status, body} the response uses, so a
-  # replay is byte-identical to what was sent. The pre-execution rejections
-  # commit nothing and are left unstored (a retry of them is already safe).
-  defp store_if_execution(_user, _key, {:error, :batch_too_large, _message}), do: :ok
-  defp store_if_execution(_user, _key, {:error, :invalid_request}), do: :ok
-
-  defp store_if_execution(user, key, outcome) do
+  # Persist ONLY a commit, captured through the SAME {status, body} the
+  # response uses, so a replay is byte-identical to what was sent — bound to
+  # the payload hash the key now carries. A rollback or a pre-execution
+  # rejection commits nothing and stores nothing (m03.04 fix 20): an honest
+  # retry of a failed batch re-executes instead of replaying the failure.
+  defp store_if_committed(user, key, payload_hash, {:ok, _results} = outcome) do
     {status, body} = execution_response(outcome)
-    Idempotency.store(user, key, status, body)
+    Idempotency.store(user, key, payload_hash, status, body)
   end
+
+  defp store_if_committed(_user, _key, _payload_hash, _outcome), do: :ok
 
   # The single {status, body} shape used for BOTH the HTTP response and the
   # stored idempotency record of an execution outcome.
@@ -105,6 +113,16 @@ defmodule DoItWeb.Api.OperationsController do
       422,
       :unprocessable_entity,
       "Request body must be a JSON object {\"operations\": [ ... ]} with a non-empty array of operations."
+    )
+  end
+
+  defp key_conflict(conn) do
+    Errors.send_error(
+      conn,
+      422,
+      :unprocessable_entity,
+      "Idempotency-Key conflict: this key was first used with a different payload. " <>
+        "A revised batch takes a new Idempotency-Key."
     )
   end
 end

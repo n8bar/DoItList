@@ -24,13 +24,18 @@ defmodule DoItWeb.Api.InitiativeController do
 
   action_fallback DoItWeb.Api.FallbackController
 
-  @doc "List the Initiatives the acting user belongs to (no per-Initiative authz: the query is already scoped to their memberships)."
+  @doc """
+  List the Initiatives the acting user belongs to (no per-Initiative authz: the
+  query is already scoped to their memberships). Filtered to agent-accessible
+  Initiatives (m03.04 item 2.12.2) — a flagged-off one never appears, matching
+  the 404 its direct reads return.
+  """
   def index(conn, _params) do
     user = conn.assigns.current_user
 
     summaries =
       user
-      |> Initiatives.list_visible_initiatives()
+      |> Initiatives.list_visible_initiatives(agent_access_only: true)
       |> Enum.map(fn ini -> Serializer.initiative_summary(ini, ini.my_role, ini.progress) end)
 
     json(conn, Api.data(summaries))

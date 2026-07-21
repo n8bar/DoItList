@@ -20,12 +20,17 @@ defmodule DoItWeb.Api.Serializer do
         "id": 12,
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
+        "url": "https://doitlist.app/initiatives/12",
         "role": "owner",
         "progress": 42,
         "root_task_id": 100
       }
 
-  `role` is the acting user's role on the Initiative (`owner` | `editor` |
+  `url` is the Initiative's web address — the operator-facing handle (m03.04
+  item 2.14): when telling a human about an Initiative, hand them the URL or
+  the name, never a raw id. Composed server-side from the endpoint's public
+  URL config, so a future id-scheme change costs the reader nothing. `role` is
+  the acting user's role on the Initiative (`owner` | `editor` |
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
   system root task's `computed_progress`, 0..100). `root_task_id` is the
   Initiative's system root task — the Initiative's own comment thread lives on
@@ -41,6 +46,7 @@ defmodule DoItWeb.Api.Serializer do
         "id": 12,
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
+        "url": "https://doitlist.app/initiatives/12",
         "role": "owner",
         "progress": 42,
         "progress_calc": "leaf_average",
@@ -50,6 +56,8 @@ defmodule DoItWeb.Api.Serializer do
         "tasks": [ <task node>, ... ]
       }
 
+  * `url` — the Initiative's web address, the operator-facing handle (same as
+    on the list summary above).
   * `progress_calc` — how branch progress rolls up: `leaf_average` (every
     descendant leaf counts one unit) or `single_level` (each direct child one
     unit). The agent needs this to predict the effect of a progress write.
@@ -203,6 +211,8 @@ defmodule DoItWeb.Api.Serializer do
   the row stays so the thread shape and any references survive.
   """
 
+  use DoItWeb, :verified_routes
+
   alias DoIt.Tasks
   alias DoIt.Tasks.{ActivityEvent, Comment, Task}
 
@@ -212,6 +222,7 @@ defmodule DoItWeb.Api.Serializer do
       id: initiative.id,
       name: initiative.name,
       subtitle: blank_to_empty(initiative.subtitle),
+      url: initiative_url(initiative.id),
       role: role,
       progress: progress || 0,
       root_task_id: initiative.root_task_id
@@ -248,6 +259,7 @@ defmodule DoItWeb.Api.Serializer do
       id: initiative.id,
       name: initiative.name,
       subtitle: blank_to_empty(subtitle),
+      url: initiative_url(initiative.id),
       role: role,
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
@@ -291,6 +303,10 @@ defmodule DoItWeb.Api.Serializer do
       }
     end)
   end
+
+  # The Initiative's web URL — the operator-facing handle (m03.04 item 2.14) —
+  # composed from the endpoint's public URL config via verified routes.
+  defp initiative_url(id), do: url(~p"/initiatives/#{id}")
 
   # `[{source_id, target_id}]` -> `%{task_id => [other_id, ...]}` keyed by the
   # source (outgoing) or target (incoming) side.

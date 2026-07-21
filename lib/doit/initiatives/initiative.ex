@@ -23,6 +23,11 @@ defmodule DoIt.Initiatives.Initiative do
     # m03.04 item 3.4: per-Initiative constants store for AI agents — plain text
     # the product stores but never interprets.
     field :ai_knobs, :string
+    # m03.04 item 2.12: per-Initiative agent access, off by default. Off means
+    # the /api/v1 surface treats this Initiative as not-found. Never cast from
+    # params — the UI flips it via Initiatives.set_agent_access/2 (owner-only)
+    # and the API create path grants it server-side at creation.
+    field :agent_access, :boolean, default: false
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
     field :trashed_at, :utc_datetime
     field :my_role, :string, virtual: true

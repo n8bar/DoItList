@@ -36,6 +36,12 @@ defmodule DoItWeb.Api.Authz do
 
     * A non-integer / unknown id → `{:error, :not_found}` (404). A garbage id
       never raises an Ecto cast error — it's parsed defensively first.
+    * Agent access off (m03.04 item 2.12.2) → `{:error, :not_found}` (404) for
+      **everyone**, ahead of the role check — indistinguishable from a
+      nonexistent id, so a token can't even prove the Initiative exists. The
+      human's per-Initiative checkbox is the trust approval; this is its
+      server enforcement, inherited by every /api/v1 path (reads here, writes
+      via `DoItWeb.Api.Operations`' per-op authorize).
     * The Initiative exists but `user` lacks `capability` → `{:error, :forbidden}`
       (403). A stranger hitting a real Initiative is denied at the role check,
       not leaked a 404-vs-403 oracle beyond "you can't view this".
@@ -51,6 +57,9 @@ defmodule DoItWeb.Api.Authz do
       int_id ->
         case Initiatives.get_initiative(int_id) do
           nil ->
+            {:error, :not_found}
+
+          %Initiative{agent_access: false} ->
             {:error, :not_found}
 
           %Initiative{} = initiative ->

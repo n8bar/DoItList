@@ -3554,6 +3554,120 @@ document.addEventListener("keydown", (e) => {
   if (m && !m.hidden && !removeMemberInFlight) m.hidden = true
 })
 
+// Agent-trust confirm (m03.04 item 2.12.4, UX_GUARDRAILS 6.5): the one-time
+// "trust this initiative's members with AI access" dialog, client-opened at
+// the click with NO round trip. The decision reads #agent-trust-state (fresh
+// DOM at click time — the server re-renders it as the flag / members / the
+// ack change); the dialog opens for exactly two trigger paths:
+//   (a) adding a member, or promoting one to a higher role, on an
+//       agent-accessible initiative (every role is viewer or higher);
+//   (b) enabling AI access when members besides the admin already exist.
+// The intercepted action is HELD (checkbox stays unflipped, select reverts,
+// submit cancelled) until Proceed re-dispatches it with the bypass latch set —
+// so nothing commits, optimistically or otherwise, before the human decides.
+// Once any gated action commits, the server records the (admin, initiative)
+// acknowledgement and data-acked flips true for good — the dialog never
+// re-shows, across sessions.
+let agentTrustBypass = false
+let agentTrustPending = null
+
+function agentTrustState() {
+  const el = document.getElementById("agent-trust-state")
+  return el ? el.dataset : null
+}
+
+function openAgentTrustConfirm(onProceed) {
+  const modal = document.getElementById("agent-trust-confirm")
+  if (!modal) { onProceed(); return } // no dialog mounted (non-admin) — never block
+  agentTrustPending = onProceed
+  modal.hidden = false
+}
+
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("agent-trust-confirm")
+  if (!modal || modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-trust-cancel]")) {
+    modal.hidden = true
+    agentTrustPending = null
+    return
+  }
+  if (e.target.closest("[data-trust-proceed]")) {
+    modal.hidden = true
+    const proceed = agentTrustPending
+    agentTrustPending = null
+    if (proceed) proceed()
+  }
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const m = document.getElementById("agent-trust-confirm")
+  if (m && !m.hidden) { m.hidden = true; agentTrustPending = null }
+})
+
+// Capture-phase interception: runs ahead of LiveView's own listeners, so a
+// gated change/submit can be held before any event reaches the server.
+document.addEventListener("change", (e) => {
+  if (agentTrustBypass) return
+  const st = agentTrustState()
+  if (!st || st.acked === "true") return
+
+  // (b) enabling AI access with members already present: hold the flip, ask,
+  // then re-check the box (the §6 optimistic ack resumes) and re-dispatch.
+  if (e.target.matches("input[name='agent_access']")) {
+    if (!e.target.checked) return // disabling never confirms
+    if (st.otherMembers !== "true") return // no member content to trust yet
+    const box = e.target
+    box.checked = false
+    e.stopImmediatePropagation()
+    openAgentTrustConfirm(() => {
+      box.checked = true
+      agentTrustBypass = true
+      box.dispatchEvent(new Event("change", {bubbles: true}))
+      agentTrustBypass = false
+    })
+    return
+  }
+
+  // (a) promoting a member — a rank increase — on an agent-accessible
+  // initiative. The pre-change role is the render-selected option
+  // (defaultSelected); revert the select until confirmed so the UI never
+  // shows a promotion the human hasn't approved.
+  if (e.target.matches("select[data-member-role-select]")) {
+    if (st.agentAccess !== "true") return
+    const sel = e.target
+    const rank = {viewer: 1, editor: 2, owner: 3}
+    const prev = Array.from(sel.options).find((o) => o.defaultSelected)
+    if (!prev || (rank[sel.value] || 0) <= (rank[prev.value] || 0)) return
+    const next = sel.value
+    sel.value = prev.value
+    e.stopImmediatePropagation()
+    openAgentTrustConfirm(() => {
+      sel.value = next
+      agentTrustBypass = true
+      sel.dispatchEvent(new Event("change", {bubbles: true}))
+      agentTrustBypass = false
+    })
+  }
+}, true)
+
+// (a) adding a member (any role — every role is viewer or higher) on an
+// agent-accessible initiative: cancel the submit, ask, re-dispatch on Proceed.
+document.addEventListener("submit", (e) => {
+  if (agentTrustBypass) return
+  const form = e.target.closest && e.target.closest("form[phx-submit='add_member']")
+  if (!form) return
+  const st = agentTrustState()
+  if (!st || st.acked === "true" || st.agentAccess !== "true") return
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  openAgentTrustConfirm(() => {
+    agentTrustBypass = true
+    form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}))
+    agentTrustBypass = false
+  })
+}, true)
+
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
 // delete confirms): the dialog's content is client-known, so it opens at the
 // click of a member's transfer (key) button — no round trip before the owner

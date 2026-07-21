@@ -139,7 +139,10 @@ defmodule DoItWeb.Api.OperationsScaleTest do
 
   setup do
     owner = register("owner")
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Grown Tree"})
+
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Grown Tree"}, agent_access: true)
+
     seed_tree(owner, ini, @seed_tasks)
     %{owner: owner, ini: ini}
   end
