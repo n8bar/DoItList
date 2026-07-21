@@ -47,6 +47,9 @@ npm-debug.log
 # Bruno: keep real API tokens out of git (copy Local.bru.example -> Local.bru)
 bruno/environments/Local.bru
 
+# Adapter-written token refresh (m03.04 item 2.13) — a secret, never committed.
+/.doitlist/
+
 # mcp_server/ is its own mix project (m03.02) — same build/deps exclusions,
 # scoped to its subdirectory since the patterns above are root-anchored.
 /mcp_server/_build/

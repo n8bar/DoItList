@@ -390,3 +390,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Feat (m03.04): fix 24 -- ingest_report gains checkbox_lines_in_descriptions fact (embedded-checklist floor for the shallow-import tell).
 2026-07-21  Feat (m03.04): 2.11.2 -- import gate ships default-on; fresh-initiative counts and confirms survive the lid->id chunk boundary; live stdio e2e proves confirm-form -> apply.
 2026-07-21  Feat (m03.04): fix 23 -- first ai_knobs write is operator-confirmed via elicitation (verbatim text; decline leaves the import gate armed; non-elicitation refusal names the in-app control).
+2026-07-21  Feat (m03.04): 2.13 -- revoked-token recovery: launcher token-file precedence (newest file wins, files beat client-config env); first 401 elicits a fresh token with one retry, persisted across the container boundary; incapable/declined clients get an actionable error naming the token file.

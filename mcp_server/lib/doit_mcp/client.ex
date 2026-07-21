@@ -5,6 +5,8 @@ defmodule DoitMcp.Client do
   the public API (Arc 1, `/api/v1`), never a shortcut into the Elixir contexts.
   """
 
+  alias DoitMcp.TokenRecovery
+
   @doc """
   POST an ordered batch of operations to `/api/v1/operations`.
 
@@ -32,10 +34,10 @@ defmodule DoitMcp.Client do
   end
 
   defp request(method, path, opts) do
-    req =
+    attempt = fn token ->
       [
         base_url: base_url(),
-        auth: {:bearer, token()},
+        auth: {:bearer, token},
         method: method,
         url: path,
         # A tool call is a synchronous round trip for whoever is waiting on the
@@ -52,8 +54,49 @@ defmodule DoitMcp.Client do
       |> Keyword.merge(Application.get_env(:doit_mcp, :req_options, []))
       |> Req.new()
       |> Req.merge(opts)
+      |> Req.request()
+    end
 
-    case Req.request(req) do
+    case attempt.(TokenRecovery.token()) do
+      # The token died out from under the session — the stdio handshake makes
+      # no API call, so connect never caught it. Recovery lives HERE, on the
+      # one path every tool and resource shares (m03.04 item 2.13): the first
+      # 401 may elicit a fresh token and retry ONCE; every non-recovery
+      # outcome comes back in the standard error envelope with an actionable
+      # message, so ToolResult/ResourceResult render it with zero per-tool
+      # code.
+      {:ok, %Req.Response{status: 401}} -> recover_unauthorized(attempt)
+      other -> translate(other)
+    end
+  end
+
+  defp recover_unauthorized(attempt) do
+    case TokenRecovery.recover() do
+      {:ok, fresh_token} ->
+        case attempt.(fresh_token) do
+          # The pasted replacement is dead too — latch (no elicit loop) and
+          # surface the manual fix instead of asking again.
+          {:ok, %Req.Response{status: 401}} ->
+            unauthorized_error(TokenRecovery.refreshed_token_rejected())
+
+          other ->
+            translate(other)
+        end
+
+      {:error, message} ->
+        unauthorized_error(message)
+    end
+  end
+
+  # Same envelope shape the API's own errors use, so the shared result
+  # translators render the actionable message as the tool/resource error.
+  defp unauthorized_error(message) do
+    {:error,
+     %{status: 401, body: %{"error" => %{"code" => "unauthorized", "message" => message}}}}
+  end
+
+  defp translate(result) do
+    case result do
       {:ok, %Req.Response{status: status, body: %{"data" => data}}} when status in 200..299 ->
         {:ok, data}
 
@@ -68,9 +111,9 @@ defmodule DoitMcp.Client do
     end
   end
 
-  # The MCP client's process env — set once by whatever launches this adapter
-  # (`claude mcp add`, a generic stdio config block, …). Never read from a
-  # config file: a token is a per-user secret, not a build-time setting.
+  # The base URL is the MCP client's process env — set once by whatever
+  # launches this adapter (`claude mcp add`, a generic stdio config block, …).
+  # The token goes through DoitMcp.TokenRecovery: same env at boot, but an
+  # in-session refresh (401 recovery, m03.04 item 2.13) can swap it.
   defp base_url, do: System.get_env("DOITLIST_API_URL", "http://localhost:4000")
-  defp token, do: System.fetch_env!("DOITLIST_API_TOKEN")
 end
