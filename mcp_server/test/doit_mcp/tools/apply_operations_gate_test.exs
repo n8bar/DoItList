@@ -125,6 +125,29 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end)
   end
 
+  # POST echoes the created Initiative's lid → real id (the wire shape for
+  # creates); GET serves its ai_knobs.
+  defp stub_create_echo_and_get(initiative_id, knobs) do
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"POST", "/api/v1/operations"} ->
+          Req.Test.json(conn, %{
+            "results" => [
+              %{
+                "index" => 0,
+                "lid" => "i",
+                "status" => "ok",
+                "data" => %{"id" => initiative_id, "type" => "initiative"}
+              }
+            ]
+          })
+
+        {"GET", "/api/v1/initiatives/" <> _} ->
+          Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => knobs}})
+      end
+    end)
+  end
+
   defp execute_ok(ops) do
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     {protocol, decoded, _rest} = decode_json_content(response)
@@ -453,6 +476,51 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
       # 35 this session — over the line, but the fetch finds settled knobs.
       execute_ok(existing_initiative_batch(10, 7))
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+
+    test "chunks on a fresh Initiative keep counting across the lid → real-id switch" do
+      start_counter()
+      elicitation_capable()
+      stub_create_echo_and_get(57, nil)
+
+      # Chunk 1 CREATES the Initiative with 20 adds — under the line, it
+      # applies, and its count lands under the real id the response echoed.
+      execute_ok(new_initiative_batch(20))
+      refute_received {:send_elicitation_request, _, _, _}
+
+      # Chunk 2 can only reference it by real id: 15 more → 35 this session
+      # crosses 30, so the crossing batch is held for a readback.
+      ops = existing_initiative_batch(15, 57)
+      assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+
+      protocol = Response.to_protocol(response)
+      assert protocol["isError"] == true
+      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+      assert text =~ "15 tasks"
+      assert text =~ "35 this session"
+    end
+
+    test "a confirm granted under the lid carries to the created id — later chunks never re-ask" do
+      start_counter()
+      elicitation_capable()
+      stub_create_echo_and_get(57, nil)
+
+      task =
+        Task.async(fn ->
+          ApplyOperations.execute(
+            %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
+            @frame
+          )
+        end)
+
+      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+      assert {:reply, _response, @frame} = Task.await(task, 5_000)
+
+      # Knobs still empty and the counter far over the line — but the
+      # operator's confirm followed the Initiative to its real id.
+      execute_ok(existing_initiative_batch(15, 57))
       refute_received {:send_elicitation_request, _, _, _}
     end
   end

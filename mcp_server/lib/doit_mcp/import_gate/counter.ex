@@ -1,8 +1,10 @@
 defmodule DoitMcp.ImportGate.Counter do
   @moduledoc """
   Session-lifetime memory behind the import gate's cumulative trigger
-  (m03.04 item 3.11.2): task-adds applied per Initiative, plus the
-  Initiatives whose import the operator already confirmed this session.
+  (m03.04 item 3.11.2): task-adds applied per Initiative, plus the confirms
+  the operator already granted this session — import targets, and the other
+  gates' keys (`{:progress_calc, id, requested}`, fix 17;
+  `{:ai_knobs, id, proposed}`, fix 23).
 
   Sub-cap chunking is sanctioned, so no single batch tells the whole story —
   the gate reads the session total, not the batch count. One Agent per
@@ -63,8 +65,11 @@ defmodule DoitMcp.ImportGate.Counter do
     end
   end
 
-  @doc "Remember that the operator confirmed an import into this target."
-  @spec mark_confirmed(DoitMcp.ImportGate.target()) :: :ok
+  @doc """
+  Remember a confirm the operator granted this session — an import target,
+  or one of the other gates' keys.
+  """
+  @spec mark_confirmed(term()) :: :ok
   def mark_confirmed(target) do
     case Process.whereis(name()) do
       nil -> :ok
@@ -72,8 +77,8 @@ defmodule DoitMcp.ImportGate.Counter do
     end
   end
 
-  @doc "Whether the operator already confirmed an import into this target."
-  @spec confirmed?(DoitMcp.ImportGate.target()) :: boolean()
+  @doc "Whether the operator already granted this confirm this session."
+  @spec confirmed?(term()) :: boolean()
   def confirmed?(target) do
     case Process.whereis(name()) do
       nil -> false

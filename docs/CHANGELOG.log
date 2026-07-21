@@ -388,3 +388,5 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-18  Doc (m03.04): worklists 2/3 swapped -- all remaining server scope (incl. fixes 20-25) lands before the skill rebuild so the RED baseline grades the finished server; "Active queue" renamed "Baseline-first skill rewrite"; cross-refs reswept.
 2026-07-18  Feat (m03.04): fix 21 -- long-comment lint exempts the Initiative root thread (the audit's long-form home); add_comment description carries the split.
 2026-07-18  Feat (m03.04): fix 24 -- ingest_report gains checkbox_lines_in_descriptions fact (embedded-checklist floor for the shallow-import tell).
+2026-07-21  Feat (m03.04): 2.11.2 -- import gate ships default-on; fresh-initiative counts and confirms survive the lid->id chunk boundary; live stdio e2e proves confirm-form -> apply.
+2026-07-21  Feat (m03.04): fix 23 -- first ai_knobs write is operator-confirmed via elicitation (verbatim text; decline leaves the import gate armed; non-elicitation refusal names the in-app control).

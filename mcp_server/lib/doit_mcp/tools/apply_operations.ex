@@ -66,7 +66,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
   Pass an optional `idempotency_key` (any client-chosen string) to make a retry
   safe: it is forwarded as the `Idempotency-Key` header, so if a first attempt
   already committed but its response was lost (e.g. a timeout), a retry with the
-  same key replays that stored response instead of re-applying the batch.
+  same key replays that stored response instead of re-applying the batch. The
+  key binds to the exact payload — a revised batch takes a new key.
 
   ## Import gate — big import into a knob-less Initiative
 
@@ -75,6 +76,10 @@ defmodule DoitMcp.Tools.ApplyOperations do
   import under the cap doesn't slip past it — every applied batch's task-adds
   are recorded per target (`DoitMcp.ImportGate.Counter`), and the session
   total including the current batch is what crosses the 30-task threshold.
+  An Initiative created mid-import keeps one total across chunks: its count
+  (and any confirm the operator granted under its lid) follows it to the real
+  id the response echoes, so later chunks referencing it by id keep
+  accumulating.
 
   When the total crosses it for an Initiative whose `ai_knobs` is still
   empty (created in this same batch, or fetched and found blank), the batch
@@ -159,8 +164,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
     # The counter is the gate's session memory: every batch that actually
     # applied feeds the cumulative trigger, so sub-threshold chunks add up.
-    with {:ok, _} <- result do
-      Counter.record(ImportGate.count_by_target(params.operations))
+    with {:ok, body} <- result do
+      record_applied(params.operations, body)
     end
 
     {:reply, response, frame} = ToolResult.reply_batch(frame, result)
@@ -172,6 +177,25 @@ defmodule DoitMcp.Tools.ApplyOperations do
       end
 
     {:reply, response, frame}
+  end
+
+  # Record the applied batch's per-target task-adds. An Initiative created in
+  # this batch was counted (and possibly confirmed) under its lid, but later
+  # chunks can only reference it by the real id the response echoes — rekey
+  # the counts and carry any granted confirm across, or the session total
+  # (and the operator's answer) would reset at the chunk boundary.
+  defp record_applied(operations, body) do
+    results = (is_map(body) && Map.get(body, "results")) || []
+    created = ImportGate.created_initiative_ids(operations, results)
+
+    operations
+    |> ImportGate.count_by_target()
+    |> ImportGate.rekey_counts(created)
+    |> Counter.record()
+
+    Enum.each(created, fn {lid, id} ->
+      if Counter.confirmed?({:in_batch, lid}), do: Counter.mark_confirmed({:existing, id})
+    end)
   end
 
   defp hold_for_confirmation(params, info, frame) do

@@ -15,7 +15,11 @@ defmodule DoitMcp.ImportGate do
   chunking is sanctioned, so no single batch tells the whole story. Each
   batch's task-adds are resolved per target Initiative and summed with the
   session counter (`DoitMcp.ImportGate.Counter`, recorded on successful
-  applies); an armed gate holds the batch only when ALL of these hold:
+  applies). A fresh Initiative switches keys mid-import — created under a
+  lid, referenced by real id from the next chunk on — so applied counts are
+  rekeyed to the created id (`created_initiative_ids/2` + `rekey_counts/2`)
+  before recording. An armed gate holds the batch only when ALL of these
+  hold:
 
     1. some Initiative's cumulative task-adds — session total plus this
        batch — cross `threshold/0`,
@@ -128,6 +132,51 @@ defmodule DoitMcp.ImportGate do
     refs
     |> Enum.uniq()
     |> Enum.map(&{&1, Map.fetch!(counts, &1)})
+  end
+
+  @doc """
+  lid → real id for the Initiatives an applied batch created, read from the
+  apply response's per-op results (each echoes the op's `"lid"` beside the
+  created resource's `"data"`). Later chunks can only reference a created
+  Initiative by real id, so the session counter is rekeyed with this mapping
+  (`rekey_counts/2`) — a fresh Initiative's cumulative count survives the
+  lid → id switch. An unreadable results shape maps nothing.
+  """
+  @spec created_initiative_ids([map()], term()) :: %{String.t() => term()}
+  def created_initiative_ids(operations, results) when is_list(results) do
+    lids =
+      for %{"op" => "add", "type" => "initiative", "lid" => lid} <- operations,
+          is_binary(lid),
+          into: MapSet.new(),
+          do: lid
+
+    for %{"lid" => lid, "status" => "ok", "data" => %{"id" => id}} <- results,
+        MapSet.member?(lids, lid),
+        into: %{},
+        do: {lid, id}
+  end
+
+  def created_initiative_ids(_operations, _results), do: %{}
+
+  @doc """
+  Rewrite `{:in_batch, lid}` keys to `{:existing, id}` per the mapping,
+  leaving unmapped lids and existing refs untouched. Applied to a batch's
+  `count_by_target/1` before it is recorded, so the counter never keeps a
+  stale in-batch key for an Initiative that now has a real id.
+  """
+  @spec rekey_counts([{target(), pos_integer()}], %{String.t() => term()}) ::
+          [{target(), pos_integer()}]
+  def rekey_counts(counts, lid_to_id) do
+    Enum.map(counts, fn
+      {{:in_batch, lid}, n} = entry ->
+        case lid_to_id do
+          %{^lid => id} -> {{:existing, id}, n}
+          _ -> entry
+        end
+
+      entry ->
+        entry
+    end)
   end
 
   @doc """

@@ -270,6 +270,38 @@ defmodule DoitMcp.ImportGateTest do
     end
   end
 
+  describe "fresh-initiative rekey (m03.04 item 2.11.2)" do
+    test "created_initiative_ids/2 maps only initiative-add lids from ok results" do
+      ops = new_initiative_batch(2)
+
+      results = [
+        %{
+          "index" => 0,
+          "lid" => "i",
+          "status" => "ok",
+          "data" => %{"id" => 57, "type" => "initiative"}
+        },
+        %{"index" => 1, "lid" => "t1", "status" => "ok", "data" => %{"id" => 100, "type" => "task"}}
+      ]
+
+      assert ImportGate.created_initiative_ids(ops, results) == %{"i" => 57}
+    end
+
+    test "an unreadable results shape maps nothing" do
+      ops = new_initiative_batch(1)
+
+      assert ImportGate.created_initiative_ids(ops, nil) == %{}
+      assert ImportGate.created_initiative_ids(ops, [%{"index" => 0, "status" => "ok"}]) == %{}
+    end
+
+    test "rekey_counts/2 moves an in-batch count to the created id, leaving the rest" do
+      counts = [{{:in_batch, "i"}, 20}, {{:existing, 9}, 3}, {{:in_batch, "ghost"}, 1}]
+
+      assert ImportGate.rekey_counts(counts, %{"i" => 57}) ==
+               [{{:existing, 57}, 20}, {{:existing, 9}, 3}, {{:in_batch, "ghost"}, 1}]
+    end
+  end
+
   describe "target_refs/1 parent-chain resolution" do
     test "children inherit the initiative through in-batch parent_lid chains" do
       ops = [

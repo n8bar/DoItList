@@ -15,12 +15,23 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   whether they actually asked for it. Setting it back to `leaf_average` (the
   default), or re-sending the current value, applies ungated. Clients without
   elicitation support get a refusal naming the in-app control instead.
+
+  ## First ai_knobs write gate (m03.04 fix 23)
+
+  Writing `ai_knobs` into an Initiative whose knobs are still empty is held
+  for the operator's confirm — self-written knobs must not settle the import
+  gate unseen. The proposed text is shown verbatim; approve records it (which
+  settles the import gate's knobs exemption), decline records nothing and the
+  import gate stays armed. An approved write is remembered for the session,
+  so a failed apply's retry never re-asks. A write to already-set knobs is
+  ungated; clients without elicitation support get a refusal naming the
+  in-app AI knobs control.
   """
 
   use Anubis.Server.Component, type: :tool
 
   alias Anubis.Server.Response
-  alias DoitMcp.{Client, Elicitation, ToolResult}
+  alias DoitMcp.{Client, Elicitation, ImportGate, ToolResult}
   alias DoitMcp.ImportGate.Counter
 
   @default_calc "leaf_average"
@@ -34,6 +45,17 @@ defmodule DoitMcp.Tools.UpdateInitiative do
       "approve" => %{
         "type" => "boolean",
         "description" => "true switches the progress calculation; false leaves it unchanged"
+      }
+    },
+    "required" => ["approve"]
+  }
+
+  @knobs_confirm_schema %{
+    "type" => "object",
+    "properties" => %{
+      "approve" => %{
+        "type" => "boolean",
+        "description" => "true records the proposed ai_knobs text; false records nothing"
       }
     },
     "required" => ["approve"]
@@ -61,7 +83,10 @@ defmodule DoitMcp.Tools.UpdateInitiative do
       required: false,
       description:
         "Per-project agent settings store — structure/scope/style knobs for this Initiative " <>
-          "only; plain text the product stores but never interprets"
+          "only; plain text the product stores but never interprets. Knobs hold only what " <>
+          "has no first-class field — never duplicate a first-class setting (progress_calc, " <>
+          "index_style); the column is the record. The first write into empty knobs is held " <>
+          "for the operator's confirm"
     )
 
     field(:auto_promote_co_assignees, :boolean, required: false)
@@ -69,8 +94,10 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   end
 
   def execute(params, frame) do
-    case calc_gate(params) do
-      :pass -> do_update(params, frame)
+    with :pass <- calc_gate(params),
+         :pass <- knobs_gate(params) do
+      do_update(params, frame)
+    else
       {:refuse, message} -> {:reply, Response.error(Response.tool(), message), frame}
     end
   end
@@ -153,6 +180,74 @@ defmodule DoitMcp.Tools.UpdateInitiative do
         {:refuse,
          "The operator did not approve the progress-calc change — progress_calc is " <>
            "unchanged and nothing was applied. Do not retry without the operator's request."}
+    end
+  end
+
+  # The knobs gate only ever engages on a FIRST write — an ai_knobs param
+  # against an Initiative whose stored knobs are still empty (fix 23:
+  # self-written knobs must not settle the import gate unseen). No ai_knobs
+  # param takes zero extra round trips.
+  defp knobs_gate(params) do
+    case Map.get(params, :ai_knobs) do
+      nil -> :pass
+      proposed -> gate_first_knobs_write(params.initiative_id, proposed)
+    end
+  end
+
+  defp gate_first_knobs_write(initiative_id, proposed) do
+    case Client.get("/api/v1/initiatives/#{initiative_id}") do
+      {:ok, initiative} when is_map(initiative) ->
+        if ImportGate.knobs_empty?(Map.get(initiative, "ai_knobs")) do
+          confirm_first_knobs_write(initiative_id, proposed)
+        else
+          :pass
+        end
+
+      # A fetch error / shape we can't read — the update itself will surface
+      # the real error.
+      _ ->
+        :pass
+    end
+  end
+
+  defp confirm_first_knobs_write(initiative_id, proposed) do
+    cond do
+      Counter.confirmed?({:ai_knobs, initiative_id, proposed}) ->
+        :pass
+
+      not Elicitation.client_supports_elicitation?() ->
+        {:refuse,
+         "This Initiative's ai_knobs is empty, and its first write needs the operator's " <>
+           "confirmation — this client cannot ask them (no elicitation support). Not " <>
+           "applied. The operator can set it themselves in the app: Initiative details " <>
+           "pane → settings, the AI knobs control. Do not retry without the operator's " <>
+           "request."}
+
+      true ->
+        elicit_knobs_approval(initiative_id, proposed)
+    end
+  end
+
+  defp elicit_knobs_approval(initiative_id, proposed) do
+    message =
+      "The agent asks to write this Initiative's first ai_knobs — its per-project agent " <>
+        "settings. Recording them settles this Initiative's import conventions, so the " <>
+        "import gate stops asking. Proposed knobs, verbatim:\n\n" <>
+        proposed <>
+        "\n\nApprove only if this matches what you want on record — decline records nothing."
+
+    case Elicitation.request(message, @knobs_confirm_schema, confirm_timeout()) do
+      {:ok, %{"action" => "accept", "content" => %{"approve" => true}}} ->
+        # Remembered for the session so a retry after a granted confirm (e.g.
+        # the update itself failed) never re-asks the operator.
+        Counter.mark_confirmed({:ai_knobs, initiative_id, proposed})
+        :pass
+
+      _decline_disapprove_timeout_or_no_session ->
+        {:refuse,
+         "The operator did not approve the first ai_knobs write — nothing was recorded, " <>
+           "the Initiative's knobs stay empty, and the import gate stays armed. Do not " <>
+           "retry without the operator's request."}
     end
   end
 
