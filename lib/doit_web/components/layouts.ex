@@ -549,12 +549,18 @@ defmodule DoItWeb.Layouts do
       </h2>
       <nav id="rail-initiatives" class="space-y-0.5">
         <%!-- The rail only renders inside the kept-mounted workspace LiveView, so
-             list<->detail here is a same-module push_patch (no remount). --%>
+             list<->detail here is a same-module push_patch (no remount).
+             data-trust-confirm (m03.04 item 2.16): render-known agent-trust
+             state for the rail's collaborator add (menu + drag) — the client
+             decides AT click/drop whether the one-time trust confirm opens
+             (UX_GUARDRAILS 6.5, no round trip); the server's rail refresh
+             flips it once the committed add records the ack. --%>
         <.link
           :for={init <- @initiatives}
           patch={if(init.id == @current_id, do: ~p"/initiatives", else: ~p"/initiatives/#{init.id}")}
           aria-current={(init.id == @current_id && "page") || nil}
           data-rail-initiative-id={init.id}
+          data-trust-confirm={to_string(init.trust_confirm_required)}
           data-nav-spinner
           class={[
             "group block rounded px-2 py-1.5",

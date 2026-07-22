@@ -10,7 +10,11 @@ defmodule DoItWeb.AgentAccessSettingsTest do
       opens client-side; these tests pin the predicate inputs it reads);
     * server-side ack recording on both trigger paths (enable-over-members,
       member add / promote), after which `data-acked` flips true for good — the
-      second occurrence for the same (admin, Initiative) shows no confirm.
+      second occurrence for the same (admin, Initiative) shows no confirm;
+    * the rail collaborator-add path (m03.04 item 2.16): each rail entry
+      carries `data-trust-confirm`, the render-known state the client reads at
+      click/drop, and the committing `add_collaborator_to` records the same
+      proof-carrying ack.
   """
   use DoItWeb.ConnCase, async: true
 
@@ -223,6 +227,136 @@ defmodule DoItWeb.AgentAccessSettingsTest do
       assert Initiatives.get_role(ini.id, bob.id) == "editor"
       assert Initiatives.agent_trust_acked?(owner.id, ini.id)
       assert has_element?(view, "#agent-trust-state[data-acked='true']")
+    end
+  end
+
+  describe "trust-confirm on the RAIL collaborator-add path (2.16)" do
+    test "the rail entry carries the confirm-required state until the admin acks", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      {:ok, beta} = Initiatives.create_initiative(owner, %{"name" => "Beta Initiative"})
+
+      # List mode: the drag path exists here too, so the entry state AND the
+      # dialog must both render (the client fail-safes to no-add without it).
+      {:ok, view, _html} = live(conn, ~p"/initiatives")
+
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='true']"
+             )
+
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{beta.id}'][data-trust-confirm='false']"
+             )
+
+      assert has_element?(view, "#agent-trust-confirm")
+
+      # Acked → the state flips for good and the dialog has no caller left.
+      :ok = Initiatives.record_agent_trust_ack(owner, ini)
+      {:ok, view, _html} = live(conn, ~p"/initiatives")
+
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='false']"
+             )
+
+      refute has_element?(view, "#agent-trust-confirm")
+    end
+
+    test "a rail add with the Proceed marker records the ack and flips the rail state", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}")
+
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='true']"
+             )
+
+      # Proceed injects `trust_confirmed` into the pushed params — the marker
+      # IS the acceptance, exactly like the members-panel paths.
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => to_string(bob.id),
+        "initiative-id" => to_string(ini.id),
+        "trust_confirmed" => "true"
+      })
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+      assert Initiatives.agent_trust_acked?(owner.id, ini.id)
+      # The server's rail refresh flips the entry state in place, and the
+      # settings pane's own state flips with it — no path re-asks.
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='false']"
+             )
+
+      assert has_element?(view, "#agent-trust-state[data-acked='true']")
+    end
+
+    test "an acked admin's rail add needs no confirm and just adds", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      :ok = Initiatives.record_agent_trust_ack(owner, ini)
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}")
+
+      # data-trust-confirm=false means the client never opens the dialog — the
+      # bare (marker-less) push is the whole flow.
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='false']"
+             )
+
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => to_string(bob.id),
+        "initiative-id" => to_string(ini.id)
+      })
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='false']"
+             )
+    end
+
+    test "a bare rail add without the marker records no ack (proof-carrying)", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}")
+
+      # An ungated push matching the trigger predicate (a bypassed/absent
+      # client dialog) must not burn the one-time ack.
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => to_string(bob.id),
+        "initiative-id" => to_string(ini.id)
+      })
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+      refute Initiatives.agent_trust_acked?(owner.id, ini.id)
+      # The confirm is still owed — the rail state stays armed.
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='true']"
+             )
     end
   end
 end

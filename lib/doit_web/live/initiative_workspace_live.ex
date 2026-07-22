@@ -2213,15 +2213,24 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # landed on. Both route through the same permission-checked context call; the
   # role is bumped afterward in that Initiative's Members panel. Removal reuses
   # "remove_member" (with its hand-off flow).
-  def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
+  def handle_event(
+        "add_collaborator_to",
+        %{"user-id" => uid, "initiative-id" => iid} = params,
+        socket
+      ) do
     user = socket.assigns.current_user
 
     # Both ids are client-supplied; a malformed either-side no-ops with ok:false so
     # the optimistic rail chip is pulled (MUST NOT LIE) rather than crashing.
     case {parse_id(iid), parse_id(uid)} do
-      {nil, _} -> {:reply, %{ok: false}, socket}
-      {_, nil} -> {:reply, %{ok: false}, socket}
-      {iid, uid} -> do_add_collaborator_to(socket, user, iid, uid)
+      {nil, _} ->
+        {:reply, %{ok: false}, socket}
+
+      {_, nil} ->
+        {:reply, %{ok: false}, socket}
+
+      {iid, uid} ->
+        do_add_collaborator_to(socket, user, iid, uid, params["trust_confirmed"] == "true")
     end
   end
 
@@ -2353,10 +2362,22 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  defp do_add_collaborator_to(socket, user, iid, uid) do
+  defp do_add_collaborator_to(socket, user, iid, uid, trust_confirmed?) do
+    # m03.04 item 2.16: the rail add is a member add, so it carries the same
+    # proof-carrying ack as the members-panel paths — `trust_confirmed` is
+    # injected ONLY by the trust confirm's Proceed, and the ack records only
+    # when the predicate still holds AND the add commits (never from a bare
+    # push that merely matches the trigger).
+    target = if trust_confirmed?, do: Initiatives.get_initiative(iid)
+
+    ack? =
+      target != nil and
+        Initiatives.agent_trust_confirm_required?(user, target, {:add_member, "viewer"})
+
     {ok?, socket} =
       case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
         {:ok, added} ->
+          if ack?, do: Initiatives.record_agent_trust_ack(user, target)
           {true, put_flash(socket, :info, "Added #{added.name} as a viewer.")}
 
         # Already a member → the real row is already present; treat the optimistic
@@ -2383,11 +2404,17 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       |> refresh_rail_initiatives()
 
     # Only refresh members when the add landed on the currently-open Initiative
-    # (detail mode). In list mode @initiative is nil, so guard it.
+    # (detail mode). In list mode @initiative is nil, so guard it. A committed
+    # ack also flips the settings pane's #agent-trust-state here (2.16 shares
+    # the once-per-(admin, Initiative) acknowledgement with the 2.12.4 paths).
     socket =
-      if socket.assigns.initiative && iid == socket.assigns.initiative.id,
-        do: assign(socket, :members, Initiatives.list_members(iid)),
-        else: socket
+      if socket.assigns.initiative && iid == socket.assigns.initiative.id do
+        socket
+        |> assign(:members, Initiatives.list_members(iid))
+        |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or (ok? and ack?))
+      else
+        socket
+      end
 
     {:reply, %{ok: ok?}, socket}
   end
@@ -3050,6 +3077,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           }
         </script>
       </div>
+
+      <%!-- Agent-trust confirm (items 2.12.4 + 2.16) — ONE instance serving
+           both modes: the detail settings paths (enable / add / promote,
+           can_admin) and the rail's collaborator add (menu + drag, either
+           mode), which triggers off any administered rail entry still
+           carrying data-trust-confirm=true. --%>
+      <.agent_trust_confirm :if={@can_admin or Enum.any?(@initiatives, & &1.trust_confirm_required)} />
 
       <%= if @live_action == :show do %>
         <div id={"initiative-detail-#{@initiative.id}"}>
@@ -4353,7 +4387,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             data-other-members={to_string(Enum.any?(@members, &(&1.user_id != @current_user.id)))}
           >
           </div>
-          <.agent_trust_confirm :if={@can_admin} />
           <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
           <div
             :if={@pending_handoff}

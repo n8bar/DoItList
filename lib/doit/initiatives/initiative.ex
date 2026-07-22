@@ -46,6 +46,13 @@ defmodule DoIt.Initiatives.Initiative do
     # `Initiatives.list_visible_initiatives/1`; defaults empty so a struct built
     # without the attach renders no row.
     field :members, :any, virtual: true, default: []
+    # Whether the VIEWING user's next member add here needs the one-time
+    # agent-trust confirm (m03.04 item 2.16): they administer it, it's
+    # agent-accessible, and they haven't acknowledged yet. Batch-attached by
+    # `Initiatives.list_visible_initiatives/1` for the rail's collaborator-add
+    # paths (menu + drag); defaults false so a struct built without the attach
+    # never demands a confirm the dialog isn't rendered for.
+    field :trust_confirm_required, :boolean, virtual: true, default: false
 
     belongs_to :owner, User
     # The system-managed root task: the Initiative IS this task (its title is the

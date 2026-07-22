@@ -3351,6 +3351,35 @@ document.addEventListener("click", (e) => {
   const uid = btn.dataset.userId
   const iid = btn.dataset.initiativeId
   if (!uid || !iid) return
+  // m03.04 item 2.16: the rail add is a member add — on an agent-accessible
+  // initiative it rides the same one-time trust confirm as the members panel.
+  // Decide AT CLICK from the rail entry's render-known data attribute (§6.5,
+  // no round trip); the optimistic stand-in waits for the decision, so Cancel
+  // pushes nothing and leaves nothing behind. Only Proceed's push carries the
+  // proof marker.
+  if (railTrustConfirmRequired(iid)) {
+    openAgentTrustConfirm({
+      control: btn,
+      held: null,
+      proceed: () => optimisticCollaboratorAdd(btn, uid, iid, true),
+      cancel: null,
+    })
+    return
+  }
+  optimisticCollaboratorAdd(btn, uid, iid, false)
+})
+
+// Whether the rail's collaborator add onto initiative `iid` needs the one-time
+// agent-trust confirm (m03.04 item 2.16): the rail entry carries the
+// render-known per-initiative state (server-computed; its rail refresh flips
+// it once the committed add records the ack). No entry → no confirm — the
+// server's proof-carrying predicate still can't burn an ack from a bare push.
+function railTrustConfirmRequired(iid) {
+  const entry = document.querySelector(`[data-rail-initiative-id="${iid}"]`)
+  return !!entry && entry.dataset.trustConfirm === "true"
+}
+
+function optimisticCollaboratorAdd(btn, uid, iid, trustConfirmed) {
   // Insert a pending stand-in into every visible members list lacking a real
   // row for this user. Keyed by echo so the reply pulls exactly these.
   const echoId = "m" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
@@ -3396,14 +3425,18 @@ document.addEventListener("click", (e) => {
   // 8s safety so a dropped reply never strands the stand-in / held chip
   // (mirrors the drag-add path — MUST NOT LIE).
   const timer = setTimeout(pull, 8000)
-  window.DoitPush("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+  const params = {"user-id": uid, "initiative-id": iid}
+  // Proof-carrying (2.16): set only on the trust confirm's Proceed re-dispatch,
+  // so the server records the one-time ack only off a human acceptance.
+  if (trustConfirmed) params["trust_confirmed"] = "true"
+  window.DoitPush("add_collaborator_to", params, (reply) => {
     // On ok the server refresh carries the real row/avatar; pull the stand-in
     // either way (success → superseded; failure → must not stand).
     clearTimeout(timer)
     pull()
     if (!reply || reply.ok === false) { if (window.DoitBonk) window.DoitBonk() }
   })
-})
+}
 
 // A dimmed pending member row: avatar + name + @username only. Deliberately
 // minimal — it never claims a role or owner-controls the server didn't grant.
@@ -3554,14 +3587,19 @@ document.addEventListener("keydown", (e) => {
   if (m && !m.hidden && !removeMemberInFlight) m.hidden = true
 })
 
-// Agent-trust confirm (m03.04 item 2.12.4, UX_GUARDRAILS 6.5): the one-time
-// "trust this initiative's members with AI access" dialog, client-opened at
-// the click with NO round trip. The decision reads #agent-trust-state (fresh
-// DOM at click time — the server re-renders it as the flag / members / the
-// ack change); the dialog opens for exactly two trigger paths:
+// Agent-trust confirm (m03.04 items 2.12.4 + 2.16, UX_GUARDRAILS 6.5): the
+// one-time "trust this initiative's members with AI access" dialog,
+// client-opened at the click with NO round trip. The decision reads
+// #agent-trust-state (fresh DOM at click time — the server re-renders it as
+// the flag / members / the ack change); the dialog opens for three trigger
+// paths:
 //   (a) adding a member, or promoting one to a higher role, on an
 //       agent-accessible initiative (every role is viewer or higher);
-//   (b) enabling AI access when members besides the admin already exist.
+//   (b) enabling AI access when members besides the admin already exist;
+//   (c) the rail's collaborator add — menu click or drag-drop (2.16), which
+//       decides off the target rail entry's own data-trust-confirm instead of
+//       #agent-trust-state (the target can be any rail initiative, in list or
+//       detail mode).
 //
 // INTERCEPTION ORDERING (why input + change, at document CAPTURE): LiveView
 // binds phx-change to BOTH "input" and "change" (deps/phoenix_live_view
@@ -3612,8 +3650,9 @@ function openAgentTrustConfirm(opts) {
   const modal = document.getElementById("agent-trust-confirm")
   if (!modal) {
     // No dialog mounted — fail SAFE: an unconfirmed action must not commit,
-    // so run the revert path, never the action. (Unreachable for admins: the
-    // dialog renders whenever #agent-trust-state does.)
+    // so run the revert path, never the action. (Unreachable in the
+    // workspace: the dialog renders whenever #agent-trust-state does AND
+    // whenever any rail entry carries data-trust-confirm=true.)
     if (opts.cancel) opts.cancel()
     return
   }
@@ -6343,7 +6382,23 @@ Hooks.CollaboratorDrag = {
     if (this.pid !== undefined && e.pointerId !== this.pid) return
     if (this.dragging) {
       this.suppressClick()
-      if (this.target) this.optimisticAdd(this.target.dataset.railInitiativeId)
+      if (this.target) {
+        const entry = this.target
+        // m03.04 item 2.16 (§6.5, decide-at-drop): the entry's render-known
+        // trust state gates the drop exactly like the menu path — the confirm
+        // opens client-side with no round trip, the pending chip waits for
+        // Proceed, and Cancel drops nothing and pushes nothing.
+        if (entry.dataset.trustConfirm === "true") {
+          openAgentTrustConfirm({
+            control: this.el,
+            held: null,
+            proceed: () => this.optimisticAdd(entry.dataset.railInitiativeId, true),
+            cancel: null,
+          })
+        } else {
+          this.optimisticAdd(entry.dataset.railInitiativeId)
+        }
+      }
     }
     this.cleanup()
   },
@@ -6354,7 +6409,7 @@ Hooks.CollaboratorDrag = {
   // refresh now carries the real avatar), failure pulls it + bonks (MUST NOT
   // LIE). An 8s safety timer self-heals a dropped reply. The chip data rides
   // this collaborator <li>'s data attributes (mirrors the rendered avatar).
-  optimisticAdd(iid) {
+  optimisticAdd(iid, trustConfirmed) {
     const uid = this.userId
     const d = this.el.dataset
     const echoId = "ra" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
@@ -6380,7 +6435,10 @@ Hooks.CollaboratorDrag = {
     }
     // Dropped reply → release the hold + pull the chip (server authoritative).
     const timer = setTimeout(clear, 8000)
-    this.pushEvent("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+    const params = {"user-id": uid, "initiative-id": iid}
+    // Proof-carrying (2.16): set only by the trust confirm's Proceed path.
+    if (trustConfirmed) params["trust_confirmed"] = "true"
+    this.pushEvent("add_collaborator_to", params, (reply) => {
       clear()
       if (reply && reply.ok === false && window.DoitBonk) window.DoitBonk()
     })

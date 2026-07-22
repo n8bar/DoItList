@@ -55,6 +55,7 @@ defmodule DoIt.Initiatives do
     )
     |> Repo.all()
     |> attach_member_avatars()
+    |> attach_trust_confirm_state(user_id)
   end
 
   # Batch-load each Initiative's members into the virtual `:members` field for
@@ -82,6 +83,39 @@ defmodule DoIt.Initiatives do
 
     Enum.map(initiatives, fn i ->
       %{i | members: Map.get(members_by_initiative, i.id, [])}
+    end)
+  end
+
+  # Batch-set the virtual `:trust_confirm_required` flag (m03.04 item 2.16):
+  # the rail's collaborator add is a member add, so on an agent-accessible
+  # Initiative this user administers it needs the one-time trust confirm until
+  # they acknowledge. ONE query over the acks for the candidate set (no N+1);
+  # the rail renders it as a per-entry data attribute the client reads at
+  # click/drop time (UX_GUARDRAILS 6.5 — decide with no round trip).
+  defp attach_trust_confirm_state([], _user_id), do: []
+
+  defp attach_trust_confirm_state(initiatives, user_id) do
+    candidate_ids =
+      for i <- initiatives, i.agent_access and can_admin?(i.my_role), into: MapSet.new(), do: i.id
+
+    acked_ids =
+      if MapSet.size(candidate_ids) == 0 do
+        MapSet.new()
+      else
+        from(a in AgentAccessAck,
+          where: a.user_id == ^user_id and a.initiative_id in ^MapSet.to_list(candidate_ids),
+          select: a.initiative_id
+        )
+        |> Repo.all()
+        |> MapSet.new()
+      end
+
+    Enum.map(initiatives, fn i ->
+      %{
+        i
+        | trust_confirm_required:
+            MapSet.member?(candidate_ids, i.id) and not MapSet.member?(acked_ids, i.id)
+      }
     end)
   end
 
