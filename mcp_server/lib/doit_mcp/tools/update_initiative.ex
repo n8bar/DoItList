@@ -1,7 +1,7 @@
 defmodule DoitMcp.Tools.UpdateInitiative do
   @moduledoc """
   Content-only edit of an Initiative's fields (name, description, subtitle,
-  progress calc, index style, AI knobs, auto-promote co-assignees, viewer+).
+  progress calc, index style, auto-promote co-assignees, viewer+).
   `description` and `subtitle` accept `%<task_id>` cross-reference tokens.
   This tool does NOT touch state (archived/hidden/trashed — see
   `set_initiative_state`) or ownership — those are rejected here or
@@ -16,16 +16,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   default), or re-sending the current value, applies ungated. Clients without
   elicitation support get a refusal naming the in-app control instead.
 
-  ## First ai_knobs write gate (m03.04 fix 23)
-
-  Writing `ai_knobs` into an Initiative whose knobs are still empty is held
-  for the operator's confirm — self-written knobs must not settle the import
-  gate unseen. The proposed text is shown verbatim; approve records it (which
-  settles the import gate's knobs exemption), decline records nothing and the
-  import gate stays armed. An approved write is remembered for the session,
-  so a failed apply's retry never re-asks. A write to already-set knobs is
-  ungated; clients without elicitation support get a refusal naming the
-  in-app AI knobs control.
+  (An `ai_knobs` write gate is dormant while AI Knobs is parked — m03.04.)
   """
 
   use Anubis.Server.Component, type: :tool

@@ -450,6 +450,8 @@ defmodule DoitMcp.IngestReportTest do
   end
 
   describe "build/1 — context facts" do
+    # AI-KNOBS-PARKED (m03.04): the ai_knobs_set fact is removed; revive with the fact.
+    @tag :skip
     test "ai_knobs presence is a boolean, never the content" do
       assert IngestReport.build(@tree).ai_knobs_set == false
 
@@ -553,7 +555,6 @@ defmodule DoitMcp.IngestReportTest do
       assert report["long_comments"] == [%{"comment_id" => 903, "task_id" => 12}]
       assert report["checkbox_lines_in_descriptions"] == []
       assert report["checkbox_line_total"] == 0
-      assert report["ai_knobs_set"] == false
     end
 
     test "surfaces a failed comment-thread read as a tool error, never a partial report" do

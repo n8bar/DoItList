@@ -293,7 +293,7 @@ defmodule DoitMcp.StdioImportGateE2eTest do
     assert decoded["ok"] == true
     assert_received :applied
     assert [%{"type" => "text", "text" => note}] = rest
-    assert note =~ "ai_knobs"
+    assert note =~ "confirmed"
   end
 
   test "two sub-threshold chunks on one fresh Initiative gate on the crossing batch",

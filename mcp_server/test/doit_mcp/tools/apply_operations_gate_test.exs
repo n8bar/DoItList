@@ -197,7 +197,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
-  test "operator confirm applies the batch and appends the ai_knobs note" do
+  test "operator confirm applies the batch and appends the confirm note" do
     elicitation_capable()
     stub_apply_ok()
 
@@ -241,7 +241,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert protocol["isError"] == false
     assert decoded["ok"] == true
     assert [%{"type" => "text", "text" => note}] = rest
-    assert note =~ "ai_knobs"
+    assert note =~ "confirmed"
   end
 
   test "corrections come back as the tool result and nothing applies" do
@@ -332,7 +332,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
 
     assert params["message"] =~
-             "Settled (operator-instructed or knobs):\n" <>
+             "Settled (operator-instructed):\n" <>
                "- Depth: two levels (operator's ask)\n- Scope: whole plan (knobs)"
 
     Elicitation.deliver(%{"action" => "decline"})

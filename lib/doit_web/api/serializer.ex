@@ -34,9 +34,7 @@ defmodule DoItWeb.Api.Serializer do
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
   system root task's `computed_progress`, 0..100). `root_task_id` is the
   Initiative's system root task — the Initiative's own comment thread lives on
-  it (item 6.4): read/write comments with `task_id = root_task_id`. `ai_knobs`
-  is deliberately **not** here (m03.04 fix 14) — it's per-Initiative context,
-  read it from the tree response.
+  it (item 6.4): read/write comments with `task_id = root_task_id`.
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
 
@@ -51,7 +49,6 @@ defmodule DoItWeb.Api.Serializer do
         "progress": 42,
         "progress_calc": "leaf_average",
         "index_style": "numerical",
-        "ai_knobs": "deploy_day: friday",
         "root_task_id": 100,
         "tasks": [ <task node>, ... ]
       }
@@ -63,9 +60,6 @@ defmodule DoItWeb.Api.Serializer do
     unit). The agent needs this to predict the effect of a progress write.
   * `index_style` — the positional index style the labels below are rendered in
     (`none` | `outline` | `numerical` | `roman` | `alphabetical`).
-  * `ai_knobs` — the per-Initiative constants store for AI agents, surfaced
-    verbatim (plain text the product stores but never interprets; `null` when
-    unset).
   * `root_task_id` — the id of the Initiative's system root task. It is **not** a
     node in `tasks` (the tree starts at its children), but it's the `parent_id`
     every top-level task carries — so to add a task at the top level (worklist 3),

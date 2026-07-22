@@ -12,8 +12,8 @@ defmodule DoitMcp.Tools.IngestReport do
   in titles and descriptions; path-like strings in descriptions; journal
   markers in descriptions (`Decision:`, `Verified:`, `Locked decisions:`,
   `Verification:` — journaling belongs in comments); long comments (comment
-  id + task id past 300 characters, no exclusions); whether `ai_knobs` is
-  set. The text scans are heuristic — expect false positives. Long lists
+  id + task id past 300 characters, no exclusions). The text scans are
+  heuristic — expect false positives. Long lists
   carry the first 20 entries plus an `"and N more"` tail. Composes the same
   tree read as `get_initiative_tree` plus the commented tasks' comment
   threads; the report is computed adapter-side (`DoitMcp.IngestReport`).

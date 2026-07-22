@@ -2,9 +2,8 @@ defmodule DoitMcp.ImportGate.Counter do
   @moduledoc """
   Session-lifetime memory behind the import gate's cumulative trigger
   (m03.04 item 3.11.2): task-adds applied per Initiative, plus the confirms
-  the operator already granted this session — import targets, and the other
-  gates' keys (`{:progress_calc, id, requested}`, fix 17;
-  `{:ai_knobs, id, proposed}`, fix 23).
+  the operator already granted this session — import targets, and the
+  progress-calc gate's key (`{:progress_calc, id, requested}`, fix 17).
 
   Sub-cap chunking is sanctioned, so no single batch tells the whole story —
   the gate reads the session total, not the batch count. One Agent per

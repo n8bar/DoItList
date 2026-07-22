@@ -46,7 +46,7 @@ defmodule DoitMcp.IngestReport do
       #{300} characters, as `%{comment_id, task_id}`. The root task's thread
       is exempt — the required post-import audit lives there and is
       necessarily long; every other thread still measures.
-    * context — `ai_knobs_set` (boolean, never the content), `initiative_id`.
+    * context — `initiative_id`.
 
   Every id/entry list is capped: the first #{20} items plus an `"and N more"`
   string tail when longer. List order is tree order (depth-first, pre-order),
@@ -126,8 +126,7 @@ defmodule DoitMcp.IngestReport do
           long_comment?(comment) and not on_root_thread?(comment, root_id)
         end)
         |> Enum.map(&%{comment_id: &1["id"], task_id: &1["task_id"]})
-        |> cap(),
-      ai_knobs_set: present?(tree["ai_knobs"])
+        |> cap()
     }
   end
 

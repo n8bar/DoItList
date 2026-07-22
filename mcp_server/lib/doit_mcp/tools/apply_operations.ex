@@ -69,7 +69,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   same key replays that stored response instead of re-applying the batch. The
   key binds to the exact payload — a revised batch takes a new key.
 
-  ## Import gate — big import into a knob-less Initiative
+  ## Import gate — big-import confirmation
 
   The gate is armed by default (`DOITLIST_IMPORT_GATE=off` opts out) and its
   trigger is CUMULATIVE per Initiative across the session: chunking a big
@@ -81,26 +81,23 @@ defmodule DoitMcp.Tools.ApplyOperations do
   id the response echoes, so later chunks referencing it by id keep
   accumulating.
 
-  When the total crosses it for an Initiative whose `ai_knobs` is still
-  empty (created in this same batch, or fetched and found blank), the batch
-  is held for the operator when your client supports elicitation. Without a
-  `readback` it is rejected unapplied — re-call with `readback` (your
-  one-paragraph statement of the import shape you're about to build),
-  `assumptions` (your assumption-tagged decisions, one string each), and
-  `settled` (dimensions already settled by the operator's own ask — an
-  explicit depth, a "summarize" instruction — or by existing knobs, one
-  string each; operator-instructed dimensions go in `settled`, never
+  When the total crosses the threshold, the batch is held for the operator
+  when your client supports elicitation. Without a `readback` it is rejected
+  unapplied — re-call with `readback` (your one-paragraph statement of the
+  import shape you're about to build), `assumptions` (your assumption-tagged
+  decisions, one string each), and `settled` (dimensions already settled by
+  the operator's own ask — an explicit depth, a "summarize" instruction —
+  one string each; operator-instructed dimensions go in `settled`, never
   `assumptions`, and are displayed so the operator can veto a misclaimed
   tag). The operator answers with one of three decisions: **apply** applies
   the batch normally and settles that Initiative for the rest of the
   session; **correct** (or any corrections text) comes back as the tool
-  result with NOTHING applied — revise the batch to match and record the
-  settled answers in the Initiative's `ai_knobs`, which stops this gate
-  firing again for that project in any session; **hold** means the operator
-  wants to be interviewed first — ask your remaining questions, settle the
-  answers in `ai_knobs`, then re-apply. No answer within 5 minutes → nothing
+  result with NOTHING applied — revise the batch to match, then re-apply;
+  **hold** means the operator wants to be interviewed first — ask your
+  remaining questions, then re-apply. No answer within 5 minutes → nothing
   applied; retry when the operator is available. Clients without elicitation
-  support skip the gate entirely.
+  support skip the gate entirely. The confirm holds for the session; it is
+  not persisted across sessions.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -131,9 +128,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     "required" => ["decision"]
   }
 
-  @knobs_note "Import confirmed by the operator. Record the now-settled answers " <>
-                "(the readback and assumptions as confirmed) in this Initiative's " <>
-                "ai_knobs so this gate never fires again for this project."
+  @confirm_note "Import confirmed by the operator for this session."
 
   schema do
     field(:operations, {:list, :map}, required: true)
@@ -224,7 +219,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         not_applied(frame, %{
           message:
             "Operator declined the import — batch NOT applied. Ask what to change, " <>
-              "settle the answers in the Initiative's ai_knobs, then re-apply."
+              "then re-apply."
         })
 
       _timeout_cancel_or_error ->
@@ -241,33 +236,32 @@ defmodule DoitMcp.Tools.ApplyOperations do
     cond do
       decision == "apply" and is_nil(corrections) ->
         # The operator's confirm settles this Initiative for the rest of the
-        # session — later chunks must not re-ask, even before the agent has
-        # recorded ai_knobs (marked before the apply so a failed apply's
-        # retry doesn't re-elicit an already-granted confirmation).
+        # session — later chunks must not re-ask (marked before the apply so a
+        # failed apply's retry doesn't re-elicit an already-granted confirm).
         Counter.mark_confirmed(info.target)
-        apply_batch(params, frame, note: @knobs_note)
+        apply_batch(params, frame, note: @confirm_note)
 
       is_binary(corrections) ->
         not_applied(frame, %{
           corrections: corrections,
           message:
             "Operator supplied corrections — batch NOT applied. Revise the batch to " <>
-              "match and record the settled answers in the Initiative's ai_knobs, then re-apply."
+              "match, then re-apply."
         })
 
       decision == "hold" ->
         not_applied(frame, %{
           message:
             "Operator chose hold — batch NOT applied. They want to be interviewed before " <>
-              "this import: ask your remaining questions now (the question budget), settle " <>
-              "the answers in the Initiative's ai_knobs, then re-apply."
+              "this import: ask your remaining questions now (the question budget), " <>
+              "then re-apply."
         })
 
       true ->
         not_applied(frame, %{
           message:
             "Operator did not choose apply and supplied no corrections — batch NOT applied. " <>
-              "Ask what to change, update the Initiative's ai_knobs, then re-apply."
+              "Ask what to change, then re-apply."
         })
     end
   end
@@ -280,14 +274,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   defp readback_required_message(%{task_adds: task_adds, cumulative: cumulative}) do
     "Import gate: this batch adds #{task_adds} tasks (#{cumulative} this session, " <>
-      "chunks included) to an Initiative whose ai_knobs is still empty, so the operator " <>
-      "must confirm it before it applies. Nothing was " <>
+      "chunks included), so the operator must confirm it before it applies. Nothing was " <>
       "applied. Re-call apply_operations with the same operations plus `readback` — " <>
       "your one-paragraph statement of the import shape you're about to build — " <>
       "`assumptions` — your assumption-tagged decisions, one string each — and " <>
-      "`settled` — dimensions the operator's own ask or existing knobs already settled, " <>
-      "one string each. The operator " <>
-      "will confirm or correct them; record the settled answers in the Initiative's ai_knobs."
+      "`settled` — dimensions the operator's own ask already settled, " <>
+      "one string each. The operator will confirm or correct them."
   end
 
   defp confirmation_message(readback, assumptions, settled) do
@@ -303,7 +295,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
           nil
 
         list ->
-          "Settled (operator-instructed or knobs):\n" <> Enum.map_join(list, "\n", &("- " <> &1))
+          "Settled (operator-instructed):\n" <> Enum.map_join(list, "\n", &("- " <> &1))
       end
 
     closing =

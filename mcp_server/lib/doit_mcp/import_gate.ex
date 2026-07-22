@@ -1,9 +1,8 @@
 defmodule DoitMcp.ImportGate do
   @moduledoc """
   Pure decision logic for `apply_operations`' import gate (m03.04 fix 10):
-  a first big import into an Initiative whose `ai_knobs` is still unsettled
-  gets held for the operator's readback confirmation instead of applying
-  blind.
+  a first big import into an Initiative gets held for the operator's readback
+  confirmation instead of applying blind.
 
   The gate ships ARMED: `enabled?/0` — `DOITLIST_IMPORT_GATE=off` opts out;
   any other value, including unset, arms it — is `evaluate/2`'s very first,
@@ -26,10 +25,8 @@ defmodule DoitMcp.ImportGate do
     2. the connected client advertised the `elicitation` capability in its
        initialize handshake (no capability → the gate silently steps aside;
        the skill's own gate rule is the only layer there), and
-    3. that Initiative's import is still unsettled: the operator has not
-       already confirmed one this session, and its `ai_knobs` is empty — an
-       Initiative created in the same batch (via `lid`) is by definition
-       knob-less; an existing target is fetched and checked.
+    3. that Initiative's import is still unsettled — the operator has not
+       already confirmed one this session.
 
   All effectful inputs (capability, session counter, confirm memory,
   Initiative fetch) are injected as funs, so the decision stays
@@ -42,7 +39,7 @@ defmodule DoitMcp.ImportGate do
   @typedoc "The Initiative a gated batch imports into."
   @type target :: {:in_batch, String.t()} | {:existing, term()}
 
-  @doc "Cumulative task-add count above which a knob-less import is gated."
+  @doc "Cumulative task-add count above which an import is gated."
   @spec threshold() :: pos_integer()
   def threshold, do: @task_add_threshold
 
@@ -68,8 +65,7 @@ defmodule DoitMcp.ImportGate do
     * `:elicitation?` — zero-arity fun; whether the client advertised the
       `elicitation` capability (required)
     * `:fetch_initiative` — 1-arity fun (`id -> {:ok, map} | {:error, term}`)
-      reading an existing target Initiative (its `"ai_knobs"` is checked)
-      (required)
+      reading an existing target Initiative (required)
     * `:cumulative` — 1-arity fun (`target -> non_neg_integer`); task-adds
       already applied to that Initiative this session (defaults to zero —
       single-batch semantics)
@@ -77,7 +73,7 @@ defmodule DoitMcp.ImportGate do
       already confirmed an import into that Initiative this session
       (defaults to false)
 
-  Checks run cheapest-first (kill switch, counts, capability, knobs) and
+  Checks run cheapest-first (kill switch, counts, capability, settled) and
   short-circuit, so nothing is counted while `enabled?/0` is false and the
   fetch only ever happens for an over-threshold target from an
   elicitation-capable client. Returns `:pass` or
@@ -191,7 +187,7 @@ defmodule DoitMcp.ImportGate do
     operations |> count_by_target() |> Enum.map(&elem(&1, 0))
   end
 
-  @doc "Whether an `ai_knobs` value counts as unsettled (nil or blank)."
+  @doc "Whether a stored knobs value counts as unsettled (nil or blank)."
   @spec knobs_empty?(term()) :: boolean()
   def knobs_empty?(nil), do: true
   def knobs_empty?(knobs) when is_binary(knobs), do: String.trim(knobs) == ""
@@ -229,8 +225,10 @@ defmodule DoitMcp.ImportGate do
     end
   end
 
-  # An in-batch Initiative is knob-less by definition; otherwise the first
-  # existing candidate (batch order) whose fetched ai_knobs is empty gates.
+  # An in-batch Initiative is unsettled by definition; otherwise the first
+  # existing candidate (batch order) whose fetched knobs are empty gates.
+  # (Knobs are parked — m03.04 — so the fetched value is always empty and
+  # every over-threshold existing target gates.)
   defp knobless_target(candidates, fetch) do
     case Enum.find(candidates, fn {ref, _n, _total} -> match?({:in_batch, _}, ref) end) do
       nil ->

@@ -271,7 +271,7 @@ defmodule DoitMcp.StdioTransportTest do
     {decoded, rest} = decoded_tool_text(result)
     assert decoded["ok"] == true
     assert [%{"type" => "text", "text" => note}] = rest
-    assert note =~ "ai_knobs"
+    assert note =~ "confirmed"
   end
 
   test "an ungated call round-trips while nothing is in flight", %{device: device} do
