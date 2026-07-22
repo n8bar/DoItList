@@ -582,6 +582,8 @@ defmodule DoItWeb.Api.OperationsTest do
       assert Initiatives.get_role(ini_id, ctx.owner.id) == "owner"
     end
 
+    # AI-KNOBS-PARKED (m03.04): ai_knobs off the API write set; revive with @initiative_content_fields.
+    @tag :skip
     test "initiative: update sets ai_knobs (edit-gated) and echoes it in the result", ctx do
       knobs = "deploy_day: friday\nlocale: en"
 

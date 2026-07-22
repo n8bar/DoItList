@@ -6715,7 +6715,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                Usable only while AI access is on (item 2.12.3): the derived
                state reads in the control itself — disabled textarea + swapped
                copy — not a separate badge. --%>
-          <div>
+          <%!-- AI-KNOBS-PARKED (m03.04): temporarily off the UI so knobs don't
+               inform agents pending the skill rebuild; the column + handler are
+               retained. Revive by removing the :if={false} on the wrapper. --%>
+          <div :if={false}>
             <div class="flex items-center gap-2">
               <label for="ai-knobs" class="text-xs text-zinc-500 dark:text-zinc-400">
                 AI knobs

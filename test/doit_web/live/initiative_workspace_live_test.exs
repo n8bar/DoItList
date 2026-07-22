@@ -132,6 +132,8 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     refute has_element?(view, "#task-#{a_task.id}")
   end
 
+  # AI-KNOBS-PARKED (m03.04): knobs off the UI; revive with the form.
+  @tag :skip
   test "detail mode renders the AI-knobs setting; a change saves it", %{
     conn: conn,
     alpha: alpha

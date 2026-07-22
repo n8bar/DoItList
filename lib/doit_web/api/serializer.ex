@@ -264,7 +264,9 @@ defmodule DoItWeb.Api.Serializer do
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
       index_style: index_style,
-      ai_knobs: initiative.ai_knobs,
+      # AI-KNOBS-PARKED (m03.04): not serialized to agents pending the skill
+      # rebuild; column retained. Revive this line.
+      # ai_knobs: initiative.ai_knobs,
       root_task_id: initiative.root_task_id,
       tasks: task_nodes(tree, ctx, [], 0)
     }

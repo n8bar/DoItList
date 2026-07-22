@@ -57,13 +57,14 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"co_assignee_ids" => [1, 2, 3]}}},
     {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, name: "New name"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"name" => "New name"}}},
-    {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, ai_knobs: "deploy_day: friday"},
-     %{
-       "op" => "update",
-       "type" => "initiative",
-       "id" => 3,
-       "data" => %{"ai_knobs" => "deploy_day: friday"}
-     }},
+    # AI-KNOBS-PARKED (m03.04): ai_knobs off the tool; revive this case with the schema field.
+    # {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, ai_knobs: "deploy_day: friday"},
+    #  %{
+    #    "op" => "update",
+    #    "type" => "initiative",
+    #    "id" => 3,
+    #    "data" => %{"ai_knobs" => "deploy_day: friday"}
+    #  }},
     {DoitMcp.Tools.UpdateMemberRole, %{initiative_id: 3, user_id: 7, role: "viewer"},
      %{
        "op" => "update",
@@ -74,6 +75,8 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"title" => "New title"}}}
   ]
 
+  # AI-KNOBS-PARKED (m03.04): revive with the schema field.
+  @tag :skip
   test "update_initiative exposes the optional ai_knobs param in its input schema" do
     schema = DoitMcp.Tools.UpdateInitiative.input_schema()
 

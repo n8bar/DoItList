@@ -259,6 +259,10 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
   end
 
   describe "first ai_knobs write gate (m03.04 fix 23)" do
+    # AI-KNOBS-PARKED (m03.04): the ai_knobs param is off the tool, so this gate
+    # is dormant (no param → :pass). Revive with the schema field + do_update
+    # Map.take, then drop this skip.
+    @describetag :skip
     # The cross-checks against the import gate need it armed regardless of
     # the container's ambient environment.
     setup do

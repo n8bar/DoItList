@@ -196,7 +196,9 @@ defmodule DoItWeb.Api.Operations do
 
   # Initiative-content fields an `update initiative` may set (owner_id and any
   # other column are intentionally excluded — see "Irreversible ops").
-  @initiative_content_fields ~w(name description progress_calc index_style ai_knobs auto_promote_co_assignees viewer_plus)
+  # AI-KNOBS-PARKED (m03.04): `ai_knobs` removed from the writable set so the API
+  # won't accept it pending the skill rebuild; column retained. Revive: re-add it.
+  @initiative_content_fields ~w(name description progress_calc index_style auto_promote_co_assignees viewer_plus)
 
   # The `data` keys each wired {verb, type} accepts, derived from every dispatch
   # path. Drives validate_data_keys/3 — the fail-fast targeted-hint check that
@@ -1521,8 +1523,10 @@ defmodule DoItWeb.Api.Operations do
       name: initiative.name,
       root_task_id: initiative.root_task_id,
       progress_calc: initiative.progress_calc,
-      index_style: initiative.index_style,
-      ai_knobs: initiative.ai_knobs
+      index_style: initiative.index_style
+      # AI-KNOBS-PARKED (m03.04): not echoed to agents pending the skill rebuild;
+      # column retained. Revive: re-add the trailing comma above + this line.
+      # ai_knobs: initiative.ai_knobs
     }
   end
 

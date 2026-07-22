@@ -79,13 +79,17 @@ defmodule DoitMcp.Tools.UpdateInitiative do
 
     field(:index_style, :string, required: false)
 
-    field(:ai_knobs, :string,
-      required: false,
-      description:
-        "Per-project agent settings store: structure/scope/style knobs only, holding what has " <>
-          "no first-class field (never duplicate progress_calc or index_style — the column is " <>
-          "the record). The first write into empty knobs is held for the operator's confirm"
-    )
+    # AI-KNOBS-PARKED (m03.04): the ai_knobs param is off the tool pending the
+    # skill rebuild, so agents can't write knobs; the API rejects the field too.
+    # The knobs_gate below goes dormant (no param → :pass). Revive this field +
+    # the :ai_knobs entry in do_update's Map.take + the knobs_gate tests.
+    # field(:ai_knobs, :string,
+    #   required: false,
+    #   description:
+    #     "Per-project agent settings store: structure/scope/style knobs only, holding what has " <>
+    #       "no first-class field (never duplicate progress_calc or index_style — the column is " <>
+    #       "the record). The first write into empty knobs is held for the operator's confirm"
+    # )
 
     field(:auto_promote_co_assignees, :boolean, required: false)
     field(:viewer_plus, :boolean, required: false)
@@ -109,7 +113,8 @@ defmodule DoitMcp.Tools.UpdateInitiative do
         :subtitle,
         :progress_calc,
         :index_style,
-        :ai_knobs,
+        # AI-KNOBS-PARKED (m03.04): revive with the schema field above.
+        # :ai_knobs,
         :auto_promote_co_assignees,
         :viewer_plus
       ])

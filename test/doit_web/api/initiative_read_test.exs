@@ -167,6 +167,8 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["comment_count"] == 0
     end
 
+    # AI-KNOBS-PARKED (m03.04): knobs off the API read; revive with the serializer line.
+    @tag :skip
     test "ai_knobs is surfaced verbatim in the tree envelope but not the list row (fix 14)",
          ctx do
       knobs = "deploy_day: friday\nlocale: en"

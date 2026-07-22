@@ -45,7 +45,7 @@ defmodule DoItWeb.AgentAccessSettingsTest do
   end
 
   describe "AI-access checkbox + knobs visibility (2.12.3)" do
-    test "the owner sees the checkbox; the knobs control is disabled until access is on", %{
+    test "the owner sees the AI-access checkbox and it toggles on", %{
       conn: conn,
       ini: ini
     } do
@@ -53,14 +53,14 @@ defmodule DoItWeb.AgentAccessSettingsTest do
 
       assert has_element?(view, "#agent-access-toggle")
       refute has_element?(view, "#agent-access-toggle[checked]")
-      # Derived state in the control itself: the textarea renders disabled.
-      assert has_element?(view, "textarea#ai-knobs[disabled]")
+      # AI-KNOBS-PARKED (m03.04): the knobs-control derived-state assertions are
+      # dropped while knobs are off the UI; the checkbox coverage stays. Revive
+      # them (textarea#ai-knobs[disabled] before/after) with the UI form.
 
       render_change(view, "set_agent_access", %{"agent_access" => "true"})
 
       assert Initiatives.get_initiative(ini.id).agent_access == true
       assert has_element?(view, "#agent-access-toggle[checked]")
-      refute has_element?(view, "textarea#ai-knobs[disabled]")
     end
 
     test "a non-owner member never sees the checkbox or the trust state", %{ini: ini} do
@@ -75,6 +75,8 @@ defmodule DoItWeb.AgentAccessSettingsTest do
       refute has_element?(view, "#agent-trust-confirm")
     end
 
+    # AI-KNOBS-PARKED (m03.04): knobs off the UI+API; revive with the surface.
+    @tag :skip
     test "set_ai_knobs is refused while access is off (server backstop)", %{
       conn: conn,
       ini: ini
