@@ -467,8 +467,8 @@ defmodule DoItWeb.Api.Operations do
     data = data(op)
 
     with {:ok, lid} <- register_lid(op, changes),
-         {:ok, initiative_id, parent_id} <- resolve_task_parentage(data, changes),
-         {:ok, %Task{} = parent} <- load_task(parent_id),
+         {:ok, initiative_id, parent_id, parent_ref} <- resolve_task_parentage(data, changes),
+         {:ok, %Task{} = parent} <- load_parent(parent_id, parent_ref),
          :ok <- parent_in_initiative(parent, initiative_id),
          {:ok, initiative} <- authorize(user, initiative_id, :edit),
          :ok <- validate_assignee_membership(initiative.id, data) do
@@ -1151,11 +1151,11 @@ defmodule DoItWeb.Api.Operations do
         # still apply to the root parent unchanged.
         is_nil(parent_id) ->
           with {:ok, root_id} <- initiative_root_task_id(initiative_id) do
-            {:ok, initiative_id, root_id}
+            {:ok, initiative_id, root_id, :derived}
           end
 
         true ->
-          {:ok, initiative_id, parent_id}
+          {:ok, initiative_id, parent_id, :explicit}
       end
     end
   end
@@ -1318,11 +1318,25 @@ defmodule DoItWeb.Api.Operations do
 
   # --- loaders & authz -------------------------------------------------------
 
+  # An explicitly named parent is a caller reference — mask a flagged-off target
+  # as no-such-task (load_task). A DERIVED root parent (the caller named only the
+  # Initiative, so its root became the parent) loads unmasked: authorize then
+  # masks it to the Initiative shape the caller actually referenced, keeping the
+  # flagged-off error indistinguishable from a nonexistent Initiative here.
+  defp load_parent(id, :explicit), do: load_task(id)
+
+  defp load_parent(id, :derived) do
+    case Tasks.get_task(id) do
+      %Task{deleted_at: nil} = task -> {:ok, task}
+      _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
+    end
+  end
+
   defp load_task(nil), do: {:error, err(:not_found, "No such task.", 422)}
 
   defp load_task(id) do
     case Tasks.get_task(id) do
-      %Task{deleted_at: nil} = task -> {:ok, task}
+      %Task{deleted_at: nil} = task -> mask_agent_access(task, id)
       _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
     end
   end
@@ -1333,8 +1347,23 @@ defmodule DoItWeb.Api.Operations do
 
   defp load_task_any(id) do
     case Tasks.get_task(id) do
-      %Task{} = task -> {:ok, task}
+      %Task{} = task -> mask_agent_access(task, id)
       nil -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
+    end
+  end
+
+  # A task inside an agent-access-off Initiative reads as nonexistent (m03.04
+  # item 2.12.2). Masking lives at the task-resolution funnel — not behind each
+  # op's authorize override — so EVERY path that reaches a task (a `parent_id`,
+  # a link endpoint, a target ref) inherits the no-existence-leak guarantee by
+  # default, and a future op path can't reintroduce the leak by forgetting an
+  # override. The masked error is byte-identical to a nonexistent id, and never
+  # names the foreign Initiative. Role-based denial on an *accessible*
+  # Initiative is unaffected — that still 403s at authorize downstream.
+  defp mask_agent_access(%Task{} = task, id) do
+    case Initiatives.get_initiative(task.initiative_id) do
+      %Initiative{agent_access: true} -> {:ok, task}
+      _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
     end
   end
 

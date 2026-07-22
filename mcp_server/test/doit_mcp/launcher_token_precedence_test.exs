@@ -107,6 +107,32 @@ defmodule DoitMcp.LauncherTokenPrecedenceTest do
     assert out =~ "TOKEN=refreshed-token"
   end
 
+  test "the adapter's own persisted format (comments + assignment) passes the read-side check",
+       ctx do
+    # Exactly what TokenRecovery.persist/1 writes — the guard must never reject
+    # the adapter's own output, or in-session recovery would break on reconnect.
+    File.write!(ctx.refresh, TokenRecovery.persist_content("refreshed-token"))
+
+    assert {out, 0} = run_launcher(ctx, %{})
+    assert out =~ "TOKEN=refreshed-token"
+  end
+
+  test "a refresh file carrying anything beyond a token assignment is refused, not sourced",
+       ctx do
+    # The file is `.`-sourced, so a bare command would run on the host. Make it
+    # NEWER than mcp.env so only the safety check — not mtime — can block it.
+    File.write!(ctx.refresh, "DOITLIST_API_TOKEN=injected-token\necho INJECTED-BY-REFRESH\n")
+    File.touch!(ctx.refresh, @new)
+
+    assert {out, 0} = run_launcher(ctx, %{"DOITLIST_API_TOKEN" => "env-token"})
+    # The injected command never ran and its token never took effect; the
+    # launcher fell back to the client-config env and warned.
+    refute out =~ "INJECTED-BY-REFRESH"
+    refute out =~ "injected-token"
+    assert out =~ "TOKEN=env-token"
+    assert out =~ "refusing to source"
+  end
+
   test "no token anywhere fails loudly instead of connecting doomed", ctx do
     assert {out, code} = run_launcher(ctx, %{})
     assert code != 0

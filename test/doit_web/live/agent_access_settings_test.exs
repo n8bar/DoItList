@@ -106,10 +106,14 @@ defmodule DoItWeb.AgentAccessSettingsTest do
       assert has_element?(view, "#agent-trust-state[data-other-members='true']")
       assert has_element?(view, "#agent-trust-confirm")
 
-      render_change(view, "set_agent_access", %{"agent_access" => "true"})
+      # Proceed injects `trust_confirmed` — that marker IS the acceptance.
+      render_change(view, "set_agent_access", %{
+        "agent_access" => "true",
+        "trust_confirmed" => "true"
+      })
 
-      # The commit IS the acceptance: acked persists and the state flips, so the
-      # dialog can never trigger again for this (admin, Initiative).
+      # acked persists and the state flips, so the dialog can never trigger
+      # again for this (admin, Initiative).
       assert Initiatives.agent_trust_acked?(owner.id, ini.id)
       assert has_element?(view, "#agent-trust-state[data-acked='true']")
       assert has_element?(view, "#agent-trust-state[data-agent-access='true']")
@@ -146,13 +150,37 @@ defmodule DoItWeb.AgentAccessSettingsTest do
       assert has_element?(view, "#agent-trust-state[data-acked='false']")
       assert has_element?(view, "#agent-trust-state[data-agent-access='true']")
 
-      render_submit(view, "add_member", %{"member" => bob.username, "role" => "viewer"})
+      render_submit(view, "add_member", %{
+        "member" => bob.username,
+        "role" => "viewer",
+        "trust_confirmed" => "true"
+      })
 
       assert Initiatives.get_role(ini.id, bob.id) == "viewer"
       assert Initiatives.agent_trust_acked?(owner.id, ini.id)
       # Second occurrence for the same (admin, Initiative): the client reads
       # data-acked=true and never opens the confirm again.
       assert has_element?(view, "#agent-trust-state[data-acked='true']")
+    end
+
+    test "a gated add WITHOUT the confirm marker records no ack (proof-carrying)", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/initiatives/#{ini.id}")
+
+      # An ungated push that matches the trigger predicate but lacks the
+      # Proceed marker (a bypassed/absent client dialog) must not burn the
+      # one-time ack — else the confirm silently never shows.
+      render_submit(view, "add_member", %{"member" => bob.username, "role" => "viewer"})
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+      refute Initiatives.agent_trust_acked?(owner.id, ini.id)
+      assert has_element?(view, "#agent-trust-state[data-acked='false']")
     end
 
     test "a member add with access OFF is confirm-free and records nothing", %{
@@ -186,7 +214,8 @@ defmodule DoItWeb.AgentAccessSettingsTest do
       # change records the ack.
       render_change(view, "update_member_role", %{
         "user_id" => to_string(bob.id),
-        "role" => "editor"
+        "role" => "editor",
+        "trust_confirmed" => "true"
       })
 
       assert Initiatives.get_role(ini.id, bob.id) == "editor"

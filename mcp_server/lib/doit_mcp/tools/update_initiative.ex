@@ -82,11 +82,9 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     field(:ai_knobs, :string,
       required: false,
       description:
-        "Per-project agent settings store — structure/scope/style knobs for this Initiative " <>
-          "only; plain text the product stores but never interprets. Knobs hold only what " <>
-          "has no first-class field — never duplicate a first-class setting (progress_calc, " <>
-          "index_style); the column is the record. The first write into empty knobs is held " <>
-          "for the operator's confirm"
+        "Per-project agent settings store: structure/scope/style knobs only, holding what has " <>
+          "no first-class field (never duplicate progress_calc or index_style — the column is " <>
+          "the record). The first write into empty knobs is held for the operator's confirm"
     )
 
     field(:auto_promote_co_assignees, :boolean, required: false)

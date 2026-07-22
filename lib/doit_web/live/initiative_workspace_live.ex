@@ -1384,14 +1384,28 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # that predicate, so the commit is the acceptance.
   def handle_event("set_agent_access", params, socket) do
     if not socket.assigns.can_admin do
-      {:noreply, socket |> put_flash(:error, "Only the owner can change AI access.") |> bonk()}
+      # A stale demoted admin may still show the flipped box — push the honest
+      # revert (same contract as the error branch), don't just flash.
+      {:noreply,
+       socket
+       |> put_flash(:error, "Only the owner can change AI access.")
+       |> push_event("agent-access-saved", %{
+         on: socket.assigns.initiative.agent_access,
+         ok: false
+       })
+       |> bonk()}
     else
       user = socket.assigns.current_user
       initiative = socket.assigns.initiative
       on = params["agent_access"] in ["true", "on"]
 
+      # Proof-carrying ack: `trust_confirmed` is injected ONLY by the trust
+      # dialog's Proceed handler, so the ack records only when the human
+      # actually saw and accepted the confirm — never from an ungated push,
+      # even one that happens to match the trigger predicate.
       ack? =
-        on and Initiatives.agent_trust_confirm_required?(user, initiative, :enable_agent_access)
+        params["trust_confirmed"] == "true" and on and
+          Initiatives.agent_trust_confirm_required?(user, initiative, :enable_agent_access)
 
       case Initiatives.set_agent_access(initiative, on) do
         {:ok, updated} ->
@@ -2106,7 +2120,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  def handle_event("update_member_role", %{"user_id" => uid, "role" => role}, socket) do
+  def handle_event("update_member_role", %{"user_id" => uid, "role" => role} = params, socket) do
     initiative = socket.assigns.initiative
     uid = parse_id(uid)
 
@@ -2114,15 +2128,17 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
          role in ~w(editor viewer) do
       actor = socket.assigns.current_user
 
-      # m03.04 item 2.12.4: a promotion on an agent-accessible Initiative was
-      # gated by the client-opened trust confirm — the committed change is the
-      # acceptance, so persist the one-time acknowledgement.
+      # m03.04 item 2.12.4: a promotion on an agent-accessible Initiative is
+      # gated by the client-opened trust confirm. Proof-carrying: the ack
+      # records only when Proceed injected `trust_confirmed` — never from an
+      # ungated push that merely matches the trigger predicate.
       ack? =
-        Initiatives.agent_trust_confirm_required?(
-          actor,
-          initiative,
-          {:promote_member, Initiatives.get_role(initiative.id, uid), role}
-        )
+        params["trust_confirmed"] == "true" and
+          Initiatives.agent_trust_confirm_required?(
+            actor,
+            initiative,
+            {:promote_member, Initiatives.get_role(initiative.id, uid), role}
+          )
 
       {:ok, _} = Initiatives.update_member_role(initiative.id, uid, role, actor)
 
@@ -2139,7 +2155,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  def handle_event("add_member", %{"member" => member, "role" => role}, socket) do
+  def handle_event("add_member", %{"member" => member, "role" => role} = params, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
     else
@@ -2154,14 +2170,16 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
         user ->
           # m03.04 item 2.12.4: a member add on an agent-accessible Initiative
-          # was gated by the client-opened trust confirm — the committed add is
-          # the acceptance, so persist the one-time acknowledgement.
+          # is gated by the client-opened trust confirm. Proof-carrying: the
+          # ack records only when Proceed injected `trust_confirmed`, never from
+          # an ungated push matching the trigger predicate.
           ack? =
-            Initiatives.agent_trust_confirm_required?(
-              socket.assigns.current_user,
-              initiative,
-              {:add_member, role}
-            )
+            params["trust_confirmed"] == "true" and
+              Initiatives.agent_trust_confirm_required?(
+                socket.assigns.current_user,
+                initiative,
+                {:add_member, role}
+              )
 
           case Initiatives.add_member(initiative.id, user.id, role, socket.assigns.current_user) do
             {:ok, _} ->

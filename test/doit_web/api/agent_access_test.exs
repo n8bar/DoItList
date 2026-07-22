@@ -214,6 +214,102 @@ defmodule DoItWeb.Api.AgentAccessTest do
       assert error["message"] == "No such Initiative with id #{ctx.off.id}."
       refute Repo.get_by(Task, title: "smuggled task")
     end
+
+    test "an add task under a parent inside a flagged-off Initiative is masked as no-such-task",
+         ctx do
+      # Derived path: parent_id resolves the Initiative. A live parent in a
+      # flagged-off Initiative must read EXACTLY like a nonexistent parent —
+      # never "No such Initiative with id <off>", which confirmed the parent
+      # exists and named its Initiative.
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "task",
+            "data" => %{"parent_id" => ctx.task.id, "title" => "smuggled child"}
+          }
+        ])
+
+      assert status == 422
+      error = Enum.at(body["results"], 0)["error"]
+      assert error["code"] == "not_found"
+      assert error["message"] == "No such task with id #{ctx.task.id}."
+      refute Repo.get_by(Task, title: "smuggled child")
+    end
+
+    test "an add naming an accessible Initiative but a parent in a flagged-off one is masked",
+         ctx do
+      # The parent load masks before parent_in_initiative can name the foreign
+      # Initiative ("parent_id P belongs to Initiative B, not A").
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "task",
+            "data" => %{
+              "initiative_id" => ctx.on.id,
+              "parent_id" => ctx.task.id,
+              "title" => "smuggled child"
+            }
+          }
+        ])
+
+      assert status == 422
+      error = Enum.at(body["results"], 0)["error"]
+      assert error["code"] == "not_found"
+      assert error["message"] == "No such task with id #{ctx.task.id}."
+      refute Repo.get_by(Task, title: "smuggled child")
+    end
+
+    test "an add link whose target is inside a flagged-off Initiative is masked as no-such-task",
+         ctx do
+      source = top_task(ctx.owner, ctx.on, "Source")
+
+      # Masked before same_initiative_link can say "Task P belongs to Initiative
+      # B …" — which confirmed the target and named its Initiative.
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "link",
+            "data" => %{"source_id" => source.id, "target_id" => ctx.task.id}
+          }
+        ])
+
+      assert status == 422
+      error = Enum.at(body["results"], 0)["error"]
+      assert error["code"] == "not_found"
+      assert error["message"] == "No such task with id #{ctx.task.id}."
+    end
+
+    test "with both Initiatives agent-accessible, the real cross-Initiative guard still fires",
+         ctx do
+      {:ok, other} =
+        Initiatives.create_initiative(ctx.owner, %{"name" => "Other On"}, agent_access: true)
+
+      parent = top_task(ctx.owner, ctx.on, "P")
+
+      # Masking applies only to flagged-off Initiatives — when both are
+      # accessible, the genuine parent-mismatch message is unchanged.
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "add",
+            "type" => "task",
+            "data" => %{
+              "initiative_id" => other.id,
+              "parent_id" => parent.id,
+              "title" => "x"
+            }
+          }
+        ])
+
+      assert status == 422
+      error = Enum.at(body["results"], 0)["error"]
+
+      assert error["message"] ==
+               "parent_id #{parent.id} belongs to Initiative #{ctx.on.id}, not Initiative #{other.id}."
+    end
   end
 
   describe "creation defaults" do

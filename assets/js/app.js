@@ -3562,13 +3562,33 @@ document.addEventListener("keydown", (e) => {
 //   (a) adding a member, or promoting one to a higher role, on an
 //       agent-accessible initiative (every role is viewer or higher);
 //   (b) enabling AI access when members besides the admin already exist.
-// The intercepted action is HELD (checkbox stays unflipped, select reverts,
-// submit cancelled) until Proceed re-dispatches it with the bypass latch set —
-// so nothing commits, optimistically or otherwise, before the human decides.
-// Once any gated action commits, the server records the (admin, initiative)
-// acknowledgement and data-acked flips true for good — the dialog never
-// re-shows, across sessions.
+//
+// INTERCEPTION ORDERING (why input + change, at document CAPTURE): LiveView
+// binds phx-change to BOTH "input" and "change" (deps/phoenix_live_view
+// live_socket.js bindForms: `for (const type of ["change","input"])`) via
+// LiveSocket.on → window.addEventListener — window target, BUBBLE phase — and
+// treats the *input* event as the acting one (a change following an input is
+// ignored via its prev-iteration bookkeeping). A change-only interceptor
+// therefore runs AFTER the input-driven push has already left. These
+// document-level CAPTURE listeners run strictly ahead of any window bubble
+// listener, and stopImmediatePropagation keeps the event from ever reaching
+// LiveView — the push genuinely cannot fire until Proceed re-dispatches with
+// the bypass latch set.
+//
+// §6.6: the gated control HOLDS its new state while the dialog decides (the
+// branch-cascade precedent) — the checkbox stays flipped, the select keeps the
+// chosen role; Cancel reverts it, Proceed carries it through. Focus moves to
+// the dialog's Cancel on open (delete-confirm precedent) and returns to the
+// triggering control on close.
+//
+// Proof-carrying ack (server side of 2.12.4): ONLY the Proceed path injects a
+// transient hidden `trust_confirmed` input into the gated form before the
+// re-dispatch, so the pushed params carry the human's actual confirmation. The
+// server records the one-time (admin, initiative) ack only when that marker
+// arrives; ungated fallbacks (no #agent-trust-state, no dialog) never inject
+// it, so they can never burn the ack.
 let agentTrustBypass = false
+// While the dialog is open: {control, held, proceed, cancel, restoreFocus}.
 let agentTrustPending = null
 
 function agentTrustState() {
@@ -3576,83 +3596,138 @@ function agentTrustState() {
   return el ? el.dataset : null
 }
 
-function openAgentTrustConfirm(onProceed) {
+// Run `fn` with the proof-carrying marker present in `form`, removing it on
+// the next tick so later, unconfirmed changes never carry it.
+function withTrustConfirmed(form, fn) {
+  if (!form) { fn(); return }
+  const marker = document.createElement("input")
+  marker.type = "hidden"
+  marker.name = "trust_confirmed"
+  marker.value = "true"
+  form.appendChild(marker)
+  try { fn() } finally { setTimeout(() => marker.remove(), 0) }
+}
+
+function openAgentTrustConfirm(opts) {
   const modal = document.getElementById("agent-trust-confirm")
-  if (!modal) { onProceed(); return } // no dialog mounted (non-admin) — never block
-  agentTrustPending = onProceed
+  if (!modal) {
+    // No dialog mounted — fail SAFE: an unconfirmed action must not commit,
+    // so run the revert path, never the action. (Unreachable for admins: the
+    // dialog renders whenever #agent-trust-state does.)
+    if (opts.cancel) opts.cancel()
+    return
+  }
+  agentTrustPending = {...opts, restoreFocus: document.activeElement}
   modal.hidden = false
+  const cancel = modal.querySelector("[data-trust-cancel]")
+  if (cancel) cancel.focus()
+}
+
+function settleAgentTrust(kind) {
+  const modal = document.getElementById("agent-trust-confirm")
+  if (modal) modal.hidden = true
+  const pending = agentTrustPending
+  agentTrustPending = null
+  if (!pending) return
+  if (kind === "proceed" && pending.proceed) pending.proceed()
+  if (kind === "cancel" && pending.cancel) pending.cancel()
+  const el = pending.restoreFocus
+  if (el && el.isConnected && el.focus) el.focus()
 }
 
 document.addEventListener("click", (e) => {
   const modal = document.getElementById("agent-trust-confirm")
   if (!modal || modal.hidden) return
   if (e.target === modal || e.target.closest("[data-trust-cancel]")) {
-    modal.hidden = true
-    agentTrustPending = null
+    settleAgentTrust("cancel")
     return
   }
-  if (e.target.closest("[data-trust-proceed]")) {
-    modal.hidden = true
-    const proceed = agentTrustPending
-    agentTrustPending = null
-    if (proceed) proceed()
-  }
+  if (e.target.closest("[data-trust-proceed]")) settleAgentTrust("proceed")
 })
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return
   const m = document.getElementById("agent-trust-confirm")
-  if (m && !m.hidden) { m.hidden = true; agentTrustPending = null }
+  if (m && !m.hidden) settleAgentTrust("cancel")
 })
 
-// Capture-phase interception: runs ahead of LiveView's own listeners, so a
-// gated change/submit can be held before any event reaches the server.
-document.addEventListener("change", (e) => {
+// The shared input/change interceptor for the two form-control paths. See the
+// ordering note above for why BOTH event types are captured.
+function interceptAgentTrust(e) {
   if (agentTrustBypass) return
   const st = agentTrustState()
-  if (!st || st.acked === "true") return
+  if (!st) return
+  const t = e.target
+  if (!t || !t.matches) return
+  const isBox = t.matches("input[name='agent_access']")
+  const isSel = t.matches("select[data-member-role-select]")
+  if (!isBox && !isSel) return
 
-  // (b) enabling AI access with members already present: hold the flip, ask,
-  // then re-check the box (the §6 optimistic ack resumes) and re-dispatch.
-  if (e.target.matches("input[name='agent_access']")) {
-    if (!e.target.checked) return // disabling never confirms
-    if (st.otherMembers !== "true") return // no member content to trust yet
-    const box = e.target
-    box.checked = false
+  // While the dialog is deciding, the gated controls are frozen: swallow any
+  // further input/change (e.g. Space re-toggling the checkbox under the
+  // overlay) and re-assert the held state, so nothing pushes or double-arms
+  // mid-decision.
+  if (agentTrustPending) {
     e.stopImmediatePropagation()
-    openAgentTrustConfirm(() => {
-      box.checked = true
-      agentTrustBypass = true
-      box.dispatchEvent(new Event("change", {bubbles: true}))
-      agentTrustBypass = false
+    if (agentTrustPending.control === t) {
+      if (isBox) t.checked = agentTrustPending.held
+      if (isSel) t.value = agentTrustPending.held
+    }
+    return
+  }
+
+  if (st.acked === "true") return
+
+  // (b) enabling AI access with members already present. The native click has
+  // already flipped the box — that flip IS the §6.6 hold; only the push is
+  // stopped until the human decides.
+  if (isBox) {
+    if (!t.checked) return // disabling never confirms
+    if (st.otherMembers !== "true") return // no member content to trust yet
+    e.stopImmediatePropagation()
+    openAgentTrustConfirm({
+      control: t,
+      held: true,
+      proceed: () =>
+        withTrustConfirmed(t.form, () => {
+          agentTrustBypass = true
+          t.dispatchEvent(new Event("input", {bubbles: true}))
+          agentTrustBypass = false
+        }),
+      cancel: () => { t.checked = false },
     })
     return
   }
 
-  // (a) promoting a member — a rank increase — on an agent-accessible
-  // initiative. The pre-change role is the render-selected option
-  // (defaultSelected); revert the select until confirmed so the UI never
-  // shows a promotion the human hasn't approved.
-  if (e.target.matches("select[data-member-role-select]")) {
-    if (st.agentAccess !== "true") return
-    const sel = e.target
-    const rank = {viewer: 1, editor: 2, owner: 3}
-    const prev = Array.from(sel.options).find((o) => o.defaultSelected)
-    if (!prev || (rank[sel.value] || 0) <= (rank[prev.value] || 0)) return
-    const next = sel.value
-    sel.value = prev.value
-    e.stopImmediatePropagation()
-    openAgentTrustConfirm(() => {
-      sel.value = next
-      agentTrustBypass = true
-      sel.dispatchEvent(new Event("change", {bubbles: true}))
-      agentTrustBypass = false
-    })
-  }
-}, true)
+  // (a) promoting a member — a rank increase vs the render-selected option
+  // (defaultSelected) — on an agent-accessible initiative. The select keeps
+  // showing the chosen new role while the dialog decides.
+  if (st.agentAccess !== "true") return
+  const rank = {viewer: 1, editor: 2, owner: 3}
+  const prev = Array.from(t.options).find((o) => o.defaultSelected)
+  if (!prev || (rank[t.value] || 0) <= (rank[prev.value] || 0)) return
+  e.stopImmediatePropagation()
+  openAgentTrustConfirm({
+    control: t,
+    held: t.value,
+    proceed: () =>
+      withTrustConfirmed(t.form, () => {
+        agentTrustBypass = true
+        t.dispatchEvent(new Event("input", {bubbles: true}))
+        agentTrustBypass = false
+      }),
+    cancel: () => { t.value = prev.value },
+  })
+}
+
+document.addEventListener("input", interceptAgentTrust, true)
+document.addEventListener("change", interceptAgentTrust, true)
 
 // (a) adding a member (any role — every role is viewer or higher) on an
-// agent-accessible initiative: cancel the submit, ask, re-dispatch on Proceed.
+// agent-accessible initiative: cancel the submit, ask, re-dispatch on Proceed
+// with the proof-carrying marker. (Submit is dispatched synchronously and
+// pushed by LiveView's window-bubble submit binding, so the same capture
+// ordering argument applies.)
 document.addEventListener("submit", (e) => {
   if (agentTrustBypass) return
   const form = e.target.closest && e.target.closest("form[phx-submit='add_member']")
@@ -3661,10 +3736,16 @@ document.addEventListener("submit", (e) => {
   if (!st || st.acked === "true" || st.agentAccess !== "true") return
   e.preventDefault()
   e.stopImmediatePropagation()
-  openAgentTrustConfirm(() => {
-    agentTrustBypass = true
-    form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}))
-    agentTrustBypass = false
+  openAgentTrustConfirm({
+    control: form,
+    held: null,
+    proceed: () =>
+      withTrustConfirmed(form, () => {
+        agentTrustBypass = true
+        form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}))
+        agentTrustBypass = false
+      }),
+    cancel: null,
   })
 }, true)
 

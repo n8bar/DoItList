@@ -141,9 +141,12 @@ defmodule DoitMcp.TokenRecovery do
     path = persist_path()
     dir = Path.dirname(path)
 
+    # Lock the dir to 0700 BEFORE writing the token, so the brief window where
+    # the new file still carries the umask default (often 0644) is unreachable —
+    # nobody but the owner can traverse a 0700 dir to open it.
     with :ok <- File.mkdir_p(dir),
-         :ok <- File.write(path, persist_content(token)),
          :ok <- File.chmod(dir, 0o700),
+         :ok <- File.write(path, persist_content(token)),
          :ok <- File.chmod(path, 0o600) do
       align_ownership(dir, path)
     else
@@ -201,7 +204,10 @@ defmodule DoitMcp.TokenRecovery do
       "yourself."
   end
 
-  defp persist_content(token) do
+  @doc false
+  # Public only so the launcher's read-side safety check can be tested against
+  # the exact bytes this writes — never call it outside persist/1 or that test.
+  def persist_content(token) do
     """
     # Written by the DoItList MCP adapter after an in-session token refresh
     # (m03.04 item 2.13). bin/mcp_server.sh sources the newest of this file

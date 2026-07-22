@@ -81,16 +81,26 @@ defmodule DoitMcp.Elicitation do
   end
 
   defp do_request(session_pid, message, requested_schema, timeout) do
-    case Process.whereis(@waiter) do
-      nil ->
-        Process.register(self(), @waiter)
+    # Register-and-check in ONE atomic step: a bare whereis-then-register races
+    # two concurrent requests into both seeing `nil`, and the loser's register
+    # raises ArgumentError instead of yielding :already_waiting. Process.register
+    # is itself atomic — let the loser's rescue be the check.
+    case register_waiter() do
+      :ok ->
         params = %{"message" => message, "requestedSchema" => requested_schema}
         send(session_pid, {:send_elicitation_request, params, requested_schema, timeout})
         await(timeout)
 
-      _pid ->
+      :already_waiting ->
         {:error, :already_waiting}
     end
+  end
+
+  defp register_waiter do
+    Process.register(self(), @waiter)
+    :ok
+  rescue
+    ArgumentError -> :already_waiting
   end
 
   defp await(timeout) do

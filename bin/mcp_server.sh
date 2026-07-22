@@ -32,11 +32,23 @@ cd "$(dirname "$0")/.."
 MCP_ENV="${DOITLIST_MCP_ENV:-$HOME/.config/doitlist/mcp.env}"
 REFRESH_FILE="${DOITLIST_MCP_REFRESH_FILE:-.doitlist/mcp-refreshed-token.env}"
 
+# A token file is `.`-sourced, so any content beyond a whitelisted
+# DOITLIST_API_TOKEN assignment would execute on the host. The adapter's writer
+# already enforces the charset (m03.04 item 2.13); this is the independent
+# read-side check so enforcement isn't single-sided. Blank lines and comments
+# are fine; anything else fails and the file is skipped with a warning.
+token_file_safe() {
+  ! grep -qvE '^[[:space:]]*(#.*)?$|^DOITLIST_API_TOKEN=[A-Za-z0-9._+/=-]+$' "$1"
+}
+
 if [ -f "$MCP_ENV" ]; then
   # shellcheck disable=SC1090
   . "$MCP_ENV"
 fi
-if [ -f "$REFRESH_FILE" ] && { [ ! -f "$MCP_ENV" ] || [ "$REFRESH_FILE" -nt "$MCP_ENV" ]; }; then
+if [ -f "$REFRESH_FILE" ] && ! token_file_safe "$REFRESH_FILE"; then
+  echo "mcp_server.sh: refusing to source $REFRESH_FILE — unexpected content" \
+    "(not a plain DOITLIST_API_TOKEN assignment)" >&2
+elif [ -f "$REFRESH_FILE" ] && { [ ! -f "$MCP_ENV" ] || [ "$REFRESH_FILE" -nt "$MCP_ENV" ]; }; then
   # shellcheck disable=SC1090
   . "$REFRESH_FILE"
 fi
@@ -52,8 +64,14 @@ export DOITLIST_MCP_ENV_PATH
 # connection exchanges, one .in/.out/.err triplet per connection under
 # /tmp/doitlist-mcp/. Lets us see exactly what a remote client sent when a
 # request comes back -32600, without any client-side setup.
+#
+# The .in stream now carries a secret: the 401-recovery elicitation answer is a
+# pasted API token (m03.04 item 2.13). Restrict the log to this user — 0700 dir,
+# 0600 files (umask 077) — so a shared host never exposes it world-readable.
 FRAMES=/tmp/doitlist-mcp
+umask 077
 mkdir -p "$FRAMES"
+chmod 700 "$FRAMES" 2>/dev/null || true
 BASE="$FRAMES/$(date +%Y%m%dT%H%M%S).$$"
 
 # Compile happens in-boot, in the same mix boot as the server: MIX_QUIET
