@@ -45,11 +45,11 @@ defmodule DoitMcp.Client do
         # the caller decide whether to retry, instead of Req's default silent
         # multi-second backoff-and-retry on a transient error.
         retry: false,
-        # A cushion over the server's fixed worst case (a cap-sized batch is
-        # bounded by the 15s transaction timeout; m03.04 item 3.8.3), not a
-        # mask for a slow server — Req's ~15s default sat exactly ON that
-        # bound and turned drive 4's 14.6s batch into a spurious timeout.
-        receive_timeout: 30_000
+        # A cushion ABOVE the server's deliberate worst case (a cap-sized batch
+        # is bounded by the 60s transaction timeout; m03.04 items 3.8.3 + 2.17),
+        # not a mask for a slow server — the client must never give up while the
+        # server is still legitimately working, so this stays above that bound.
+        receive_timeout: 90_000
       ]
       |> Keyword.merge(Application.get_env(:doit_mcp, :req_options, []))
       |> Req.new()

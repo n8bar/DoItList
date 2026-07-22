@@ -21,7 +21,7 @@ defmodule DoItWeb.Api.OperationsScaleTest do
 
   `async: false` deliberately: racing 20 parallel test cases inflates the
   batch's wall time with suite contention (a run under full parallel load
-  blew the 15s connection-hold bound) — the deadline should measure the
+  blew the old 15s default; 2.17 made the bound deliberate) — the deadline should measure the
   pipeline, not the scheduler.
   """
   use DoItWeb.ConnCase, async: false
@@ -29,9 +29,11 @@ defmodule DoItWeb.Api.OperationsScaleTest do
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
 
-  # Generous cushion-within-the-cushion: far above the ~3s measured, far
-  # below the adapter's 30_000ms receive timeout.
-  @batch_deadline_ms 15_000
+  # The deliberate transaction bound (m03.04 item 2.17), NOT the driver's old
+  # 15s default: the batch must complete within our chosen 60s cushion — far
+  # above the seconds it really takes, far below the adapter's 90_000ms receive
+  # timeout. Asserting this bound (not the driver default) is what 2.17.2 wants.
+  @batch_deadline_ms 60_000
 
   @seed_tasks 300
 
@@ -169,8 +171,8 @@ defmodule DoItWeb.Api.OperationsScaleTest do
     elapsed_ms = div(elapsed_us, 1000)
 
     assert elapsed_ms < @batch_deadline_ms,
-           "cap-sized batch took #{elapsed_ms}ms — the fixed pipeline should stay far below " <>
-             "#{@batch_deadline_ms}ms (adapter receive timeout is 30_000ms)"
+           "cap-sized batch took #{elapsed_ms}ms — should complete within the deliberate " <>
+             "#{@batch_deadline_ms}ms transaction bound (adapter receive timeout is 90_000ms)"
 
     # Broadcasts are per BATCH now (5.8.2): one task_created reload signal —
     # not one per created task — no superseded task_updated patches, and one

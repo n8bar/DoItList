@@ -186,13 +186,20 @@ defmodule DoItWeb.Api.Operations do
   @verbs ~w(add update remove)
 
   # Hard cap on ops per batch, enforced before any DB work (see apply_batch/2).
-  # The whole batch runs in one synchronous Repo.transaction, which is bound by
-  # the 15 s transaction timeout — breach it and the entire batch fails. A
-  # cascade-heavy benchmark (dev-over-docker) ran roughly linear at ~40-55 ms/op;
-  # 250 ops took ~11 s and 200 breached 15 s once under added load. 150 ops
-  # (~6-8 s in that pessimistic env, far less in prod) keeps ~2x headroom while
-  # staying a useful atomic batch.
+  # A cascade-heavy benchmark (dev-over-docker) ran roughly linear at ~40-55 ms/op;
+  # 250 ops took ~11 s and 200 breached the old 15 s default once under load.
+  # 150 ops (~6-8 s in that pessimistic env, far less in prod) stays a useful
+  # atomic batch, well inside the deliberate transaction bound below.
   @max_batch_size 150
+
+  # The whole batch runs in ONE synchronous Repo.transaction (m03.04 item 2.17).
+  # The timeout is DELIBERATE — a generous cushion over the worst-case cap batch
+  # on a grown tree (~15-20 s observed on a thrashing shared host), not the
+  # driver's tight 15 s default, which a legit batch breaches under load and
+  # dies spuriously. The adapter's HTTP receive timeout sits ABOVE this
+  # (DoitMcp.Client, 90 s) so the client never gives up while the server is
+  # still legitimately working.
+  @batch_transaction_timeout 60_000
 
   # Initiative-content fields an `update initiative` may set (owner_id and any
   # other column are intentionally excluded — see "Irreversible ops").
@@ -294,7 +301,7 @@ defmodule DoItWeb.Api.Operations do
       end)
 
     try do
-      result = Repo.transaction(multi)
+      result = Repo.transaction(multi, timeout: @batch_transaction_timeout)
       # Every PubSub message queued by a context fn during the batch (task,
       # member, AND notification broadcasts all route through DoIt.Broadcast)
       # fires now on commit, or is dropped on rollback — the all-or-nothing
