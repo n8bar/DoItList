@@ -398,3 +398,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-07-21  Feat (m03.04): fix 25 -- knob-hygiene boundary in the ai_knobs param and knob-legitimacy moduledoc (a knob never duplicates a first-class setting).
 2026-07-21  Doc (m03.04): 2.16 banked -- rail collaborator-add is a third member-add path the 2.12.4 trust confirm misses (surfaced during the 2.12 build).
 2026-07-21  Doc (m03.04): 2.17 banked -- explicit transaction timeout on the operations batch; the driver 15s connection-hold default trips on a busy host (scale test red even at its birth commit; bisect exonerated the code).
+2026-07-21  Doc (m03.04): banked from the §2 review -- 2.16 rail collaborator-add trust-confirm gap, 2.17 explicit operations-batch transaction timeout; testing items 2.4 (trust confirm gates) + 4.4 added.
