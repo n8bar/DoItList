@@ -37,6 +37,16 @@ defmodule DoIt.Api.Idempotency do
   # How long a stored response stays replayable. Retunable.
   @retention_hours 24
 
+  # How long a same-key request waits for the holder of its lock (m03.04 2.19).
+  # Must cover the batch transaction's deliberate 60s bound
+  # (DoItWeb.Api.Operations, m03.04 2.17) so a waiter outlives the slowest
+  # legitimate holder instead of raising mid-wait.
+  @lock_wait_timeout 75_000
+
+  # How long the pinned connection may be held overall: a worst-case lock wait
+  # plus the waiter's own worst-case batch, with slack.
+  @checkout_timeout 150_000
+
   @doc """
   The hash that binds an idempotency key to its payload (m03.04 fix 20).
 
@@ -84,13 +94,51 @@ defmodule DoIt.Api.Idempotency do
   end
 
   @doc """
+  Serialize the controller's whole fetch → apply → store window for
+  `(user, key)` (m03.04 2.19).
+
+  The lookup-then-execute sequence is check-then-act: without a lock, two
+  same-key requests in flight together both fetch a miss and both execute — a
+  timeout-retry racing its original double-applies. `fun` runs while a
+  session-level Postgres advisory lock on `(user, key)` is held, so the second
+  request blocks until the first stores its response, then finds it on its own
+  fetch and replays.
+
+  Session-level (not transaction-scoped) because `fun` spans
+  `Operations.apply_batch/2`, which must own its transaction boundary
+  (broadcasts flush only on its real commit) — so the lock instead rides a
+  connection pinned with `Repo.checkout/2`, and the `after` releases it on
+  every exit; a process killed outright takes the pinned connection down with
+  it, which also releases the lock. The lock key is the first 8 bytes of
+  `sha256(user_id <> ":" <> key)` — a cross-pair collision only means needless
+  serialization, never wrong behavior.
+  """
+  @spec with_key_lock(User.t(), String.t(), (-> result)) :: result when result: var
+  def with_key_lock(%User{} = user, key, fun) when is_binary(key) do
+    <<lock_key::signed-64, _rest::binary>> = :crypto.hash(:sha256, "#{user.id}:#{key}")
+
+    Repo.checkout(
+      fn ->
+        Repo.query!("SELECT pg_advisory_lock($1)", [lock_key], timeout: @lock_wait_timeout)
+
+        try do
+          fun.()
+        after
+          Repo.query!("SELECT pg_advisory_unlock($1)", [lock_key])
+        end
+      end,
+      timeout: @checkout_timeout
+    )
+  end
+
+  @doc """
   Record the response `(status, body)` for `(user, key)`, bound to
   `payload_hash`.
 
-  Returns `:ok`. A concurrent request may have stored the same key first; the
-  unique index on `(user_id, idempotency_key)` then makes this a no-op via
-  `on_conflict: :nothing` — the key is recorded either way, so a losing race is
-  still a success.
+  Returns `:ok`. Same-key requests serialize on `with_key_lock/3`, so the
+  unique index on `(user_id, idempotency_key)` + `on_conflict: :nothing` is
+  the structural backstop rather than the working guard — a losing writer is
+  still a success either way.
   """
   @spec store(User.t(), String.t(), binary(), integer(), map()) :: :ok
   def store(%User{} = user, key, payload_hash, status, body) when is_binary(key) do

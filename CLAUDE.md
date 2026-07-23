@@ -48,5 +48,3 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 ## Terminal Ownership
 Claude drives Docker, git, and `mix` (via the container) — assume the user has no shell open unless they say otherwise.
 
-## Subagents & workflows
-Use workflows and subagents wherever feasible — delegate independent investigation, review, and path-scoped implementation to them by default. The primary agent owns diagnosis, decisions, integration, and the user-facing summary.

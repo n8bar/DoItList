@@ -30,8 +30,11 @@ defmodule DoItWeb.Api.OperationsController do
   naming the key conflict — a revised batch takes a new key. Only a commit is
   stored: a rolled-back batch and the pre-execution rejections (batch-too-large,
   malformed body) commit nothing and store nothing, so an honest retry of them
-  re-executes. With no header, behavior is exactly as above. The key itself is
-  enforced server-side here; the MCP tool merely forwards it.
+  re-executes. Same-key requests **in flight together** serialize on a
+  per-`(user, key)` advisory lock (m03.04 2.19), so a racing retry waits, then
+  replays — it can never double-apply. With no header, behavior is exactly as
+  above and no lock is taken. The key itself is enforced server-side here; the
+  MCP tool merely forwards it.
   """
   use DoItWeb, :controller
 
@@ -48,19 +51,24 @@ defmodule DoItWeb.Api.OperationsController do
       key ->
         payload_hash = Idempotency.payload_hash(operations)
 
-        case Idempotency.fetch(user, key, payload_hash) do
-          {:replay, {status, body}} ->
-            # Replay the first attempt's stored response — no re-execution.
-            conn |> put_status(status) |> json(body)
+        # The whole fetch -> apply -> store window holds the (user, key)
+        # advisory lock (m03.04 2.19): a same-key request racing this one
+        # blocks here, then fetches the winner's stored response and replays.
+        Idempotency.with_key_lock(user, key, fn ->
+          case Idempotency.fetch(user, key, payload_hash) do
+            {:replay, {status, body}} ->
+              # Replay the first attempt's stored response — no re-execution.
+              conn |> put_status(status) |> json(body)
 
-          :payload_conflict ->
-            key_conflict(conn)
+            :payload_conflict ->
+              key_conflict(conn)
 
-          nil ->
-            outcome = Operations.apply_batch(user, operations)
-            store_if_committed(user, key, payload_hash, outcome)
-            render_outcome(conn, outcome)
-        end
+            nil ->
+              outcome = Operations.apply_batch(user, operations)
+              store_if_committed(user, key, payload_hash, outcome)
+              render_outcome(conn, outcome)
+          end
+        end)
     end
   end
 
