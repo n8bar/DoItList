@@ -250,20 +250,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert_receive {:send_elicitation_request, params, schema, timeout}, 2_000
 
-    # Message: readback verbatim, the server-computed size line (no tells for
-    # this clean batch), assumptions as a list, then the decision line naming
-    # all three choices. No `settled` passed → no Settled block.
+    # Message: readback verbatim, assumptions as a list, then the decision
+    # line naming all three choices. No `settled` passed → no Settled block.
     assert params["message"] ==
              readback <>
-               "\n\nServer-computed: this batch adds #{@threshold + 1} tasks " <>
-               "(#{@threshold + 1} this session).\n\n" <>
-               "Assumptions:\n- Depth taken from markdown heading levels\n" <>
+               "\n\nAssumptions:\n- Depth taken from markdown heading levels\n" <>
                "- Struck-through items skipped\n\n" <>
                "Decide: apply — apply this import as read back; correct — don't apply, " <>
                "your corrections say what to change; hold — don't apply, have the agent " <>
                "ask you more questions first."
-
-    refute params["message"] =~ "file-mirror"
 
     refute params["message"] =~ "Settled"
 
@@ -282,44 +277,6 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["ok"] == true
     assert [%{"type" => "text", "text" => note}] = rest
     assert note =~ "confirmed"
-  end
-
-  test "a mirror-shaped batch gets its tells printed under the readback" do
-    elicitation_capable()
-
-    ops =
-      [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Docs"}}] ++
-        for i <- 1..(@threshold + 1) do
-          %{
-            "op" => "add",
-            "type" => "task",
-            "lid" => "t#{i}",
-            "data" => %{
-              "initiative_lid" => "i",
-              "title" => "docs\\file#{i}.md",
-              "description" => String.duplicate("x", 2_100)
-            }
-          }
-        end
-
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{operations: ops, readback: "Importing the docs tree, preserving each file."},
-          @frame
-        )
-      end)
-
-    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
-
-    assert params["message"] =~
-             "#{@threshold + 1} of #{@threshold + 1} new task titles look like file paths/names."
-
-    assert params["message"] =~ "whole-file sized"
-    assert params["message"] =~ "file-mirror tells"
-
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "correct", "corrections" => "Extract the work, not the files."}})
-    assert {:reply, _response, @frame} = Task.await(task, 5_000)
   end
 
   test "corrections come back as the tool result and nothing applies" do
