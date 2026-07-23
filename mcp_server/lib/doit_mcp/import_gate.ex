@@ -14,7 +14,11 @@ defmodule DoitMcp.ImportGate do
   chunking is sanctioned, so no single batch tells the whole story. Each
   batch's task-adds are resolved per target Initiative and summed with the
   session counter (`DoitMcp.ImportGate.Counter`, recorded on successful
-  applies). A fresh Initiative switches keys mid-import — created under a
+  applies). An add anchored on an EXISTING task's `parent_id` — the most
+  common import shape, growing an existing tree — resolves through the
+  caller-built `parent_targets` map (m03.04 item 2.18): the caller reads
+  each unique parent once (`GET /api/v1/tasks/:id`) at the IO edge
+  (`existing_parent_ids/1` lists the ids), keeping this module pure. A fresh Initiative switches keys mid-import — created under a
   lid, referenced by real id from the next chunk on — so applied counts are
   rekeyed to the created id (`created_initiative_ids/2` + `rekey_counts/2`)
   before recording. An armed gate holds the batch only when ALL of these
@@ -72,6 +76,10 @@ defmodule DoitMcp.ImportGate do
     * `:confirmed?` — 1-arity fun (`target -> boolean`); whether the operator
       already confirmed an import into that Initiative this session
       (defaults to false)
+    * `:parent_targets` — `%{parent_id => target}` map resolving the batch's
+      parent-anchored adds (`existing_parent_ids/1`) to their Initiatives,
+      built by the caller at the IO edge (defaults to `%{}` — such adds
+      stay uncounted)
 
   Checks run cheapest-first (kill switch, counts, capability, settled) and
   short-circuit, so nothing is counted while `enabled?/0` is false and the
@@ -88,9 +96,10 @@ defmodule DoitMcp.ImportGate do
   def evaluate(operations, opts) when is_list(operations) do
     cumulative = Keyword.get(opts, :cumulative, fn _target -> 0 end)
     confirmed? = Keyword.get(opts, :confirmed?, fn _target -> false end)
+    parent_targets = Keyword.get(opts, :parent_targets, %{})
 
     with true <- enabled?(),
-         [_ | _] = candidates <- over_threshold(operations, cumulative),
+         [_ | _] = candidates <- over_threshold(operations, cumulative, parent_targets),
          true <- Keyword.fetch!(opts, :elicitation?).(),
          [_ | _] = unsettled <- Enum.reject(candidates, fn {ref, _, _} -> confirmed?.(ref) end),
          {:ok, gated} <- knobless_target(unsettled, Keyword.fetch!(opts, :fetch_initiative)) do
@@ -107,12 +116,17 @@ defmodule DoitMcp.ImportGate do
 
   @doc """
   Task-adds in the batch summed per target Initiative, first-seen batch
-  order, resolving in-batch `parent_lid` chains like `target_refs/1`. Adds
-  with no resolvable Initiative are dropped. This is also the shape
+  order, resolving in-batch `parent_lid` chains like `target_refs/2` and
+  parent-anchored adds through `parent_targets` — the `%{parent_id =>
+  target}` map the caller resolved at the IO edge (`existing_parent_ids/1`
+  lists the ids to resolve). An add whose target is still unknowable (a
+  `parent_id` missing from the map, a dangling `parent_lid`) is dropped —
+  the apply surfaces the real error. This is also the shape
   `DoitMcp.ImportGate.Counter.record/1` takes after a successful apply.
   """
-  @spec count_by_target([map()]) :: [{target(), pos_integer()}]
-  def count_by_target(operations) do
+  @spec count_by_target([map()], %{optional(term()) => target()}) ::
+          [{target(), pos_integer()}]
+  def count_by_target(operations, parent_targets \\ %{}) do
     task_adds = Enum.filter(operations, &task_add?/1)
 
     by_lid =
@@ -120,7 +134,7 @@ defmodule DoitMcp.ImportGate do
 
     refs =
       task_adds
-      |> Enum.map(&resolve_ref(&1, by_lid, MapSet.new()))
+      |> Enum.map(&resolve_ref(&1, by_lid, parent_targets, MapSet.new()))
       |> Enum.reject(&is_nil/1)
 
     counts = Enum.frequencies(refs)
@@ -178,13 +192,40 @@ defmodule DoitMcp.ImportGate do
   @doc """
   Resolve each task-add op to the Initiative it targets, chasing in-batch
   `parent_lid` chains (an add without its own Initiative ref inherits its
-  in-batch parent's). Returns the deduplicated refs in batch order; adds
-  hanging off an existing task via `parent_id` resolve to nothing — their
-  Initiative isn't knowable without a per-task read.
+  in-batch parent's) and consulting `parent_targets` when an add — or the
+  chain it hangs off — ends at an existing task's `parent_id`. Returns the
+  deduplicated refs in batch order; a parent-anchored add whose `parent_id`
+  isn't in the map resolves to nothing and is dropped — the apply surfaces
+  the real error.
   """
-  @spec target_refs([map()]) :: [target()]
-  def target_refs(operations) do
-    operations |> count_by_target() |> Enum.map(&elem(&1, 0))
+  @spec target_refs([map()], %{optional(term()) => target()}) :: [target()]
+  def target_refs(operations, parent_targets \\ %{}) do
+    operations |> count_by_target(parent_targets) |> Enum.map(&elem(&1, 0))
+  end
+
+  @doc """
+  The unique existing-task `parent_id`s the batch's task-adds anchor on —
+  the ids whose Initiative `count_by_target/2` can only learn from the
+  `parent_targets` map. Mirrors `resolve_ref`'s priority order, so an add
+  that already carries its own Initiative ref or an in-batch `parent_lid`
+  never lists its `parent_id` here (a `parent_lid` CHAIN terminating at a
+  `parent_id` is covered: the terminal op lists it itself). IO stays at
+  the edge — the caller resolves each id (one task read apiece, deduped
+  per batch) and hands back the map.
+  """
+  @spec existing_parent_ids([map()]) :: [term()]
+  def existing_parent_ids(operations) do
+    operations
+    |> Enum.filter(&task_add?/1)
+    |> Enum.flat_map(fn op ->
+      data = Map.get(op, "data") || %{}
+
+      if not is_binary(data["initiative_lid"]) and is_nil(data["initiative_id"]) and
+           not is_binary(data["parent_lid"]) and not is_nil(data["parent_id"]),
+         do: [data["parent_id"]],
+         else: []
+    end)
+    |> Enum.uniq()
   end
 
   @doc "Whether a stored knobs value counts as unsettled (nil or blank)."
@@ -198,28 +239,42 @@ defmodule DoitMcp.ImportGate do
 
   # Targets whose session total (counter plus this batch) crosses the
   # threshold, as {ref, batch_adds, total} in batch order.
-  defp over_threshold(operations, cumulative) do
+  defp over_threshold(operations, cumulative, parent_targets) do
     operations
-    |> count_by_target()
+    |> count_by_target(parent_targets)
     |> Enum.map(fn {ref, n} -> {ref, n, n + cumulative.(ref)} end)
     |> Enum.filter(fn {_ref, _n, total} -> total > @task_add_threshold end)
   end
 
-  defp resolve_ref(op, by_lid, seen) do
+  defp resolve_ref(op, by_lid, parent_targets, seen) do
     data = Map.get(op, "data") || %{}
 
     cond do
-      is_binary(data["initiative_lid"]) -> {:in_batch, data["initiative_lid"]}
-      not is_nil(data["initiative_id"]) -> {:existing, data["initiative_id"]}
-      is_binary(data["parent_lid"]) -> chase_parent(data["parent_lid"], by_lid, seen)
-      true -> nil
+      is_binary(data["initiative_lid"]) ->
+        {:in_batch, data["initiative_lid"]}
+
+      not is_nil(data["initiative_id"]) ->
+        {:existing, data["initiative_id"]}
+
+      is_binary(data["parent_lid"]) ->
+        chase_parent(data["parent_lid"], by_lid, parent_targets, seen)
+
+      # Anchored on an existing task: the caller-resolved map knows its
+      # Initiative. A parent the map doesn't carry (unknown/foreign id, a
+      # failed read) keeps the old dropped behavior — nil, uncounted — and
+      # the apply surfaces the real error.
+      not is_nil(data["parent_id"]) ->
+        Map.get(parent_targets, data["parent_id"])
+
+      true ->
+        nil
     end
   end
 
-  defp chase_parent(lid, by_lid, seen) do
+  defp chase_parent(lid, by_lid, parent_targets, seen) do
     with false <- MapSet.member?(seen, lid),
          %{} = parent <- Map.get(by_lid, lid) do
-      resolve_ref(parent, by_lid, MapSet.put(seen, lid))
+      resolve_ref(parent, by_lid, parent_targets, MapSet.put(seen, lid))
     else
       _ -> nil
     end

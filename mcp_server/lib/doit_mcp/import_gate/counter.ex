@@ -43,7 +43,7 @@ defmodule DoitMcp.ImportGate.Counter do
 
   @doc """
   Record an applied batch's per-target task-add counts
-  (`DoitMcp.ImportGate.count_by_target/1`'s shape).
+  (`DoitMcp.ImportGate.count_by_target/2`'s shape).
   """
   @spec record([{DoitMcp.ImportGate.target(), pos_integer()}]) :: :ok
   def record(counts) when is_list(counts) do

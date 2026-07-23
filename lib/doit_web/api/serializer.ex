@@ -138,6 +138,18 @@ defmodule DoItWeb.Api.Serializer do
     both directions (no extra round-trip).
   * `children` — nested task nodes (empty for a leaf).
 
+  ## Task ref — `GET /api/v1/tasks/:id`
+
+      {
+        "id": 101,
+        "initiative_id": 12
+      }
+
+  The task → Initiative resolver (m03.04 item 2.18.1) — deliberately minimal:
+  just enough for a caller holding a bare task id (e.g. a `parent_id`) to
+  learn which Initiative it belongs to. The full task shape lives in the
+  Initiative tree read above.
+
   ## Activity event — `GET /api/v1/initiatives/:id/activity`
 
       {
@@ -333,6 +345,11 @@ defmodule DoItWeb.Api.Serializer do
 
   defp reference_entry(:source, id, index, title),
     do: %{source_id: id, source_index: index, source_title: title}
+
+  @doc "The task → Initiative resolver body (`GET /api/v1/tasks/:id`)."
+  def task_ref(%Task{} = task) do
+    %{id: task.id, initiative_id: task.initiative_id}
+  end
 
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do

@@ -331,4 +331,78 @@ defmodule DoitMcp.ImportGateTest do
       assert ImportGate.target_refs(ops) == [{:existing, 9}, {:in_batch, "i"}]
     end
   end
+
+  describe "parent-anchored adds (m03.04 item 2.18)" do
+    test "existing_parent_ids/1 lists unique bare parent_ids in batch order" do
+      ops = [
+        %{"op" => "add", "type" => "task", "lid" => "a", "data" => %{"parent_id" => 42}},
+        %{"op" => "add", "type" => "task", "lid" => "b", "data" => %{"parent_id" => 42}},
+        %{"op" => "add", "type" => "task", "lid" => "c", "data" => %{"parent_id" => 43}},
+        # Carries its own Initiative ref — its parent_id is never consulted.
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "d",
+          "data" => %{"parent_id" => 44, "initiative_id" => 9}
+        },
+        # Chases the in-batch parent instead.
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "e",
+          "data" => %{"parent_id" => 45, "parent_lid" => "a"}
+        },
+        # Not a task-add.
+        %{"op" => "update", "type" => "task", "id" => 1, "data" => %{"parent_id" => 46}}
+      ]
+
+      assert ImportGate.existing_parent_ids(ops) == [42, 43]
+    end
+
+    test "count_by_target/2 counts parent-anchored adds through the resolved map, mixed batch" do
+      ops =
+        task_adds(2, %{"initiative_id" => 9}) ++
+          [
+            %{"op" => "add", "type" => "task", "lid" => "p1", "data" => %{"parent_id" => 42}},
+            %{"op" => "add", "type" => "task", "lid" => "p2", "data" => %{"parent_id" => 43}}
+          ]
+
+      assert ImportGate.count_by_target(ops, %{42 => {:existing, 9}, 43 => {:existing, 8}}) ==
+               [{{:existing, 9}, 3}, {{:existing, 8}, 1}]
+    end
+
+    test "an in-batch parent_lid chain terminating at a parent_id resolves through the map" do
+      ops = [
+        %{"op" => "add", "type" => "task", "lid" => "root", "data" => %{"parent_id" => 42}},
+        %{"op" => "add", "type" => "task", "lid" => "mid", "data" => %{"parent_lid" => "root"}},
+        %{"op" => "add", "type" => "task", "lid" => "leaf", "data" => %{"parent_lid" => "mid"}}
+      ]
+
+      assert ImportGate.count_by_target(ops, %{42 => {:existing, 7}}) == [{{:existing, 7}, 3}]
+      assert ImportGate.target_refs(ops, %{42 => {:existing, 7}}) == [{:existing, 7}]
+    end
+
+    test "a parent missing from the map stays dropped — the apply surfaces the real error" do
+      ops = [
+        %{"op" => "add", "type" => "task", "lid" => "a", "data" => %{"parent_id" => 42}},
+        %{"op" => "add", "type" => "task", "lid" => "b", "data" => %{"parent_id" => 404}}
+      ]
+
+      assert ImportGate.count_by_target(ops, %{42 => {:existing, 7}}) == [{{:existing, 7}, 1}]
+    end
+
+    test "evaluate/2 gates an over-threshold parent-anchored batch through :parent_targets" do
+      ops = task_adds(@threshold + 1, %{"parent_id" => 42})
+      fetch = fn _id -> {:ok, %{"id" => 7, "ai_knobs" => nil}} end
+
+      assert {:gate, %{task_adds: task_adds, target: {:existing, 7}}} =
+               ImportGate.evaluate(ops,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: fetch,
+                 parent_targets: %{42 => {:existing, 7}}
+               )
+
+      assert task_adds == @threshold + 1
+    end
+  end
 end

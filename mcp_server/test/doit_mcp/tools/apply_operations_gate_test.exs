@@ -99,6 +99,41 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
   end
 
+  defp parent_anchored_batch(task_count, parent_id) do
+    for i <- 1..task_count do
+      %{
+        "op" => "add",
+        "type" => "task",
+        "lid" => "t#{i}",
+        "data" => %{"parent_id" => parent_id, "title" => "task #{i}"}
+      }
+    end
+  end
+
+  # GET /api/v1/tasks/:id resolves the anchor parent to its Initiative (and
+  # reports each read to the test process, so dedup is assertable); GET
+  # /api/v1/initiatives/:id serves the target knobless; POST applies.
+  defp stub_parent_resolve_and_apply(parent_id, initiative_id) do
+    reply_to = self()
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", "/api/v1/tasks/" <> _} ->
+          send(reply_to, {:task_read, conn.request_path})
+
+          Req.Test.json(conn, %{
+            "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
+          })
+
+        {"GET", "/api/v1/initiatives/" <> _} ->
+          Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
+
+        {"POST", "/api/v1/operations"} ->
+          Req.Test.json(conn, %{"results" => []})
+      end
+    end)
+  end
+
   defp stub_apply_ok do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       assert conn.method == "POST"
@@ -501,6 +536,29 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       assert text =~ "35 this session"
     end
 
+    test "recorded counts match gate counts across resolution modes: a parent-anchored chunk and an initiative_id chunk share one total" do
+      start_counter()
+      elicitation_capable()
+      stub_parent_resolve_and_apply(42, 7)
+
+      # Chunk 1: 20 parent-anchored adds — under the line, applies, and is
+      # recorded under the parent's Initiative (the same key the gate reads).
+      execute_ok(parent_anchored_batch(20, 42))
+      refute_received {:send_elicitation_request, _, _, _}
+      assert DoitMcp.ImportGate.Counter.cumulative({:existing, 7}) == 20
+
+      # Chunk 2 references the SAME Initiative by id: 15 more → 35 this
+      # session crosses 30, so the crossing batch is held.
+      ops = existing_initiative_batch(15, 7)
+      assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+
+      protocol = Response.to_protocol(response)
+      assert protocol["isError"] == true
+      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+      assert text =~ "15 tasks"
+      assert text =~ "35 this session"
+    end
+
     test "a confirm granted under the lid carries to the created id — later chunks never re-ask" do
       start_counter()
       elicitation_capable()
@@ -521,6 +579,77 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       # Knobs still empty and the counter far over the line — but the
       # operator's confirm followed the Initiative to its real id.
       execute_ok(existing_initiative_batch(15, 57))
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+  end
+
+  describe "parent-anchored adds (m03.04 item 2.18)" do
+    test "an over-threshold parent-anchored batch is held — no more dodging via parent_id" do
+      elicitation_capable()
+      stub_parent_resolve_and_apply(42, 7)
+
+      ops = parent_anchored_batch(@threshold + 1, 42)
+      assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+
+      protocol = Response.to_protocol(response)
+      assert protocol["isError"] == true
+      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+      assert text =~ "readback"
+      assert text =~ "#{@threshold + 1} tasks"
+    end
+
+    test "with a readback the operator is elicited, and a confirm applies the batch" do
+      elicitation_capable()
+      stub_parent_resolve_and_apply(42, 7)
+
+      task =
+        Task.async(fn ->
+          ApplyOperations.execute(
+            %{
+              operations: parent_anchored_batch(@threshold + 1, 42),
+              readback: "Importing 31 tasks under an existing task."
+            },
+            @frame
+          )
+        end)
+
+      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+
+      assert {:reply, response, @frame} = Task.await(task, 5_000)
+      {protocol, decoded, _} = decode_json_content(response)
+      assert protocol["isError"] == false
+      assert decoded["ok"] == true
+    end
+
+    test "a below-threshold parent-anchored batch applies straight through, one read per unique parent" do
+      elicitation_capable()
+      stub_parent_resolve_and_apply(42, 7)
+
+      execute_ok(parent_anchored_batch(@threshold, 42))
+      refute_received {:send_elicitation_request, _, _, _}
+
+      # All 30 adds anchor on the same parent — resolved exactly once.
+      assert_received {:task_read, "/api/v1/tasks/42"}
+      refute_received {:task_read, _}
+    end
+
+    test "an unresolvable parent (404 read) stays dropped — the gate passes, the apply speaks" do
+      elicitation_capable()
+
+      Req.Test.stub(DoitMcp.Client, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/v1/tasks/" <> _} ->
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{"error" => %{"status" => 404, "code" => "not_found"}})
+
+          {"POST", "/api/v1/operations"} ->
+            Req.Test.json(conn, %{"results" => []})
+        end
+      end)
+
+      execute_ok(parent_anchored_batch(@threshold + 1, 999))
       refute_received {:send_elicitation_request, _, _, _}
     end
   end
