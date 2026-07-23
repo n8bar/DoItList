@@ -832,6 +832,61 @@ defmodule DoItWeb.Layouts do
 
   # How many member avatars the rail entry shows before collapsing the rest
   # into a "+N" overflow (m02.09 WL3.5). Sized for the 17rem rail width.
+  @doc """
+  Agent-trust confirm dialog (m03.04 items 2.12.4/2.16/2.21) — the one
+  client-opened modal (UX_GUARDRAILS 6.5) shared by every path that adds or
+  promotes a member on an agent-accessible initiative: the workspace's
+  settings panes and the rail's collaborator add on any page rendering the
+  rail (workspace, `/assigned`). app.js decides at the click/drop with no
+  round trip and holds the intercepted action until Proceed re-dispatches it;
+  shown at most once per (admin, Initiative) — the server records the
+  acknowledgement when the confirmed action commits. `phx-update="ignore"`:
+  the JS owns visibility and button wiring. Render it wherever a caller might
+  open it — the JS fail-safes to Cancel when it's absent.
+  """
+  def agent_trust_confirm(assigns) do
+    ~H"""
+    <div
+      id="agent-trust-confirm"
+      hidden
+      phx-update="ignore"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+    >
+      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
+        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+          Trust this initiative's members with AI access?
+        </h2>
+        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+          AI agents working this initiative read everything its members write —
+          content from current <span class="font-medium">and future</span>
+          members alike. Anything a member writes can steer an agent that reads
+          it (prompt injection). Proceed only if you trust this initiative's
+          members, present and future, with your AI agents.
+        </p>
+        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          Asked once per initiative — you won't see this again here.
+        </p>
+        <div class="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            data-trust-cancel
+            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            data-trust-proceed
+            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
+          >
+            I trust these members
+          </button>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
   defp rail_avatar_cap, do: 6
 
   # a11y label for the rail member-avatar row — avatars aren't the only signal.

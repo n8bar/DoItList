@@ -359,4 +359,97 @@ defmodule DoItWeb.AgentAccessSettingsTest do
              )
     end
   end
+
+  describe "trust-confirm on the /assigned collaborator-drop path (2.21)" do
+    test "a gated drop on /assigned shows the dialog state, adds, and records the ack", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/assigned")
+
+      # The rail entry is armed and the dialog is mounted for the drop to open.
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='true']"
+             )
+
+      assert has_element?(view, "#agent-trust-confirm")
+
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => to_string(bob.id),
+        "initiative-id" => to_string(ini.id),
+        "trust_confirmed" => "true"
+      })
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+      assert Initiatives.agent_trust_acked?(owner.id, ini.id)
+      # The rail refresh flips the entry in place; no gated entry remains, so
+      # the dialog unrenders.
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='false']"
+             )
+
+      refute has_element?(view, "#agent-trust-confirm")
+    end
+
+    test "a bare /assigned drop adds but records no ack (proof-carrying)", %{
+      conn: conn,
+      owner: owner,
+      ini: ini
+    } do
+      {:ok, _} = Initiatives.set_agent_access(ini, true)
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/assigned")
+
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => to_string(bob.id),
+        "initiative-id" => to_string(ini.id)
+      })
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+      refute Initiatives.agent_trust_acked?(owner.id, ini.id)
+
+      assert has_element?(
+               view,
+               "[data-rail-initiative-id='#{ini.id}'][data-trust-confirm='true']"
+             )
+    end
+
+    test "no gated entry: no dialog on /assigned, an ungated drop just adds", %{
+      conn: conn,
+      ini: ini
+    } do
+      # Agent access off — the predicate can't match anywhere.
+      bob = user("bob")
+
+      {:ok, view, _html} = live(conn, ~p"/assigned")
+
+      refute has_element?(view, "#agent-trust-confirm")
+
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => to_string(bob.id),
+        "initiative-id" => to_string(ini.id)
+      })
+
+      assert Initiatives.get_role(ini.id, bob.id) == "viewer"
+    end
+
+    test "malformed ids on /assigned no-op instead of crashing", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/assigned")
+
+      render_hook(view, "add_collaborator_to", %{
+        "user-id" => "garbage",
+        "initiative-id" => "also-garbage"
+      })
+
+      # Still alive and rendering.
+      assert has_element?(view, "#assigned-page")
+    end
+  end
 end

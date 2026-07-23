@@ -3650,9 +3650,10 @@ function openAgentTrustConfirm(opts) {
   const modal = document.getElementById("agent-trust-confirm")
   if (!modal) {
     // No dialog mounted — fail SAFE: an unconfirmed action must not commit,
-    // so run the revert path, never the action. (Unreachable in the
-    // workspace: the dialog renders whenever #agent-trust-state does AND
-    // whenever any rail entry carries data-trust-confirm=true.)
+    // so run the revert path, never the action. (Unreachable in practice:
+    // the workspace renders the dialog whenever #agent-trust-state does AND
+    // whenever any rail entry carries data-trust-confirm=true; /assigned
+    // mirrors the rail rule — m03.04 2.21.)
     if (opts.cancel) opts.cancel()
     return
   }

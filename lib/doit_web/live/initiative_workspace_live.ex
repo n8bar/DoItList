@@ -17,6 +17,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   alias DoIt.Tasks.Progress
   alias DoIt.Tasks.Tree
   alias DoItWeb.AssignedActions
+  alias DoItWeb.CollaboratorAdd
 
   # Sort modes the index understands. `nil` = the server's default order
   # (owner-first, recently-updated); "manual" = the user's drag order, stored
@@ -2363,35 +2364,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   end
 
   defp do_add_collaborator_to(socket, user, iid, uid, trust_confirmed?) do
-    # m03.04 item 2.16: the rail add is a member add, so it carries the same
-    # proof-carrying ack as the members-panel paths — `trust_confirmed` is
-    # injected ONLY by the trust confirm's Proceed, and the ack records only
-    # when the predicate still holds AND the add commits (never from a bare
-    # push that merely matches the trigger).
-    target = if trust_confirmed?, do: Initiatives.get_initiative(iid)
-
-    ack? =
-      target != nil and
-        Initiatives.agent_trust_confirm_required?(user, target, {:add_member, "viewer"})
-
-    {ok?, socket} =
-      case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
-        {:ok, added} ->
-          if ack?, do: Initiatives.record_agent_trust_ack(user, target)
-          {true, put_flash(socket, :info, "Added #{added.name} as a viewer.")}
-
-        # Already a member → the real row is already present; treat the optimistic
-        # chip as not-needed (ok:false pulls the dimmed stand-in; the flash is
-        # informational, no lie left behind).
-        {:error, :already_member} ->
-          {false, put_flash(socket, :info, "They're already a member there.")}
-
-        {:error, :forbidden} ->
-          {false, put_flash(socket, :error, "Only that Initiative's owner can add members.")}
-
-        {:error, :failed} ->
-          {false, put_flash(socket, :error, "Couldn't add them.")}
-      end
+    # Core shared with /assigned (m03.04 2.21) — DoItWeb.CollaboratorAdd owns
+    # the proof-carrying ack rules (2.16).
+    {ok?, ack?, socket} = CollaboratorAdd.add_as_viewer(socket, user, iid, uid, trust_confirmed?)
 
     # Refresh the collaborators pane AND the rail initiatives (their member-
     # avatar rows) so the server render carries the real avatar after the add —
@@ -3083,7 +3058,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
            can_admin) and the rail's collaborator add (menu + drag, either
            mode), which triggers off any administered rail entry still
            carrying data-trust-confirm=true. --%>
-      <.agent_trust_confirm :if={@can_admin or Enum.any?(@initiatives, & &1.trust_confirm_required)} />
+      <Layouts.agent_trust_confirm :if={@can_admin or Enum.any?(@initiatives, & &1.trust_confirm_required)} />
 
       <%= if @live_action == :show do %>
         <div id={"initiative-detail-#{@initiative.id}"}>
@@ -5388,55 +5363,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-red-600 hover:bg-red-700 active:bg-red-800"
           >
             Remove
-          </button>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # Agent-trust confirm (m03.04 item 2.12.4) — client-opened (UX_GUARDRAILS
-  # 6.5): app.js decides from #agent-trust-state at the click and opens this
-  # with no round trip, holding the intercepted action (enable-access flip,
-  # member add, promote) until Proceed re-dispatches it. Shown at most once per
-  # (admin, Initiative): the server records the acknowledgement when the
-  # confirmed action commits, and data-acked flips true for good.
-  defp agent_trust_confirm(assigns) do
-    ~H"""
-    <div
-      id="agent-trust-confirm"
-      hidden
-      phx-update="ignore"
-      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
-    >
-      <div class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-zinc-900">
-        <h2 class="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-          Trust this initiative's members with AI access?
-        </h2>
-        <p class="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
-          AI agents working this initiative read everything its members write —
-          content from current <span class="font-medium">and future</span>
-          members alike. Anything a member writes can steer an agent that reads
-          it (prompt injection). Proceed only if you trust this initiative's
-          members, present and future, with your AI agents.
-        </p>
-        <p class="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Asked once per initiative — you won't see this again here.
-        </p>
-        <div class="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            data-trust-cancel
-            class="rounded border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-100 active:bg-zinc-200 active:scale-95 transition dark:border-zinc-600 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:active:bg-zinc-700"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            data-trust-proceed
-            class="rounded px-3 py-1.5 text-sm font-medium text-white active:scale-95 transition bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800"
-          >
-            I trust these members
           </button>
         </div>
       </div>
