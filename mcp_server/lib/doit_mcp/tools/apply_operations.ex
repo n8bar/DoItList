@@ -107,7 +107,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   use Anubis.Server.Component, type: :tool
 
   alias Anubis.Server.Response
-  alias DoitMcp.{Client, Elicitation, ImportGate, ToolResult}
+  alias DoitMcp.{BatchShape, Client, Elicitation, ImportGate, ToolResult}
   alias DoitMcp.ImportGate.Counter
 
   # A human is reading the readback — give them a generous window.
@@ -143,21 +143,80 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   def execute(params, frame) do
-    parent_targets = resolve_parent_targets(params.operations)
+    # Content-shape pass first (m03.04 3.1 iteration 1): a refusal costs no
+    # API reads, and a shape-hold forces the confirm even under the size
+    # threshold. Rides the gate's kill switch — one switch disarms all import
+    # guardrails.
+    case shape_check(params) do
+      {:refuse, message} ->
+        {:reply, shape_refused(message), frame}
 
-    gate =
-      ImportGate.evaluate(params.operations,
-        elicitation?: &Elicitation.client_supports_elicitation?/0,
-        fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end,
-        cumulative: &Counter.cumulative/1,
-        confirmed?: &Counter.confirmed?/1,
-        parent_targets: parent_targets
-      )
+      shape ->
+        parent_targets = resolve_parent_targets(params.operations)
 
-    case gate do
-      :pass -> apply_batch(params, parent_targets, frame)
-      {:gate, info} -> hold_for_confirmation(params, info, parent_targets, frame)
+        gate =
+          ImportGate.evaluate(params.operations,
+            elicitation?: &Elicitation.client_supports_elicitation?/0,
+            fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end,
+            cumulative: &Counter.cumulative/1,
+            confirmed?: &Counter.confirmed?/1,
+            parent_targets: parent_targets
+          )
+
+        case {gate, shape} do
+          {{:gate, info}, _} ->
+            hold_for_confirmation(params, info, parent_targets, frame)
+
+          {:pass, :hold} ->
+            # Shape-held below the size threshold: synthetic info, no target —
+            # the confirm is about this batch's content, not a per-Initiative
+            # session settling.
+            adds = ImportGate.count_task_adds(params.operations)
+            info = %{task_adds: adds, cumulative: adds, target: nil}
+            hold_for_confirmation(params, info, parent_targets, frame)
+
+          {:pass, :pass} ->
+            apply_batch(params, parent_targets, frame)
+        end
     end
+  end
+
+  # BatchShape verdict, folded with what the session can actually do:
+  #   - refusals stand unless the agent claims an operator instruction
+  #     (`readback` + `settled`) AND the client can ask the operator — the
+  #     claim then routes to the confirm form, where the printed facts make a
+  #     false "operator asked for this" vetoable at a glance (fix 18.2's
+  #     precedent);
+  #   - sub-scale holds step aside on a non-elicitation client, exactly like
+  #     the size gate (condition 2) — with no way to ask, prose is the only
+  #     layer there.
+  defp shape_check(params) do
+    if ImportGate.enabled?() do
+      case BatchShape.classify(params.operations) do
+        {:refuse, message} ->
+          if override_claimed?(params) and Elicitation.client_supports_elicitation?(),
+            do: :hold,
+            else: {:refuse, message}
+
+        {:hold, _question} ->
+          if Elicitation.client_supports_elicitation?(), do: :hold, else: :pass
+
+        :pass ->
+          :pass
+      end
+    else
+      :pass
+    end
+  end
+
+  defp override_claimed?(params) do
+    presence(Map.get(params, :readback)) != nil and (Map.get(params, :settled) || []) != []
+  end
+
+  defp shape_refused(message) do
+    payload = %{ok: false, applied: false, gate: "batch_shape", message: message}
+    response = Response.json(Response.tool(), payload)
+    %{response | isError: true}
   end
 
   # Resolve the batch's parent-anchored task-adds (`parent_id` = an existing
@@ -244,6 +303,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     message =
       confirmation_message(
         readback,
+        BatchShape.facts_block(params.operations),
         Map.get(params, :assumptions) || [],
         Map.get(params, :settled) || []
       )
@@ -275,7 +335,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
         # The operator's confirm settles this Initiative for the rest of the
         # session — later chunks must not re-ask (marked before the apply so a
         # failed apply's retry doesn't re-elicit an already-granted confirm).
-        Counter.mark_confirmed(info.target)
+        # A shape-hold has no target: its confirm is per-batch, nothing settles.
+        if info.target, do: Counter.mark_confirmed(info.target)
         apply_batch(params, parent_targets, frame, note: @confirm_note)
 
       is_binary(corrections) ->
@@ -309,6 +370,13 @@ defmodule DoitMcp.Tools.ApplyOperations do
     {:reply, %{response | isError: true}, frame}
   end
 
+  defp readback_required_message(%{target: nil, task_adds: task_adds}) do
+    "Import gate: this batch's content shape needs the operator's confirmation before " <>
+      "its #{task_adds} task-adds apply (checkbox/description shape — the confirm form " <>
+      "carries the specifics). Nothing was applied. Re-call apply_operations with the " <>
+      "same operations plus `readback`, `assumptions`, and `settled`, as for a large import."
+  end
+
   defp readback_required_message(%{task_adds: task_adds, cumulative: cumulative}) do
     "Import gate: this batch adds #{task_adds} tasks (#{cumulative} this session, " <>
       "chunks included), so the operator must confirm it before it applies. Nothing was " <>
@@ -319,7 +387,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "one string each. The operator will confirm or correct them."
   end
 
-  defp confirmation_message(readback, assumptions, settled) do
+  # Shape facts print directly under the agent's readback: claim first, then
+  # the numbers that check it. Nil (an unremarkable batch) drops the section.
+  defp confirmation_message(readback, shape_facts, assumptions, settled) do
     assumptions_block =
       case assumptions do
         [] -> "Assumptions: none stated."
@@ -340,7 +410,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         "your corrections say what to change; hold — don't apply, have the agent " <>
         "ask you more questions first."
 
-    [readback, settled_block, assumptions_block, closing]
+    [readback, shape_facts, settled_block, assumptions_block, closing]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end

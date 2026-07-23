@@ -279,6 +279,131 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert note =~ "confirmed"
   end
 
+  test "a mirror batch refuses before any read; the override claim routes to the form" do
+    elicitation_capable()
+
+    ops =
+      [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Docs"}}] ++
+        for i <- 1..12 do
+          %{
+            "op" => "add",
+            "type" => "task",
+            "lid" => "t#{i}",
+            "data" => %{
+              "initiative_lid" => "i",
+              "title" => "docs\\f#{i}.md",
+              "description" => String.duplicate("x", 2_100) <> "#{i}"
+            }
+          }
+        end
+
+    # Bare call: refused, no elicitation, nothing applied.
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+    {protocol, decoded, _rest} = decode_json_content(response)
+    assert protocol["isError"] == true
+    assert decoded["gate"] == "batch_shape"
+    assert decoded["applied"] == false
+    assert decoded["message"] =~ "file-mirror import"
+    assert decoded["message"] =~ "`settled` entry quoting their instruction"
+    refute_received {:send_elicitation_request, _, _, _}
+
+    # Override claim (readback + settled): the operator vets it on the form,
+    # with the server's facts printed under the claim.
+    stub_apply_ok()
+
+    task =
+      Task.async(fn ->
+        ApplyOperations.execute(
+          %{
+            operations: ops,
+            readback: "One task per source file, as the operator asked.",
+            settled: ["Operator: import the docs tree file-per-task"]
+          },
+          @frame
+        )
+      end)
+
+    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
+    assert params["message"] =~ "Server-computed shape facts:"
+    assert params["message"] =~ "12 of 12 new task titles look like file paths/names."
+    assert params["message"] =~ "Settled (operator-instructed):"
+
+    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    {protocol, decoded, _rest} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["ok"] == true
+  end
+
+  test "a sub-scale checklist batch holds for the subtasks-or-prose call" do
+    elicitation_capable()
+
+    ops = [
+      %{
+        "op" => "add",
+        "type" => "task",
+        "lid" => "t1",
+        "data" => %{
+          "initiative_id" => 7,
+          "title" => "Set up the environment",
+          "description" => "Steps:\n- [ ] install deps\n- [ ] configure env"
+        }
+      }
+    ]
+
+    # Without a readback the hold names the content shape, not batch size.
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+    assert response.isError == true
+    assert [%{"type" => "text", "text" => text}] = Enum.map(response.content, &Map.new(&1, fn {k, v} -> {to_string(k), v} end))
+    assert text =~ "content shape"
+    assert text =~ "Re-call apply_operations"
+
+    # With a readback: the form carries the checklist question; apply keeps prose.
+    stub_apply_ok()
+
+    task =
+      Task.async(fn ->
+        ApplyOperations.execute(%{operations: ops, readback: "Adding one setup task."}, @frame)
+      end)
+
+    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
+    assert params["message"] =~ "2 markdown-checkbox lines"
+    assert params["message"] =~ "subtasks"
+
+    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    {protocol, decoded, _rest} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["ok"] == true
+  end
+
+  test "the kill switch disarms the shape pass with the gate" do
+    Application.put_env(:doit_mcp, :import_gate_enabled, false)
+    stub_apply_ok()
+
+    ops =
+      for i <- 1..12 do
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "t#{i}",
+          "data" => %{
+            "initiative_id" => 7,
+            "title" => "docs/f#{i}.md",
+            "description" => String.duplicate("x", 2_100) <> "#{i}"
+          }
+        }
+      end
+
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+    {protocol, decoded, _} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["ok"] == true
+    refute_received {:send_elicitation_request, _, _, _}
+  end
+
   test "corrections come back as the tool result and nothing applies" do
     elicitation_capable()
 

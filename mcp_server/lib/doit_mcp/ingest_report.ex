@@ -273,7 +273,10 @@ defmodule DoitMcp.IngestReport do
   # A markdown checkbox line: `- [ ]` / `- [x]` / `* [ ]` / `* [x]`,
   # case-insensitive x, leading whitespace allowed. A floor for embedded
   # checklists, not a definition — unmarked lists don't match on purpose.
-  defp checkbox_line_pattern, do: ~r/^[ \t]*[-*][ \t]+\[[ xX]\]/m
+  @doc false
+  # Public only so DoitMcp.BatchShape shares the exact same definition of a
+  # checkbox line — the audit tool and the batch pass must never disagree.
+  def checkbox_line_pattern, do: ~r/^[ \t]*[-*][ \t]+\[[ xX]\]/m
 
   defp checkbox_lines({task, _depth}) do
     with text when is_binary(text) <- task["description"],
