@@ -244,6 +244,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     message =
       confirmation_message(
         readback,
+        ImportGate.shape_facts_block(params.operations, info.task_adds, info.cumulative),
         Map.get(params, :assumptions) || [],
         Map.get(params, :settled) || []
       )
@@ -319,7 +320,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "one string each. The operator will confirm or correct them."
   end
 
-  defp confirmation_message(readback, assumptions, settled) do
+  # The facts block prints directly under the agent's readback: claim first,
+  # then the numbers that check it (m03.04 3.1 iteration 1).
+  defp confirmation_message(readback, shape_facts, assumptions, settled) do
     assumptions_block =
       case assumptions do
         [] -> "Assumptions: none stated."
@@ -340,7 +343,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         "your corrections say what to change; hold — don't apply, have the agent " <>
         "ask you more questions first."
 
-    [readback, settled_block, assumptions_block, closing]
+    [readback, shape_facts, settled_block, assumptions_block, closing]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end
