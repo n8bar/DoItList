@@ -105,6 +105,10 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     assert Jason.decode!(text) == %{"id" => 3}
   end
 
+  # CALC-GATE-PARKED (m03.04): fix 17's progress-calc confirm is parked — the
+  # adapter applies every update ungated, so the gate-behavior tests below are
+  # skipped as a unit. Revive them with the gate.
+  @tag :skip
   test "an update without progress_calc takes zero extra round trips" do
     elicitation_capable()
     stub_apply_only()
@@ -116,6 +120,8 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
+  # CALC-GATE-PARKED (m03.04): revive with the gate.
+  @tag :skip
   test "returning to leaf_average applies ungated, without even a fetch" do
     elicitation_capable()
     stub_apply_only()
@@ -127,6 +133,8 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
+  # CALC-GATE-PARKED (m03.04): revive with the gate.
+  @tag :skip
   test "re-sending the current non-default value applies ungated — no change happening" do
     elicitation_capable()
     stub_get_and_apply("single_level")
@@ -138,6 +146,8 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
+  # CALC-GATE-PARKED (m03.04): revive with the gate.
+  @tag :skip
   test "a change to non-default without elicitation support refuses, naming the in-app control" do
     fake_session(%{"sampling" => %{}})
     stub_get_only("leaf_average")
@@ -153,6 +163,8 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
+  # CALC-GATE-PARKED (m03.04): revive with the gate.
+  @tag :skip
   test "a change to non-default elicits; approve applies" do
     elicitation_capable()
     stub_get_and_apply("leaf_average")
@@ -174,6 +186,8 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     assert_applied(response)
   end
 
+  # CALC-GATE-PARKED (m03.04): revive with the gate.
+  @tag :skip
   test "decline and approve=false both leave the calc unapplied" do
     elicitation_capable()
     stub_get_only("leaf_average")
@@ -198,6 +212,8 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     end
   end
 
+  # CALC-GATE-PARKED (m03.04): revive with the gate.
+  @tag :skip
   test "after an approved confirm, retrying the same change does not re-elicit" do
     start_counter()
     elicitation_capable()
@@ -213,6 +229,20 @@ defmodule DoitMcp.UpdateInitiativeGateTest do
     # Same change again (e.g. a retry after a lost response) — the session
     # remembers the granted confirm; no second ask.
     assert {:reply, response, @frame} = UpdateInitiative.execute(params, @frame)
+    assert_applied(response)
+    refute_received {:send_elicitation_request, _, _, _}
+  end
+
+  # CALC-GATE-PARKED (m03.04): the parked-state contract — a non-default calc
+  # change applies ungated, with no fetch, no elicitation, and no refusal,
+  # even on an elicitation-capable client. Retire when the gate revives.
+  test "with the calc gate parked, a change to non-default applies ungated" do
+    elicitation_capable()
+    stub_apply_only()
+
+    params = %{initiative_id: 3, progress_calc: "single_level"}
+    assert {:reply, response, @frame} = UpdateInitiative.execute(params, @frame)
+
     assert_applied(response)
     refute_received {:send_elicitation_request, _, _, _}
   end
