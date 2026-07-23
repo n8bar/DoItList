@@ -1,5 +1,8 @@
 defmodule DoitMcp.CreateTaskGateTest.FakeSession do
-  @moduledoc "Holds client_capabilities where DoitMcp.Elicitation reads them."
+  @moduledoc """
+  Holds client_capabilities where DoitMcp.Elicitation reads them and forwards
+  elicitation requests to the test process so it can play the operator.
+  """
   use GenServer
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: opts[:name])
@@ -7,6 +10,12 @@ defmodule DoitMcp.CreateTaskGateTest.FakeSession do
   @impl true
   def init(opts) do
     {:ok, %{client_capabilities: opts[:capabilities], forward_to: opts[:forward_to]}}
+  end
+
+  @impl true
+  def handle_info({:send_elicitation_request, _params, _schema, _timeout} = msg, state) do
+    send(state.forward_to, msg)
+    {:noreply, state}
   end
 end
 
@@ -19,7 +28,7 @@ defmodule DoitMcp.CreateTaskGateTest do
 
   alias Anubis.Server.Response
   alias DoitMcp.CreateTaskGateTest.FakeSession
-  alias DoitMcp.ImportGate
+  alias DoitMcp.{Elicitation, ImportGate}
   alias DoitMcp.ImportGate.Counter
   alias DoitMcp.Tools.CreateTask
 
@@ -93,32 +102,75 @@ defmodule DoitMcp.CreateTaskGateTest do
     assert Counter.cumulative({:existing, 7}) == 1
   end
 
-  test "crossing the threshold one-by-one refuses and names the batch path" do
-    elicitation_capable()
-    start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
-
-    assert {:reply, response, @frame} =
-             CreateTask.execute(%{initiative_id: 7, title: "One too many"}, @frame)
-
-    {protocol, decoded} = decode(response)
-    assert protocol["isError"] == true
-    assert decoded["gate"] == "single_create_cap"
-    assert decoded["message"] =~ "created #{@threshold} tasks"
-    assert decoded["message"] =~ "apply_operations"
-    # Refused creates record nothing.
-    assert Counter.cumulative({:existing, 7}) == @threshold
-  end
-
-  test "a parent-anchored create resolves its initiative through the task read" do
+  test "crossing the threshold asks; approve sanctions the session, no re-ask" do
     elicitation_capable()
     start_counter()
     Counter.record([{{:existing, 7}, @threshold}])
     stub_create_ok()
 
-    assert {:reply, response, @frame} =
-             CreateTask.execute(%{parent_id: 42, title: "Nested dodge"}, @frame)
+    task =
+      Task.async(fn -> CreateTask.execute(%{initiative_id: 7, title: "31st"}, @frame) end)
 
+    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
+    assert params["message"] =~ "created #{@threshold} tasks one-by-one"
+    assert params["message"] =~ "apply_operations"
+
+    Elicitation.deliver(%{"action" => "accept", "content" => %{"approve" => true}})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    {protocol, _decoded} = decode(response)
+    assert protocol["isError"] == false
+    assert Counter.cumulative({:existing, 7}) == @threshold + 1
+
+    # Sanctioned for the session — the next create asks nothing.
+    assert {:reply, _response, @frame} =
+             CreateTask.execute(%{initiative_id: 7, title: "32nd"}, @frame)
+
+    refute_received {:send_elicitation_request, _, _, _}
+    assert Counter.cumulative({:existing, 7}) == @threshold + 2
+  end
+
+  test "decline refuses, latches, and later attempts refuse without re-asking" do
+    elicitation_capable()
+    start_counter()
+    Counter.record([{{:existing, 7}, @threshold}])
+
+    task =
+      Task.async(fn -> CreateTask.execute(%{initiative_id: 7, title: "31st"}, @frame) end)
+
+    assert_receive {:send_elicitation_request, _params, _schema, _timeout}, 2_000
+    Elicitation.deliver(%{"action" => "decline"})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    {protocol, decoded} = decode(response)
+    assert protocol["isError"] == true
+    assert decoded["gate"] == "single_create_confirm"
+    assert decoded["message"] =~ "declined"
+    assert decoded["message"] =~ "apply_operations"
+
+    # Latched: the loop can't re-ask.
+    assert {:reply, response, @frame} =
+             CreateTask.execute(%{initiative_id: 7, title: "again"}, @frame)
+
+    refute_received {:send_elicitation_request, _, _, _}
+    {protocol, _decoded} = decode(response)
+    assert protocol["isError"] == true
+    assert Counter.cumulative({:existing, 7}) == @threshold
+  end
+
+  test "a parent-anchored create resolves its initiative and asks past the threshold" do
+    elicitation_capable()
+    start_counter()
+    Counter.record([{{:existing, 7}, @threshold}])
+    stub_create_ok()
+
+    task =
+      Task.async(fn -> CreateTask.execute(%{parent_id: 42, title: "Nested"}, @frame) end)
+
+    assert_receive {:send_elicitation_request, _params, _schema, _timeout}, 2_000
+    Elicitation.deliver(%{"action" => "decline"})
+
+    assert {:reply, response, @frame} = Task.await(task, 5_000)
     {protocol, _decoded} = decode(response)
     assert protocol["isError"] == true
   end
