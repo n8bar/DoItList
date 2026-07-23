@@ -19,7 +19,7 @@ defmodule DoitMcp.ImportGate.Counter do
 
   def start_link(opts \\ []) do
     Agent.start_link(
-      fn -> %{counts: %{}, confirmed: MapSet.new(), declined: MapSet.new()} end,
+      fn -> %{counts: %{}, confirmed: MapSet.new()} end,
       name: Keyword.get(opts, :name, name())
     )
   end
@@ -82,28 +82,6 @@ defmodule DoitMcp.ImportGate.Counter do
     case Process.whereis(name()) do
       nil -> false
       pid -> Agent.get(pid, &MapSet.member?(&1.confirmed, target))
-    end
-  end
-
-  @doc """
-  Remember a confirm the operator DECLINED this session (the single-create
-  continuation ask, m03.04 3.1 iteration 2) — later attempts refuse without
-  re-asking.
-  """
-  @spec mark_declined(term()) :: :ok
-  def mark_declined(target) do
-    case Process.whereis(name()) do
-      nil -> :ok
-      pid -> Agent.update(pid, &%{&1 | declined: MapSet.put(&1.declined, target)})
-    end
-  end
-
-  @doc "Whether the operator already declined this confirm this session."
-  @spec declined?(term()) :: boolean()
-  def declined?(target) do
-    case Process.whereis(name()) do
-      nil -> false
-      pid -> Agent.get(pid, &MapSet.member?(&1.declined, target))
     end
   end
 end

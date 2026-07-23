@@ -25,7 +25,9 @@ defmodule DoitMcp.ImportGate do
   hold:
 
     1. some Initiative's cumulative task-adds — session total plus this
-       batch — cross `threshold/0`,
+       batch — cross the batch's bound: `threshold/0` normally,
+       `ramp_threshold/0` for a coherent one-list batch (`coherent_unit?/1`
+       — each such unit lands as one reviewable increment),
     2. the connected client advertised the `elicitation` capability in its
        initialize handshake (no capability → the gate silently steps aside;
        the skill's own gate rule is the only layer there), and
@@ -38,7 +40,15 @@ defmodule DoitMcp.ImportGate do
   the flow in `DoitMcp.Tools.ApplyOperations`.
   """
 
-  @task_add_threshold 30
+  @task_add_threshold 32
+
+  # The ramp (m03.04 3.1 iteration 2, operator design): a batch that delivers
+  # ONE reviewable list — every add under a single parent, at most
+  # @task_add_threshold adds — earns the long leash, because each such unit
+  # lands visibly in the app between batches. Anything else (bulk, mixed
+  # parents, oversized) keeps the tight threshold and meets the one readback
+  # confirm. Both retunable; powers of two by operator taste.
+  @ramp_threshold 128
 
   @typedoc "The Initiative a gated batch imports into."
   @type target :: {:in_batch, String.t()} | {:existing, term()}
@@ -46,6 +56,10 @@ defmodule DoitMcp.ImportGate do
   @doc "Cumulative task-add count above which an import is gated."
   @spec threshold() :: pos_integer()
   def threshold, do: @task_add_threshold
+
+  @doc "The coherent-unit leash: cumulative bound while batches stay one-list-at-a-time."
+  @spec ramp_threshold() :: pos_integer()
+  def ramp_threshold, do: @ramp_threshold
 
   @doc """
   Whether the gate is armed: on by default; `DOITLIST_IMPORT_GATE=off` in
@@ -239,11 +253,59 @@ defmodule DoitMcp.ImportGate do
 
   # Targets whose session total (counter plus this batch) crosses the
   # threshold, as {ref, batch_adds, total} in batch order.
+  @doc """
+  Whether a batch delivers one reviewable list — the ramp's unit (m03.04 3.1
+  iteration 2): every task-add's in-batch root hangs off the SAME single
+  anchor (one existing task, one existing initiative, or one in-batch
+  initiative), and the batch stays within `threshold/0` adds. Such a batch
+  lands visibly as one checkable increment, so `evaluate/2` stretches its
+  cumulative bound to `ramp_threshold/0`.
+  """
+  @spec coherent_unit?([map()]) :: boolean()
+  def coherent_unit?(operations) do
+    adds = Enum.filter(operations, &task_add?/1)
+
+    task_lids = for %{"lid" => lid} <- adds, is_binary(lid), into: MapSet.new(), do: lid
+
+    anchors =
+      adds
+      |> Enum.reject(fn op ->
+        # In-batch children ride their root's anchor.
+        parent_lid = (Map.get(op, "data") || %{})["parent_lid"]
+        is_binary(parent_lid) and MapSet.member?(task_lids, parent_lid)
+      end)
+      |> Enum.map(&root_anchor/1)
+      |> Enum.uniq()
+
+    case anchors do
+      [anchor] when not is_nil(anchor) -> length(adds) in 1..@task_add_threshold
+      _ -> false
+    end
+  end
+
+  # A root add's anchor. A parent_lid that survived the in-batch reject is
+  # dangling — unknowable anchor, so nil (incoherent, the safe reading).
+  defp root_anchor(op) do
+    data = Map.get(op, "data") || %{}
+
+    cond do
+      is_binary(data["parent_lid"]) -> nil
+      not is_nil(data["parent_id"]) -> {:parent_id, data["parent_id"]}
+      is_binary(data["initiative_lid"]) -> {:initiative_lid, data["initiative_lid"]}
+      not is_nil(data["initiative_id"]) -> {:initiative_id, data["initiative_id"]}
+      true -> nil
+    end
+  end
+
   defp over_threshold(operations, cumulative, parent_targets) do
+    # The ramp: one-list batches get the long leash; bulk, mixed-parent, or
+    # oversized batches keep the tight bound and meet the readback confirm.
+    bound = if coherent_unit?(operations), do: @ramp_threshold, else: @task_add_threshold
+
     operations
     |> count_by_target(parent_targets)
     |> Enum.map(fn {ref, n} -> {ref, n, n + cumulative.(ref)} end)
-    |> Enum.filter(fn {_ref, _n, total} -> total > @task_add_threshold end)
+    |> Enum.filter(fn {_ref, _n, total} -> total > bound end)
   end
 
   defp resolve_ref(op, by_lid, parent_targets, seen) do

@@ -181,24 +181,26 @@ defmodule DoitMcp.ImportGateTest do
 
   describe "evaluate/2 cumulative trigger (m03.03 item 5.11.2)" do
     test "a sub-threshold batch gates once the session counter pushes its target over the line" do
+      # A coherent unit rides the ramp, so the crossing here is the RAMP bound.
       ops = task_adds(10, %{"initiative_id" => 7})
       fetch = fn _id -> {:ok, %{"ai_knobs" => nil}} end
+      expected_total = ImportGate.ramp_threshold() + 7
 
-      assert {:gate, %{task_adds: 10, cumulative: 35, target: {:existing, 7}}} =
+      assert {:gate, %{task_adds: 10, cumulative: ^expected_total, target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
                  fetch_initiative: fetch,
-                 cumulative: fn {:existing, 7} -> 25 end
+                 cumulative: fn {:existing, 7} -> ImportGate.ramp_threshold() - 3 end
                )
     end
 
-    test "landing exactly ON the threshold passes — the gate needs a crossing" do
+    test "landing exactly ON the bound passes — the gate needs a crossing" do
       ops = task_adds(10, %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
                fetch_initiative: never_fetch(),
-               cumulative: fn _ -> @threshold - 10 end
+               cumulative: fn _ -> ImportGate.ramp_threshold() - 10 end
              ) == :pass
     end
 
@@ -245,9 +247,71 @@ defmodule DoitMcp.ImportGateTest do
       assert ImportGate.evaluate(ops,
                elicitation?: yes_elicitation(),
                fetch_initiative: never_fetch(),
-               cumulative: fn _ -> 100 end,
+               cumulative: fn _ -> ImportGate.ramp_threshold() + 100 end,
                confirmed?: fn {:existing, 7} -> true end
              ) == :pass
+    end
+  end
+
+  describe "the ramp (m03.04 3.1 iteration 2)" do
+    test "a coherent one-list batch flows past the tight threshold" do
+      # Well over 32 cumulative, but every add hangs under one parent and the
+      # batch is capped — the ramp's whole point.
+      ops = task_adds(10, %{"initiative_id" => 7})
+
+      assert ImportGate.evaluate(ops,
+               elicitation?: never_elicitation(),
+               fetch_initiative: never_fetch(),
+               cumulative: fn _ -> @threshold + 20 end
+             ) == :pass
+    end
+
+    test "mixed parents lose the ramp — the tight threshold gates" do
+      ops =
+        task_adds(5, %{"initiative_id" => 7}) ++
+          for i <- 1..5 do
+            %{
+              "op" => "add",
+              "type" => "task",
+              "lid" => "p#{i}",
+              "data" => %{"parent_id" => 42, "title" => "task #{i}"}
+            }
+          end
+
+      fetch = fn _id -> {:ok, %{"ai_knobs" => nil}} end
+
+      assert {:gate, %{target: {:existing, 7}}} =
+               ImportGate.evaluate(ops,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: fetch,
+                 cumulative: fn _ -> @threshold end,
+                 parent_targets: %{42 => {:existing, 7}}
+               )
+    end
+
+    test "coherent_unit?: one subtree via parent_lid chains counts as one list" do
+      ops = [
+        %{"op" => "add", "type" => "task", "lid" => "root", "data" => %{"initiative_id" => 7, "title" => "Worklist"}},
+        %{"op" => "add", "type" => "task", "lid" => "c1", "data" => %{"parent_lid" => "root", "title" => "a"}},
+        %{"op" => "add", "type" => "task", "lid" => "c2", "data" => %{"parent_lid" => "c1", "title" => "b"}}
+      ]
+
+      assert ImportGate.coherent_unit?(ops)
+    end
+
+    test "coherent_unit?: over the per-batch cap is not a unit" do
+      refute ImportGate.coherent_unit?(task_adds(@threshold + 1, %{"initiative_id" => 7}))
+    end
+
+    test "coherent_unit?: a dangling parent_lid or anchorless add is not coherent" do
+      dangling = [
+        %{"op" => "add", "type" => "task", "lid" => "x", "data" => %{"parent_lid" => "ghost", "title" => "a"}}
+      ]
+
+      anchorless = [%{"op" => "add", "type" => "task", "lid" => "y", "data" => %{"title" => "b"}}]
+
+      refute ImportGate.coherent_unit?(dangling)
+      refute ImportGate.coherent_unit?(anchorless)
     end
   end
 

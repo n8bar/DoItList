@@ -384,7 +384,10 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "your one-paragraph statement of the import shape you're about to build — " <>
       "`assumptions` — your assumption-tagged decisions, one string each — and " <>
       "`settled` — dimensions the operator's own ask already settled, " <>
-      "one string each. The operator will confirm or correct them."
+      "one string each. The operator will confirm or correct them. Alternatively: " <>
+      "batches that deliver one list at a time (every add under one parent, at most " <>
+      "#{ImportGate.threshold()} adds) flow without confirmation up to " <>
+      "#{ImportGate.ramp_threshold()} cumulative."
   end
 
   # Shape facts print directly under the agent's readback: claim first, then

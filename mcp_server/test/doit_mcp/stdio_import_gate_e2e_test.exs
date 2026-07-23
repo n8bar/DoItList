@@ -301,22 +301,23 @@ defmodule DoitMcp.StdioImportGateE2eTest do
     stub_api(self())
     handshake(device)
 
-    # Chunk 1 CREATES the Initiative with 20 task-adds — under the line, it
-    # applies with no confirm; the response's lid → id echo moves its count
-    # under the real id.
+    # Chunk 1 CREATES the Initiative with 20 task-adds — one coherent list,
+    # it applies with no confirm; the response's lid → id echo moves its
+    # count under the real id.
     send_frame(device, tools_call(2, %{"operations" => fresh_import_ops(20)}))
 
     assert %{"id" => 2, "result" => chunk1} = recv_frame()
     assert chunk1["isError"] == false
     assert_received :applied
 
-    # Chunk 2 references the created Initiative by real id: 15 more adds put
-    # the session at 35 — the gate holds THIS batch and asks the operator.
+    # Chunk 2 is the bulk "rest" by real id: 33 adds bust the per-batch cap,
+    # so the tight bound applies — 53 this session crosses it and the gate
+    # holds THIS batch for the operator.
     send_frame(
       device,
       tools_call(3, %{
-        "operations" => chunk_ops(15, 57),
-        "readback" => "Importing the plan's remaining 15 tasks into the same Initiative."
+        "operations" => chunk_ops(33, 57),
+        "readback" => "Importing the plan's remaining 33 tasks into the same Initiative."
       })
     )
 
@@ -326,7 +327,7 @@ defmodule DoitMcp.StdioImportGateE2eTest do
              "params" => %{"message" => message}
            } = recv_frame()
 
-    assert message =~ "remaining 15 tasks"
+    assert message =~ "remaining 33 tasks"
     refute_received :applied
 
     send_frame(device, %{

@@ -585,11 +585,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       elicitation_capable()
       stub_get_and_apply(nil)
 
-      # Chunk 1: 20 adds — under the line, applies silently and is recorded.
+      # Chunk 1: 20 adds — coherent, under every bound; applies silently and
+      # is recorded.
       execute_ok(existing_initiative_batch(20, 7))
       refute_received {:send_elicitation_request, _, _, _}
+      assert DoitMcp.ImportGate.Counter.cumulative({:existing, 7}) == 20
 
-      # Chunk 2: 15 more — 35 this session crosses 30; held for a readback.
+      # Ride the ramp to its edge, then one more coherent chunk crosses the
+      # RAMP bound — held for a readback even as a one-list batch.
+      DoitMcp.ImportGate.Counter.record([{{:existing, 7}, 100}])
       ops = existing_initiative_batch(15, 7)
       assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
@@ -597,7 +601,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       assert protocol["isError"] == true
       assert [%{"type" => "text", "text" => text}] = protocol["content"]
       assert text =~ "15 tasks"
-      assert text =~ "35 this session"
+      assert text =~ "135 this session"
       refute_received {:send_elicitation_request, _, _, _}
     end
 
@@ -644,13 +648,14 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       elicitation_capable()
       stub_create_echo_and_get(57, nil)
 
-      # Chunk 1 CREATES the Initiative with 20 adds — under the line, it
-      # applies, and its count lands under the real id the response echoed.
+      # Chunk 1 CREATES the Initiative with 20 adds — it applies, and its
+      # count lands under the real id the response echoed.
       execute_ok(new_initiative_batch(20))
       refute_received {:send_elicitation_request, _, _, _}
 
-      # Chunk 2 can only reference it by real id: 15 more → 35 this session
-      # crosses 30, so the crossing batch is held for a readback.
+      # Chunk 2 can only reference it by real id: pushed past the ramp bound,
+      # the crossing batch is held for a readback under the SAME total.
+      DoitMcp.ImportGate.Counter.record([{{:existing, 57}, 100}])
       ops = existing_initiative_batch(15, 57)
       assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
@@ -658,7 +663,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       assert protocol["isError"] == true
       assert [%{"type" => "text", "text" => text}] = protocol["content"]
       assert text =~ "15 tasks"
-      assert text =~ "35 this session"
+      assert text =~ "135 this session"
     end
 
     test "recorded counts match gate counts across resolution modes: a parent-anchored chunk and an initiative_id chunk share one total" do
@@ -666,14 +671,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       elicitation_capable()
       stub_parent_resolve_and_apply(42, 7)
 
-      # Chunk 1: 20 parent-anchored adds — under the line, applies, and is
-      # recorded under the parent's Initiative (the same key the gate reads).
+      # Chunk 1: 20 parent-anchored adds — applies, and is recorded under the
+      # parent's Initiative (the same key the gate reads).
       execute_ok(parent_anchored_batch(20, 42))
       refute_received {:send_elicitation_request, _, _, _}
       assert DoitMcp.ImportGate.Counter.cumulative({:existing, 7}) == 20
 
-      # Chunk 2 references the SAME Initiative by id: 15 more → 35 this
-      # session crosses 30, so the crossing batch is held.
+      # Chunk 2 references the SAME Initiative by id past the ramp bound —
+      # the crossing batch is held under the shared total.
+      DoitMcp.ImportGate.Counter.record([{{:existing, 7}, 100}])
       ops = existing_initiative_batch(15, 7)
       assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
@@ -681,7 +687,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       assert protocol["isError"] == true
       assert [%{"type" => "text", "text" => text}] = protocol["content"]
       assert text =~ "15 tasks"
-      assert text =~ "35 this session"
+      assert text =~ "135 this session"
     end
 
     test "a confirm granted under the lid carries to the created id — later chunks never re-ask" do

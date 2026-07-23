@@ -28,7 +28,7 @@ defmodule DoitMcp.CreateTaskGateTest do
 
   alias Anubis.Server.Response
   alias DoitMcp.CreateTaskGateTest.FakeSession
-  alias DoitMcp.{Elicitation, ImportGate}
+  alias DoitMcp.ImportGate
   alias DoitMcp.ImportGate.Counter
   alias DoitMcp.Tools.CreateTask
 
@@ -102,77 +102,38 @@ defmodule DoitMcp.CreateTaskGateTest do
     assert Counter.cumulative({:existing, 7}) == 1
   end
 
-  test "crossing the threshold asks; approve sanctions the session, no re-ask" do
-    elicitation_capable()
-    start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
-    stub_create_ok()
-
-    task =
-      Task.async(fn -> CreateTask.execute(%{initiative_id: 7, title: "31st"}, @frame) end)
-
-    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
-    assert params["message"] =~ "created #{@threshold} tasks one-by-one"
-    assert params["message"] =~ "apply_operations"
-
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"approve" => true}})
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
-    {protocol, _decoded} = decode(response)
-    assert protocol["isError"] == false
-    assert Counter.cumulative({:existing, 7}) == @threshold + 1
-
-    # Sanctioned for the session — the next create asks nothing.
-    assert {:reply, _response, @frame} =
-             CreateTask.execute(%{initiative_id: 7, title: "32nd"}, @frame)
-
-    refute_received {:send_elicitation_request, _, _, _}
-    assert Counter.cumulative({:existing, 7}) == @threshold + 2
-  end
-
-  test "decline refuses, latches, and later attempts refuse without re-asking" do
+  test "crossing the threshold pauses toward the batch path — never a question to the operator" do
     elicitation_capable()
     start_counter()
     Counter.record([{{:existing, 7}, @threshold}])
 
-    task =
-      Task.async(fn -> CreateTask.execute(%{initiative_id: 7, title: "31st"}, @frame) end)
+    assert {:reply, response, @frame} =
+             CreateTask.execute(%{initiative_id: 7, title: "One too many"}, @frame)
 
-    assert_receive {:send_elicitation_request, _params, _schema, _timeout}, 2_000
-    Elicitation.deliver(%{"action" => "decline"})
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
     {protocol, decoded} = decode(response)
     assert protocol["isError"] == true
-    assert decoded["gate"] == "single_create_confirm"
-    assert decoded["message"] =~ "declined"
+    assert decoded["gate"] == "single_create_pause"
+    assert decoded["message"] =~ "#{@threshold} tasks have landed"
     assert decoded["message"] =~ "apply_operations"
-
-    # Latched: the loop can't re-ask.
-    assert {:reply, response, @frame} =
-             CreateTask.execute(%{initiative_id: 7, title: "again"}, @frame)
-
+    assert decoded["message"] =~ "one list at a time"
+    # Agent-facing only: no elicitation went to the operator.
     refute_received {:send_elicitation_request, _, _, _}
-    {protocol, _decoded} = decode(response)
-    assert protocol["isError"] == true
+    # A paused create records nothing.
     assert Counter.cumulative({:existing, 7}) == @threshold
   end
 
-  test "a parent-anchored create resolves its initiative and asks past the threshold" do
+  test "a parent-anchored create resolves its initiative and pauses past the threshold" do
     elicitation_capable()
     start_counter()
     Counter.record([{{:existing, 7}, @threshold}])
     stub_create_ok()
 
-    task =
-      Task.async(fn -> CreateTask.execute(%{parent_id: 42, title: "Nested"}, @frame) end)
+    assert {:reply, response, @frame} =
+             CreateTask.execute(%{parent_id: 42, title: "Nested"}, @frame)
 
-    assert_receive {:send_elicitation_request, _params, _schema, _timeout}, 2_000
-    Elicitation.deliver(%{"action" => "decline"})
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
     {protocol, _decoded} = decode(response)
     assert protocol["isError"] == true
+    refute_received {:send_elicitation_request, _, _, _}
   end
 
   test "an operator-confirmed initiative flows freely past the cap" do
