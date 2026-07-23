@@ -73,14 +73,23 @@ defmodule DoitMcp.Client do
   defp recover_unauthorized(attempt) do
     case TokenRecovery.recover() do
       {:ok, fresh_token} ->
-        case attempt.(fresh_token) do
-          # The pasted replacement is dead too — latch (no elicit loop) and
-          # surface the manual fix instead of asking again.
-          {:ok, %Req.Response{status: 401}} ->
-            unauthorized_error(TokenRecovery.refreshed_token_rejected())
+        # This retry is the accept→retry window (m03.04 2.20): TokenRecovery
+        # holds a verify-in-flight guard for it so a concurrent 401 joins this
+        # recovery instead of re-eliciting; the `after` clears the guard on
+        # every exit — success, rejection, or raise. (Holder-only: a joiner's
+        # pass through here leaves the verifier's guard alone.)
+        try do
+          case attempt.(fresh_token) do
+            # The pasted replacement is dead too — latch (no elicit loop) and
+            # surface the manual fix instead of asking again.
+            {:ok, %Req.Response{status: 401}} ->
+              unauthorized_error(TokenRecovery.refreshed_token_rejected())
 
-          other ->
-            translate(other)
+            other ->
+              translate(other)
+          end
+        after
+          TokenRecovery.verify_concluded()
         end
 
       {:error, message} ->

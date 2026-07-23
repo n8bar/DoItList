@@ -213,4 +213,107 @@ defmodule DoitMcp.ClientTokenRecoveryTest do
     assert_received {:elicited, _, _}
     assert attempts(counter) == 3
   end
+
+  describe "verify-in-flight guard (m03.04 2.20)" do
+    # The name accept/1 registers the verifier under — the guard's contract.
+    @verifying DoitMcp.TokenRecovery.Verifying
+
+    test "a 401 during the accept→retry window joins the recovery, no second form" do
+      capable()
+      elicit_returning({:ok, %{"action" => "accept", "content" => %{"token" => "fresh-token"}}})
+      test_pid = self()
+
+      # env token 401s; the fresh token's verify NOTIFIES the test, then holds
+      # mid-flight until released — the 2.20 window, kept open deterministically.
+      Req.Test.stub(DoitMcp.Client, fn conn ->
+        if Plug.Conn.get_req_header(conn, "authorization") == ["Bearer fresh-token"] do
+          send(test_pid, :verify_started)
+
+          receive do
+            :release_verify -> Req.Test.json(conn, %{"data" => %{"id" => 7}})
+          after
+            5_000 -> raise "verify never released"
+          end
+        else
+          conn
+          |> Plug.Conn.put_status(401)
+          |> Req.Test.json(%{"error" => %{"code" => "unauthorized", "message" => "invalid"}})
+        end
+      end)
+
+      verifier = Task.async(fn -> Client.get("/api/v1/me") end)
+      assert_receive :verify_started, 5_000
+      assert TokenRecovery.verifying?()
+      assert_received {:elicited, _, _}
+
+      # The concurrent 401's recovery: joins with the fresh override, no form.
+      assert TokenRecovery.recover() == {:ok, "fresh-token"}
+      refute_received {:elicited, _, _}
+
+      send(verifier.pid, :release_verify)
+      assert {:ok, %{"id" => 7}} = Task.await(verifier)
+      refute TokenRecovery.verifying?()
+    end
+
+    test "a joiner whose retry 401s latches the session like the verifier would" do
+      capable()
+      elicit_returning({:ok, %{"action" => "accept", "content" => %{"token" => "unused"}}})
+      counter = stub_401_unless("nothing-works")
+
+      # Guard held by a live verifier elsewhere; the pasted token is dead.
+      test_pid = self()
+
+      {holder, ref} =
+        spawn_monitor(fn ->
+          Process.register(self(), @verifying)
+          send(test_pid, :registered)
+
+          receive do
+            :done -> :ok
+          end
+        end)
+
+      assert_receive :registered
+      Application.put_env(:doit_mcp, :token_override, "dead-token")
+
+      assert {:error, %{status: 401, body: %{"error" => %{"message" => message}}}} =
+               Client.get("/api/v1/me")
+
+      # Joined (no form), retried once with the override, latched on its 401.
+      refute_received {:elicited, _, _}
+      assert message =~ "rejected too"
+      assert attempts(counter) == 2
+
+      # Holder-only conclude: the joiner's pass left the verifier's guard up.
+      assert TokenRecovery.verifying?()
+
+      send(holder, :done)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :normal}
+    end
+
+    test "the guard dies with its verifier" do
+      test_pid = self()
+
+      {holder, ref} =
+        spawn_monitor(fn ->
+          Process.register(self(), @verifying)
+          send(test_pid, :registered)
+
+          receive do
+            :die -> :ok
+          end
+        end)
+
+      assert_receive :registered
+      assert TokenRecovery.verifying?()
+
+      # A non-holder's conclude is a no-op — only the verifier clears itself.
+      assert TokenRecovery.verify_concluded() == :ok
+      assert TokenRecovery.verifying?()
+
+      send(holder, :die)
+      assert_receive {:DOWN, ^ref, :process, ^holder, :normal}
+      refute TokenRecovery.verifying?()
+    end
+  end
 end

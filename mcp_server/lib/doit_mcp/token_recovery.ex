@@ -18,7 +18,10 @@ defmodule DoitMcp.TokenRecovery do
       the session failed — later 401s go straight to the actionable error,
       never a re-prompt loop. A no-answer timeout does NOT latch: the
       operator merely wasn't there, so a later call may ask again. Clients
-      without the capability get the actionable error immediately.
+      without the capability get the actionable error immediately. While an
+      accepted token's verify retry is in flight, a concurrent 401 joins
+      that recovery — it retries with the installed override instead of
+      raising a second form (the verify-in-flight guard, m03.04 2.20).
 
   ## Persistence across the container boundary
 
@@ -44,6 +47,12 @@ defmodule DoitMcp.TokenRecovery do
   alias DoitMcp.Elicitation
 
   require Logger
+
+  # The verify-in-flight guard (m03.04 2.20): the process that accepted a
+  # fresh token registers under this name until its verify retry concludes.
+  # Same atomic primitive as the elicitation waiter — and a registered name
+  # dies with its process, so a killed verifier can never wedge recovery.
+  @verifying DoitMcp.TokenRecovery.Verifying
 
   @env_var "DOITLIST_API_TOKEN"
   @default_persist_path "/app/.doitlist/mcp-refreshed-token.env"
@@ -95,6 +104,14 @@ defmodule DoitMcp.TokenRecovery do
          "A replacement token was already declined or rejected this session — " <>
            "not asking again. " <> manual_fix_message()}
 
+      verifying?() ->
+        # A fresh token was accepted moments ago and its verify retry is still
+        # in flight — the accept→retry window (m03.04 2.20). Join that
+        # recovery: retry with the installed override instead of raising a
+        # second form. If the override is dead too, this caller's retry
+        # latches the session exactly like the verifier's would.
+        {:ok, token()}
+
       not capable?() ->
         {:error, manual_fix_message()}
 
@@ -104,12 +121,37 @@ defmodule DoitMcp.TokenRecovery do
   end
 
   @doc """
+  Whether a freshly accepted token's verify retry is still in flight — the
+  window where `recover/0` joins the ongoing recovery rather than eliciting
+  again (m03.04 2.20).
+  """
+  @spec verifying?() :: boolean()
+  def verifying?, do: Process.whereis(@verifying) != nil
+
+  @doc """
+  Drop the verify-in-flight guard. The client calls this in an `after` around
+  the verify retry, so every exit — success, rejection, raise — clears it.
+  Holder-only: a joiner concluding its own retry leaves the verifier's guard
+  alone, and a verifier killed outright needs no call at all (the registered
+  name dies with it).
+  """
+  @spec verify_concluded() :: :ok
+  def verify_concluded do
+    if Process.whereis(@verifying) == self(), do: Process.unregister(@verifying)
+    :ok
+  rescue
+    # The name emptied between the check and the unregister — already clear.
+    ArgumentError -> :ok
+  end
+
+  @doc """
   Called when the retry with a freshly pasted token 401'd too: latches the
   failed state (no elicit loop on a bad paste) and returns the message.
   """
   @spec refreshed_token_rejected() :: String.t()
   def refreshed_token_rejected do
     mark_failed()
+    verify_concluded()
 
     "The freshly pasted token was rejected too (401) — not asking again this session. " <>
       manual_fix_message()
@@ -156,12 +198,16 @@ defmodule DoitMcp.TokenRecovery do
     end
   end
 
-  @doc "Forget the session's override and failed latch (tests)."
+  @doc "Forget the session's override, failed latch, and verify guard (tests)."
   @spec reset() :: :ok
   def reset do
     Application.delete_env(:doit_mcp, :token_override)
     Application.delete_env(:doit_mcp, :token_recovery_failed)
+    # Force-clear regardless of holder — test cleanup only.
+    if Process.whereis(@verifying), do: Process.unregister(@verifying)
     :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp elicit_fresh_token do
@@ -186,6 +232,7 @@ defmodule DoitMcp.TokenRecovery do
     if token != "" and Regex.match?(@token_format, token) do
       Application.put_env(:doit_mcp, :token_override, token)
       _ = persist(token)
+      register_verifying()
       {:ok, token}
     else
       mark_failed()
@@ -230,6 +277,18 @@ defmodule DoitMcp.TokenRecovery do
       _ ->
         :ok
     end
+  end
+
+  # Guard up BEFORE `{:ok, token}` sends the caller into its verify retry
+  # (m03.04 2.20). The elicitation waiter unregistered before accept runs, so
+  # this process carries no name; a collision means a prior guard leaked
+  # (shouldn't happen — the client's `after` covers every verifier exit) and
+  # already-guarded is the correct reading.
+  defp register_verifying do
+    Process.register(self(), @verifying)
+    :ok
+  rescue
+    ArgumentError -> :ok
   end
 
   defp mark_failed, do: Application.put_env(:doit_mcp, :token_recovery_failed, true)
