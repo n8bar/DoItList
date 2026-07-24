@@ -7,7 +7,7 @@ defmodule DoitMcp.IngestReport do
   HTTP in here, so the whole report is unit-testable off fixture maps.
 
   Facts only: counts, ids, and matched substrings. No verdicts, no thresholds —
-  the tool measures, the companion skill judges, the product never interprets.
+  the tool measures, the driving agent judges, the product never interprets.
 
   Fact classes (`build/2` output, flat):
 

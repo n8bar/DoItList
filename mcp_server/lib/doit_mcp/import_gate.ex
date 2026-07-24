@@ -31,8 +31,8 @@ defmodule DoitMcp.ImportGate do
        `ramp_threshold/0` for a coherent one-list batch (`coherent_unit?/1`
        — each such unit lands as one reviewable increment),
     2. the connected client advertised the `elicitation` capability in its
-       initialize handshake (no capability → the gate silently steps aside;
-       the skill's own gate rule is the only layer there), and
+       initialize handshake (no capability → the gate silently steps aside —
+       no other layer holds the batch), and
     3. that Initiative's import is still unsettled — the operator has not
        already confirmed one this session.
 
