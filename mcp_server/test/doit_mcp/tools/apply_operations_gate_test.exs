@@ -110,35 +110,49 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
   end
 
+  # Serves GET /initiatives/:id/task_count — the DB-window pressure read
+  # (m03.04 3.1 iteration 2) — ahead of a stub's other clauses.
+  defp with_pressure(conn, pressure, fallback) do
+    if conn.method == "GET" and String.ends_with?(conn.request_path, "/task_count") do
+      Req.Test.json(conn, %{"data" => %{"count" => pressure}})
+    else
+      fallback.(conn)
+    end
+  end
+
   # GET /api/v1/tasks/:id resolves the anchor parent to its Initiative (and
   # reports each read to the test process, so dedup is assertable); GET
   # /api/v1/initiatives/:id serves the target knobless; POST applies.
-  defp stub_parent_resolve_and_apply(parent_id, initiative_id) do
+  defp stub_parent_resolve_and_apply(parent_id, initiative_id, pressure \\ 0) do
     reply_to = self()
 
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/v1/tasks/" <> _} ->
-          send(reply_to, {:task_read, conn.request_path})
+      with_pressure(conn, pressure, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/v1/tasks/" <> _} ->
+            send(reply_to, {:task_read, conn.request_path})
 
-          Req.Test.json(conn, %{
-            "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
-          })
+            Req.Test.json(conn, %{
+              "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
+            })
 
-        {"GET", "/api/v1/initiatives/" <> _} ->
-          Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
+          {"GET", "/api/v1/initiatives/" <> _} ->
+            Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
 
-        {"POST", "/api/v1/operations"} ->
-          Req.Test.json(conn, %{"results" => []})
-      end
+          {"POST", "/api/v1/operations"} ->
+            Req.Test.json(conn, %{"results" => []})
+        end
+      end)
     end)
   end
 
-  defp stub_apply_ok do
+  defp stub_apply_ok(pressure \\ 0) do
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      assert conn.method == "POST"
-      assert conn.request_path == "/api/v1/operations"
-      Req.Test.json(conn, %{"results" => []})
+      with_pressure(conn, pressure, fn conn ->
+        assert conn.method == "POST"
+        assert conn.request_path == "/api/v1/operations"
+        Req.Test.json(conn, %{"results" => []})
+      end)
     end)
   end
 
@@ -148,38 +162,42 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     {protocol, Jason.decode!(text), rest}
   end
 
-  defp stub_get_and_apply(knobs) do
+  defp stub_get_and_apply(knobs, pressure \\ 0) do
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/v1/initiatives/7"} ->
-          Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
+      with_pressure(conn, pressure, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/v1/initiatives/7"} ->
+            Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
 
-        {"POST", "/api/v1/operations"} ->
-          Req.Test.json(conn, %{"results" => []})
-      end
+          {"POST", "/api/v1/operations"} ->
+            Req.Test.json(conn, %{"results" => []})
+        end
+      end)
     end)
   end
 
   # POST echoes the created Initiative's lid → real id (the wire shape for
   # creates); GET serves its ai_knobs.
-  defp stub_create_echo_and_get(initiative_id, knobs) do
+  defp stub_create_echo_and_get(initiative_id, knobs, pressure \\ 0) do
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"POST", "/api/v1/operations"} ->
-          Req.Test.json(conn, %{
-            "results" => [
-              %{
-                "index" => 0,
-                "lid" => "i",
-                "status" => "ok",
-                "data" => %{"id" => initiative_id, "type" => "initiative"}
-              }
-            ]
-          })
+      with_pressure(conn, pressure, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"POST", "/api/v1/operations"} ->
+            Req.Test.json(conn, %{
+              "results" => [
+                %{
+                  "index" => 0,
+                  "lid" => "i",
+                  "status" => "ok",
+                  "data" => %{"id" => initiative_id, "type" => "initiative"}
+                }
+              ]
+            })
 
-        {"GET", "/api/v1/initiatives/" <> _} ->
-          Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => knobs}})
-      end
+          {"GET", "/api/v1/initiatives/" <> _} ->
+            Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => knobs}})
+        end
+      end)
     end)
   end
 
@@ -352,6 +370,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       }
     ]
 
+    stub_apply_ok()
+
     # Without a readback the hold names the content shape, not batch size.
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     assert response.isError == true
@@ -360,8 +380,6 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert text =~ "Re-call apply_operations"
 
     # With a readback: the form carries the checklist question; apply keeps prose.
-    stub_apply_ok()
-
     task =
       Task.async(fn ->
         ApplyOperations.execute(%{operations: ops, readback: "Adding one setup task."}, @frame)
@@ -547,13 +565,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     elicitation_capable()
 
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", "/api/v1/initiatives/7"} ->
-          Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => "deploy_day: friday"}})
+      with_pressure(conn, 0, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/v1/initiatives/7"} ->
+            Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => "deploy_day: friday"}})
 
-        {"POST", "/api/v1/operations"} ->
-          Req.Test.json(conn, %{"results" => []})
-      end
+          {"POST", "/api/v1/operations"} ->
+            Req.Test.json(conn, %{"results" => []})
+        end
+      end)
     end)
 
     ops = existing_initiative_batch(@threshold + 1, 7)
@@ -568,8 +588,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     elicitation_capable()
 
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      assert {conn.method, conn.request_path} == {"GET", "/api/v1/initiatives/7"}
-      Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => nil}})
+      with_pressure(conn, 0, fn conn ->
+        assert {conn.method, conn.request_path} == {"GET", "/api/v1/initiatives/7"}
+        Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => nil}})
+      end)
     end)
 
     ops = existing_initiative_batch(@threshold + 1, 7)
@@ -585,15 +607,13 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       elicitation_capable()
       stub_get_and_apply(nil)
 
-      # Chunk 1: 20 adds — coherent, under every bound; applies silently and
-      # is recorded.
+      # Chunk 1: 20 adds — coherent, under every bound; applies silently.
       execute_ok(existing_initiative_batch(20, 7))
       refute_received {:send_elicitation_request, _, _, _}
-      assert DoitMcp.ImportGate.Counter.cumulative({:existing, 7}) == 20
 
-      # Ride the ramp to its edge, then one more coherent chunk crosses the
-      # RAMP bound — held for a readback even as a one-list batch.
-      DoitMcp.ImportGate.Counter.record([{{:existing, 7}, 100}])
+      # The DB window now reports the ramp nearly ridden out — one more
+      # coherent chunk crosses the RAMP bound and is held for a readback.
+      stub_get_and_apply(nil, 120)
       ops = existing_initiative_batch(15, 7)
       assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
@@ -625,8 +645,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
       assert {:reply, _response, @frame} = Task.await(task, 5_000)
 
-      # ai_knobs is STILL empty and the counter far over the line — but the
+      # ai_knobs is STILL empty and the window far over the line — but the
       # operator already confirmed this Initiative this session.
+      stub_get_and_apply(nil, 200)
       execute_ok(existing_initiative_batch(15, 7))
       refute_received {:send_elicitation_request, _, _, _}
     end
@@ -638,7 +659,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
       execute_ok(existing_initiative_batch(25, 7))
 
-      # 35 this session — over the line, but the fetch finds settled knobs.
+      # The window reports far over every bound — but the fetch finds
+      # settled knobs.
+      stub_get_and_apply("deploy_day: friday", 200)
       execute_ok(existing_initiative_batch(10, 7))
       refute_received {:send_elicitation_request, _, _, _}
     end
@@ -653,9 +676,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       execute_ok(new_initiative_batch(20))
       refute_received {:send_elicitation_request, _, _, _}
 
-      # Chunk 2 can only reference it by real id: pushed past the ramp bound,
-      # the crossing batch is held for a readback under the SAME total.
-      DoitMcp.ImportGate.Counter.record([{{:existing, 57}, 100}])
+      # Chunk 2 can only reference it by real id: the DATABASE carries the
+      # count across the lid → real-id switch, and past the ramp bound the
+      # crossing batch is held for a readback.
+      stub_create_echo_and_get(57, nil, 120)
       ops = existing_initiative_batch(15, 57)
       assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
@@ -675,11 +699,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       # parent's Initiative (the same key the gate reads).
       execute_ok(parent_anchored_batch(20, 42))
       refute_received {:send_elicitation_request, _, _, _}
-      assert DoitMcp.ImportGate.Counter.cumulative({:existing, 7}) == 20
 
       # Chunk 2 references the SAME Initiative by id past the ramp bound —
-      # the crossing batch is held under the shared total.
-      DoitMcp.ImportGate.Counter.record([{{:existing, 7}, 100}])
+      # one DB total serves both resolution modes.
+      stub_parent_resolve_and_apply(42, 7, 120)
       ops = existing_initiative_batch(15, 7)
       assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
@@ -707,8 +730,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
       assert {:reply, _response, @frame} = Task.await(task, 5_000)
 
-      # Knobs still empty and the counter far over the line — but the
+      # Knobs still empty and the window far over the line — but the
       # operator's confirm followed the Initiative to its real id.
+      stub_create_echo_and_get(57, nil, 200)
       execute_ok(existing_initiative_batch(15, 57))
       refute_received {:send_elicitation_request, _, _, _}
     end

@@ -72,18 +72,19 @@ defmodule DoitMcp.Tools.ApplyOperations do
   ## Import gate — big-import confirmation
 
   The gate is armed by default (`DOITLIST_IMPORT_GATE=off` opts out) and its
-  trigger is CUMULATIVE per Initiative across the session: chunking a big
-  import under the cap doesn't slip past it — every applied batch's task-adds
-  are recorded per target (`DoitMcp.ImportGate.Counter`), and the session
-  total including the current batch is what crosses the 30-task threshold.
-  Adds anchored on an EXISTING task's `parent_id` count too (m03.04 item
-  2.18): the adapter resolves each unique parent to its Initiative through
-  `GET /api/v1/tasks/:id` — one read per unique parent per batch — before
-  the gate runs, so growing an existing tree can't dodge the threshold.
-  An Initiative created mid-import keeps one total across chunks: its count
-  (and any confirm the operator granted under its lid) follows it to the real
-  id the response echoes, so later chunks referencing it by id keep
-  accumulating.
+  trigger is CUMULATIVE per Initiative over a trailing time window: recent
+  task creations are read from the DATABASE (`DoitMcp.ImportPressure`, via
+  `GET /initiatives/:id/task_count?created_at=`), so chunking can't slip
+  past it, reconnecting can't reset it, and a human-rhythm drip of creates
+  decays out on its own. The recent count plus the current batch crosses the
+  batch's bound: 32 normally, 128 for a coherent one-list batch (every add
+  under one parent, at most 32 adds — each such unit lands as one reviewable
+  increment; the ramp). Adds anchored on an EXISTING task's `parent_id`
+  count too (m03.04 item 2.18): the adapter resolves each unique parent to
+  its Initiative through `GET /api/v1/tasks/:id` — one read per unique
+  parent per batch — before the gate runs, so growing an existing tree can't
+  dodge the threshold. A confirm the operator granted under a fresh
+  Initiative's lid follows it to the real id the response echoes.
 
   When the total crosses the threshold, the batch is held for the operator
   when your client supports elicitation. Without a `readback` it is rejected
@@ -107,7 +108,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   use Anubis.Server.Component, type: :tool
 
   alias Anubis.Server.Response
-  alias DoitMcp.{BatchShape, Client, Elicitation, ImportGate, ToolResult}
+  alias DoitMcp.{BatchShape, Client, Elicitation, ImportGate, ImportPressure, ToolResult}
   alias DoitMcp.ImportGate.Counter
 
   # A human is reading the readback — give them a generous window.
@@ -158,14 +159,17 @@ defmodule DoitMcp.Tools.ApplyOperations do
           ImportGate.evaluate(params.operations,
             elicitation?: &Elicitation.client_supports_elicitation?/0,
             fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end,
-            cumulative: &Counter.cumulative/1,
+            # Recent pressure comes from the DATABASE's inserted_at window
+            # (m03.04 3.1 iteration 2) — human-rhythm drips decay, gulps
+            # weigh full, and reconnects can't reset it.
+            cumulative: &ImportPressure.recent/1,
             confirmed?: &Counter.confirmed?/1,
             parent_targets: parent_targets
           )
 
         case {gate, shape} do
           {{:gate, info}, _} ->
-            hold_for_confirmation(params, info, parent_targets, frame)
+            hold_for_confirmation(params, info, frame)
 
           {:pass, :hold} ->
             # Shape-held below the size threshold: synthetic info, no target —
@@ -173,10 +177,10 @@ defmodule DoitMcp.Tools.ApplyOperations do
             # session settling.
             adds = ImportGate.count_task_adds(params.operations)
             info = %{task_adds: adds, cumulative: adds, target: nil}
-            hold_for_confirmation(params, info, parent_targets, frame)
+            hold_for_confirmation(params, info, frame)
 
           {:pass, :pass} ->
-            apply_batch(params, parent_targets, frame)
+            apply_batch(params, frame)
         end
     end
   end
@@ -221,11 +225,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   # Resolve the batch's parent-anchored task-adds (`parent_id` = an existing
   # task) to their Initiatives — one GET /api/v1/tasks/:id per unique parent
-  # (m03.04 item 2.18). Built ONCE per call and reused by both the gate
-  # evaluation and the post-apply Counter.record, so gate-time counting and
-  # recorded counts can never drift. Skipped when the gate could never fire
-  # (kill switch off, or a client without elicitation) — both fixed for the
-  # session, so the counter stays consistent with what the gate would read.
+  # (m03.04 item 2.18) — for the gate's per-target counting. Skipped when the
+  # gate could never fire (kill switch off, or a client without elicitation).
   # A parent the read can't resolve (404/error) is left out of the map: its
   # adds keep the old dropped behavior and the apply surfaces the real error.
   defp resolve_parent_targets(operations) do
@@ -247,14 +248,15 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  defp apply_batch(params, parent_targets, frame, opts \\ []) do
+  defp apply_batch(params, frame, opts \\ []) do
     result =
       Client.operations(params.operations, idempotency_key: Map.get(params, :idempotency_key))
 
-    # The counter is the gate's session memory: every batch that actually
-    # applied feeds the cumulative trigger, so sub-threshold chunks add up.
+    # Pressure now lives in the DATABASE (inserted_at window) — applied adds
+    # count themselves. Only the operator's confirm needs carrying: granted
+    # under a fresh Initiative's lid, later chunks reference the real id.
     with {:ok, body} <- result do
-      record_applied(params.operations, body, parent_targets)
+      carry_confirms(params.operations, body)
     end
 
     {:reply, response, frame} = ToolResult.reply_batch(frame, result)
@@ -268,38 +270,27 @@ defmodule DoitMcp.Tools.ApplyOperations do
     {:reply, response, frame}
   end
 
-  # Record the applied batch's per-target task-adds — through the SAME
-  # parent_targets map the gate evaluated, so what's recorded is exactly what
-  # was counted. An Initiative created in this batch was counted (and
-  # possibly confirmed) under its lid, but later chunks can only reference it
-  # by the real id the response echoes — rekey the counts and carry any
-  # granted confirm across, or the session total (and the operator's answer)
-  # would reset at the chunk boundary.
-  defp record_applied(operations, body, parent_targets) do
+  defp carry_confirms(operations, body) do
     results = (is_map(body) && Map.get(body, "results")) || []
-    created = ImportGate.created_initiative_ids(operations, results)
 
     operations
-    |> ImportGate.count_by_target(parent_targets)
-    |> ImportGate.rekey_counts(created)
-    |> Counter.record()
-
-    Enum.each(created, fn {lid, id} ->
+    |> ImportGate.created_initiative_ids(results)
+    |> Enum.each(fn {lid, id} ->
       if Counter.confirmed?({:in_batch, lid}), do: Counter.mark_confirmed({:existing, id})
     end)
   end
 
-  defp hold_for_confirmation(params, info, parent_targets, frame) do
+  defp hold_for_confirmation(params, info, frame) do
     case presence(Map.get(params, :readback)) do
       nil ->
         {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
 
       readback ->
-        confirm_with_operator(params, readback, info, parent_targets, frame)
+        confirm_with_operator(params, readback, info, frame)
     end
   end
 
-  defp confirm_with_operator(params, readback, info, parent_targets, frame) do
+  defp confirm_with_operator(params, readback, info, frame) do
     message =
       confirmation_message(
         readback,
@@ -310,7 +301,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
     case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
       {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
-        handle_answer(params, content, info, parent_targets, frame)
+        handle_answer(params, content, info, frame)
 
       {:ok, %{"action" => "decline"}} ->
         not_applied(frame, %{
@@ -326,7 +317,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  defp handle_answer(params, content, info, parent_targets, frame) do
+  defp handle_answer(params, content, info, frame) do
     corrections = presence(content["corrections"])
     decision = content["decision"]
 
@@ -337,7 +328,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         # failed apply's retry doesn't re-elicit an already-granted confirm).
         # A shape-hold has no target: its confirm is per-batch, nothing settles.
         if info.target, do: Counter.mark_confirmed(info.target)
-        apply_batch(params, parent_targets, frame, note: @confirm_note)
+        apply_batch(params, frame, note: @confirm_note)
 
       is_binary(corrections) ->
         not_applied(frame, %{

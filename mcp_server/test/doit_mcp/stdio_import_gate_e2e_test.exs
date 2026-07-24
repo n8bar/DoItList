@@ -159,7 +159,8 @@ defmodule DoitMcp.StdioImportGateE2eTest do
 
   # POST echoes the created Initiative's lid → real id (the wire shape for
   # creates) and reports each apply to the test; GET serves its ai_knobs
-  # (still empty — fresh).
+  # (still empty — fresh) and the DB-window pressure read (chunk 1's 20
+  # tasks all landed inside the window).
   defp stub_api(test_pid) do
     stub_http(fn conn ->
       case {conn.method, conn.request_path} do
@@ -176,6 +177,9 @@ defmodule DoitMcp.StdioImportGateE2eTest do
               }
             ]
           })
+
+        {"GET", "/api/v1/initiatives/57/task_count"} ->
+          Req.Test.json(conn, %{"data" => %{"count" => 20}})
 
         {"GET", "/api/v1/initiatives/57"} ->
           Req.Test.json(conn, %{"data" => %{"id" => 57, "ai_knobs" => nil}})

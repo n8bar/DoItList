@@ -358,12 +358,6 @@ defmodule DoitMcp.ImportGateTest do
       assert ImportGate.created_initiative_ids(ops, [%{"index" => 0, "status" => "ok"}]) == %{}
     end
 
-    test "rekey_counts/2 moves an in-batch count to the created id, leaving the rest" do
-      counts = [{{:in_batch, "i"}, 20}, {{:existing, 9}, 3}, {{:in_batch, "ghost"}, 1}]
-
-      assert ImportGate.rekey_counts(counts, %{"i" => 57}) ==
-               [{{:existing, 57}, 20}, {{:existing, 9}, 3}, {{:in_batch, "ghost"}, 1}]
-    end
   end
 
   describe "target_refs/1 parent-chain resolution" do

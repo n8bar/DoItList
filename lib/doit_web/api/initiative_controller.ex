@@ -20,7 +20,7 @@ defmodule DoItWeb.Api.InitiativeController do
   alias DoIt.{Initiatives, Tasks}
   alias DoIt.Tasks.Task
   alias DoItWeb.Api
-  alias DoItWeb.Api.{Authz, Serializer}
+  alias DoItWeb.Api.{Authz, Errors, Serializer}
 
   action_fallback DoItWeb.Api.FallbackController
 
@@ -111,6 +111,38 @@ defmodule DoItWeb.Api.InitiativeController do
     with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
       members = initiative.id |> Initiatives.list_members() |> Enum.map(&Serializer.member/1)
       json(conn, Api.data(members))
+    end
+  end
+
+  # Live task count (root excluded), optionally scoped to tasks created at or
+  # after `?created_at=<ISO8601>` — a dumb fact (m03.04 3.1 iteration 2): the
+  # MCP import gate reads its recent-pressure window from it, so the window
+  # length stays adapter policy and pressure survives reconnects.
+  def task_count(conn, %{"id" => id} = params) do
+    user = conn.assigns.current_user
+
+    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
+      case parse_created_at(Map.get(params, "created_at")) do
+        {:ok, created_at} ->
+          json(conn, Api.data(%{count: Tasks.count_created(initiative.id, created_at)}))
+
+        :error ->
+          Errors.send_error(
+            conn,
+            422,
+            :unprocessable_entity,
+            "created_at must be an ISO 8601 datetime, e.g. 2026-07-23T17:00:00Z."
+          )
+      end
+    end
+  end
+
+  defp parse_created_at(nil), do: {:ok, nil}
+
+  defp parse_created_at(raw) when is_binary(raw) do
+    case DateTime.from_iso8601(raw) do
+      {:ok, dt, _offset} -> {:ok, dt}
+      _ -> :error
     end
   end
 

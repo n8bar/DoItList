@@ -1860,6 +1860,29 @@ defmodule DoIt.Tasks do
     end)
   end
 
+  @doc """
+  Count an Initiative's live tasks (root excluded), optionally only those
+  created at or after `created_at` — the dumb fact behind the API's
+  `task_count` read (m03.04 3.1 iteration 2): the import gate's recent-
+  pressure window derives from `inserted_at`, so pressure survives adapter
+  restarts and reconnects.
+  """
+  def count_created(initiative_id, created_at \\ nil) when is_integer(initiative_id) do
+    base =
+      from t in Task,
+        where:
+          t.initiative_id == ^initiative_id and is_nil(t.deleted_at) and
+            not is_nil(t.parent_id)
+
+    query =
+      case created_at do
+        nil -> base
+        %DateTime{} = dt -> from t in base, where: t.inserted_at >= ^dt
+      end
+
+    Repo.aggregate(query, :count)
+  end
+
   @doc "Count branch descendants of `task_id` (descendants that themselves have children)."
   def count_descendant_branches(task_id) when is_integer(task_id) do
     length(descendant_branches(task_id))

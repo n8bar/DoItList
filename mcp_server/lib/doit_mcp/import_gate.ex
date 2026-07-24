@@ -10,19 +10,21 @@ defmodule DoitMcp.ImportGate do
   until the concurrent stdio transport landed, m03.04 item 3.11.1 — the old
   serial transport could never read the operator's answer.)
 
-  The trigger is CUMULATIVE across the session (m03.04 item 3.11.2): sub-cap
-  chunking is sanctioned, so no single batch tells the whole story. Each
-  batch's task-adds are resolved per target Initiative and summed with the
-  session counter (`DoitMcp.ImportGate.Counter`, recorded on successful
-  applies). An add anchored on an EXISTING task's `parent_id` — the most
-  common import shape, growing an existing tree — resolves through the
-  caller-built `parent_targets` map (m03.04 item 2.18): the caller reads
-  each unique parent once (`GET /api/v1/tasks/:id`) at the IO edge
-  (`existing_parent_ids/1` lists the ids), keeping this module pure. A fresh Initiative switches keys mid-import — created under a
-  lid, referenced by real id from the next chunk on — so applied counts are
-  rekeyed to the created id (`created_initiative_ids/2` + `rekey_counts/2`)
-  before recording. An armed gate holds the batch only when ALL of these
-  hold:
+  The trigger is CUMULATIVE over a trailing time window (m03.04 items 3.11.2
+  and 3.1 iteration 2): sub-cap chunking is sanctioned, so no single batch
+  tells the whole story — each batch's task-adds are resolved per target
+  Initiative and summed with the recent-pressure fun the caller injects
+  (`DoitMcp.ImportPressure`: the database's `inserted_at` window, so a
+  human-rhythm drip decays and a reconnect resets nothing). An add anchored
+  on an EXISTING task's `parent_id` — the most common import shape, growing
+  an existing tree — resolves through the caller-built `parent_targets` map
+  (m03.04 item 2.18): the caller reads each unique parent once
+  (`GET /api/v1/tasks/:id`) at the IO edge (`existing_parent_ids/1` lists
+  the ids), keeping this module pure. A fresh Initiative switches keys
+  mid-import — created under a lid, referenced by real id from the next
+  chunk on — so a confirm granted under the lid is carried to the real id
+  (`created_initiative_ids/2`). An armed gate holds the batch only when ALL
+  of these hold:
 
     1. some Initiative's cumulative task-adds — session total plus this
        batch — cross the batch's bound: `threshold/0` normally,
@@ -135,8 +137,7 @@ defmodule DoitMcp.ImportGate do
   target}` map the caller resolved at the IO edge (`existing_parent_ids/1`
   lists the ids to resolve). An add whose target is still unknowable (a
   `parent_id` missing from the map, a dangling `parent_lid`) is dropped —
-  the apply surfaces the real error. This is also the shape
-  `DoitMcp.ImportGate.Counter.record/1` takes after a successful apply.
+  the apply surfaces the real error.
   """
   @spec count_by_target([map()], %{optional(term()) => target()}) ::
           [{target(), pos_integer()}]
@@ -162,9 +163,10 @@ defmodule DoitMcp.ImportGate do
   lid → real id for the Initiatives an applied batch created, read from the
   apply response's per-op results (each echoes the op's `"lid"` beside the
   created resource's `"data"`). Later chunks can only reference a created
-  Initiative by real id, so the session counter is rekeyed with this mapping
-  (`rekey_counts/2`) — a fresh Initiative's cumulative count survives the
-  lid → id switch. An unreadable results shape maps nothing.
+  Initiative by real id, so a confirm the operator granted under the lid is
+  carried to the real id — the sanction survives the lid → id switch
+  (pressure needs no carrying: it lives in the database's `inserted_at`).
+  An unreadable results shape maps nothing.
   """
   @spec created_initiative_ids([map()], term()) :: %{String.t() => term()}
   def created_initiative_ids(operations, results) when is_list(results) do
@@ -181,27 +183,6 @@ defmodule DoitMcp.ImportGate do
   end
 
   def created_initiative_ids(_operations, _results), do: %{}
-
-  @doc """
-  Rewrite `{:in_batch, lid}` keys to `{:existing, id}` per the mapping,
-  leaving unmapped lids and existing refs untouched. Applied to a batch's
-  `count_by_target/1` before it is recorded, so the counter never keeps a
-  stale in-batch key for an Initiative that now has a real id.
-  """
-  @spec rekey_counts([{target(), pos_integer()}], %{String.t() => term()}) ::
-          [{target(), pos_integer()}]
-  def rekey_counts(counts, lid_to_id) do
-    Enum.map(counts, fn
-      {{:in_batch, lid}, n} = entry ->
-        case lid_to_id do
-          %{^lid => id} -> {{:existing, id}, n}
-          _ -> entry
-        end
-
-      entry ->
-        entry
-    end)
-  end
 
   @doc """
   Resolve each task-add op to the Initiative it targets, chasing in-batch

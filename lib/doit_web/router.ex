@@ -47,6 +47,7 @@ defmodule DoItWeb.Router do
     get "/initiatives/:id", InitiativeController, :show
     get "/initiatives/:id/activity", InitiativeController, :activity
     get "/initiatives/:id/members", InitiativeController, :members
+    get "/initiatives/:id/task_count", InitiativeController, :task_count
     get "/initiatives/:id/tasks/:task_id/comments", CommentController, :index
 
     # Task → Initiative resolver (m03.04 item 2.18.1): the one read keyed on a

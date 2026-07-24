@@ -1,8 +1,5 @@
 defmodule DoitMcp.CreateTaskGateTest.FakeSession do
-  @moduledoc """
-  Holds client_capabilities where DoitMcp.Elicitation reads them and forwards
-  elicitation requests to the test process so it can play the operator.
-  """
+  @moduledoc "Holds client_capabilities where DoitMcp.Elicitation reads them."
   use GenServer
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: opts[:name])
@@ -20,10 +17,10 @@ defmodule DoitMcp.CreateTaskGateTest.FakeSession do
 end
 
 defmodule DoitMcp.CreateTaskGateTest do
-  # The single-create cap (m03.04 3.1 iteration 2): create_task feeds the
-  # batch gate's per-initiative session counter and refuses once the same
-  # threshold is crossed one-by-one — the gate-evasion loop a baseline drive
-  # narrated ("avoiding an unapplied bulk operation").
+  # The single-create pause (m03.04 3.1 iteration 2): pressure is the
+  # DATABASE's recent-creation window (DoitMcp.ImportPressure) — a drip
+  # decays, a loop accumulates — and past the threshold the tool pauses
+  # agent-facing, never asking the operator anything.
   use ExUnit.Case, async: false
 
   alias Anubis.Server.Response
@@ -73,14 +70,23 @@ defmodule DoitMcp.CreateTaskGateTest do
 
   defp elicitation_capable, do: fake_session(%{"elicitation" => %{}})
 
-  defp stub_create_ok do
+  # The window count comes from the API; POST creates; GET /tasks/42 resolves
+  # a parent anchor. `pressure` seeds the initiative's recent-creation count.
+  defp stub_api(pressure) do
+    test_pid = self()
+
     Req.Test.stub(DoitMcp.Client, fn conn ->
       case {conn.method, conn.request_path} do
-        {"POST", "/api/v1/operations"} ->
-          Req.Test.json(conn, %{"results" => [%{"status" => "ok", "data" => %{"id" => 1}}]})
+        {"GET", "/api/v1/initiatives/7/task_count"} ->
+          assert conn.query_string =~ "created_at="
+          Req.Test.json(conn, %{"data" => %{"count" => pressure}})
 
         {"GET", "/api/v1/tasks/42"} ->
           Req.Test.json(conn, %{"data" => %{"id" => 42, "initiative_id" => 7}})
+
+        {"POST", "/api/v1/operations"} ->
+          send(test_pid, :created)
+          Req.Test.json(conn, %{"results" => [%{"status" => "ok", "data" => %{"id" => 1}}]})
       end
     end)
   end
@@ -91,21 +97,21 @@ defmodule DoitMcp.CreateTaskGateTest do
     {protocol, Jason.decode!(text)}
   end
 
-  test "each committed single create records toward the destination's counter" do
+  test "under the window's threshold a single create flows" do
     elicitation_capable()
-    start_counter()
-    stub_create_ok()
+    stub_api(@threshold - 5)
 
-    assert {:reply, _response, @frame} =
+    assert {:reply, response, @frame} =
              CreateTask.execute(%{initiative_id: 7, title: "One"}, @frame)
 
-    assert Counter.cumulative({:existing, 7}) == 1
+    {protocol, _decoded} = decode(response)
+    assert protocol["isError"] == false
+    assert_received :created
   end
 
-  test "crossing the threshold pauses toward the batch path — never a question to the operator" do
+  test "past the threshold the pause names the window and the batch path — no operator question" do
     elicitation_capable()
-    start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
+    stub_api(@threshold)
 
     assert {:reply, response, @frame} =
              CreateTask.execute(%{initiative_id: 7, title: "One too many"}, @frame)
@@ -114,69 +120,61 @@ defmodule DoitMcp.CreateTaskGateTest do
     assert protocol["isError"] == true
     assert decoded["gate"] == "single_create_pause"
     assert decoded["message"] =~ "#{@threshold} tasks have landed"
+    assert decoded["message"] =~ "minutes"
     assert decoded["message"] =~ "apply_operations"
     assert decoded["message"] =~ "one list at a time"
-    # Agent-facing only: no elicitation went to the operator.
     refute_received {:send_elicitation_request, _, _, _}
-    # A paused create records nothing.
-    assert Counter.cumulative({:existing, 7}) == @threshold
+    refute_received :created
   end
 
   test "a parent-anchored create resolves its initiative and pauses past the threshold" do
     elicitation_capable()
-    start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
-    stub_create_ok()
+    stub_api(@threshold + 3)
 
     assert {:reply, response, @frame} =
              CreateTask.execute(%{parent_id: 42, title: "Nested"}, @frame)
 
     {protocol, _decoded} = decode(response)
     assert protocol["isError"] == true
-    refute_received {:send_elicitation_request, _, _, _}
+    refute_received :created
   end
 
-  test "an operator-confirmed initiative flows freely past the cap" do
+  test "an operator-confirmed initiative flows freely past any pressure" do
     elicitation_capable()
     start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
     Counter.mark_confirmed({:existing, 7})
-    stub_create_ok()
+    stub_api(@threshold + 100)
 
     assert {:reply, response, @frame} =
              CreateTask.execute(%{initiative_id: 7, title: "Sanctioned"}, @frame)
 
     {protocol, _decoded} = decode(response)
     assert protocol["isError"] == false
-    assert Counter.cumulative({:existing, 7}) == @threshold + 1
+    assert_received :created
   end
 
-  test "the cap stands aside without elicitation capability" do
+  test "the pause stands aside without elicitation capability" do
     fake_session(%{})
-    start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
-    stub_create_ok()
+    stub_api(@threshold + 100)
 
     assert {:reply, response, @frame} =
              CreateTask.execute(%{initiative_id: 7, title: "Ungated client"}, @frame)
 
     {protocol, _decoded} = decode(response)
     assert protocol["isError"] == false
-    # And records nothing — mirrors the batch side's capability skip.
-    assert Counter.cumulative({:existing, 7}) == @threshold
+    assert_received :created
   end
 
-  test "the kill switch disarms the cap" do
+  test "the kill switch disarms the pause" do
     Application.put_env(:doit_mcp, :import_gate_enabled, false)
     elicitation_capable()
-    start_counter()
-    Counter.record([{{:existing, 7}, @threshold}])
-    stub_create_ok()
+    stub_api(@threshold + 100)
 
     assert {:reply, response, @frame} =
              CreateTask.execute(%{initiative_id: 7, title: "Disarmed"}, @frame)
 
     {protocol, _decoded} = decode(response)
     assert protocol["isError"] == false
+    assert_received :created
   end
 end
