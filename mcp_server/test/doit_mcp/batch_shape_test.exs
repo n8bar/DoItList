@@ -88,9 +88,38 @@ defmodule DoitMcp.BatchShapeTest do
       assert block =~ "subtasks"
     end
 
-    test "non-task ops are ignored" do
+    test "an initiative add with index_style set prints the sets line" do
+      ops = [
+        %{
+          "op" => "add",
+          "type" => "initiative",
+          "lid" => "i",
+          "data" => %{"name" => "Plan", "index_style" => "numerical"}
+        },
+        add("Build the parser")
+      ]
+
+      block = BatchShape.facts_block(ops)
+      assert block =~ "Server-computed shape facts:"
+      assert block =~ ~s(- New Initiative "Plan" sets index_style: numerical.)
+    end
+
+    test "an initiative add without index_style prints the unset fact — always notable" do
+      ops = [
+        %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Plan"}}
+      ]
+
+      assert BatchShape.facts_block(ops) =~
+               ~s(- New Initiative "Plan" leaves index_style unset — tasks render unnumbered.)
+    end
+
+    test "an initiative add never counts toward the task-shape facts" do
+      # A pathlike initiative NAME is not a pathlike task title; only the
+      # index_style fact prints.
       ops = [%{"op" => "add", "type" => "initiative", "data" => %{"name" => "a/b.md"}}]
-      assert BatchShape.facts_block(ops) == nil
+      block = BatchShape.facts_block(ops)
+      refute block =~ "task titles"
+      assert block =~ ~s(- New Initiative "a/b.md" leaves index_style unset)
     end
   end
 end

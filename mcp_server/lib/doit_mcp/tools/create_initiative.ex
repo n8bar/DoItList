@@ -15,7 +15,16 @@ defmodule DoitMcp.Tools.CreateInitiative do
     field(:name, :string, required: true)
     field(:description, :string, required: false)
     field(:subtitle, :string, required: false)
-    field(:index_style, :string, required: false)
+
+    field(:index_style, :string,
+      required: false,
+      description:
+        "Task-numbering scheme: none (default), outline, numerical, roman, alphabetical. " <>
+          "An imported/hierarchical source matches the source's scheme when it has a usable " <>
+          "one (outline, numerical, roman, alphabetical); a hierarchy with no usable scheme " <>
+          "takes numerical; a plain non-referenced list stays none"
+    )
+
     field(:auto_promote_co_assignees, :boolean, required: false)
     field(:viewer_plus, :boolean, required: false)
   end

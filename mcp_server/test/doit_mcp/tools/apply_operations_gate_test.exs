@@ -111,10 +111,13 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   end
 
   # Serves GET /initiatives/:id/task_count — the DB-window pressure read
-  # (m03.04 3.1 iteration 2) — ahead of a stub's other clauses.
-  defp with_pressure(conn, pressure, fallback) do
+  # (m03.04 3.1 iteration 2) — ahead of a stub's other clauses. `extra`
+  # merges further task_count facts (e.g. initiative_index_style); the
+  # count-only default models a response WITHOUT the style key, so tests on
+  # it exercise the confirm's fail-open no-line lane.
+  defp with_pressure(conn, pressure, fallback, extra \\ %{}) do
     if conn.method == "GET" and String.ends_with?(conn.request_path, "/task_count") do
-      Req.Test.json(conn, %{"data" => %{"count" => pressure}})
+      Req.Test.json(conn, %{"data" => Map.merge(%{"count" => pressure}, extra)})
     else
       fallback.(conn)
     end
@@ -123,26 +126,31 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   # GET /api/v1/tasks/:id resolves the anchor parent to its Initiative (and
   # reports each read to the test process, so dedup is assertable); GET
   # /api/v1/initiatives/:id serves the target knobless; POST applies.
-  defp stub_parent_resolve_and_apply(parent_id, initiative_id, pressure \\ 0) do
+  defp stub_parent_resolve_and_apply(parent_id, initiative_id, pressure \\ 0, extra \\ %{}) do
     reply_to = self()
 
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      with_pressure(conn, pressure, fn conn ->
-        case {conn.method, conn.request_path} do
-          {"GET", "/api/v1/tasks/" <> _} ->
-            send(reply_to, {:task_read, conn.request_path})
+      with_pressure(
+        conn,
+        pressure,
+        fn conn ->
+          case {conn.method, conn.request_path} do
+            {"GET", "/api/v1/tasks/" <> _} ->
+              send(reply_to, {:task_read, conn.request_path})
 
-            Req.Test.json(conn, %{
-              "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
-            })
+              Req.Test.json(conn, %{
+                "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
+              })
 
-          {"GET", "/api/v1/initiatives/" <> _} ->
-            Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
+            {"GET", "/api/v1/initiatives/" <> _} ->
+              Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
 
-          {"POST", "/api/v1/operations"} ->
-            Req.Test.json(conn, %{"results" => []})
-        end
-      end)
+            {"POST", "/api/v1/operations"} ->
+              Req.Test.json(conn, %{"results" => []})
+          end
+        end,
+        extra
+      )
     end)
   end
 
@@ -302,10 +310,14 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert_receive {:send_elicitation_request, params, schema, timeout}, 2_000
 
-    # Message: readback verbatim, assumptions as a list, then the decision
-    # line naming all three choices. No `settled` passed → no Settled block.
+    # Message: readback verbatim, the server's facts (the in-batch
+    # Initiative's index_style — always notable), assumptions as a list,
+    # then the decision line naming all three choices. No `settled` passed →
+    # no Settled block; an in-batch target → no target-style read.
     assert params["message"] ==
              readback <>
+               "\n\nServer-computed shape facts:\n" <>
+               "- New Initiative \"Import\" leaves index_style unset — tasks render unnumbered." <>
                "\n\nAssumptions:\n- Depth taken from markdown heading levels\n" <>
                "- Struck-through items skipped\n\n" <>
                "Decide: apply — apply this import as read back; correct — don't apply, " <>
@@ -409,7 +421,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     # Without a readback the hold names the content shape, not batch size.
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     assert response.isError == true
-    assert [%{"type" => "text", "text" => text}] = Enum.map(response.content, &Map.new(&1, fn {k, v} -> {to_string(k), v} end))
+
+    assert [%{"type" => "text", "text" => text}] =
+             Enum.map(response.content, &Map.new(&1, fn {k, v} -> {to_string(k), v} end))
+
     assert text =~ "content shape"
     assert text =~ "Re-call apply_operations"
 
@@ -675,7 +690,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
           )
         end)
 
-      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      # The count-only task_count stub carries no initiative_index_style →
+      # the confirm's target-style read fails open and prints no line.
+      assert_receive {:send_elicitation_request, params, _, _}, 2_000
+      refute params["message"] =~ "Target Initiative index_style"
       Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
       assert {:reply, _response, @frame} = Task.await(task, 5_000)
 
@@ -855,7 +873,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     test "with a readback the operator is elicited, and a confirm applies the batch" do
       elicitation_capable()
-      stub_parent_resolve_and_apply(42, 7)
+      # task_count serves the target's index_style → the confirm form carries
+      # the target-style line even with no shape facts (unremarkable adds).
+      stub_parent_resolve_and_apply(42, 7, 0, %{"initiative_index_style" => "none"})
 
       task =
         Task.async(fn ->
@@ -868,7 +888,11 @@ defmodule DoitMcp.ApplyOperationsGateTest do
           )
         end)
 
-      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      assert_receive {:send_elicitation_request, params, _, _}, 2_000
+
+      assert params["message"] =~
+               "- Target Initiative index_style: none — tasks render unnumbered."
+
       Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
 
       assert {:reply, response, @frame} = Task.await(task, 5_000)

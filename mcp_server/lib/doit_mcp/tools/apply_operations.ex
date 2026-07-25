@@ -55,6 +55,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
         %{"op" => "update", "type" => "task", "lid" => "t1", "data" => %{"done" => true}}
       ]
 
+  When the bootstrapped Initiative imports a hierarchical source, set
+  `index_style` in its `data` to match the source's numbering scheme when it
+  has a usable one (`outline`, `numerical`, `roman`, `alphabetical`); a
+  hierarchy with no usable scheme takes `numerical`; a plain non-referenced
+  list stays `none` (the default).
+
   This tool is a pure pass-through — the caller is responsible for building
   each op object correctly per the wire format above; no reshaping happens
   here.
@@ -302,6 +308,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
       confirmation_message(
         readback,
         BatchShape.facts_block(params.operations),
+        target_style_line(info.target),
         Map.get(params, :assumptions) || [],
         Map.get(params, :settled) || []
       )
@@ -402,9 +409,32 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "#{ImportGate.ramp_threshold()} cumulative."
   end
 
+  # An EXISTING target's index_style, printed beneath the shape facts so the
+  # confirm shows how the imported tree will render there. One read per HELD
+  # batch only — this runs solely on the elicitation path. A failed read or a
+  # response without the key drops the line (fail-open, ImportPressure's
+  # precedent); an in-batch target's style is already a shape fact, and a
+  # shape-hold (nil target) has no Initiative to read.
+  defp target_style_line({:existing, id}) do
+    case Client.get("/api/v1/initiatives/#{id}/task_count") do
+      {:ok, %{"initiative_index_style" => "none"}} ->
+        "- Target Initiative index_style: none — tasks render unnumbered."
+
+      {:ok, %{"initiative_index_style" => style}} when is_binary(style) ->
+        "- Target Initiative index_style: #{style}."
+
+      _ ->
+        nil
+    end
+  end
+
+  defp target_style_line(_target), do: nil
+
   # Shape facts print directly under the agent's readback: claim first, then
-  # the numbers that check it. Nil (an unremarkable batch) drops the section.
-  defp confirmation_message(readback, shape_facts, assumptions, settled) do
+  # the numbers that check it. Nil (an unremarkable batch) drops the section;
+  # the target-style line rides the same nil-dropping join, so it still
+  # prints when the shape facts don't.
+  defp confirmation_message(readback, shape_facts, target_style, assumptions, settled) do
     assumptions_block =
       case assumptions do
         [] -> "Assumptions: none stated."
@@ -425,7 +455,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         "your corrections say what to change; hold — don't apply, have the agent " <>
         "ask you more questions first."
 
-    [readback, shape_facts, settled_block, assumptions_block, closing]
+    [readback, shape_facts, target_style, settled_block, assumptions_block, closing]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n\n")
   end

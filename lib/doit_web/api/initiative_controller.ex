@@ -120,7 +120,8 @@ defmodule DoItWeb.Api.InitiativeController do
   # length stays adapter policy and pressure survives reconnects. Also carries
   # the Initiative's own creation instant (m03.04 3.1 iteration 3) so the
   # adapter can age-qualify a FRESH Initiative — same stance: the facts live
-  # here, the freshness window stays adapter policy.
+  # here, the freshness window stays adapter policy — and its `index_style`,
+  # so the held-batch confirm can print how the imported tree will render.
   def task_count(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
@@ -131,7 +132,8 @@ defmodule DoItWeb.Api.InitiativeController do
             conn,
             Api.data(%{
               count: Tasks.count_created(initiative.id, created_at),
-              initiative_created_at: DateTime.to_iso8601(initiative.inserted_at)
+              initiative_created_at: DateTime.to_iso8601(initiative.inserted_at),
+              initiative_index_style: initiative.index_style
             })
           )
 

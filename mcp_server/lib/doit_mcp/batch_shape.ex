@@ -19,7 +19,10 @@ defmodule DoitMcp.BatchShape do
 
   `facts_block/1` renders the same counts for the gate's confirm form (nil
   when nothing is notable), so any held batch shows the server's numbers
-  under the agent's readback — a rosy readback can't hide the shape.
+  under the agent's readback — a rosy readback can't hide the shape. An
+  initiative ADD is always notable: its `index_style` fact prints per add,
+  so a held batch that bootstraps an Initiative always shows the operator
+  how the imported tree will render (numbered or not).
 
   Pure; adapter-side judgment like every gate (the API stays dumb — thin-layer
   guardrail). Thresholds are retunable module attributes. Checkbox detection
@@ -73,13 +76,15 @@ defmodule DoitMcp.BatchShape do
 
   @doc """
   The server-computed counts for a held batch's confirm form — nil when
-  nothing is notable (the form then carries no facts section).
+  nothing is notable (the form then carries no facts section). An initiative
+  add is always notable: each one contributes an `index_style` line, read
+  purely from the op's data. Facts only — `classify/1` verdicts don't move.
   """
   @spec facts_block([map()]) :: String.t() | nil
   def facts_block(operations) do
     facts = analyze(operations)
 
-    lines =
+    task_lines =
       Enum.filter(
         [
           facts.pathlike_titles > 0 &&
@@ -93,6 +98,9 @@ defmodule DoitMcp.BatchShape do
         ],
         &is_binary/1
       )
+
+    # The container's rendering fact leads the task-shape counts.
+    lines = initiative_style_lines(operations) ++ task_lines
 
     case lines do
       [] ->
@@ -108,6 +116,29 @@ defmodule DoitMcp.BatchShape do
   end
 
   # --- Facts -----------------------------------------------------------------
+
+  # One line per initiative ADD, read purely from the op's data: unset (no
+  # key, nil, or blank) is itself the fact — the tasks render unnumbered.
+  defp initiative_style_lines(operations) do
+    for op <- operations, initiative_add?(op) do
+      name =
+        case add_field(op, "name") do
+          name when is_binary(name) ->
+            if String.trim(name) == "", do: "(unnamed)", else: name
+
+          _ ->
+            "(unnamed)"
+        end
+
+      style = add_field(op, "index_style")
+
+      if is_binary(style) and String.trim(style) != "" do
+        ~s(- New Initiative "#{name}" sets index_style: #{style}.)
+      else
+        ~s(- New Initiative "#{name}" leaves index_style unset — tasks render unnumbered.)
+      end
+    end
+  end
 
   defp analyze(operations) do
     adds = Enum.filter(operations, &task_add?/1)
@@ -202,6 +233,9 @@ defmodule DoitMcp.BatchShape do
 
   defp task_add?(%{"op" => "add", "type" => "task"}), do: true
   defp task_add?(_), do: false
+
+  defp initiative_add?(%{"op" => "add", "type" => "initiative"}), do: true
+  defp initiative_add?(_), do: false
 
   defp add_field(op, key) do
     case Map.get(op, "data") do
