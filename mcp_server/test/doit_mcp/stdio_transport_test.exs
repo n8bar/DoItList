@@ -122,7 +122,7 @@ defmodule DoitMcp.StdioTransportTest do
   # stock serial transport could not read the operator's elicitation answer
   # while the gated tools/call was in flight.
 
-  setup do
+  setup context do
     # Determinism against any ambient DOITLIST_IMPORT_GATE in the container.
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
 
@@ -143,8 +143,17 @@ defmodule DoitMcp.StdioTransportTest do
 
     device = FakeIO.open(self())
 
+    # The substantive-idle tests below tag in a millisecond-scale window;
+    # everything else runs with the transport's default (never reached).
+    idle_opts =
+      case context do
+        %{substantive_idle_timeout: timeout} -> [substantive_idle_timeout: timeout]
+        _ -> []
+      end
+
     start_supervised!(
-      {DoitMcp.Stdio.Supervisor, io_device: device, session_idle_timeout: to_timeout(minute: 10)}
+      {DoitMcp.Stdio.Supervisor,
+       [io_device: device, session_idle_timeout: to_timeout(minute: 10)] ++ idle_opts}
     )
 
     {:ok, device: device}
@@ -301,6 +310,60 @@ defmodule DoitMcp.StdioTransportTest do
 
     assert %{"id" => 2, "result" => result} = recv_frame()
     assert result["isError"] == false
+  end
+
+  # Substantive-idle expiry (m03.04 item 22): pinging clients must not hold
+  # the transport open, so the window re-arms only on non-ping frames.
+
+  @tag substantive_idle_timeout: 500
+  test "ping-only traffic does not hold the transport past the substantive window",
+       %{device: device} do
+    handshake(device)
+
+    transport = Process.whereis(Registry.transport_name(DoitMcp.Server, :stdio))
+    ref = Process.monitor(transport)
+
+    # Ping continuously — each iteration waits only for the previous pong,
+    # so pings land far more often than the 500ms window — until the DOWN.
+    {reason, pongs} = ping_until_down(device, ref, transport, 100, 0)
+
+    assert reason == {:shutdown, :substantive_idle_timeout}
+    # Routing is unchanged: pings were still being answered while the
+    # window ran out.
+    assert pongs > 0
+  end
+
+  @tag substantive_idle_timeout: 500
+  test "substantive frames re-arm the window; the transport stops once they cease",
+       %{device: device} do
+    handshake(device)
+
+    transport = Process.whereis(Registry.transport_name(DoitMcp.Server, :stdio))
+    ref = Process.monitor(transport)
+
+    # A substantive frame every ~300ms keeps the transport alive well past
+    # the 500ms window — each refute below would see the DOWN if the
+    # preceding frame had not re-armed the timer.
+    refute_receive {:DOWN, ^ref, :process, ^transport, _}, 300
+    send_frame(device, %{"jsonrpc" => "2.0", "id" => 50, "method" => "tools/list"})
+    refute_receive {:DOWN, ^ref, :process, ^transport, _}, 300
+    send_frame(device, %{"jsonrpc" => "2.0", "id" => 51, "method" => "tools/list"})
+    refute_receive {:DOWN, ^ref, :process, ^transport, _}, 300
+
+    # Traffic ceased — expiry fires one window after the last frame.
+    assert_receive {:DOWN, ^ref, :process, ^transport, {:shutdown, :substantive_idle_timeout}},
+                   2_000
+  end
+
+  defp ping_until_down(device, ref, transport, id, pongs) do
+    send_frame(device, %{"jsonrpc" => "2.0", "id" => id, "method" => "ping"})
+
+    receive do
+      {:DOWN, ^ref, :process, ^transport, reason} -> {reason, pongs}
+      {:stdout, _pong} -> ping_until_down(device, ref, transport, id + 1, pongs + 1)
+    after
+      5_000 -> flunk("neither a pong nor a transport exit arrived")
+    end
   end
 
   test "client EOF stops the transport normally and trips the watchdog's halt",

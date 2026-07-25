@@ -35,4 +35,14 @@ defmodule DoitMcp.ApplicationTest do
     assert timeout >= to_timeout(day: 30)
     assert timeout <= 4_294_967_295
   end
+
+  test "real runs reap the transport after 2 hours without substantive traffic" do
+    {DoitMcp.Stdio.Supervisor, opts} =
+      Enum.find(DoitMcp.Application.children(:dev), &match?({DoitMcp.Stdio.Supervisor, _}, &1))
+
+    # Deliberately distinct from :session_idle_timeout (sidelined at 49 days,
+    # above): this window counts only non-ping frames, so a pinging-but-
+    # abandoned client still gets reaped (m03.04 item 22).
+    assert Keyword.fetch!(opts, :substantive_idle_timeout) == to_timeout(hour: 2)
+  end
 end

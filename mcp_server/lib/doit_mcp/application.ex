@@ -27,8 +27,14 @@ defmodule DoitMcp.Application do
       # (m03.04 item 3.2). nil is not infinity here (anubis falls back
       # to the default), so pin the session open with a large timeout —
       # kept under Process.send_after's ceiling of 4_294_967_295 ms
-      # (~49.7 days; larger raises badarg).
-      {DoitMcp.Stdio.Supervisor, session_idle_timeout: to_timeout(day: 49)},
+      # (~49.7 days; larger raises badarg). The pin sidelines that expiry
+      # rather than replacing it: the session resets it on every inbound
+      # frame, pings included, so an abandoned client that keeps pinging
+      # would hold the adapter forever. The transport's substantive-idle
+      # window reaps those — 2 hours without a non-ping frame stops the
+      # transport and the watchdog below halts the VM (m03.04 item 22).
+      {DoitMcp.Stdio.Supervisor,
+       session_idle_timeout: to_timeout(day: 49), substantive_idle_timeout: to_timeout(hour: 2)},
       # After the stdio tree, which registers the transport under the same
       # anubis registry name the stock one used — the watchdog looks it up
       # by name and exits the VM when it stops (client disconnect); `mix run

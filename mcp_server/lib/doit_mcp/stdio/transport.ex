@@ -35,6 +35,16 @@ defmodule DoitMcp.Stdio.Transport do
   On stdin EOF (client hung up) this process stops `:normal`;
   `DoitMcp.TransportWatchdog` monitors it under the registered
   `Anubis.Server.Registry.transport_name/2` and halts the VM.
+
+  Abandoned-but-pinging clients are reaped by a substantive-idle window
+  (m03.04 item 22). The session's own `session_idle_timeout` can't do it:
+  the session resets its expiry on EVERY inbound frame, pings included, so
+  a client that pings forever holds the session open forever. This
+  transport re-arms its own timer only on non-ping inbound frames; once
+  `:substantive_idle_timeout` passes without one, it stops
+  `{:shutdown, :substantive_idle_timeout}` and the watchdog halts the VM,
+  exactly as on EOF. Pings are still routed and answered normally — only
+  the timer bookkeeping tells them apart.
   """
 
   @behaviour Anubis.Transport.Behaviour
@@ -54,12 +64,17 @@ defmodule DoitMcp.Stdio.Transport do
     * `:name` — registered name (default: `Registry.transport_name(server, :stdio)`)
     * `:session` — the session's registered name (default: `Registry.stdio_session_name(server)`)
     * `:io_device` — read/write device (default: `:stdio`; tests inject a fake)
+    * `:substantive_idle_timeout` — ms without a non-ping inbound frame before
+      the transport stops itself (default: 2 hours)
   """
   @type option ::
           {:server, module()}
           | {:name, GenServer.name()}
           | {:session, GenServer.name()}
           | {:io_device, IO.device()}
+          | {:substantive_idle_timeout, non_neg_integer()}
+
+  @default_substantive_idle_timeout to_timeout(hour: 2)
 
   @impl Anubis.Transport.Behaviour
   @spec start_link([option()]) :: GenServer.on_start()
@@ -70,7 +85,9 @@ defmodule DoitMcp.Stdio.Transport do
     init_arg = %{
       server: server,
       session: Keyword.get(opts, :session, Registry.stdio_session_name(server)),
-      io_device: Keyword.get(opts, :io_device, :stdio)
+      io_device: Keyword.get(opts, :io_device, :stdio),
+      substantive_idle_timeout:
+        Keyword.get(opts, :substantive_idle_timeout, @default_substantive_idle_timeout)
     }
 
     GenServer.start_link(__MODULE__, init_arg, name: name)
@@ -106,10 +123,11 @@ defmodule DoitMcp.Stdio.Transport do
       Map.merge(state, %{
         reader: reader,
         pending: :gen_server.reqids_new(),
-        context: %{type: :stdio, env: System.get_env(), pid: System.pid()}
+        context: %{type: :stdio, env: System.get_env(), pid: System.pid()},
+        idle_timer: nil
       })
 
-    {:ok, state}
+    {:ok, arm_substantive_idle(state)}
   end
 
   # The session sends its own outbound frames (elicitation/create, server
@@ -132,6 +150,7 @@ defmodule DoitMcp.Stdio.Transport do
   def handle_info({:stdin, data}, state) when is_binary(data) do
     case Message.decode(data) do
       {:ok, messages} ->
+        state = maybe_reset_substantive_idle(messages, state)
         {:noreply, Enum.reduce(messages, state, &route/2)}
 
       {:error, reason} ->
@@ -149,6 +168,17 @@ defmodule DoitMcp.Stdio.Transport do
   def handle_info({:stdin, {:error, reason}}, state) do
     Logger.error("stdio read error: #{inspect(reason)}")
     {:stop, {:shutdown, {:read_error, reason}}, state}
+  end
+
+  def handle_info(:substantive_idle_timeout, state) do
+    # Nothing but pings for the whole window — the client is gone in every
+    # way that matters. Stop like EOF does; the watchdog halts the VM.
+    Logger.info(
+      "stdio substantive-idle timeout: no non-ping traffic for " <>
+        "#{state.substantive_idle_timeout}ms, closing session"
+    )
+
+    {:stop, {:shutdown, :substantive_idle_timeout}, state}
   end
 
   def handle_info({:EXIT, reader, reason}, %{reader: reader} = state) do
@@ -209,6 +239,23 @@ defmodule DoitMcp.Stdio.Transport do
 
   defp write_session_reply({:error, reason}, _state) do
     Logger.error("session error: #{inspect(reason)}")
+  end
+
+  # Substantive-idle bookkeeping — cancel + re-arm, same shape as the
+  # session's own expiry timer, but deaf to pings.
+
+  defp maybe_reset_substantive_idle(messages, state) do
+    if Enum.any?(messages, fn message -> not Message.is_ping(message) end) do
+      if state.idle_timer, do: Process.cancel_timer(state.idle_timer)
+      arm_substantive_idle(state)
+    else
+      state
+    end
+  end
+
+  defp arm_substantive_idle(state) do
+    timer = Process.send_after(self(), :substantive_idle_timeout, state.substantive_idle_timeout)
+    %{state | idle_timer: timer}
   end
 
   # Reader — its whole job is to never be the thing that blocks the pipe.

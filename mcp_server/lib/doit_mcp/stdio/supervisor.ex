@@ -21,8 +21,9 @@ defmodule DoitMcp.Stdio.Supervisor do
   frame here without patching the dep.
 
   Options: `:session_idle_timeout` (the caller pins it near the timer
-  ceiling — see `DoitMcp.Application`), `:io_device` (tests inject a fake
-  device; defaults to `:stdio`).
+  ceiling — see `DoitMcp.Application`), `:substantive_idle_timeout` (the
+  transport's non-ping idle window — see `DoitMcp.Stdio.Transport`),
+  `:io_device` (tests inject a fake device; defaults to `:stdio`).
   """
 
   use Supervisor
@@ -49,11 +50,12 @@ defmodule DoitMcp.Stdio.Supervisor do
         task_supervisor: task_supervisor
       ] ++ Keyword.take(opts, [:session_idle_timeout])
 
-    transport_opts = [
-      server: @server,
-      name: transport_name,
-      io_device: Keyword.get(opts, :io_device, :stdio)
-    ]
+    transport_opts =
+      [
+        server: @server,
+        name: transport_name,
+        io_device: Keyword.get(opts, :io_device, :stdio)
+      ] ++ Keyword.take(opts, [:substantive_idle_timeout])
 
     children = [
       {Task.Supervisor, name: task_supervisor},
