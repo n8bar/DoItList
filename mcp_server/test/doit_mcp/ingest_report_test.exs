@@ -449,18 +449,19 @@ defmodule DoitMcp.IngestReportTest do
     end
   end
 
-  describe "build/1 — context facts" do
-    # AI-KNOBS-PARKED (m03.04): the ai_knobs_set fact is removed; revive with the fact.
-    @tag :skip
-    test "ai_knobs presence is a boolean, never the content" do
-      assert IngestReport.build(@tree).ai_knobs_set == false
-
-      assert IngestReport.build(Map.put(@tree, "ai_knobs", "deploy_day: friday")).ai_knobs_set ==
-               true
-
-      assert IngestReport.build(Map.put(@tree, "ai_knobs", "   ")).ai_knobs_set == false
-    end
-  end
+  # AI-KNOBS-PARKED (m03.04): the ai_knobs_set fact is removed; revive this
+  # block with the fact (commented out, not skipped — a skipped body still
+  # compiles and warns on the missing key).
+  # describe "build/1 — context facts" do
+  #   test "ai_knobs presence is a boolean, never the content" do
+  #     assert IngestReport.build(@tree).ai_knobs_set == false
+  #
+  #     assert IngestReport.build(Map.put(@tree, "ai_knobs", "deploy_day: friday")).ai_knobs_set ==
+  #              true
+  #
+  #     assert IngestReport.build(Map.put(@tree, "ai_knobs", "   ")).ai_knobs_set == false
+  #   end
+  # end
 
   describe "build/1 — capped lists" do
     test "every list carries the first 20 plus an 'and N more' tail" do
