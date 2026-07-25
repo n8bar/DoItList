@@ -17,6 +17,12 @@ defmodule DoitMcp.Tools.CreateTask do
   An initiative the operator has confirmed flows freely, singles included.
   Like the batch gate, the pause stands aside for clients without
   elicitation and rides `DOITLIST_IMPORT_GATE=off`.
+
+  The fresh floor (m03.04 3.1 iteration 3) applies here too: a just-created
+  Initiative pauses singles past `ImportGate.fresh_threshold/0` toward the
+  batch path's confirm, closing the per-op dodge under the floor — an agent
+  held at the floor on the batch path can't drip the rest in one at a time.
+  Settling and aging out restore the normal threshold.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -39,7 +45,13 @@ defmodule DoitMcp.Tools.CreateTask do
   def execute(params, frame) do
     case guard(params) do
       {:refuse, message} ->
-        response = Response.json(Response.tool(), %{ok: false, gate: "single_create_pause", message: message})
+        response =
+          Response.json(Response.tool(), %{
+            ok: false,
+            gate: "single_create_pause",
+            message: message
+          })
+
         {:reply, %{response | isError: true}, frame}
 
       :pass ->
@@ -70,16 +82,21 @@ defmodule DoitMcp.Tools.CreateTask do
   # :pass (guardrail dark, unresolvable destination — the apply surfaces the
   # real error — or simply under pressure) or {:refuse, message}. A committed
   # create counts itself: pressure is the DATABASE's inserted_at window
-  # (DoitMcp.ImportPressure), so no recording happens here.
+  # (DoitMcp.ImportPressure), so no recording happens here. Pressure and
+  # freshness ride ONE read — the fresh floor must not double the pause's
+  # per-call cost.
   defp guard(params) do
     with true <- ImportGate.enabled?() and Elicitation.client_supports_elicitation?(),
          {:ok, target} <- destination(params),
          false <- Counter.confirmed?(target) do
-      pressure = ImportPressure.recent(target)
+      {pressure, fresh?} = ImportPressure.recent_with_freshness(target)
+      bound = if fresh?, do: ImportGate.fresh_threshold(), else: ImportGate.threshold()
 
-      if pressure + 1 > ImportGate.threshold(),
-        do: {:refuse, batch_path_message(pressure)},
-        else: :pass
+      cond do
+        pressure + 1 <= bound -> :pass
+        fresh? -> {:refuse, fresh_floor_message(pressure)}
+        true -> {:refuse, batch_path_message(pressure)}
+      end
     else
       _ -> :pass
     end
@@ -106,5 +123,17 @@ defmodule DoitMcp.Tools.CreateTask do
       "#{ImportGate.threshold()} per batch) flows without questions up to " <>
       "#{ImportGate.ramp_threshold()} recent; past that, the operator's one readback " <>
       "confirm opens this initiative fully, singles included. Nothing was created."
+  end
+
+  # The fresh floor's refusal (m03.04 3.1 iteration 3) — agent-facing only,
+  # same doctrine as above: the redirect names the batch path and the one
+  # operator confirm waiting there.
+  defp fresh_floor_message(pressure) do
+    "One-at-a-time pause: this initiative was just created (#{pressure} tasks in the " <>
+      "last #{ImportPressure.window_minutes()} minutes) and its first import belongs " <>
+      "on the batch path. Batch the work through apply_operations — past " <>
+      "#{ImportGate.fresh_threshold()} recent adds a new initiative's import meets " <>
+      "the operator's one readback confirm; their confirm opens this initiative " <>
+      "fully, singles included. Nothing was created."
   end
 end
