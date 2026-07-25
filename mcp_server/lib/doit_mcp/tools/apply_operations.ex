@@ -168,7 +168,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         gate =
           ImportGate.evaluate(params.operations,
             elicitation?: &Elicitation.client_supports_elicitation?/0,
-            fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end,
+            # AI-KNOBS-PARKED (m03.04): revive re-adds fetch_initiative (knobs-exemption read).
             # Recent pressure comes from the DATABASE's inserted_at window
             # (m03.04 3.1 iteration 2) — human-rhythm drips decay, gulps
             # weigh full, and reconnects can't reset it.

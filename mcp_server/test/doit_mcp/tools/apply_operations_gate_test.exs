@@ -142,6 +142,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
                 "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
               })
 
+            # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
+            # parked; a revived fetch hits it again.
             {"GET", "/api/v1/initiatives/" <> _} ->
               Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
 
@@ -174,6 +176,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       with_pressure(conn, pressure, fn conn ->
         case {conn.method, conn.request_path} do
+          # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
+          # parked; a revived fetch hits it (and the knobs arg matters) again.
           {"GET", "/api/v1/initiatives/7"} ->
             Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
 
@@ -185,7 +189,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   end
 
   # POST echoes the created Initiative's lid → real id (the wire shape for
-  # creates); GET serves its ai_knobs.
+  # creates); GET serves its ai_knobs (AI-KNOBS-PARKED: unreached while the
+  # gate's knobs fetch is parked; a revived fetch hits it again).
   defp stub_create_echo_and_get(initiative_id, knobs, pressure \\ 0) do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       with_pressure(conn, pressure, fn conn ->
@@ -223,6 +228,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
               "data" => %{"count" => pressure, "initiative_created_at" => created}
             })
           else
+            # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
+            # parked; a revived fetch hits it again.
             Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
           end
 
@@ -610,36 +617,16 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["message"] =~ "did not respond"
   end
 
-  test "an existing target's ai_knobs is fetched over the API; settled knobs pass" do
+  test "an over-threshold existing target gates with no initiative fetch — knobs are parked" do
     elicitation_capable()
+    reply_to = self()
 
+    # Only the pressure read may hit the API: the knobs whole-tree read is
+    # parked, and a held batch applies nothing.
     Req.Test.stub(DoitMcp.Client, fn conn ->
       with_pressure(conn, 0, fn conn ->
-        case {conn.method, conn.request_path} do
-          {"GET", "/api/v1/initiatives/7"} ->
-            Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => "deploy_day: friday"}})
-
-          {"POST", "/api/v1/operations"} ->
-            Req.Test.json(conn, %{"results" => []})
-        end
-      end)
-    end)
-
-    ops = existing_initiative_batch(@threshold + 1, 7)
-    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
-
-    {_, decoded, _} = decode_json_content(response)
-    assert decoded["ok"] == true
-    refute_received {:send_elicitation_request, _, _, _}
-  end
-
-  test "an existing target with empty ai_knobs gates" do
-    elicitation_capable()
-
-    Req.Test.stub(DoitMcp.Client, fn conn ->
-      with_pressure(conn, 0, fn conn ->
-        assert {conn.method, conn.request_path} == {"GET", "/api/v1/initiatives/7"}
-        Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => nil}})
+        send(reply_to, {:unexpected_request, conn.method, conn.request_path})
+        Req.Test.json(conn, %{"data" => %{}})
       end)
     end)
 
@@ -647,8 +634,54 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
     assert Response.to_protocol(response)["isError"] == true
+    refute_received {:unexpected_request, _, _}
     refute_received {:send_elicitation_request, _, _, _}
   end
+
+  # AI-KNOBS-PARKED (m03.04): the knobs exemption at the tool level — settled
+  # ai_knobs let an over-threshold batch through; empty knobs gated via the
+  # API fetch. Revive with knobless_target/2 and the fetch_initiative wiring
+  # in ApplyOperations (the live no-fetch test above then retires).
+  #
+  # test "an existing target's ai_knobs is fetched over the API; settled knobs pass" do
+  #   elicitation_capable()
+  #
+  #   Req.Test.stub(DoitMcp.Client, fn conn ->
+  #     with_pressure(conn, 0, fn conn ->
+  #       case {conn.method, conn.request_path} do
+  #         {"GET", "/api/v1/initiatives/7"} ->
+  #           Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => "deploy_day: friday"}})
+  #
+  #         {"POST", "/api/v1/operations"} ->
+  #           Req.Test.json(conn, %{"results" => []})
+  #       end
+  #     end)
+  #   end)
+  #
+  #   ops = existing_initiative_batch(@threshold + 1, 7)
+  #   assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+  #
+  #   {_, decoded, _} = decode_json_content(response)
+  #   assert decoded["ok"] == true
+  #   refute_received {:send_elicitation_request, _, _, _}
+  # end
+  #
+  # test "an existing target with empty ai_knobs gates" do
+  #   elicitation_capable()
+  #
+  #   Req.Test.stub(DoitMcp.Client, fn conn ->
+  #     with_pressure(conn, 0, fn conn ->
+  #       assert {conn.method, conn.request_path} == {"GET", "/api/v1/initiatives/7"}
+  #       Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => nil}})
+  #     end)
+  #   end)
+  #
+  #   ops = existing_initiative_batch(@threshold + 1, 7)
+  #   assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+  #
+  #   assert Response.to_protocol(response)["isError"] == true
+  #   refute_received {:send_elicitation_request, _, _, _}
+  # end
 
   describe "cumulative trigger across chunks (m03.03 item 5.11.2)" do
     test "two sub-threshold chunks crossing the line fire the gate" do
@@ -704,19 +737,22 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       refute_received {:send_elicitation_request, _, _, _}
     end
 
-    test "post-knobs silence: once ai_knobs is settled, an over-the-line session stays quiet" do
-      start_counter()
-      elicitation_capable()
-      stub_get_and_apply("deploy_day: friday")
-
-      execute_ok(existing_initiative_batch(25, 7))
-
-      # The window reports far over every bound — but the fetch finds
-      # settled knobs.
-      stub_get_and_apply("deploy_day: friday", 200)
-      execute_ok(existing_initiative_batch(10, 7))
-      refute_received {:send_elicitation_request, _, _, _}
-    end
+    # AI-KNOBS-PARKED (m03.04): settled knobs silenced the gate for a whole
+    # session. Revive with the knobs exemption.
+    #
+    # test "post-knobs silence: once ai_knobs is settled, an over-the-line session stays quiet" do
+    #   start_counter()
+    #   elicitation_capable()
+    #   stub_get_and_apply("deploy_day: friday")
+    #
+    #   execute_ok(existing_initiative_batch(25, 7))
+    #
+    #   # The window reports far over every bound — but the fetch finds
+    #   # settled knobs.
+    #   stub_get_and_apply("deploy_day: friday", 200)
+    #   execute_ok(existing_initiative_batch(10, 7))
+    #   refute_received {:send_elicitation_request, _, _, _}
+    # end
 
     test "chunks on a fresh Initiative keep counting across the lid → real-id switch" do
       start_counter()

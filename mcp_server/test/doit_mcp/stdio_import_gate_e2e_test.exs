@@ -158,10 +158,10 @@ defmodule DoitMcp.StdioImportGateE2eTest do
   defp stub_http(fun), do: Application.put_env(:doit_mcp, :req_options, plug: fun)
 
   # POST echoes the created Initiative's lid → real id (the wire shape for
-  # creates) and reports each apply to the test; GET serves its ai_knobs
-  # (still empty) and the DB-window pressure read (chunk 1's 8 tasks all
-  # landed inside the window; count-only — no initiative_created_at — so the
-  # fresh floor reads the Initiative as aged and the normal bounds apply).
+  # creates) and reports each apply to the test; GET serves the DB-window
+  # pressure read (chunk 1's 8 tasks all landed inside the window; count-only
+  # — no initiative_created_at — so the fresh floor reads the Initiative as
+  # aged and the normal bounds apply).
   defp stub_api(test_pid) do
     stub_http(fn conn ->
       case {conn.method, conn.request_path} do
@@ -182,6 +182,8 @@ defmodule DoitMcp.StdioImportGateE2eTest do
         {"GET", "/api/v1/initiatives/57/task_count"} ->
           Req.Test.json(conn, %{"data" => %{"count" => 8}})
 
+        # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
+        # parked; a revived fetch hits it again.
         {"GET", "/api/v1/initiatives/57"} ->
           Req.Test.json(conn, %{"data" => %{"id" => 57, "ai_knobs" => nil}})
       end

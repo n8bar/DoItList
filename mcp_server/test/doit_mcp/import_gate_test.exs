@@ -18,8 +18,12 @@ defmodule DoitMcp.ImportGateTest do
 
   # Effectful inputs that must NOT be reached prove short-circuit order.
   defp never_elicitation, do: fn -> flunk("capability check must not run") end
-  defp never_fetch, do: fn _id -> flunk("initiative fetch must not run") end
   defp never_fresh, do: fn _target -> flunk("fresh? must not run") end
+
+  # AI-KNOBS-PARKED (m03.04): the revived `:fetch_initiative` option is
+  # required again, so revive re-threads `fetch_initiative:` (this fun / the
+  # parked tests' stub fns) through every live evaluate call below.
+  # defp never_fetch, do: fn _id -> flunk("initiative fetch must not run") end
 
   defp yes_elicitation, do: fn -> true end
   defp no_elicitation, do: fn -> false end
@@ -49,8 +53,7 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{target: {:in_batch, "i"}}} =
                ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-                 elicitation?: yes_elicitation(),
-                 fetch_initiative: never_fetch()
+                 elicitation?: yes_elicitation()
                )
     end
 
@@ -62,8 +65,7 @@ defmodule DoitMcp.ImportGateTest do
       refute ImportGate.enabled?()
 
       assert ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-               elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch()
+               elicitation?: never_elicitation()
              ) == :pass
 
       System.put_env("DOITLIST_IMPORT_GATE", "on")
@@ -71,8 +73,7 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{target: {:in_batch, "i"}}} =
                ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-                 elicitation?: yes_elicitation(),
-                 fetch_initiative: never_fetch()
+                 elicitation?: yes_elicitation()
                )
     end
   end
@@ -81,16 +82,22 @@ defmodule DoitMcp.ImportGateTest do
     # These run in the AGED lane (`:fresh?` omitted → its pure default,
     # false): an in-batch Initiative is fresh by definition and now meets
     # the fresh floor instead — that lane lives in its own describe below.
-    test "exactly the threshold of task-adds passes without touching capability or fetch" do
+    test "exactly the threshold of task-adds passes without touching capability" do
       # Mixed anchors (initiative_id + parent_id) keep the tight bound;
       # landing exactly ON it is no crossing.
       ops =
         task_adds(@threshold - 1, %{"initiative_id" => 7}) ++
-          [%{"op" => "add", "type" => "task", "lid" => "p", "data" => %{"parent_id" => 42, "title" => "p"}}]
+          [
+            %{
+              "op" => "add",
+              "type" => "task",
+              "lid" => "p",
+              "data" => %{"parent_id" => 42, "title" => "p"}
+            }
+          ]
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch(),
                parent_targets: %{42 => {:existing, 7}}
              ) == :pass
     end
@@ -105,86 +112,103 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.count_task_adds(ops) == @threshold - 1
 
-      assert ImportGate.evaluate(ops,
-               elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch()
-             ) == :pass
+      assert ImportGate.evaluate(ops, elicitation?: never_elicitation()) == :pass
     end
   end
 
   describe "evaluate/2 capability (condition 2)" do
-    test "over threshold but no elicitation capability passes without fetching" do
+    test "over threshold but no elicitation capability passes" do
       ops = new_initiative_batch(@threshold + 1)
 
-      assert ImportGate.evaluate(ops,
-               elicitation?: no_elicitation(),
-               fetch_initiative: never_fetch()
-             ) == :pass
+      assert ImportGate.evaluate(ops, elicitation?: no_elicitation()) == :pass
     end
   end
 
-  describe "evaluate/2 target knobs (condition 3)" do
-    test "an initiative created in the same batch is knob-less by definition — gated, no fetch" do
-      ops = new_initiative_batch(@threshold + 1)
+  describe "evaluate/2 gated-target selection (condition 3)" do
+    test "an over-threshold existing target gates — knobs parked, every unsettled target asks" do
+      ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
+
+      assert {:gate, %{task_adds: task_adds, cumulative: total, target: {:existing, 7}}} =
+               ImportGate.evaluate(ops, elicitation?: yes_elicitation())
+
+      assert task_adds == @threshold + 1
+      assert total == @threshold + 1
+    end
+
+    test "an in-batch initiative is unsettled by definition and wins the pick over an earlier existing candidate" do
+      # Both targets cross the tight bound; the in-batch one gates even though
+      # the existing one comes first in batch order.
+      existing = task_adds(@threshold + 1, %{"initiative_id" => 7})
+
+      in_batch =
+        [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Import"}}] ++
+          for i <- 1..(@threshold + 1) do
+            %{
+              "op" => "add",
+              "type" => "task",
+              "lid" => "n#{i}",
+              "data" => %{"initiative_lid" => "i", "title" => "new #{i}"}
+            }
+          end
 
       assert {:gate, %{task_adds: task_adds, target: {:in_batch, "i"}}} =
-               ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
-                 fetch_initiative: never_fetch()
-               )
+               ImportGate.evaluate(existing ++ in_batch, elicitation?: yes_elicitation())
 
       assert task_adds == @threshold + 1
     end
 
-    test "an existing target with empty ai_knobs gates, fetched exactly once" do
-      ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
-      parent = self()
-
-      fetch = fn id ->
-        send(parent, {:fetched, id})
-        {:ok, %{"id" => id, "ai_knobs" => nil}}
-      end
-
-      assert {:gate, %{target: {:existing, 7}}} =
-               ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch)
-
-      assert_received {:fetched, 7}
-      refute_received {:fetched, _}
-    end
-
-    test "whitespace-only ai_knobs counts as empty" do
-      ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
-      fetch = fn _id -> {:ok, %{"ai_knobs" => "  \n"}} end
-
-      assert {:gate, _} =
-               ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch)
-    end
-
-    test "settled ai_knobs passes" do
-      ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
-      fetch = fn _id -> {:ok, %{"ai_knobs" => "deploy_day: friday"}} end
-
-      assert ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch) ==
-               :pass
-    end
-
-    test "a fetch error passes — the apply surfaces the real error" do
-      ops = task_adds(@threshold + 1, %{"initiative_id" => 404})
-      fetch = fn _id -> {:error, %{status: 404}} end
-
-      assert ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch) ==
-               :pass
-    end
+    # AI-KNOBS-PARKED (m03.04): the knobs exemption's decision lanes — settled
+    # ai_knobs passed, empty/whitespace knobs gated (fetched exactly once),
+    # and a fetch error passed (the apply surfaces the real error). Revive
+    # with knobless_target/2 and the `:fetch_initiative` option, plus
+    # never_fetch/0 at the top of this file.
+    #
+    # test "an existing target with empty ai_knobs gates, fetched exactly once" do
+    #   ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
+    #   parent = self()
+    #
+    #   fetch = fn id ->
+    #     send(parent, {:fetched, id})
+    #     {:ok, %{"id" => id, "ai_knobs" => nil}}
+    #   end
+    #
+    #   assert {:gate, %{target: {:existing, 7}}} =
+    #            ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch)
+    #
+    #   assert_received {:fetched, 7}
+    #   refute_received {:fetched, _}
+    # end
+    #
+    # test "whitespace-only ai_knobs counts as empty" do
+    #   ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
+    #   fetch = fn _id -> {:ok, %{"ai_knobs" => "  \n"}} end
+    #
+    #   assert {:gate, _} =
+    #            ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch)
+    # end
+    #
+    # test "settled ai_knobs passes" do
+    #   ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
+    #   fetch = fn _id -> {:ok, %{"ai_knobs" => "deploy_day: friday"}} end
+    #
+    #   assert ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch) ==
+    #            :pass
+    # end
+    #
+    # test "a fetch error passes — the apply surfaces the real error" do
+    #   ops = task_adds(@threshold + 1, %{"initiative_id" => 404})
+    #   fetch = fn _id -> {:error, %{status: 404}} end
+    #
+    #   assert ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch) ==
+    #            :pass
+    # end
 
     test "adds hanging off an existing task (parent_id only) have no resolvable target — pass" do
       ops = task_adds(@threshold + 1, %{"parent_id" => 42})
 
       assert ImportGate.target_refs(ops) == []
 
-      assert ImportGate.evaluate(ops,
-               elicitation?: yes_elicitation(),
-               fetch_initiative: never_fetch()
-             ) == :pass
+      assert ImportGate.evaluate(ops, elicitation?: yes_elicitation()) == :pass
     end
   end
 
@@ -192,13 +216,11 @@ defmodule DoitMcp.ImportGateTest do
     test "a sub-threshold batch gates once the session counter pushes its target over the line" do
       # A coherent unit rides the ramp, so the crossing here is the RAMP bound.
       ops = task_adds(10, %{"initiative_id" => 7})
-      fetch = fn _id -> {:ok, %{"ai_knobs" => nil}} end
       expected_total = ImportGate.ramp_threshold() + 7
 
       assert {:gate, %{task_adds: 10, cumulative: ^expected_total, target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: fetch,
                  cumulative: fn {:existing, 7} -> ImportGate.ramp_threshold() - 3 end
                )
     end
@@ -208,12 +230,11 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch(),
                cumulative: fn _ -> ImportGate.ramp_threshold() - 10 end
              ) == :pass
     end
 
-    test "counts are per Initiative — only the crossing target gates, and only it is fetched" do
+    test "counts are per Initiative — only the crossing target gates" do
       ops =
         task_adds(5, %{"initiative_id" => 7}) ++
           for i <- 1..5 do
@@ -225,13 +246,6 @@ defmodule DoitMcp.ImportGateTest do
             }
           end
 
-      parent = self()
-
-      fetch = fn id ->
-        send(parent, {:fetched, id})
-        {:ok, %{"id" => id, "ai_knobs" => nil}}
-      end
-
       history = fn
         {:existing, 8} -> @threshold
         {:existing, 7} -> 0
@@ -242,12 +256,8 @@ defmodule DoitMcp.ImportGateTest do
       assert {:gate, %{task_adds: 5, cumulative: ^expected_total, target: {:existing, 8}}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: fetch,
                  cumulative: history
                )
-
-      assert_received {:fetched, 8}
-      refute_received {:fetched, _}
     end
 
     test "an operator-confirmed target never re-gates, even far over the line" do
@@ -255,7 +265,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(ops,
                elicitation?: yes_elicitation(),
-               fetch_initiative: never_fetch(),
                cumulative: fn _ -> ImportGate.ramp_threshold() + 100 end,
                confirmed?: fn {:existing, 7} -> true end
              ) == :pass
@@ -270,7 +279,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch(),
                cumulative: fn _ -> @threshold + 20 end
              ) == :pass
     end
@@ -287,12 +295,9 @@ defmodule DoitMcp.ImportGateTest do
             }
           end
 
-      fetch = fn _id -> {:ok, %{"ai_knobs" => nil}} end
-
       assert {:gate, %{target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: fetch,
                  cumulative: fn _ -> @threshold end,
                  parent_targets: %{42 => {:existing, 7}}
                )
@@ -300,9 +305,24 @@ defmodule DoitMcp.ImportGateTest do
 
     test "coherent_unit?: one subtree via parent_lid chains counts as one list" do
       ops = [
-        %{"op" => "add", "type" => "task", "lid" => "root", "data" => %{"initiative_id" => 7, "title" => "Worklist"}},
-        %{"op" => "add", "type" => "task", "lid" => "c1", "data" => %{"parent_lid" => "root", "title" => "a"}},
-        %{"op" => "add", "type" => "task", "lid" => "c2", "data" => %{"parent_lid" => "c1", "title" => "b"}}
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "root",
+          "data" => %{"initiative_id" => 7, "title" => "Worklist"}
+        },
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "c1",
+          "data" => %{"parent_lid" => "root", "title" => "a"}
+        },
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "c2",
+          "data" => %{"parent_lid" => "c1", "title" => "b"}
+        }
       ]
 
       assert ImportGate.coherent_unit?(ops)
@@ -314,7 +334,12 @@ defmodule DoitMcp.ImportGateTest do
 
     test "coherent_unit?: a dangling parent_lid or anchorless add is not coherent" do
       dangling = [
-        %{"op" => "add", "type" => "task", "lid" => "x", "data" => %{"parent_lid" => "ghost", "title" => "a"}}
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "x",
+          "data" => %{"parent_lid" => "ghost", "title" => "a"}
+        }
       ]
 
       anchorless = [%{"op" => "add", "type" => "task", "lid" => "y", "data" => %{"title" => "b"}}]
@@ -325,7 +350,7 @@ defmodule DoitMcp.ImportGateTest do
   end
 
   describe "the fresh floor (m03.04 3.1 iteration 3)" do
-    test "a fresh in-batch Initiative gates past the floor — fresh? never consulted, no fetch" do
+    test "a fresh in-batch Initiative gates past the floor — fresh? never consulted" do
       # 9 adds under one in-batch Initiative: coherent, under every old bound
       # — the pre-floor gate flowed this silently (the observed failure).
       ops = new_initiative_batch(9)
@@ -333,7 +358,6 @@ defmodule DoitMcp.ImportGateTest do
       assert {:gate, %{task_adds: 9, cumulative: 9, target: {:in_batch, "i"}, fresh: true}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: never_fetch(),
                  fresh?: never_fresh()
                )
     end
@@ -343,19 +367,16 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch(),
                fresh?: never_fresh()
              ) == :pass
     end
 
     test "a fresh existing target gates in the band — the operator adjudicates the first import" do
       ops = task_adds(12, %{"initiative_id" => 7})
-      fetch = fn _id -> {:ok, %{"id" => 7, "ai_knobs" => nil}} end
 
       assert {:gate, %{task_adds: 12, cumulative: 12, target: {:existing, 7}, fresh: true}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: fetch,
                  fresh?: fn {:existing, 7} -> true end
                )
     end
@@ -365,7 +386,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch(),
                fresh?: fn {:existing, 7} -> false end
              ) == :pass
     end
@@ -375,7 +395,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(ops,
                elicitation?: yes_elicitation(),
-               fetch_initiative: never_fetch(),
                fresh?: fn {:existing, 7} -> true end,
                confirmed?: fn {:existing, 7} -> true end
              ) == :pass
@@ -387,18 +406,15 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.evaluate(sub_floor,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch(),
                fresh?: never_fresh()
              ) == :pass
 
       # Over-bound: the target gates regardless — freshness is moot, no IO.
       over_bound = task_adds(@threshold + 1, %{"initiative_id" => 7})
-      fetch = fn _id -> {:ok, %{"id" => 7, "ai_knobs" => nil}} end
 
       assert {:gate, %{target: {:existing, 7}, fresh: false}} =
                ImportGate.evaluate(over_bound,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: fetch,
                  fresh?: never_fresh()
                )
     end
@@ -434,7 +450,12 @@ defmodule DoitMcp.ImportGateTest do
           "status" => "ok",
           "data" => %{"id" => 57, "type" => "initiative"}
         },
-        %{"index" => 1, "lid" => "t1", "status" => "ok", "data" => %{"id" => 100, "type" => "task"}}
+        %{
+          "index" => 1,
+          "lid" => "t1",
+          "status" => "ok",
+          "data" => %{"id" => 100, "type" => "task"}
+        }
       ]
 
       assert ImportGate.created_initiative_ids(ops, results) == %{"i" => 57}
@@ -446,7 +467,6 @@ defmodule DoitMcp.ImportGateTest do
       assert ImportGate.created_initiative_ids(ops, nil) == %{}
       assert ImportGate.created_initiative_ids(ops, [%{"index" => 0, "status" => "ok"}]) == %{}
     end
-
   end
 
   describe "target_refs/1 parent-chain resolution" do
@@ -540,12 +560,10 @@ defmodule DoitMcp.ImportGateTest do
 
     test "evaluate/2 gates an over-threshold parent-anchored batch through :parent_targets" do
       ops = task_adds(@threshold + 1, %{"parent_id" => 42})
-      fetch = fn _id -> {:ok, %{"id" => 7, "ai_knobs" => nil}} end
 
       assert {:gate, %{task_adds: task_adds, target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
                  elicitation?: yes_elicitation(),
-                 fetch_initiative: fetch,
                  parent_targets: %{42 => {:existing, 7}}
                )
 

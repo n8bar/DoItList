@@ -42,7 +42,7 @@ defmodule DoitMcp.ImportGate do
        already confirmed one this session.
 
   All effectful inputs (capability, session counter, confirm memory,
-  freshness read, Initiative fetch) are injected as funs, so the decision
+  freshness read) are injected as funs, so the decision
   stays unit-testable; the elicitation wiring lives in `DoitMcp.Elicitation`
   and the flow in `DoitMcp.Tools.ApplyOperations`.
   """
@@ -101,8 +101,6 @@ defmodule DoitMcp.ImportGate do
 
     * `:elicitation?` — zero-arity fun; whether the client advertised the
       `elicitation` capability (required)
-    * `:fetch_initiative` — 1-arity fun (`id -> {:ok, map} | {:error, term}`)
-      reading an existing target Initiative (required)
     * `:cumulative` — 1-arity fun (`target -> non_neg_integer`); task-adds
       already applied to that Initiative this session (defaults to zero —
       single-batch semantics)
@@ -122,15 +120,13 @@ defmodule DoitMcp.ImportGate do
       stay uncounted)
 
   Checks run cheapest-first (kill switch, counts, capability, settled) and
-  short-circuit, so nothing is counted while `enabled?/0` is false and the
-  fetch only ever happens for an over-threshold target from an
-  elicitation-capable client. Returns `:pass` or
+  short-circuit, so nothing is counted while `enabled?/0` is false. Returns
+  `:pass` or
   `{:gate, %{task_adds: n, cumulative: total, target: target, fresh: bool}}`
   — `task_adds` is this batch's count for the gated target, `cumulative` the
   session total including it, and `fresh` true iff the target gated through
   the fresh band (total within the batch's bound — the floor, not the bound,
-  was crossed). A fetch error passes — the apply itself will surface the
-  real error.
+  was crossed).
   """
   @spec evaluate([map()], keyword()) ::
           :pass
@@ -150,9 +146,8 @@ defmodule DoitMcp.ImportGate do
     with true <- enabled?(),
          [_ | _] = candidates <- over_threshold(operations, cumulative, parent_targets, fresh?),
          true <- Keyword.fetch!(opts, :elicitation?).(),
-         [_ | _] = unsettled <- Enum.reject(candidates, fn {ref, _, _, _} -> confirmed?.(ref) end),
-         {:ok, gated} <- knobless_target(unsettled, Keyword.fetch!(opts, :fetch_initiative)) do
-      {ref, task_adds, total, fresh} = gated
+         [_ | _] = unsettled <- Enum.reject(candidates, fn {ref, _, _, _} -> confirmed?.(ref) end) do
+      {ref, task_adds, total, fresh} = gated_target(unsettled)
       {:gate, %{task_adds: task_adds, cumulative: total, target: ref, fresh: fresh}}
     else
       _ -> :pass
@@ -256,7 +251,10 @@ defmodule DoitMcp.ImportGate do
     |> Enum.uniq()
   end
 
-  @doc "Whether a stored knobs value counts as unsettled (nil or blank)."
+  @doc """
+  Whether a stored knobs value counts as unsettled (nil or blank). Pure;
+  every caller currently sits inside an AI-KNOBS-PARKED block.
+  """
   @spec knobs_empty?(term()) :: boolean()
   def knobs_empty?(nil), do: true
   def knobs_empty?(knobs) when is_binary(knobs), do: String.trim(knobs) == ""
@@ -326,9 +324,14 @@ defmodule DoitMcp.ImportGate do
     |> Enum.map(fn {ref, n} -> {ref, n, n + cumulative.(ref)} end)
     |> Enum.flat_map(fn {ref, n, total} ->
       cond do
-        total > bound -> [{ref, n, total, false}]
-        total > @fresh_task_add_threshold and fresh_target?(ref, fresh?) -> [{ref, n, total, true}]
-        true -> []
+        total > bound ->
+          [{ref, n, total, false}]
+
+        total > @fresh_task_add_threshold and fresh_target?(ref, fresh?) ->
+          [{ref, n, total, true}]
+
+        true ->
+          []
       end
     end)
   end
@@ -371,25 +374,48 @@ defmodule DoitMcp.ImportGate do
     end
   end
 
-  # An in-batch Initiative is unsettled by definition; otherwise the first
-  # existing candidate (batch order) whose fetched knobs are empty gates.
-  # (Knobs are parked — m03.04 — so the fetched value is always empty and
-  # every over-threshold existing target gates.)
-  defp knobless_target(candidates, fetch) do
-    case Enum.find(candidates, fn {ref, _n, _total, _fresh} -> match?({:in_batch, _}, ref) end) do
-      nil ->
-        Enum.find_value(candidates, :pass, fn {{:existing, id}, _n, _total, _fresh} = candidate ->
-          case fetch.(id) do
-            {:ok, initiative} ->
-              if knobs_empty?(Map.get(initiative, "ai_knobs")), do: {:ok, candidate}
-
-            {:error, _} ->
-              nil
-          end
-        end)
-
-      in_batch ->
-        {:ok, in_batch}
-    end
+  # The gated target: the first {:in_batch, _} candidate wins, else the first
+  # candidate in batch order — an in-batch Initiative is unsettled by
+  # definition, and with knobs parked (m03.04) every unsettled over-threshold
+  # target gates. Candidates are never empty here, so one always returns.
+  defp gated_target([first | _] = candidates) do
+    Enum.find(candidates, first, fn {ref, _n, _total, _fresh} -> match?({:in_batch, _}, ref) end)
   end
+
+  # AI-KNOBS-PARKED (m03.04): the knobs exemption — an existing over-threshold
+  # target whose FETCHED ai_knobs were settled passed the gate. The API no
+  # longer serves ai_knobs to agents, so the fetch decided nothing and cost
+  # one whole-tree read per held batch. Revive: restore this fun in place of
+  # gated_target/1, the `:fetch_initiative` option in `evaluate/2` (the
+  # with-clause step `{:ok, gated} <- knobless_target(unsettled,
+  # Keyword.fetch!(opts, :fetch_initiative))`), its @doc texts below, and the
+  # parked tests (import_gate_test.exs, apply_operations_gate_test.exs).
+  #
+  # @doc options entry:
+  #   * `:fetch_initiative` — 1-arity fun (`id -> {:ok, map} | {:error, term}`)
+  #     reading an existing target Initiative (required)
+  # @doc cheapest-first tail: "... and the fetch only ever happens for an
+  # over-threshold target from an elicitation-capable client."
+  # @doc closing: "A fetch error passes — the apply itself will surface the
+  # real error."
+  #
+  # # An in-batch Initiative is unsettled by definition; otherwise the first
+  # # existing candidate (batch order) whose fetched knobs are empty gates.
+  # defp knobless_target(candidates, fetch) do
+  #   case Enum.find(candidates, fn {ref, _n, _total, _fresh} -> match?({:in_batch, _}, ref) end) do
+  #     nil ->
+  #       Enum.find_value(candidates, :pass, fn {{:existing, id}, _n, _total, _fresh} = candidate ->
+  #         case fetch.(id) do
+  #           {:ok, initiative} ->
+  #             if knobs_empty?(Map.get(initiative, "ai_knobs")), do: {:ok, candidate}
+  #
+  #           {:error, _} ->
+  #             nil
+  #         end
+  #       end)
+  #
+  #     in_batch ->
+  #       {:ok, in_batch}
+  #   end
+  # end
 end
