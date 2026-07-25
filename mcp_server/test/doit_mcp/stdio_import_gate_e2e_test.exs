@@ -159,8 +159,9 @@ defmodule DoitMcp.StdioImportGateE2eTest do
 
   # POST echoes the created Initiative's lid → real id (the wire shape for
   # creates) and reports each apply to the test; GET serves its ai_knobs
-  # (still empty — fresh) and the DB-window pressure read (chunk 1's 20
-  # tasks all landed inside the window).
+  # (still empty) and the DB-window pressure read (chunk 1's 8 tasks all
+  # landed inside the window; count-only — no initiative_created_at — so the
+  # fresh floor reads the Initiative as aged and the normal bounds apply).
   defp stub_api(test_pid) do
     stub_http(fn conn ->
       case {conn.method, conn.request_path} do
@@ -179,7 +180,7 @@ defmodule DoitMcp.StdioImportGateE2eTest do
           })
 
         {"GET", "/api/v1/initiatives/57/task_count"} ->
-          Req.Test.json(conn, %{"data" => %{"count" => 20}})
+          Req.Test.json(conn, %{"data" => %{"count" => 8}})
 
         {"GET", "/api/v1/initiatives/57"} ->
           Req.Test.json(conn, %{"data" => %{"id" => 57, "ai_knobs" => nil}})
@@ -305,17 +306,17 @@ defmodule DoitMcp.StdioImportGateE2eTest do
     stub_api(self())
     handshake(device)
 
-    # Chunk 1 CREATES the Initiative with 20 task-adds — one coherent list,
-    # it applies with no confirm; the response's lid → id echo moves its
-    # count under the real id.
-    send_frame(device, tools_call(2, %{"operations" => fresh_import_ops(20)}))
+    # Chunk 1 CREATES the Initiative at the fresh floor — 8 task-adds, one
+    # coherent list, it applies with no confirm; the response's lid → id
+    # echo moves its count under the real id.
+    send_frame(device, tools_call(2, %{"operations" => fresh_import_ops(8)}))
 
     assert %{"id" => 2, "result" => chunk1} = recv_frame()
     assert chunk1["isError"] == false
     assert_received :applied
 
     # Chunk 2 is the bulk "rest" by real id: 33 adds bust the per-batch cap,
-    # so the tight bound applies — 53 this session crosses it and the gate
+    # so the tight bound applies — 41 this session crosses it and the gate
     # holds THIS batch for the operator.
     send_frame(
       device,

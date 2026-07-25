@@ -201,6 +201,38 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end)
   end
 
+  # Like stub_create_echo_and_get, but task_count also carries a FRESH
+  # initiative_created_at (m03.04 3.1 iteration 3) — the Initiative is still
+  # inside its freshness window, so fresh?/1 reads true over HTTP.
+  defp stub_fresh_create_echo_and_get(initiative_id, pressure \\ 0) do
+    created = DateTime.utc_now() |> DateTime.add(-2, :minute) |> DateTime.to_iso8601()
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      case {conn.method, conn.request_path} do
+        {"GET", path} ->
+          if String.ends_with?(path, "/task_count") do
+            Req.Test.json(conn, %{
+              "data" => %{"count" => pressure, "initiative_created_at" => created}
+            })
+          else
+            Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
+          end
+
+        {"POST", "/api/v1/operations"} ->
+          Req.Test.json(conn, %{
+            "results" => [
+              %{
+                "index" => 0,
+                "lid" => "i",
+                "status" => "ok",
+                "data" => %{"id" => initiative_id, "type" => "initiative"}
+              }
+            ]
+          })
+      end
+    end)
+  end
+
   defp execute_ok(ops) do
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     {protocol, decoded, _rest} = decode_json_content(response)
@@ -208,11 +240,13 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["ok"] == true
   end
 
-  test "a batch at the threshold applies straight through, no elicitation" do
+  test "an aged Initiative's batch at the threshold applies straight through, no elicitation" do
     elicitation_capable()
+    # The count-only task_count stub models an Initiative older than the
+    # window: no initiative_created_at → not fresh (fail-open) → old bounds.
     stub_apply_ok()
 
-    ops = new_initiative_batch(@threshold)
+    ops = existing_initiative_batch(@threshold, 7)
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
     {protocol, decoded, _} = decode_json_content(response)
@@ -671,9 +705,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       elicitation_capable()
       stub_create_echo_and_get(57, nil)
 
-      # Chunk 1 CREATES the Initiative with 20 adds — it applies, and its
-      # count lands under the real id the response echoed.
-      execute_ok(new_initiative_batch(20))
+      # Chunk 1 CREATES the Initiative at the fresh floor (8 adds — flows
+      # silently); its count lands under the real id the response echoed.
+      execute_ok(new_initiative_batch(ImportGate.fresh_threshold()))
       refute_received {:send_elicitation_request, _, _, _}
 
       # Chunk 2 can only reference it by real id: the DATABASE carries the
@@ -734,6 +768,72 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       # operator's confirm followed the Initiative to its real id.
       stub_create_echo_and_get(57, nil, 200)
       execute_ok(existing_initiative_batch(15, 57))
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+  end
+
+  describe "the fresh floor (m03.04 3.1 iteration 3)" do
+    test "a just-created Initiative's scaffold past the floor is held without a readback" do
+      # The observed failure, replayed: the Initiative was created moments
+      # ago (task_count says so), and the scaffold batch — 12 adds, coherent,
+      # under every old bound — arrives by real id. It must meet the confirm.
+      elicitation_capable()
+      stub_fresh_create_echo_and_get(57, 2)
+
+      ops = existing_initiative_batch(12, 57)
+      assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+
+      protocol = Response.to_protocol(response)
+      assert protocol["isError"] == true
+      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+      assert text =~ "just created"
+      assert text =~ "#{ImportGate.fresh_threshold()} cumulative task-adds"
+      assert text =~ "this batch adds 12 (14 this session)"
+      assert text =~ "SOURCE"
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+
+    test "with a readback the operator confirms the fresh import; the confirm settles it" do
+      start_counter()
+      elicitation_capable()
+      stub_fresh_create_echo_and_get(57)
+
+      # An in-batch Initiative is fresh by definition — the floor gates its
+      # 12-add scaffold with no freshness read.
+      task =
+        Task.async(fn ->
+          ApplyOperations.execute(
+            %{
+              operations: new_initiative_batch(12),
+              readback: "Importing the first two milestones from PLAN.md, one level deep."
+            },
+            @frame
+          )
+        end)
+
+      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+
+      assert {:reply, response, @frame} = Task.await(task, 5_000)
+      {protocol, decoded, rest} = decode_json_content(response)
+      assert protocol["isError"] == false
+      assert decoded["ok"] == true
+      assert [%{"type" => "text", "text" => note}] = rest
+      assert note =~ "confirmed"
+
+      # The confirm followed the lid to the real id: the next chunk lands in
+      # a STILL-fresh Initiative (the stub vouches), yet nothing re-asks —
+      # one confirm settles the session.
+      stub_fresh_create_echo_and_get(57, 12)
+      execute_ok(existing_initiative_batch(9, 57))
+      refute_received {:send_elicitation_request, _, _, _}
+    end
+
+    test "a fresh Initiative's first #{ImportGate.fresh_threshold()} adds flow — casual creations stay silent" do
+      elicitation_capable()
+      stub_fresh_create_echo_and_get(57)
+
+      execute_ok(new_initiative_batch(ImportGate.fresh_threshold()))
       refute_received {:send_elicitation_request, _, _, _}
     end
   end

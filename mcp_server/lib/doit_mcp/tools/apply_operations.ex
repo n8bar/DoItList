@@ -77,7 +77,13 @@ defmodule DoitMcp.Tools.ApplyOperations do
   decays out on its own. The recent count plus the current batch crosses the
   batch's bound: 32 normally, 128 for a coherent one-list batch (every add
   under one parent, at most 32 adds — each such unit lands as one reviewable
-  increment; the ramp). Adds anchored on an EXISTING task's `parent_id`
+  increment; the ramp). A just-created Initiative (created within the
+  trailing window, or in this very batch) meets the confirm once past 8
+  cumulative task-adds regardless of batch coherence — the fresh floor: the
+  operator adjudicates the interpretation at the start, their one confirm
+  settles the Initiative for the session and the ramp applies from there; an
+  Initiative that ages past the window earns the normal bounds. Adds
+  anchored on an EXISTING task's `parent_id`
   count too (m03.04 item 2.18): the adapter resolves each unique parent to
   its Initiative through `GET /api/v1/tasks/:id` — one read per unique
   parent per batch — before the gate runs, so growing an existing tree can't
@@ -162,6 +168,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
             # weigh full, and reconnects can't reset it.
             cumulative: &ImportPressure.recent/1,
             confirmed?: &Counter.confirmed?/1,
+            # Freshness reads the same DB fact as pressure — a reconnect
+            # can't blank it.
+            fresh?: &ImportPressure.fresh?/1,
             parent_targets: parent_targets
           )
 
@@ -174,7 +183,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
             # the confirm is about this batch's content, not a per-Initiative
             # session settling.
             adds = ImportGate.count_task_adds(params.operations)
-            info = %{task_adds: adds, cumulative: adds, target: nil}
+            info = %{task_adds: adds, cumulative: adds, target: nil, fresh: false}
             hold_for_confirmation(params, info, frame)
 
           {:pass, :pass} ->
@@ -364,6 +373,20 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "its #{task_adds} task-adds apply (checkbox/description shape — the confirm form " <>
       "carries the specifics). Nothing was applied. Re-call apply_operations with the " <>
       "same operations plus `readback`, `assumptions`, and `settled`, as for a large import."
+  end
+
+  # The fresh floor's clause must precede the generic volume clause — a
+  # fresh-gated map carries the same task_adds/cumulative keys.
+  defp readback_required_message(%{fresh: true, task_adds: task_adds, cumulative: cumulative}) do
+    "Import gate: this Initiative was just created, so its first import needs the " <>
+      "operator's confirmation once it passes #{ImportGate.fresh_threshold()} cumulative " <>
+      "task-adds — this batch adds #{task_adds} (#{cumulative} this session). Nothing was " <>
+      "applied. Re-call apply_operations with the same operations plus `readback` — name " <>
+      "the SOURCE you are importing from, the selection you resolved from the operator's " <>
+      "ask (which parts, and why those), and the planned coverage and depth — plus " <>
+      "`assumptions` (assumption-tagged decisions, one string each) and `settled` " <>
+      "(dimensions the operator's own ask already settled, one string each). One confirm " <>
+      "settles this Initiative for the session."
   end
 
   defp readback_required_message(%{task_adds: task_adds, cumulative: cumulative}) do

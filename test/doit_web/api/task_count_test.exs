@@ -4,7 +4,10 @@ defmodule DoItWeb.Api.TaskCountTest do
   `GET /api/v1/initiatives/:id/task_count?created_at=<ISO8601>` — live task
   count (root excluded), optionally only tasks created at/after the given
   instant. A dumb fact: the MCP import gate derives its trailing window from
-  it, so the window length stays adapter policy.
+  it, so the window length stays adapter policy. The response also carries
+  the Initiative's own creation instant (m03.04 3.1 iteration 3), so the
+  adapter can age-qualify a fresh Initiative — the freshness window stays
+  adapter policy too.
   """
   use DoItWeb.ConnCase, async: true
 
@@ -52,7 +55,7 @@ defmodule DoItWeb.Api.TaskCountTest do
     %{owner: owner, ini: ini}
   end
 
-  test "counts live tasks, root excluded; deleted tasks don't count", ctx do
+  test "counts live tasks, root excluded; deleted tasks don't count; carries the Initiative's creation instant", ctx do
     add_task(ctx.owner, ctx.ini, "One")
     add_task(ctx.owner, ctx.ini, "Two")
     doomed = add_task(ctx.owner, ctx.ini, "Doomed")
@@ -63,7 +66,11 @@ defmodule DoItWeb.Api.TaskCountTest do
       |> bearer(token(ctx.owner))
       |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/task_count")
 
-    assert %{"data" => %{"count" => 2}} = json_response(conn, 200)
+    assert %{"data" => %{"count" => 2, "initiative_created_at" => created_at}} =
+             json_response(conn, 200)
+
+    # ISO8601 UTC of the Initiative's inserted_at — the adapter's freshness fact.
+    assert created_at == DateTime.to_iso8601(ctx.ini.inserted_at)
   end
 
   test "created_at scopes the count to the window", ctx do

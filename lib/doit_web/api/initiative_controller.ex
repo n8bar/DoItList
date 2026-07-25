@@ -117,14 +117,23 @@ defmodule DoItWeb.Api.InitiativeController do
   # Live task count (root excluded), optionally scoped to tasks created at or
   # after `?created_at=<ISO8601>` — a dumb fact (m03.04 3.1 iteration 2): the
   # MCP import gate reads its recent-pressure window from it, so the window
-  # length stays adapter policy and pressure survives reconnects.
+  # length stays adapter policy and pressure survives reconnects. Also carries
+  # the Initiative's own creation instant (m03.04 3.1 iteration 3) so the
+  # adapter can age-qualify a FRESH Initiative — same stance: the facts live
+  # here, the freshness window stays adapter policy.
   def task_count(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
     with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
       case parse_created_at(Map.get(params, "created_at")) do
         {:ok, created_at} ->
-          json(conn, Api.data(%{count: Tasks.count_created(initiative.id, created_at)}))
+          json(
+            conn,
+            Api.data(%{
+              count: Tasks.count_created(initiative.id, created_at),
+              initiative_created_at: DateTime.to_iso8601(initiative.inserted_at)
+            })
+          )
 
         :error ->
           Errors.send_error(

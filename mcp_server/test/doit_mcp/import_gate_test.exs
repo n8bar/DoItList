@@ -19,6 +19,7 @@ defmodule DoitMcp.ImportGateTest do
   # Effectful inputs that must NOT be reached prove short-circuit order.
   defp never_elicitation, do: fn -> flunk("capability check must not run") end
   defp never_fetch, do: fn _id -> flunk("initiative fetch must not run") end
+  defp never_fresh, do: fn _target -> flunk("fresh? must not run") end
 
   defp yes_elicitation, do: fn -> true end
   defp no_elicitation, do: fn -> false end
@@ -77,18 +78,26 @@ defmodule DoitMcp.ImportGateTest do
   end
 
   describe "evaluate/2 threshold (condition 1)" do
+    # These run in the AGED lane (`:fresh?` omitted → its pure default,
+    # false): an in-batch Initiative is fresh by definition and now meets
+    # the fresh floor instead — that lane lives in its own describe below.
     test "exactly the threshold of task-adds passes without touching capability or fetch" do
-      ops = new_initiative_batch(@threshold)
+      # Mixed anchors (initiative_id + parent_id) keep the tight bound;
+      # landing exactly ON it is no crossing.
+      ops =
+        task_adds(@threshold - 1, %{"initiative_id" => 7}) ++
+          [%{"op" => "add", "type" => "task", "lid" => "p", "data" => %{"parent_id" => 42, "title" => "p"}}]
 
       assert ImportGate.evaluate(ops,
                elicitation?: never_elicitation(),
-               fetch_initiative: never_fetch()
+               fetch_initiative: never_fetch(),
+               parent_targets: %{42 => {:existing, 7}}
              ) == :pass
     end
 
     test "non-task and non-add ops don't count toward the threshold" do
       ops =
-        new_initiative_batch(@threshold - 1) ++
+        task_adds(@threshold - 1, %{"initiative_id" => 7}) ++
           [
             %{"op" => "update", "type" => "task", "lid" => "t1", "data" => %{"done" => true}},
             %{"op" => "add", "type" => "comment", "data" => %{"task_lid" => "t1", "body" => "hi"}}
@@ -312,6 +321,86 @@ defmodule DoitMcp.ImportGateTest do
 
       refute ImportGate.coherent_unit?(dangling)
       refute ImportGate.coherent_unit?(anchorless)
+    end
+  end
+
+  describe "the fresh floor (m03.04 3.1 iteration 3)" do
+    test "a fresh in-batch Initiative gates past the floor — fresh? never consulted, no fetch" do
+      # 9 adds under one in-batch Initiative: coherent, under every old bound
+      # — the pre-floor gate flowed this silently (the observed failure).
+      ops = new_initiative_batch(9)
+
+      assert {:gate, %{task_adds: 9, cumulative: 9, target: {:in_batch, "i"}, fresh: true}} =
+               ImportGate.evaluate(ops,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: never_fetch(),
+                 fresh?: never_fresh()
+               )
+    end
+
+    test "the floor is exclusive: a fresh Initiative's first #{ImportGate.fresh_threshold()} adds flow" do
+      ops = new_initiative_batch(ImportGate.fresh_threshold())
+
+      assert ImportGate.evaluate(ops,
+               elicitation?: never_elicitation(),
+               fetch_initiative: never_fetch(),
+               fresh?: never_fresh()
+             ) == :pass
+    end
+
+    test "a fresh existing target gates in the band — the operator adjudicates the first import" do
+      ops = task_adds(12, %{"initiative_id" => 7})
+      fetch = fn _id -> {:ok, %{"id" => 7, "ai_knobs" => nil}} end
+
+      assert {:gate, %{task_adds: 12, cumulative: 12, target: {:existing, 7}, fresh: true}} =
+               ImportGate.evaluate(ops,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: fetch,
+                 fresh?: fn {:existing, 7} -> true end
+               )
+    end
+
+    test "an aged existing target keeps the old bounds — the same batch flows" do
+      ops = task_adds(12, %{"initiative_id" => 7})
+
+      assert ImportGate.evaluate(ops,
+               elicitation?: never_elicitation(),
+               fetch_initiative: never_fetch(),
+               fresh?: fn {:existing, 7} -> false end
+             ) == :pass
+    end
+
+    test "the operator's confirm settles a fresh Initiative — later chunks flow" do
+      ops = task_adds(12, %{"initiative_id" => 7})
+
+      assert ImportGate.evaluate(ops,
+               elicitation?: yes_elicitation(),
+               fetch_initiative: never_fetch(),
+               fresh?: fn {:existing, 7} -> true end,
+               confirmed?: fn {:existing, 7} -> true end
+             ) == :pass
+    end
+
+    test "cheapest-first: fresh? never runs below the floor nor for an over-bound target" do
+      # Sub-floor: the floor can't matter, so no freshness IO.
+      sub_floor = task_adds(ImportGate.fresh_threshold(), %{"initiative_id" => 7})
+
+      assert ImportGate.evaluate(sub_floor,
+               elicitation?: never_elicitation(),
+               fetch_initiative: never_fetch(),
+               fresh?: never_fresh()
+             ) == :pass
+
+      # Over-bound: the target gates regardless — freshness is moot, no IO.
+      over_bound = task_adds(@threshold + 1, %{"initiative_id" => 7})
+      fetch = fn _id -> {:ok, %{"id" => 7, "ai_knobs" => nil}} end
+
+      assert {:gate, %{target: {:existing, 7}, fresh: false}} =
+               ImportGate.evaluate(over_bound,
+                 elicitation?: yes_elicitation(),
+                 fetch_initiative: fetch,
+                 fresh?: never_fresh()
+               )
     end
   end
 
