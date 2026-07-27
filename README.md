@@ -43,12 +43,33 @@ override them, copy `.env.example` to `.env` and edit:
 | Variable      | Default      | Purpose                                    |
 | ------------- | ------------ | ------------------------------------------ |
 | `WEB_PORT`    | `4000`       | Port mapped from the host to the web app.  |
+| `MCP_PORT`    | `4004`       | Port mapped from the host to the MCP server. |
 | `DB_USERNAME` | `postgres`   | PostgreSQL user.                           |
 | `DB_PASSWORD` | `postgres`   | PostgreSQL password.                       |
 | `DB_DATABASE` | `doit_dev`   | PostgreSQL database name.                  |
 
 Database data lives in the named Docker volume `doit_pgdata`, so it survives
 `docker compose down`. `docker compose down -v` wipes everything.
+
+## Connect an AI agent
+
+`docker compose up` also starts an MCP server, so an MCP-capable agent can read
+and edit your task trees. Point the client at:
+
+| Setting   | Value                                     |
+| --------- | ----------------------------------------- |
+| Transport | Streamable HTTP                           |
+| URL       | `http://<host>:4004/` (`MCP_PORT` remaps) |
+| Header    | `Authorization: Bearer <your API token>`  |
+
+Generate the token in the app under Account → API tokens. It carries your own
+access, so an agent sees exactly the Initiatives you do — and only those whose
+owner has turned on **AI access**, which is off until someone deliberately
+enables it.
+
+Large imports are gated: when an agent tries to create many tasks at once, the
+server holds the batch and asks you to confirm what it understood before
+anything is written.
 
 ## Run the tests
 
