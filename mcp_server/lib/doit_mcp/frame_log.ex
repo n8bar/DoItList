@@ -29,6 +29,8 @@ defmodule DoitMcp.FrameLog do
 
   use GenServer
 
+  alias DoitMcp.Redaction
+
   require Logger
 
   @default_root "/tmp/doitlist-mcp"
@@ -36,10 +38,6 @@ defmodule DoitMcp.FrameLog do
   # Frames that arrive before their session has an id (an `initialize` whose
   # answer assigns one, or a request that never gets that far).
   @unassigned "unassigned"
-
-  @redacted "[redacted]"
-  @redacted_bearer "Bearer [redacted]"
-  @bearer ~r/\ABearer\s+\S+/
 
   # The resident VM outlives every session it serves, so the id-to-path map
   # is bounded; a pruned session that speaks again simply opens a new file.
@@ -83,12 +81,13 @@ defmodule DoitMcp.FrameLog do
   @doc """
   Replace every credential-bearing field of a decoded frame: a `token` or
   `authorization` field at any depth, and any value that is itself a bearer
-  header.
+  header. Shapes and replacements are `DoitMcp.Redaction`'s, shared with the
+  log filter (m03.04 item 23.7).
   """
   @spec redact(term()) :: term()
   def redact(frame) when is_map(frame) do
     Map.new(frame, fn {key, value} ->
-      case redaction(key) do
+      case Redaction.replacement_for(key) do
         nil -> {key, redact(value)}
         replacement -> {key, replacement}
       end
@@ -97,21 +96,7 @@ defmodule DoitMcp.FrameLog do
 
   def redact(frame) when is_list(frame), do: Enum.map(frame, &redact/1)
 
-  def redact(frame) when is_binary(frame) do
-    if Regex.match?(@bearer, frame), do: @redacted_bearer, else: frame
-  end
-
-  def redact(frame), do: frame
-
-  defp redaction(key) when is_binary(key) do
-    case String.downcase(key) do
-      "authorization" -> @redacted_bearer
-      "token" -> @redacted
-      _other -> nil
-    end
-  end
-
-  defp redaction(_key), do: nil
+  def redact(frame), do: Redaction.redact_value(frame)
 
   @impl GenServer
   def init(_opts) do

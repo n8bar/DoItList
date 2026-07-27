@@ -4,6 +4,11 @@ defmodule DoitMcp.Application do
 
   @impl true
   def start(_type, _args) do
+    # Before anything can log: no dep's error path may write a credential to
+    # the container log (m03.04 item 23.7). Transport-independent — stdio's
+    # stderr is teed to a host file, which is the same disclosure.
+    :ok = DoitMcp.LogRedaction.install()
+
     mode = transport_mode()
 
     # The VM runs exactly one transport for its lifetime; record which, so
