@@ -6,12 +6,11 @@ defmodule DoitMcp.LogRedaction do
   inspects the `GenServer.call` exit reason, which carries the request
   context — bearer header included — so one failed call writes a live API
   token in plaintext. On a resident multi-user service that is a credential
-  disclosure to anyone who can read the container's log, and on stdio the
-  same lines go to stderr, which the launcher tees to a host file.
+  disclosure to anyone who can read the container's log.
 
   So the guarantee sits at the logger, not at the call site: a Logger
-  PRIMARY filter, installed at boot on both transports, sees every event
-  from every dependency and from our own code before any handler formats it.
+  PRIMARY filter, installed at boot, sees every event from every dependency
+  and from our own code before any handler formats it.
   Chasing individual dep log statements would leave the next dep version or
   the next error path free to reintroduce the leak silently.
 

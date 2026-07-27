@@ -1,6 +1,6 @@
 defmodule DoitMcp.HttpTransportTest do
   # async: false — boots the anubis HTTP tree under its real global registry
-  # names and swaps global app env (:transport_mode, :req_options).
+  # names and swaps the global :req_options app env.
   use ExUnit.Case, async: false
 
   import Plug.Test, only: [conn: 3]
@@ -16,12 +16,9 @@ defmodule DoitMcp.HttpTransportTest do
   # via the same plug Bandit serves, plus one smoke over a real listener.
 
   setup do
-    Application.put_env(:doit_mcp, :transport_mode, :http)
     previous_req = Application.fetch_env(:doit_mcp, :req_options)
 
     on_exit(fn ->
-      Application.delete_env(:doit_mcp, :transport_mode)
-
       case previous_req do
         {:ok, value} -> Application.put_env(:doit_mcp, :req_options, value)
         :error -> Application.delete_env(:doit_mcp, :req_options)
@@ -130,8 +127,9 @@ defmodule DoitMcp.HttpTransportTest do
   end
 
   test "a session without a bearer header gets the dead-token guidance, never the env token" do
-    # test_helper sets DOITLIST_API_TOKEN — the stdio boot credential. It
-    # must not leak into an HTTP session that presented nothing.
+    # test_helper sets DOITLIST_API_TOKEN — an API token lying around in
+    # the VM's environment. It must not leak into a session that presented
+    # nothing.
     stub_api(self())
 
     session = handshake([])

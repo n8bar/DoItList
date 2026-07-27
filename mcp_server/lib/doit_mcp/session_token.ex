@@ -11,12 +11,9 @@ defmodule DoitMcp.SessionToken do
   request process before dispatch and the client fetches it without any
   per-tool threading.
 
-  The stdio path is untouched: its frames carry no headers, and
-  `DoitMcp.Client` only consults this module in HTTP mode — the boot-env
-  token keeps flowing through `DoitMcp.TokenRecovery` there. A request
-  without a usable bearer header installs `:absent`, never an env fallback:
-  a session that presented nothing must get the 401 guidance, not another
-  credential.
+  A request without a usable bearer header installs `:absent`, never an env
+  fallback: a session that presented nothing must get the 401 guidance, not
+  another credential.
   """
 
   @key :doit_mcp_session_token
@@ -30,11 +27,18 @@ defmodule DoitMcp.SessionToken do
 
   @doc """
   This request's credential: `{:ok, token}` when it carried a usable bearer
-  header, `:absent` otherwise (including a process nothing was installed in).
+  header, `:absent` otherwise.
+
+  A process nothing was installed in has no credential either. Every real API
+  call runs inside a request task, so that is a test-only situation — one a
+  unit test driving a tool directly hits — and the test env configures a
+  stand-in (`:session_token`) the same way it configures a stub HTTP layer.
+  An installed `:absent` still wins: the stand-in can never stand in for a
+  session that presented nothing.
   """
   @spec fetch() :: {:ok, String.t()} | :absent
   def fetch do
-    Process.get(@key, :absent)
+    Process.get(@key, Application.get_env(:doit_mcp, :session_token, :absent))
   end
 
   defp from_headers(%{context: %{headers: %{"authorization" => header}}})

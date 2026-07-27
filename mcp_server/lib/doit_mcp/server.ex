@@ -1,8 +1,8 @@
 defmodule DoitMcp.Server do
   @moduledoc """
-  The Do It List MCP server (m03.03) — a thin stdio adapter over `/api/v1`
-  (Arc 1). Holds no domain logic; every tool/resource is a translation layer
-  that calls `DoitMcp.Client`, the only module that speaks HTTP.
+  The Do It List MCP server (m03.03) — a thin adapter over `/api/v1` (Arc 1).
+  Holds no domain logic; every tool/resource is a translation layer that
+  calls `DoitMcp.Client`, the only module that speaks HTTP.
   """
 
   use Anubis.Server,
@@ -74,14 +74,12 @@ defmodule DoitMcp.Server do
   end
 
   # Every request runs in its own task with the transport's context on the
-  # frame; on streamable HTTP that context carries the request's headers, so
-  # install the bearer token as this task's API credential before dispatch
-  # (m03.04 item 23.2). Stdio frames carry no headers and DoitMcp.Client only
-  # consults the installed credential in HTTP mode, so the stdio path keeps
-  # its boot-env token. The session identity rides along (m03.04 item 23.3)
-  # so elicitation and the per-session 401 recovery can reach THIS request's
-  # session on any transport. The body is the default this callback
-  # overrides — Anubis's stock routing into tool/resource handlers.
+  # frame, which carries the request's headers, so install the bearer token
+  # as this task's API credential before dispatch (m03.04 item 23.2). The
+  # session identity rides along (m03.04 item 23.3) so elicitation and the
+  # per-session 401 recovery can reach THIS request's session. The body is
+  # the default this callback overrides — Anubis's stock routing into
+  # tool/resource handlers.
   @impl true
   def handle_request(request, frame) do
     DoitMcp.SessionToken.install(frame)

@@ -1,6 +1,6 @@
 defmodule DoitMcp.HttpImportGateSessionsTest do
   # async: false — boots the anubis HTTP tree under its real global registry
-  # names and swaps global app env (:transport_mode, :req_options).
+  # names and swaps the global :req_options app env.
   use ExUnit.Case, async: false
 
   import Plug.Test, only: [conn: 3]
@@ -13,20 +13,17 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
   @threshold ImportGate.threshold()
 
   # Gate state per session on the resident transport (m03.04 item 23.6). One
-  # VM now serves every connected client, so what used to be per-session by
-  # architecture (stdio: one VM per connection) has to be keyed: the
-  # operator's confirm settles an Initiative for the session that granted it
-  # and for no other. Recent-creation PRESSURE is deliberately not session
+  # VM serves every connected client, so the confirm memory has to be keyed:
+  # the operator's confirm settles an Initiative for the session that granted
+  # it and for no other. Recent-creation PRESSURE is deliberately not session
   # state — it is the database's window (3.1 iteration 2), shared by design —
   # so a second session sees it in full.
 
   setup do
-    Application.put_env(:doit_mcp, :transport_mode, :http)
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
     previous_req = Application.fetch_env(:doit_mcp, :req_options)
 
     on_exit(fn ->
-      Application.delete_env(:doit_mcp, :transport_mode)
       Application.delete_env(:doit_mcp, :import_gate_enabled)
 
       case previous_req do

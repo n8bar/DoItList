@@ -7,17 +7,14 @@ defmodule DoitMcp.ImportGate.Counter do
   (`DoitMcp.ImportPressure`) and is deliberately shared across connections,
   so this process holds only what the operator said yes to.
 
-  Rows key on the SESSION process (m03.04 item 23.6). Under stdio that was
-  free — one session per OS process — but the resident HTTP transport serves
-  every connected client from one VM, where a flat set would settle an
+  Rows key on the SESSION process (m03.04 item 23.6): the resident transport
+  serves every connected client from one VM, where a flat set would settle an
   Initiative for sessions that answered nothing. The key is
-  `DoitMcp.RequestSession`'s session pid, installed on every transport, so
-  one mechanism is correct on both: stdio's single session reproduces its
-  old per-VM semantics exactly. Each keyed session is monitored and its row
-  dies with it — nothing survives a session, and a VM outliving thousands of
-  them holds no trace. A caller outside any request task (a unit test
-  driving a tool directly) gets one `:unscoped` row, which no session can
-  see and no session can reach.
+  `DoitMcp.RequestSession`'s session pid. Each keyed session is monitored and
+  its row dies with it — nothing survives a session, and a VM outliving
+  thousands of them holds no trace. A caller outside any request task (a unit
+  test driving a tool directly) gets one `:unscoped` row, which no session
+  can see and no session can reach.
 
   Keys within a row are the same `t:DoitMcp.ImportGate.target/0` refs the
   gate evaluates. Every function degrades gracefully — false / no-op / empty
@@ -29,7 +26,7 @@ defmodule DoitMcp.ImportGate.Counter do
   alias DoitMcp.RequestSession
 
   # The row for callers with no session — see the moduledoc. One row for the
-  # VM's lifetime; on stdio that IS the session.
+  # VM's lifetime.
   @unscoped :unscoped
 
   def start_link(opts \\ []) do

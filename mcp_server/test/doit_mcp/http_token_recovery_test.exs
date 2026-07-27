@@ -1,6 +1,6 @@
 defmodule DoitMcp.HttpTokenRecoveryTest do
   # async: false — boots the anubis HTTP tree under its real global registry
-  # names and swaps global app env (:transport_mode, :req_options).
+  # names and swaps the global :req_options app env.
   use ExUnit.Case, async: false
 
   import Plug.Test, only: [conn: 3]
@@ -16,14 +16,12 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
   # the session and is NEVER persisted or visible to another session — a
   # concurrent session with a valid token proceeds untouched throughout, and
   # one sharing the dead token gets guidance, not the override. Declined and
-  # streamless sessions get the HTTP-flavored guidance (the client config's
-  # Authorization header, never the stdio token file).
+  # streamless sessions get the durable fix instead: the Authorization
+  # header in the client config.
 
   setup do
-    Application.put_env(:doit_mcp, :transport_mode, :http)
-
-    # Recovery on HTTP must write NOTHING — point the stdio ladder's persist
-    # path somewhere observable and assert it stays empty.
+    # Recovery holds a fresh token in memory only — point a persist path
+    # somewhere observable and assert nothing is ever written there.
     tmp = Path.join(System.tmp_dir!(), "http-recovery-#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp)
     persist_path = Path.join(tmp, "refresh.env")
@@ -32,7 +30,6 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
     previous_req = Application.fetch_env(:doit_mcp, :req_options)
 
     on_exit(fn ->
-      Application.delete_env(:doit_mcp, :transport_mode)
       Application.delete_env(:doit_mcp, :token_persist_path)
       File.rm_rf!(tmp)
 
@@ -170,8 +167,8 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
 
     call = Task.async(fn -> post_frame(get_me_call(2), a_headers) end)
 
-    # The form rides session A's stream with the HTTP wording — the client
-    # config's Authorization header, never the stdio token file.
+    # The form rides session A's stream, naming the durable fix: the
+    # Authorization header in the client config.
     assert_receive {:sse, ^session_a,
                     %{
                       "method" => "elicitation/create",
@@ -221,7 +218,7 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
     assert_received {:api_call, "Bearer dead-token"}
     refute_received {:api_call, _header}
 
-    # Nothing was written where the stdio ladder persists.
+    # No token reached disk.
     refute File.exists?(persist_path)
     refute_received {:sse, ^session_b, _frame}
   end

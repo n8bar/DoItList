@@ -7,13 +7,13 @@ defmodule DoitMcp.Http.Plug do
   delivered to the session via the immediate `{:mcp_request, ...}` call path
   instead of the stock plug's `{:mcp_response, ...}` cast.
 
-  Same reason the stdio transport routes responses that way (see
-  `DoitMcp.Stdio.Transport`): `Anubis.Server.Session.handle_single_request/4`
-  matches a response to a server-initiated request FIRST and processes it
-  immediately even while a tool call is in flight, whereas the cast path
-  defers every `mcp_response` until the in-flight task completes — so a tool
-  call parked on an elicitation answer would deadlock until its timeout,
-  because the answer it waits for sits in the deferred queue behind it.
+  The reroute is what makes a mid-call elicitation possible at all:
+  `Anubis.Server.Session.handle_single_request/4` matches a response to a
+  server-initiated request FIRST and processes it immediately even while a
+  tool call is in flight, whereas the cast path defers every `mcp_response`
+  until the in-flight task completes — so a tool call parked on an
+  elicitation answer would deadlock until its timeout, because the answer it
+  waits for sits in the deferred queue behind it.
 
   Everything else — requests, notifications, GET (the standalone SSE
   stream), DELETE, unparseable bodies — flows to the stock plug untouched:

@@ -12,10 +12,11 @@ defmodule DoitMcp.Elicitation do
   answer back (or the window lapses; the session cancels the client-side
   request on its own matching timer).
 
-  The session is found two ways (m03.04 item 23.3): a request task reads its
-  own session from `DoitMcp.RequestSession` — any transport, any number of
-  concurrent HTTP sessions — and a caller outside a request task (unit tests
-  driving a tool directly) falls back to the registered `session_name/0`.
+  A request task reads its own session from `DoitMcp.RequestSession` (m03.04
+  item 23.3); a caller outside a request task (unit tests driving a tool
+  directly) falls back to the session registered under the
+  `:elicitation_session_name` app env, which is how those tests point this
+  module at their fake session.
   Waiters register in the `DoitMcp.Elicitation.Registry` KEYED BY SESSION
   process, so concurrent sessions elicit independently while each stays one
   waiter at a time (Anubis serializes requests within a session). The answer
@@ -26,20 +27,6 @@ defmodule DoitMcp.Elicitation do
   alias DoitMcp.RequestSession
 
   @registry DoitMcp.Elicitation.Registry
-
-  @doc """
-  The registered fallback name of the session process — the stdio tree's
-  single session. Overridable via the `:elicitation_session_name` app env
-  for tests. Request tasks resolve their own session through
-  `DoitMcp.RequestSession` first and only fall back here.
-  """
-  def session_name do
-    Application.get_env(
-      :doit_mcp,
-      :elicitation_session_name,
-      Anubis.Server.Registry.stdio_session_name(DoitMcp.Server)
-    )
-  end
 
   @doc """
   Whether the connected client advertised the `elicitation` capability in its
@@ -64,22 +51,26 @@ defmodule DoitMcp.Elicitation do
   end
 
   @doc """
-  Whether a server-initiated request can reach the client RIGHT NOW. Always
-  true on stdio — the pipe is the channel. On streamable HTTP it requires
-  the session's standalone GET stream: the transport routes an elicitation
-  to that session's own stream and a missing handler is a silent drop (the
-  session logs the failed send and forgets it), so callers check here first
-  — a parked waiter would otherwise hang to its timeout (m03.04 item 23.3).
+  Whether a server-initiated request can reach the client RIGHT NOW: it
+  requires the session's standalone GET stream, since the transport routes an
+  elicitation to that session's own stream and a missing handler is a silent
+  drop (the session logs the failed send and forgets it). Callers check here
+  first — a parked waiter would otherwise hang to its timeout (m03.04 item
+  23.3).
+
+  Overridable via the `:elicitation_reachable` app env: a test that stands in
+  for the transport itself answers for its own channel, the way
+  `:elicitation_session_name` stands in for the session.
   """
   @spec reachable?() :: boolean()
   def reachable? do
-    case Application.get_env(:doit_mcp, :transport_mode, :stdio) do
-      :http -> http_stream_open?()
-      _stdio -> true
+    case Application.fetch_env(:doit_mcp, :elicitation_reachable) do
+      {:ok, reachable?} -> reachable?
+      :error -> stream_open?()
     end
   end
 
-  defp http_stream_open? do
+  defp stream_open? do
     transport = Anubis.Server.Registry.transport_name(DoitMcp.Server, :streamable_http)
     session_id = RequestSession.id()
 
@@ -121,7 +112,7 @@ defmodule DoitMcp.Elicitation do
     # Anubis dispatches handle_elicitation IN the session process, so self()
     # keys the waiter; the named fallback serves callers outside any session
     # (tests driving deliver directly against a fake session).
-    _ = notify(self(), result) || notify(Process.whereis(session_name()), result)
+    _ = notify(self(), result) || notify(configured_session(), result)
     :ok
   end
 
@@ -139,7 +130,16 @@ defmodule DoitMcp.Elicitation do
   end
 
   defp current_session do
-    RequestSession.pid() || Process.whereis(session_name())
+    RequestSession.pid() || configured_session()
+  end
+
+  # The fallback for callers outside a request task: the session registered
+  # under :elicitation_session_name, or nil when nothing configured one.
+  defp configured_session do
+    case Application.get_env(:doit_mcp, :elicitation_session_name) do
+      nil -> nil
+      name -> Process.whereis(name)
+    end
   end
 
   defp do_request(session_pid, message, requested_schema, timeout) do

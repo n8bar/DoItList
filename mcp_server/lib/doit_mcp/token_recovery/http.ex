@@ -1,12 +1,15 @@
 defmodule DoitMcp.TokenRecovery.Http do
   @moduledoc """
-  The 401 policy on the HTTP transport (m03.04 item 23.3) — the stdio
-  ladder (`DoitMcp.TokenRecovery`) re-based on per-session state
+  Revoked-token recovery without config surgery (m03.04 items 2.13 + 23.3).
+
+  A dead token still connects — the MCP handshake makes no API call — and
+  then 401s every tool call; before this ladder, recovery meant hand-editing
+  MCP client config. The whole policy is here, keyed to the session
   (`DoitMcp.TokenRecovery.Sessions`):
 
     * `credential/0` — the session's in-memory override when a recovery
       installed one, else the bearer header this request arrived with
-      (`DoitMcp.SessionToken`); never a boot-env token.
+      (`DoitMcp.SessionToken`); never a VM-wide token.
     * `recover/0` — a session's FIRST 401 raises the same paste-a-fresh-token
       form, riding that session's own server→client stream. The accepted
       token is held in memory KEYED TO THAT SESSION only, overriding its
@@ -17,25 +20,23 @@ defmodule DoitMcp.TokenRecovery.Http do
       no-answer timeout does not latch. While an accepted token's verify
       retry is in flight, a concurrent 401 on the SAME session joins that
       recovery instead of raising a second form (the per-session
-      verify-in-flight guard, mirroring m03.04 2.20); sessions with valid
-      tokens proceed untouched throughout.
+      verify-in-flight guard, m03.04 2.20); sessions with valid tokens
+      proceed untouched throughout.
 
-  Only the durable-fix wording differs from the stdio ladder (whose copy is
-  empirically tuned and stays verbatim over there): on HTTP the operator's
-  lasting fix is the Authorization header in this server's entry in the MCP
-  client configuration, not a token file on a launcher host.
+  The operator's lasting fix is the Authorization header in this server's
+  entry in the MCP client configuration — the one place a session's
+  credential comes from.
   """
 
   alias DoitMcp.{Elicitation, RequestSession, SessionToken}
   alias DoitMcp.TokenRecovery.Sessions
 
-  # Same generous paste window as the stdio ladder — a human has to go mint
-  # a token in the web app. Shares the ladder's injectable timeout seam.
+  # A generous paste window — a human has to go mint a token in the web app.
+  # Same as the import gate's readback confirm.
   @elicit_timeout to_timeout(minute: 5)
 
-  # Same shape rule as the stdio ladder (tokens are url-base64-ish). Nothing
-  # is shell-sourced here, but a paste outside this set is still never a
-  # token — reject it before it burns the one retry.
+  # Tokens are url-base64-ish; a paste outside this set is never a token —
+  # reject it before it burns the one retry.
   @token_format ~r|\A[A-Za-z0-9._+/=-]+\z|
 
   @token_schema %{

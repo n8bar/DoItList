@@ -1,25 +1,23 @@
 defmodule DoitMcp.FrameLog do
   @moduledoc """
   Per-session frame capture for the resident HTTP transport (m03.04 item
-  23.5) — the server-side stand-in for the stdio launcher's host-side tee
-  (`bin/mcp_server.sh`), which kept an `.in`/`.out` pair per connection so we
-  could see exactly what a client sent when a request came back -32600.
+  23.5): transport debugging needs the exact bytes a client sent when a
+  request comes back wrong, without any client-side setup.
 
   One JSONL file per session under `/tmp/doitlist-mcp` INSIDE the container —
-  ephemeral with it, like the launcher's `/tmp` logs, and deliberately not
-  under `/app`, which is the repository bind mount. Files are named
-  `<session id>.<start>.jsonl` and each line is `{"ts", "dir", "frame"}`,
-  where `dir` is `"in"` (client to server) or `"out"`.
+  ephemeral with it, and deliberately not under `/app`, which is the
+  repository bind mount. Files are named `<session id>.<start>.jsonl` and
+  each line is `{"ts", "dir", "frame"}`, where `dir` is `"in"` (client to
+  server) or `"out"`.
 
-  Unlike stdio's single-operator pipe, this service is multi-user, so NO
-  credential material is written. Redaction is structural, not a scrub of the
-  encoded line: a `token` field (the 401-recovery form's answer, see
-  `DoitMcp.TokenRecovery.Http`), an `authorization` field, and any value that
-  IS a bearer header are replaced wherever they appear in a frame.
+  This service is multi-user, so NO credential material is written.
+  Redaction is structural, not a scrub of the encoded line: a `token` field
+  (the 401-recovery form's answer, see `DoitMcp.TokenRecovery.Http`), an
+  `authorization` field, and any value that IS a bearer header are replaced
+  wherever they appear in a frame.
 
-  Capture is on by default, matching the launcher's always-on tee;
-  `DOITLIST_MCP_FRAME_LOGS=off` turns it off, read once at boot by
-  `DoitMcp.Application`.
+  Capture is on by default; `DOITLIST_MCP_FRAME_LOGS=off` turns it off, read
+  once at boot by `DoitMcp.Application`.
 
   Logging never breaks serving: writes are casts, redacted and stamped in the
   caller so no secret ever sits in this process's mailbox, and a write that

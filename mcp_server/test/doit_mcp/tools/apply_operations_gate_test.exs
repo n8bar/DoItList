@@ -66,7 +66,14 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     previous = Application.fetch_env(:doit_mcp, :elicitation_session_name)
     Application.put_env(:doit_mcp, :elicitation_session_name, name)
 
+    # The fake session IS this test's channel to the "client" — it forwards
+    # every elicitation straight here, so declare it reachable in place of
+    # the real transport's stream check.
+    Application.put_env(:doit_mcp, :elicitation_reachable, true)
+
     on_exit(fn ->
+      Application.delete_env(:doit_mcp, :elicitation_reachable)
+
       case previous do
         {:ok, value} -> Application.put_env(:doit_mcp, :elicitation_session_name, value)
         :error -> Application.delete_env(:doit_mcp, :elicitation_session_name)

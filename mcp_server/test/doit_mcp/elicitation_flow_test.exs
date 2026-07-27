@@ -11,9 +11,9 @@ defmodule DoitMcp.ElicitationFlowTest do
   # capability, tools/call dispatch, the outbound elicitation/create, the
   # client's answer routed back through DoitMcp.Server.handle_elicitation/3,
   # and the parked tool resuming with the operator's decision. The test
-  # process stands in as the transport (STDIO's send_message/3 is a
+  # process stands in as the transport (the dep's STDIO layer sends via a
   # GenServer.call it can answer directly); the same flow over the real
-  # concurrent transport lives in DoitMcp.StdioTransportTest.
+  # HTTP transport lives in DoitMcp.HttpImportGateE2eTest.
 
   # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on for
   # determinism against the container's ambient environment.
@@ -43,7 +43,13 @@ defmodule DoitMcp.ElicitationFlowTest do
     previous = Application.fetch_env(:doit_mcp, :elicitation_session_name)
     Application.put_env(:doit_mcp, :elicitation_session_name, session_name)
 
+    # The test process stands in as the transport (see above), so it answers
+    # for the channel too, in place of the real transport's stream check.
+    Application.put_env(:doit_mcp, :elicitation_reachable, true)
+
     on_exit(fn ->
+      Application.delete_env(:doit_mcp, :elicitation_reachable)
+
       case previous do
         {:ok, value} -> Application.put_env(:doit_mcp, :elicitation_session_name, value)
         :error -> Application.delete_env(:doit_mcp, :elicitation_session_name)

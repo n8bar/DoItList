@@ -22,12 +22,9 @@ defmodule DoitMcp.LogRedactionTest do
   @pasted "pasted-secret-token-23-7"
 
   setup do
-    Application.put_env(:doit_mcp, :transport_mode, :http)
     previous_req = Application.fetch_env(:doit_mcp, :req_options)
 
     on_exit(fn ->
-      Application.delete_env(:doit_mcp, :transport_mode)
-
       case previous_req do
         {:ok, value} -> Application.put_env(:doit_mcp, :req_options, value)
         :error -> Application.delete_env(:doit_mcp, :req_options)

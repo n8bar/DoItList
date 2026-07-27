@@ -1,7 +1,7 @@
 defmodule DoitMcp.HttpFrameLogTest do
   # async: false — boots the anubis HTTP tree under its real global registry
-  # names and swaps global app env (:transport_mode, :req_options, and the
-  # frame log's root and switch).
+  # names and swaps global app env (:req_options, and the frame log's
+  # root and switch).
   use ExUnit.Case, async: false
 
   import Plug.Test, only: [conn: 3]
@@ -11,7 +11,7 @@ defmodule DoitMcp.HttpFrameLogTest do
   @moduletag :capture_log
 
   # Per-session frame capture on the resident HTTP transport (m03.04 item
-  # 23.5) — the server-side stand-in for the stdio launcher's host-side tee.
+  # 23.5).
   # Every frame a session exchanges lands in that session's own JSONL file,
   # direction-tagged; no credential material lands anywhere in the log root.
 
@@ -25,7 +25,6 @@ defmodule DoitMcp.HttpFrameLogTest do
   @stream_accept [{"accept", "application/json, text/event-stream"}]
 
   setup context do
-    Application.put_env(:doit_mcp, :transport_mode, :http)
     previous_req = Application.fetch_env(:doit_mcp, :req_options)
 
     # ExUnit only clears a tmp_dir on the NEXT run, and these roots are 0700
@@ -33,7 +32,6 @@ defmodule DoitMcp.HttpFrameLogTest do
     if tmp_dir = context[:tmp_dir], do: on_exit(fn -> File.rm_rf!(tmp_dir) end)
 
     on_exit(fn ->
-      Application.delete_env(:doit_mcp, :transport_mode)
       Application.delete_env(:doit_mcp, :frame_log_root)
       Application.delete_env(:doit_mcp, :frame_logs)
 

@@ -50,7 +50,6 @@ services:
     environment:
       MIX_ENV: dev
       TZ: America/Denver
-      DOITLIST_MCP_TRANSPORT: http
       DOITLIST_API_URL: http://web:4000
     ports:
       - "${MCP_PORT:-4004}:4004"

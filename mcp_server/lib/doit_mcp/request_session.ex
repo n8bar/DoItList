@@ -8,10 +8,10 @@ defmodule DoitMcp.RequestSession do
   `Task.Supervisor`, so the session process is the head of the task's
   `$callers` chain, and the frame's context carries the session id. Modules
   that must reach the session — `DoitMcp.Elicitation` (park a waiter, read
-  client capabilities, find the session's stream) and the HTTP 401
-  recovery's per-session state — read both from here instead of assuming
-  the stdio tree's registered names, which is what makes them work
-  unchanged across transports and across concurrent HTTP sessions.
+  client capabilities, find the session's stream) and the 401 recovery's
+  per-session state — read both from here rather than from any VM-wide
+  registered name, which is what keeps them correct across concurrent
+  sessions.
 
   Nothing installed (a unit test driving a tool directly) reads as `nil`;
   callers fall back to their registered-name resolution.

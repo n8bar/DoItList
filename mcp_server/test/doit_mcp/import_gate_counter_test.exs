@@ -8,8 +8,7 @@ defmodule DoitMcp.ImportGateCounterTest do
   # The gate's confirm memory keys on the SESSION (m03.04 item 23.6): the
   # resident HTTP VM serves every connected client at once, so a flat set
   # would settle an Initiative for sessions that never answered anything.
-  # Each keyed session is monitored and its row dies with it; stdio, one
-  # session per VM, keeps exactly its old semantics.
+  # Each keyed session is monitored and its row dies with it.
 
   setup do
     name = :"#{__MODULE__}.Counter"

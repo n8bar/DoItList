@@ -6,13 +6,8 @@ defmodule DoitMcp.TokenRecovery.Sessions do
   so one session's recovery can never bleed into another's. Nothing here is
   ever persisted anywhere; every row dies with its session (each keyed pid
   is monitored, a DOWN clears its row), and the verify guard dies with its
-  verifier — a killed request task can never wedge a session's recovery,
-  mirroring the stdio ladder's registered-name guard (m03.04 2.20).
-
-  This is `DoitMcp.TokenRecovery`'s session state (app env + a registered
-  name) one level up: stdio is one session per VM, HTTP is many sessions per
-  VM. It runs in the HTTP tree and under the test helper; the stdio tree
-  never consults it.
+  verifier — a killed request task can never wedge a session's recovery
+  (m03.04 2.20).
   """
 
   use GenServer
@@ -53,8 +48,7 @@ defmodule DoitMcp.TokenRecovery.Sessions do
 
   @doc """
   Raise the verify-in-flight guard with the CALLER as verifier. A guard
-  already up stays up (already-guarded is the correct reading — the stdio
-  ladder's precedent).
+  already up stays up — already-guarded is the correct reading.
   """
   @spec begin_verify(pid()) :: :ok
   def begin_verify(session) do
