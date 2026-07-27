@@ -294,12 +294,19 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   defp hold_for_confirmation(params, info, frame) do
-    case presence(Map.get(params, :readback)) do
-      nil ->
+    cond do
+      not Elicitation.reachable?() ->
+        # The client advertised elicitation but this session has no open
+        # server-to-client stream for the confirm form to ride (m03.04 item
+        # 23.3). Loud and immediate — never a hang, never a silent pass:
+        # held with the server facts, like the pre-elicitation hold.
+        not_applied(frame, %{message: no_stream_message(info)})
+
+      is_nil(presence(Map.get(params, :readback))) ->
         {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
 
-      readback ->
-        confirm_with_operator(params, readback, info, frame)
+      true ->
+        confirm_with_operator(params, presence(Map.get(params, :readback)), info, frame)
     end
   end
 
@@ -324,11 +331,24 @@ defmodule DoitMcp.Tools.ApplyOperations do
               "then re-apply."
         })
 
+      {:error, :no_sse_handler} ->
+        # The stream closed between hold_for_confirmation's check and the
+        # send — same loud hold.
+        not_applied(frame, %{message: no_stream_message(info)})
+
       _timeout_cancel_or_error ->
         not_applied(frame, %{
           message: "Operator did not respond; batch not applied — retry when they're available."
         })
     end
+  end
+
+  defp no_stream_message(%{task_adds: task_adds, cumulative: cumulative}) do
+    "Import gate: this batch needs the operator's confirmation (#{task_adds} task-adds, " <>
+      "#{cumulative} this session), but the confirm form cannot reach them — the client " <>
+      "advertises elicitation yet holds no open server-to-client stream on this session. " <>
+      "Nothing was applied. Connect the standalone stream (a GET against this MCP " <>
+      "endpoint) and re-apply."
   end
 
   defp handle_answer(params, content, info, frame) do

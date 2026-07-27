@@ -10,4 +10,9 @@ config :logger, :default_handler, config: [type: :standard_error]
 # instead of the network, so tests never touch a live server.
 if config_env() == :test do
   config :doit_mcp, req_options: [plug: {Req.Test, DoitMcp.Client}]
+
+  # anubis 1.10 logs session/transport lifecycle at debug; teardown-time
+  # events land outside capture_log's window and would litter the suite
+  # output. No test asserts on log content, so filter below warnings.
+  config :logger, level: :warning
 end

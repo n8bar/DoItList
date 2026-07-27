@@ -57,6 +57,33 @@ defmodule DoitMcp.Client do
       |> Req.request()
     end
 
+    dispatch(attempt, Application.get_env(:doit_mcp, :transport_mode, :stdio))
+  end
+
+  # HTTP mode (m03.04 items 23.2 + 23.3): the credential is the session's
+  # in-memory override when a 401 recovery installed one, else the bearer
+  # header this request arrived with (installed per request task by
+  # DoitMcp.Server.handle_request/2) — never a boot-env token, which would
+  # hand one session another's identity. A rejected or absent credential
+  # runs the per-session recovery ladder (TokenRecovery.Http): elicit over
+  # THAT session's own stream, retry once with an accepted token, actionable
+  # guidance on every other outcome — the stdio ladder's shape, keyed to the
+  # session.
+  defp dispatch(attempt, :http) do
+    case TokenRecovery.Http.credential() do
+      {:ok, token} ->
+        case attempt.(token) do
+          {:ok, %Req.Response{status: 401}} -> recover_unauthorized_http(attempt)
+          other -> translate(other)
+        end
+
+      :absent ->
+        # No credential at all — same ladder, minus the doomed round trip.
+        recover_unauthorized_http(attempt)
+    end
+  end
+
+  defp dispatch(attempt, _stdio) do
     case attempt.(TokenRecovery.token()) do
       # The token died out from under the session — the stdio handshake makes
       # no API call, so connect never caught it. Recovery lives HERE, on the
@@ -67,6 +94,31 @@ defmodule DoitMcp.Client do
       # code.
       {:ok, %Req.Response{status: 401}} -> recover_unauthorized(attempt)
       other -> translate(other)
+    end
+  end
+
+  defp recover_unauthorized_http(attempt) do
+    case TokenRecovery.Http.recover() do
+      {:ok, fresh_token} ->
+        # The accept→retry window, per session (m03.04 2.20 mirrored):
+        # TokenRecovery.Http holds this session's verify-in-flight guard so
+        # a concurrent 401 on the SAME session joins this recovery instead
+        # of re-eliciting; the `after` clears it on every exit. Holder-only:
+        # a joiner's pass through here leaves the verifier's guard alone.
+        try do
+          case attempt.(fresh_token) do
+            {:ok, %Req.Response{status: 401}} ->
+              unauthorized_error(TokenRecovery.Http.refreshed_token_rejected())
+
+            other ->
+              translate(other)
+          end
+        after
+          TokenRecovery.Http.verify_concluded()
+        end
+
+      {:error, message} ->
+        unauthorized_error(message)
     end
   end
 
@@ -120,9 +172,10 @@ defmodule DoitMcp.Client do
     end
   end
 
-  # The base URL is the MCP client's process env — set once by whatever
-  # launches this adapter (`claude mcp add`, a generic stdio config block, …).
-  # The token goes through DoitMcp.TokenRecovery: same env at boot, but an
+  # The base URL is the adapter's process env — set once by whatever launches
+  # it (a stdio config block, the resident compose service, …). The token is
+  # mode-dependent (see dispatch/2): per-session via DoitMcp.TokenRecovery.Http
+  # on HTTP; on stdio through DoitMcp.TokenRecovery — same env at boot, but an
   # in-session refresh (401 recovery, m03.04 item 2.13) can swap it.
   defp base_url, do: System.get_env("DOITLIST_API_URL", "http://localhost:4000")
 end

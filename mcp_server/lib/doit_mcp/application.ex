@@ -4,20 +4,80 @@ defmodule DoitMcp.Application do
 
   @impl true
   def start(_type, _args) do
-    Supervisor.start_link(children(Mix.env()), strategy: :one_for_one, name: DoitMcp.Supervisor)
+    mode = transport_mode()
+
+    # The VM runs exactly one transport for its lifetime; record which, so
+    # DoitMcp.Client can resolve the API credential per mode (m03.04 item
+    # 23.2) without re-reading the environment on every request.
+    Application.put_env(:doit_mcp, :transport_mode, mode)
+
+    # Same one-read-at-boot treatment for the frame-log switch (m03.04 item
+    # 23.5): capture is on unless DOITLIST_MCP_FRAME_LOGS says off.
+    Application.put_env(:doit_mcp, :frame_logs, DoitMcp.FrameLog.env_enabled?())
+
+    Supervisor.start_link(children(Mix.env(), mode),
+      strategy: :one_for_one,
+      name: DoitMcp.Supervisor
+    )
   end
 
-  # Tests exercise tool/resource modules directly against a Req.Test stub —
-  # they never need a live stdio transport, and starting one under `mix
-  # test` would fight ExUnit for stdin/stdout. Only boot it for real runs.
-  def children(:test), do: []
+  @doc """
+  The transport this VM serves: `DOITLIST_MCP_TRANSPORT=http` boots the
+  resident streamable-HTTP tree (m03.04 item 23.1); anything else — unset,
+  `stdio` — keeps the launcher-spawned stdio tree.
+  """
+  def transport_mode(env_value \\ System.get_env("DOITLIST_MCP_TRANSPORT"))
+  def transport_mode("http"), do: :http
+  def transport_mode(_env_value), do: :stdio
 
-  def children(_env) do
+  # Tests exercise tool/resource modules directly against a Req.Test stub —
+  # they never need a live transport, and starting one under `mix test`
+  # would fight ExUnit for stdin/stdout (or a port). Only boot it for real
+  # runs.
+  def children(env, mode \\ :stdio)
+
+  def children(:test, _mode), do: []
+
+  def children(_env, :http) do
     [
-      # Session memory for the import gate's cumulative trigger (m03.04 item
-      # 3.11.2) — before the stdio tree so a tool call can never race its
-      # start.
+      # The import gate's confirm memory, keyed per session (m03.04 item
+      # 23.6) — before the transport tree so a tool call can never race
+      # its start.
       DoitMcp.ImportGate.Counter,
+      # Session-keyed elicitation waiters and per-session 401-recovery state
+      # (m03.04 item 23.3) — same never-race-a-tool-call ordering.
+      {Registry, keys: :unique, name: DoitMcp.Elicitation.Registry},
+      DoitMcp.TokenRecovery.Sessions,
+      # Per-session frame capture (m03.04 item 23.5) — before the transport
+      # tree so a session's first frame can't outrun the logger.
+      DoitMcp.FrameLog,
+      # The stock anubis streamable-HTTP tree: session registry + dynamic
+      # session supervisor + transport, one session process per connected
+      # client. Deliberately NO timeout options: anubis's stock 30-minute
+      # idle expiry is right here (m03.04 item 23.4) — an expired session
+      # re-initializes from a live client in milliseconds, so none of the
+      # stdio tree's lifecycle machinery (49-day pin, substantive-idle
+      # reaper, watchdog) applies. `start: true` skips the dep's web-server
+      # heuristics; the Bandit listener below is that server.
+      {DoitMcp.Server, transport: {:streamable_http, start: true}},
+      # The listener serving our wrapper around anubis's MCP plug — client
+      # answers to server-initiated requests take the immediate session call
+      # path, everything else the stock plug (m03.04 item 23.3; see
+      # DoitMcp.Http.Plug) — after the tree it routes into. In-container
+      # bind is fixed; compose maps the host port (MCP_PORT, default 4004).
+      {Bandit, plug: {DoitMcp.Http.Plug, server: DoitMcp.Server}, ip: {0, 0, 0, 0}, port: 4004}
+    ]
+  end
+
+  def children(_env, _mode) do
+    [
+      # The import gate's confirm memory, keyed per session on this
+      # transport too (m03.04 item 23.6 — stdio is one session per VM) —
+      # before the stdio tree so a tool call can never race its start.
+      DoitMcp.ImportGate.Counter,
+      # Elicitation waiters key on the session process on every transport
+      # (m03.04 item 23.3) — stdio's single session included.
+      {Registry, keys: :unique, name: DoitMcp.Elicitation.Registry},
       # The stdio tree (m03.04 item 3.11.1): anubis Session plus our own
       # concurrent read/dispatch transport — the stock one blocked the
       # reader on every request, so an elicitation answer could never

@@ -72,4 +72,20 @@ defmodule DoitMcp.Server do
     DoitMcp.Elicitation.deliver(result)
     {:noreply, frame}
   end
+
+  # Every request runs in its own task with the transport's context on the
+  # frame; on streamable HTTP that context carries the request's headers, so
+  # install the bearer token as this task's API credential before dispatch
+  # (m03.04 item 23.2). Stdio frames carry no headers and DoitMcp.Client only
+  # consults the installed credential in HTTP mode, so the stdio path keeps
+  # its boot-env token. The session identity rides along (m03.04 item 23.3)
+  # so elicitation and the per-session 401 recovery can reach THIS request's
+  # session on any transport. The body is the default this callback
+  # overrides — Anubis's stock routing into tool/resource handlers.
+  @impl true
+  def handle_request(request, frame) do
+    DoitMcp.SessionToken.install(frame)
+    DoitMcp.RequestSession.install(frame)
+    Anubis.Server.Handlers.handle(request, __MODULE__, frame)
+  end
 end

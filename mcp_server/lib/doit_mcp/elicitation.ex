@@ -12,15 +12,26 @@ defmodule DoitMcp.Elicitation do
   answer back (or the window lapses; the session cancels the client-side
   request on its own matching timer).
 
-  One waiter at a time — safe here: the stdio adapter is one session per OS
-  process and Anubis serializes tool calls within a session.
+  The session is found two ways (m03.04 item 23.3): a request task reads its
+  own session from `DoitMcp.RequestSession` — any transport, any number of
+  concurrent HTTP sessions — and a caller outside a request task (unit tests
+  driving a tool directly) falls back to the registered `session_name/0`.
+  Waiters register in the `DoitMcp.Elicitation.Registry` KEYED BY SESSION
+  process, so concurrent sessions elicit independently while each stays one
+  waiter at a time (Anubis serializes requests within a session). The answer
+  dispatches `handle_elicitation` IN the session process — that identity is
+  how `deliver/1` finds the right waiter.
   """
 
-  @waiter DoitMcp.Elicitation.Waiter
+  alias DoitMcp.RequestSession
+
+  @registry DoitMcp.Elicitation.Registry
 
   @doc """
-  The registered name of the session process this adapter talks to.
-  Overridable via the `:elicitation_session_name` app env for tests.
+  The registered fallback name of the session process — the stdio tree's
+  single session. Overridable via the `:elicitation_session_name` app env
+  for tests. Request tasks resolve their own session through
+  `DoitMcp.RequestSession` first and only fall back here.
   """
   def session_name do
     Application.get_env(
@@ -38,7 +49,7 @@ defmodule DoitMcp.Elicitation do
   """
   @spec client_supports_elicitation?() :: boolean()
   def client_supports_elicitation? do
-    case Process.whereis(session_name()) do
+    case current_session() do
       nil ->
         false
 
@@ -53,54 +64,102 @@ defmodule DoitMcp.Elicitation do
   end
 
   @doc """
+  Whether a server-initiated request can reach the client RIGHT NOW. Always
+  true on stdio — the pipe is the channel. On streamable HTTP it requires
+  the session's standalone GET stream: the transport routes an elicitation
+  to that session's own stream and a missing handler is a silent drop (the
+  session logs the failed send and forgets it), so callers check here first
+  — a parked waiter would otherwise hang to its timeout (m03.04 item 23.3).
+  """
+  @spec reachable?() :: boolean()
+  def reachable? do
+    case Application.get_env(:doit_mcp, :transport_mode, :stdio) do
+      :http -> http_stream_open?()
+      _stdio -> true
+    end
+  end
+
+  defp http_stream_open? do
+    transport = Anubis.Server.Registry.transport_name(DoitMcp.Server, :streamable_http)
+    session_id = RequestSession.id()
+
+    is_binary(session_id) and
+      Anubis.Server.Transport.StreamableHTTP.get_sse_handler(transport, session_id) != nil
+  catch
+    :exit, _ -> false
+  end
+
+  @doc """
   Send an `elicitation/create` to the client and block until it answers.
 
   Returns `{:ok, result}` with the sanitized MCP elicitation result
   (`%{"action" => "accept", "content" => %{...}}`, `%{"action" => "decline"}`,
   or `%{"action" => "cancel"}`), or `{:error, :timeout | :no_session |
-  :already_waiting}`. A client-side error response is only logged by Anubis —
-  it never reaches `handle_elicitation/3` — so it surfaces here as `:timeout`.
+  :no_sse_handler | :already_waiting}` — `:no_sse_handler` when an HTTP
+  session holds no standalone GET stream to carry the request. A client-side
+  error response is only logged by Anubis — it never reaches
+  `handle_elicitation/3` — so it surfaces here as `:timeout`.
   """
   @spec request(String.t(), map(), non_neg_integer()) :: {:ok, map()} | {:error, atom()}
   def request(message, requested_schema, timeout) do
-    case Process.whereis(session_name()) do
-      nil -> {:error, :no_session}
-      pid -> do_request(pid, message, requested_schema, timeout)
+    case current_session() do
+      nil ->
+        {:error, :no_session}
+
+      pid ->
+        if reachable?() do
+          do_request(pid, message, requested_schema, timeout)
+        else
+          {:error, :no_sse_handler}
+        end
     end
   end
 
   @doc "Forward a client's elicitation answer to the parked waiter, if any."
   @spec deliver(map()) :: :ok
   def deliver(result) do
-    case Process.whereis(@waiter) do
-      nil -> :ok
-      pid -> send(pid, {:elicitation_result, result})
-    end
-
+    # Anubis dispatches handle_elicitation IN the session process, so self()
+    # keys the waiter; the named fallback serves callers outside any session
+    # (tests driving deliver directly against a fake session).
+    _ = notify(self(), result) || notify(Process.whereis(session_name()), result)
     :ok
+  end
+
+  defp notify(nil, _result), do: false
+
+  defp notify(session, result) do
+    case Registry.lookup(@registry, session) do
+      [{waiter, _value}] ->
+        send(waiter, {:elicitation_result, result})
+        true
+
+      [] ->
+        false
+    end
+  end
+
+  defp current_session do
+    RequestSession.pid() || Process.whereis(session_name())
   end
 
   defp do_request(session_pid, message, requested_schema, timeout) do
-    # Register-and-check in ONE atomic step: a bare whereis-then-register races
-    # two concurrent requests into both seeing `nil`, and the loser's register
-    # raises ArgumentError instead of yielding :already_waiting. Process.register
-    # is itself atomic — let the loser's rescue be the check.
-    case register_waiter() do
-      :ok ->
-        params = %{"message" => message, "requestedSchema" => requested_schema}
-        send(session_pid, {:send_elicitation_request, params, requested_schema, timeout})
-        await(timeout)
+    # Registry.register is register-and-check in ONE atomic step per session
+    # key: the loser of two concurrent requests on the same session gets
+    # :already_waiting instead of a race, and a dead waiter's entry cleans
+    # itself up (the registry monitors owners).
+    case Registry.register(@registry, session_pid, nil) do
+      {:ok, _owner} ->
+        try do
+          params = %{"message" => message, "requestedSchema" => requested_schema}
+          send(session_pid, {:send_elicitation_request, params, requested_schema, timeout})
+          await(timeout)
+        after
+          Registry.unregister(@registry, session_pid)
+        end
 
-      :already_waiting ->
+      {:error, {:already_registered, _pid}} ->
         {:error, :already_waiting}
     end
-  end
-
-  defp register_waiter do
-    Process.register(self(), @waiter)
-    :ok
-  rescue
-    ArgumentError -> :already_waiting
   end
 
   defp await(timeout) do
@@ -111,7 +170,5 @@ defmodule DoitMcp.Elicitation do
       # second covers scheduling skew so its cancel wins that race.
       timeout + 1_000 -> {:error, :timeout}
     end
-  after
-    Process.unregister(@waiter)
   end
 end

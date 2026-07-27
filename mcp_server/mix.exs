@@ -20,9 +20,12 @@ defmodule DoitMcp.MixProject do
 
   defp deps do
     [
-      {:anubis_mcp, "~> 1.6"},
+      {:anubis_mcp, "~> 1.10"},
       {:req, "~> 0.5"},
-      {:plug, "~> 1.16", only: :test}
+      # The HTTP transport serves the MCP plug resident (m03.04 item 23.1);
+      # bandit pulls plug in for every env, not just :test.
+      {:bandit, "~> 1.5"},
+      {:plug, "~> 1.16"}
     ]
   end
 end
