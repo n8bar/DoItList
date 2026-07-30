@@ -1,5 +1,14 @@
 defmodule DoItWeb.AgentConnect do
-  @moduledoc "Composes the agent-facing MCP endpoint URL from instance config."
+  @moduledoc """
+  Composes the agent-facing MCP endpoint URL from instance config, and the
+  per-client connect pastes built from it (m03.04 item 24.2/24.3).
+
+  Each paste function takes the just-minted plaintext token and returns the
+  full text a user pastes into their shell — self-contained: runnable as
+  pasted, credential included, no assembly by the reader.
+  """
+
+  @server_name "doit-list"
 
   @doc """
   The public URL agents connect to, with exactly one trailing slash.
@@ -18,5 +27,57 @@ defmodule DoItWeb.AgentConnect do
       url ->
         String.trim_trailing(url, "/") <> "/"
     end
+  end
+
+  @doc """
+  All connect pastes for the panel: `{dom_slug, client_name, paste}` per
+  client, in display order.
+  """
+  def client_pastes(token) when is_binary(token) do
+    [
+      {"claude-code", "Claude Code", claude_code_paste(token)},
+      {"codex", "Codex", codex_paste(token)},
+      {"hermes", "Hermes Agent", hermes_paste(token)}
+    ]
+  end
+
+  @doc """
+  Claude Code holds the credential inline, so one line does it all:
+  the `mcp add` with the bearer header.
+  """
+  def claude_code_paste(token) when is_binary(token) do
+    ~s(claude mcp add --transport http #{@server_name} #{mcp_url()} --header "Authorization: Bearer #{token}")
+  end
+
+  @doc """
+  Codex's config can't hold the credential — it reads an env var at launch.
+  The export rides the same paste (24.3), plus a profile append so future
+  shells have it too.
+  """
+  def codex_paste(token) when is_binary(token) do
+    Enum.join(
+      [
+        "export DOITLIST_API_TOKEN='#{token}'",
+        "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN",
+        ~s(echo "export DOITLIST_API_TOKEN='#{token}'" >> ~/.bashrc   # or your shell's profile)
+      ],
+      "\n"
+    )
+  end
+
+  @doc """
+  Hermes Agent reads the bare token (no `Bearer ` prefix) from
+  `~/.hermes/.env` under the `MCP_<SERVER>_API_KEY` name — for server
+  `doit-list` that's `MCP_DOIT_LIST_API_KEY`. The append rides the same
+  paste (24.3).
+  """
+  def hermes_paste(token) when is_binary(token) do
+    Enum.join(
+      [
+        "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
+        ~s(echo "MCP_DOIT_LIST_API_KEY=#{token}" >> ~/.hermes/.env)
+      ],
+      "\n"
+    )
   end
 end

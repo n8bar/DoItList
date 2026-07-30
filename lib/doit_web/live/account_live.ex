@@ -2,6 +2,7 @@ defmodule DoItWeb.AccountLive do
   use DoItWeb, :live_view
 
   alias DoIt.Accounts
+  alias DoItWeb.AgentConnect
 
   @impl true
   def mount(_params, _session, socket) do
@@ -604,8 +605,8 @@ defmodule DoItWeb.AccountLive do
                   <button
                     type="button"
                     id="api-token-copy"
-                    phx-hook=".CopyToken"
-                    data-token-target="api-token-value"
+                    phx-hook=".CopyText"
+                    data-copy-target="api-token-value"
                     class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
                   >
                     Copy
@@ -619,19 +620,67 @@ defmodule DoItWeb.AccountLive do
                     Done
                   </button>
                 </div>
+
+                <%!-- Connect panel (m03.04 item 24.2/24.3): per-client pastes
+                   composed server-side from the endpoint URL and the token just
+                   minted — self-contained, runnable as pasted. Lives inside the
+                   one-time reveal because the plaintext exists only here;
+                   dismissing the token dismisses the panel with it. --%>
+                <div
+                  id="agent-connect-panel"
+                  class="mt-3 pt-3 border-t border-emerald-200 dark:border-emerald-900 space-y-3"
+                >
+                  <p class="text-sm text-emerald-800 dark:text-emerald-300">
+                    Connect an agent — one paste per client:
+                  </p>
+                  <%= for {slug, name, paste} <- AgentConnect.client_pastes(@new_api_token) do %>
+                    <div id={"connect-client-#{slug}"}>
+                      <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">
+                        {name}
+                      </h4>
+                      <div class="flex items-start gap-2">
+                        <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 px-2 py-1.5"><code
+                          id={"connect-cmd-#{slug}"}
+                          class="font-mono text-xs text-zinc-800 dark:text-zinc-100"
+                        >{paste}</code></pre>
+                        <button
+                          type="button"
+                          id={"connect-copy-#{slug}"}
+                          phx-hook=".CopyText"
+                          data-copy-target={"connect-cmd-#{slug}"}
+                          class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  <% end %>
+                </div>
               </div>
             <% end %>
 
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
+            <%!-- One copy hook for the token input and every connect paste:
+               data-copy-target names the element; inputs copy .value, code/pre
+               blocks copy .textContent. --%>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyText">
               export default {
                 mounted() {
                   this.el.addEventListener("click", async () => {
-                    const target = document.getElementById(this.el.dataset.tokenTarget)
+                    const target = document.getElementById(this.el.dataset.copyTarget)
                     if (!target) return
+                    const text = target.value !== undefined ? target.value : target.textContent
                     try {
-                      await navigator.clipboard.writeText(target.value)
+                      await navigator.clipboard.writeText(text)
                     } catch (_e) {
-                      target.select()
+                      if (typeof target.select === "function") {
+                        target.select()
+                      } else {
+                        const range = document.createRange()
+                        range.selectNodeContents(target)
+                        const sel = window.getSelection()
+                        sel.removeAllRanges()
+                        sel.addRange(range)
+                      }
                       document.execCommand("copy")
                     }
                     const original = this.el.textContent

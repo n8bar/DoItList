@@ -2,7 +2,8 @@ defmodule DoItWeb.AccountApiTokensTest do
   @moduledoc """
   The account page's "API tokens" section (m03.01 worklist 1.2): mint reveals
   the plaintext once, the token lists, dismissing hides the plaintext for good,
-  and revoke removes it.
+  and revoke removes it. Plus the agent-connect panel (m03.04 item 24.2):
+  per-client pastes riding the one-time reveal, gone with the dismiss.
   """
   use DoItWeb.ConnCase, async: true
 
@@ -54,6 +55,32 @@ defmodule DoItWeb.AccountApiTokensTest do
     # Dismissing the reveal hides the plaintext for good.
     view |> element("#api-token-dismiss") |> render_click()
     refute has_element?(view, "#api-token-reveal")
+    refute render(view) =~ "doit_pat_"
+  end
+
+  test "minting shows the connect panel; dismissing removes it with the reveal", %{conn: conn} do
+    {:ok, view, _html} = live(conn, ~p"/account")
+
+    refute has_element?(view, "#agent-connect-panel")
+
+    view
+    |> form("#api-token-form", api_token: %{label: "Agent"})
+    |> render_submit()
+
+    assert has_element?(view, "#agent-connect-panel")
+    assert has_element?(view, "#connect-copy-claude-code")
+    assert has_element?(view, "#connect-copy-codex")
+    assert has_element?(view, "#connect-copy-hermes")
+
+    # Self-contained pastes: the minted plaintext and the endpoint URL are in
+    # the panel itself — no assembly by the reader.
+    [plaintext] = Regex.run(~r/doit_pat_[A-Za-z0-9_-]+/, render(view))
+    panel = view |> element("#agent-connect-panel") |> render()
+    assert panel =~ plaintext
+    assert panel =~ DoItWeb.AgentConnect.mcp_url()
+
+    view |> element("#api-token-dismiss") |> render_click()
+    refute has_element?(view, "#agent-connect-panel")
     refute render(view) =~ "doit_pat_"
   end
 
