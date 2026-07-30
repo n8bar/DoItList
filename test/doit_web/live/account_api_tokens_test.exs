@@ -9,7 +9,7 @@ defmodule DoItWeb.AccountApiTokensTest do
 
   import Phoenix.LiveViewTest
 
-  alias DoIt.Accounts
+  alias DoIt.{Accounts, Initiatives}
 
   defp user do
     {:ok, u} =
@@ -104,5 +104,71 @@ defmodule DoItWeb.AccountApiTokensTest do
 
     refute has_element?(view, "#api-token-#{token.id}")
     assert Accounts.list_api_tokens(user) == []
+  end
+
+  describe "repo-marker panel (m03.04 item 24.4)" do
+    test "lists only agent-accessible initiatives and composes the snippet", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _a} = Initiatives.create_initiative(user, %{"name" => "Alpha"}, agent_access: true)
+      {:ok, _b} = Initiatives.create_initiative(user, %{"name" => "Beta"}, agent_access: true)
+      {:ok, _off} = Initiatives.create_initiative(user, %{"name" => "Private Notes"})
+
+      # The panel's default is the first entry of the context list.
+      [first, second] = Initiatives.list_agent_accessible_initiatives(user)
+
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      assert has_element?(view, "#repo-marker-panel")
+      assert has_element?(view, "#repo-marker-copy")
+      assert has_element?(view, "#repo-marker-initiative option", first.name)
+      assert has_element?(view, "#repo-marker-initiative option", second.name)
+
+      # Exactly the two accessible names — the flagged-off one is absent.
+      select_html = view |> element("#repo-marker-initiative") |> render()
+      assert length(Regex.scan(~r/<option/, select_html)) == 2
+      panel = view |> element("#repo-marker-panel") |> render()
+      refute panel =~ "Private Notes"
+
+      snippet = view |> element("#repo-marker-snippet") |> render()
+      assert snippet =~ first.name
+      assert snippet =~ "/initiatives/#{first.id}"
+    end
+
+    test "changing the select swaps the snippet to the other initiative", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _a} = Initiatives.create_initiative(user, %{"name" => "Alpha"}, agent_access: true)
+      {:ok, _b} = Initiatives.create_initiative(user, %{"name" => "Beta"}, agent_access: true)
+      [first, second] = Initiatives.list_agent_accessible_initiatives(user)
+
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      view
+      |> form("#repo-marker-form", %{"initiative_id" => to_string(second.id)})
+      |> render_change()
+
+      snippet = view |> element("#repo-marker-snippet") |> render()
+      assert snippet =~ second.name
+      assert snippet =~ "/initiatives/#{second.id}"
+      refute snippet =~ "/initiatives/#{first.id}"
+    end
+
+    test "with no agent-accessible initiatives the empty state renders", %{
+      conn: conn,
+      user: user
+    } do
+      # An Initiative exists, but agent access is off — still the empty state.
+      {:ok, _off} = Initiatives.create_initiative(user, %{"name" => "Private Notes"})
+
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      assert has_element?(view, "#repo-marker-panel")
+      assert has_element?(view, "#repo-marker-empty")
+      refute has_element?(view, "#repo-marker-initiative")
+      refute has_element?(view, "#repo-marker-snippet")
+    end
   end
 end

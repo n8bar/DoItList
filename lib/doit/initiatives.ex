@@ -120,6 +120,31 @@ defmodule DoIt.Initiatives do
   end
 
   @doc """
+  Agent-accessible Initiatives for the given user, as `%{id: id, name: name}`
+  maps — the repo-marker panel's option list (m03.04 item 24.4). Same
+  visibility rules and ordering as `list_visible_initiatives/2` with
+  `agent_access_only: true` (member, not trashed, not archived/hidden, agent
+  access on), but names and ids only — no members, progress, or trees.
+  """
+  def list_agent_accessible_initiatives(%User{id: user_id}) do
+    from(i in Initiative,
+      where: is_nil(i.trashed_at) and i.agent_access == true,
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id == ^user_id,
+      where: is_nil(m.archived_at) and is_nil(m.hidden_at),
+      select: %{id: i.id, name: i.name},
+      order_by: [
+        asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
+        desc: i.updated_at,
+        # Deterministic among same-second updated_at ties (timestamps are
+        # second-precision) so the panel's default doesn't wobble.
+        desc: i.id
+      ]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Everyone the given user has ever worked with (m02.05 items 8 + 12.10), drawn
   from the persistent `collaborators` table so people stay after a shared
   Initiative ends. Each row is `%{user: %User{}, shared_count: n}` — `n` is the

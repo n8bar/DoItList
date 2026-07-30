@@ -2,11 +2,16 @@ defmodule DoItWeb.AccountLive do
   use DoItWeb, :live_view
 
   alias DoIt.Accounts
+  alias DoIt.Initiatives
   alias DoItWeb.AgentConnect
 
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
+
+    # Repo-marker panel (m03.04 item 24.4): names + ids only, loaded once.
+    # Which one is selected is ephemeral UI state — assign-only.
+    marker_initiatives = Initiatives.list_agent_accessible_initiatives(user)
 
     {:ok,
      socket
@@ -18,7 +23,19 @@ defmodule DoItWeb.AccountLive do
      |> assign(:api_token_form, new_api_token_form())
      # The just-minted plaintext, shown ONCE then dismissed. Never re-derivable.
      |> assign(:new_api_token, nil)
-     |> assign(:api_tokens, Accounts.list_api_tokens(user))}
+     |> assign(:api_tokens, Accounts.list_api_tokens(user))
+     |> assign(:marker_initiatives, marker_initiatives)
+     |> assign(:marker_initiative_id, marker_default_id(marker_initiatives))}
+  end
+
+  defp marker_default_id([%{id: id} | _]), do: id
+  defp marker_default_id([]), do: nil
+
+  # The selected entry for the snippet; falls back to the first when the
+  # assign doesn't match (e.g. nothing selected yet). Callers guarantee a
+  # non-empty list.
+  defp marker_selected(initiatives, id) do
+    Enum.find(initiatives, hd(initiatives), &(&1.id == id))
   end
 
   defp new_api_token_form, do: to_form(%{"label" => ""}, as: :api_token)
@@ -181,6 +198,18 @@ defmodule DoItWeb.AccountLive do
   # Dismiss the one-time plaintext reveal so it can't be screen-scraped later.
   def handle_event("dismiss_api_token", _params, socket) do
     {:noreply, assign(socket, :new_api_token, nil)}
+  end
+
+  # Repo-marker select (m03.04 item 24.4): a name+URL swap on an already-loaded
+  # list — no work proportional to any tree.
+  def handle_event("select_marker_initiative", %{"initiative_id" => id}, socket) do
+    id = String.to_integer(id)
+
+    if Enum.any?(socket.assigns.marker_initiatives, &(&1.id == id)) do
+      {:noreply, assign(socket, :marker_initiative_id, id)}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -711,6 +740,57 @@ defmodule DoItWeb.AccountLive do
                 <.button type="submit" data-latch="Minting…">Mint token</.button>
               </div>
             </.form>
+
+            <%!-- Repo marker (m03.04 item 24.4), the second paste: a few lines
+               for the repo's agent-instruction file naming the Initiative and
+               its URL, so a connected agent works the tree instead of starting
+               a TODO.md. Holds no secret, so it renders always — never locked
+               inside the one-time reveal. --%>
+            <div
+              id="repo-marker-panel"
+              class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-2"
+            >
+              <p class="text-sm text-zinc-600 dark:text-zinc-300">
+                Repo marker — paste into the repo's agent-instruction file (CLAUDE.md, AGENTS.md):
+              </p>
+              <%= if @marker_initiatives == [] do %>
+                <p id="repo-marker-empty" class="text-sm text-zinc-500 dark:text-zinc-400">
+                  Turn on AI access for an Initiative (Initiative settings) to compose this.
+                </p>
+              <% else %>
+                <form id="repo-marker-form" phx-change="select_marker_initiative">
+                  <select
+                    id="repo-marker-initiative"
+                    name="initiative_id"
+                    aria-label="Initiative"
+                    class="w-full select select-bordered select-sm"
+                  >
+                    <option
+                      :for={i <- @marker_initiatives}
+                      value={i.id}
+                      selected={i.id == @marker_initiative_id}
+                    >
+                      {i.name}
+                    </option>
+                  </select>
+                </form>
+                <div class="flex items-start gap-2">
+                  <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 px-2 py-1.5"><code
+                    id="repo-marker-snippet"
+                    class="font-mono text-xs text-zinc-800 dark:text-zinc-100"
+                  >{AgentConnect.repo_marker(marker_selected(@marker_initiatives, @marker_initiative_id))}</code></pre>
+                  <button
+                    type="button"
+                    id="repo-marker-copy"
+                    phx-hook=".CopyText"
+                    data-copy-target="repo-marker-snippet"
+                    class="shrink-0 px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                  >
+                    Copy
+                  </button>
+                </div>
+              <% end %>
+            </div>
 
             <div class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
               <h3 class="text-sm font-medium text-zinc-700 dark:text-zinc-200 mb-2">

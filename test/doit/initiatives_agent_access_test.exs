@@ -184,4 +184,21 @@ defmodule DoIt.InitiativesAgentAccessTest do
       assert Initiatives.agent_trust_confirm_required?(owner, b, {:add_member, "viewer"})
     end
   end
+
+  describe "list_agent_accessible_initiatives/1 (m03.04 item 24.4)" do
+    test "returns id+name for agent-accessible member Initiatives only" do
+      me = user("Ann")
+      other = user("Bob")
+
+      {:ok, on} = Initiatives.create_initiative(me, %{"name" => "Mine On"}, agent_access: true)
+      {:ok, _off} = Initiatives.create_initiative(me, %{"name" => "Mine Off"})
+
+      # Agent-accessible, but I'm not a member — must not appear.
+      {:ok, _theirs} =
+        Initiatives.create_initiative(other, %{"name" => "Theirs On"}, agent_access: true)
+
+      assert [entry] = Initiatives.list_agent_accessible_initiatives(me)
+      assert entry == %{id: on.id, name: "Mine On"}
+    end
+  end
 end

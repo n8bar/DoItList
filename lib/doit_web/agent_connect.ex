@@ -8,6 +8,8 @@ defmodule DoItWeb.AgentConnect do
   pasted, credential included, no assembly by the reader.
   """
 
+  use DoItWeb, :verified_routes
+
   @server_name "doit-list"
 
   @doc """
@@ -76,6 +78,25 @@ defmodule DoItWeb.AgentConnect do
       [
         "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
         ~s(echo "MCP_DOIT_LIST_API_KEY=#{token}" >> ~/.hermes/.env)
+      ],
+      "\n"
+    )
+  end
+
+  @doc """
+  Repo-marker snippet (m03.04 item 24.4), the second paste: a few markdown
+  lines for the repo's agent-instruction file naming the Initiative and its
+  web URL, so a connected agent works the tree instead of starting a
+  `TODO.md`. The URL composes from the endpoint's public URL config via
+  verified routes — same as the API serializer's operator-facing handle.
+  """
+  def repo_marker(%{name: name, id: id}) do
+    Enum.join(
+      [
+        "## Do It List",
+        ~s(This repo's work is tracked in the "#{name}" Initiative: #{url(~p"/initiatives/#{id}")}),
+        "Use the #{@server_name} MCP server to read and work that task tree — " <>
+          "plan from it and record progress there instead of a TODO.md."
       ],
       "\n"
     )

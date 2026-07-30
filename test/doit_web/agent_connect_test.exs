@@ -109,4 +109,27 @@ defmodule DoItWeb.AgentConnectTest do
              ] = AgentConnect.client_pastes(@paste_token)
     end
   end
+
+  describe "repo_marker/1 (item 24.4)" do
+    @marker_initiative %DoIt.Initiatives.Initiative{id: 57, name: "Q3 Launch"}
+
+    test "exact three-line markdown snippet naming the Initiative and its web URL" do
+      expected_url = DoItWeb.Endpoint.url() <> "/initiatives/57"
+
+      assert AgentConnect.repo_marker(@marker_initiative) ==
+               "## Do It List\n" <>
+                 ~s(This repo's work is tracked in the "Q3 Launch" Initiative: #{expected_url}\n) <>
+                 "Use the doit-list MCP server to read and work that task tree — " <>
+                 "plan from it and record progress there instead of a TODO.md."
+    end
+
+    test "the id appears only inside the URL path — no bare id leakage" do
+      marker = AgentConnect.repo_marker(@marker_initiative)
+
+      assert marker =~ "/initiatives/57"
+      # The URL path segment is the id's ONLY occurrence — no "ID: 57" style.
+      assert Regex.scan(~r/57/, marker) == [["57"]]
+      refute marker =~ ~r/\bid\b/i
+    end
+  end
 end
