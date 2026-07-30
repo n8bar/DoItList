@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "app.doitlist/mcp",
+  "title": "Do It List",
+  "description": "Drive Do It List task trees over MCP: read, create, and update nested tasks with rolled-up progress.",
+  "version": "0.1.0",
+  "websiteUrl": "https://doitlist.app",
+  "repository": {
+    "url": "https://github.com/n8bar/DoItList",
+    "source": "github",
+    "id": "1230388465",
+    "subfolder": "mcp_server"
+  },
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "http://{host}/",
+      "variables": {
+        "host": {
+          "description": "Host and port of your Do It List instance's MCP endpoint; the self-hosted default port is 4004. Hosted TLS deployments use their own https URL.",
+          "isRequired": true,
+          "placeholder": "your-host:4004"
+        }
+      },
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "Bearer <token> — mint an API token at Account → API tokens in your Do It List instance.",
+          "isRequired": true,
+          "isSecret": true,
+          "placeholder": "Bearer <token>"
+        }
+      ]
+    }
+  ]
+}
