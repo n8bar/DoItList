@@ -3058,7 +3058,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
            can_admin) and the rail's collaborator add (menu + drag, either
            mode), which triggers off any administered rail entry still
            carrying data-trust-confirm=true. --%>
-      <Layouts.agent_trust_confirm :if={@can_admin or Enum.any?(@initiatives, & &1.trust_confirm_required)} />
+      <Layouts.agent_trust_confirm :if={
+        @can_admin or Enum.any?(@initiatives, & &1.trust_confirm_required)
+      } />
 
       <%= if @live_action == :show do %>
         <div id={"initiative-detail-#{@initiative.id}"}>

@@ -27,6 +27,18 @@ if config_env() != :test do
   config :doit, DoItWeb.Endpoint, http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 end
 
+# Agent-facing MCP endpoint (m03.04 item 24.1): MCP_PUBLIC_URL is a full-URL
+# override; unset, the endpoint's public host + MCP_PORT compose it. Compose
+# passes "" when the var is unset in .env — treat that as unset.
+mcp_public_url =
+  case System.get_env("MCP_PUBLIC_URL") do
+    v when v in [nil, ""] -> nil
+    v -> v
+  end
+
+config :doit, :mcp_public_url, mcp_public_url
+config :doit, :mcp_public_port, String.to_integer(System.get_env("MCP_PORT", "4004"))
+
 if config_env() == :prod do
   database_url =
     System.get_env("DATABASE_URL") ||

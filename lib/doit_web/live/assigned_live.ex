@@ -58,7 +58,13 @@ defmodule DoItWeb.AssignedLive do
 
       {iid, uid} ->
         {ok?, _ack?, socket} =
-          CollaboratorAdd.add_as_viewer(socket, user, iid, uid, params["trust_confirmed"] == "true")
+          CollaboratorAdd.add_as_viewer(
+            socket,
+            user,
+            iid,
+            uid,
+            params["trust_confirmed"] == "true"
+          )
 
         # Refresh both rail panes so the reply render carries the real avatar
         # (the optimistic chip reconciles against it) and a committed ack flips

@@ -24,6 +24,10 @@ services:
       MIX_ENV: dev
       PHX_SERVER: "true"
       PORT: "4000"
+      PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      WEB_PORT: ${WEB_PORT:-4000}
+      MCP_PORT: ${MCP_PORT:-4004}
+      MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-}
       TZ: America/Denver
       DB_HOSTNAME: db
       DB_USERNAME: ${DB_USERNAME:-postgres}

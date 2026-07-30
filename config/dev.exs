@@ -21,6 +21,12 @@ config :doit, DoItWeb.Endpoint,
   # This makes make the service accessible from any network interface.
   # Change to `ip: {127, 0, 0, 1}` to allow access only from the server machine.
   http: [ip: {0, 0, 0, 0}, port: String.to_integer(System.get_env("PORT", "4000"))],
+  # Public URL: the host/port other machines use to reach this box, so
+  # composed URLs (API links, agent connect) don't say "localhost" on a LAN.
+  url: [
+    host: System.get_env("PUBLIC_HOST", "localhost"),
+    port: String.to_integer(System.get_env("WEB_PORT", "4000"))
+  ],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,
