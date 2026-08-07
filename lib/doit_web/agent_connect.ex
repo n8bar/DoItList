@@ -117,19 +117,18 @@ defmodule DoItWeb.AgentConnect do
   end
 
   @doc """
-  Repo-marker snippet (m03.04 item 24.4), the second paste: a few markdown
-  lines for the repo's agent-instruction file naming the Initiative and its
-  web URL, so a connected agent works the tree instead of starting a
-  `TODO.md`. The URL composes from the endpoint's public URL config via
-  verified routes — same as the API serializer's operator-facing handle.
+  Repo-marker snippet (m03.04 item 24.4), the second paste: two markdown
+  lines for the repo's agent-instruction file. The URL is the whole handle —
+  the Initiative's name stays in the panel's dropdown, not the paste. The URL
+  composes from the endpoint's public URL config via verified routes — same
+  as the API serializer's operator-facing handle.
   """
-  def repo_marker(%{name: name, id: id}) do
+  def repo_marker(%{id: id}) do
     Enum.join(
       [
         "## Do It List",
-        ~s(This repo's work is tracked in the "#{name}" Initiative: #{url(~p"/initiatives/#{id}")}),
-        "Use the #{@server_name} MCP server to read and work that task tree — " <>
-          "plan from it and record progress there instead of a TODO.md."
+        "Tasks: #{url(~p"/initiatives/#{id}")} — work this tree via the " <>
+          "#{@server_name} MCP server, not a TODO.md."
       ],
       "\n"
     )

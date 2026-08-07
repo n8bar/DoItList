@@ -9,8 +9,9 @@ defmodule DoItWeb.AccountLive do
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
 
-    # Repo-marker panel (m03.04 item 24.4): names + ids only, loaded once.
-    # Which one is selected is ephemeral UI state — assign-only.
+    # Repo-marker panel (m03.04 item 24.4): names + ids only, loaded at mount,
+    # reloadable from the panel. Which one is selected is ephemeral UI state —
+    # assign-only.
     marker_initiatives = Initiatives.list_agent_accessible_initiatives(user)
 
     {:ok,
@@ -210,6 +211,23 @@ defmodule DoItWeb.AccountLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # Repo-marker reload: the mount-time list goes stale when an Initiative is
+  # created or AI-enabled after page load. Selection survives when its
+  # Initiative is still listed.
+  def handle_event("reload_marker_initiatives", _params, socket) do
+    initiatives = Initiatives.list_agent_accessible_initiatives(socket.assigns.current_user)
+
+    id =
+      if Enum.any?(initiatives, &(&1.id == socket.assigns.marker_initiative_id)),
+        do: socket.assigns.marker_initiative_id,
+        else: marker_default_id(initiatives)
+
+    {:noreply,
+     socket
+     |> assign(:marker_initiatives, initiatives)
+     |> assign(:marker_initiative_id, id)}
   end
 
   @impl true
@@ -823,27 +841,47 @@ defmodule DoItWeb.AccountLive do
               <p class="text-sm text-zinc-600 dark:text-zinc-300">
                 Repo marker — paste into the repo's agent-instruction file (CLAUDE.md, AGENTS.md):
               </p>
-              <%= if @marker_initiatives == [] do %>
-                <p id="repo-marker-empty" class="text-sm text-zinc-500 dark:text-zinc-400">
-                  Turn on AI access for an Initiative (Initiative settings) to compose this.
-                </p>
-              <% else %>
-                <form id="repo-marker-form" phx-change="select_marker_initiative">
-                  <select
-                    id="repo-marker-initiative"
-                    name="initiative_id"
-                    aria-label="Initiative"
-                    class="w-full select select-bordered select-sm"
+              <div class="flex items-center gap-2">
+                <%= if @marker_initiatives == [] do %>
+                  <p id="repo-marker-empty" class="flex-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    Turn on AI access for an Initiative (Initiative settings) to compose this.
+                  </p>
+                <% else %>
+                  <form
+                    id="repo-marker-form"
+                    phx-change="select_marker_initiative"
+                    class="flex-1 min-w-0"
                   >
-                    <option
-                      :for={i <- @marker_initiatives}
-                      value={i.id}
-                      selected={i.id == @marker_initiative_id}
+                    <select
+                      id="repo-marker-initiative"
+                      name="initiative_id"
+                      aria-label="Initiative"
+                      class="w-full select select-bordered select-sm"
                     >
-                      {i.name}
-                    </option>
-                  </select>
-                </form>
+                      <option
+                        :for={i <- @marker_initiatives}
+                        value={i.id}
+                        selected={i.id == @marker_initiative_id}
+                      >
+                        {i.name}
+                      </option>
+                    </select>
+                  </form>
+                <% end %>
+                <%!-- Reload (server-gated, so the icon spins in flight — §6.7):
+                   brings in Initiatives created or AI-enabled after page load. --%>
+                <button
+                  type="button"
+                  id="repo-marker-reload"
+                  phx-click="reload_marker_initiatives"
+                  aria-label="Reload Initiative list"
+                  title="Reload Initiative list"
+                  class="shrink-0 p-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  <.icon name="hero-arrow-path" class="w-4 h-4 phx-click-loading:animate-spin" />
+                </button>
+              </div>
+              <%= if @marker_initiatives != [] do %>
                 <div class="flex items-start gap-2">
                   <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 px-2 py-1.5"><code
                     id="repo-marker-snippet"

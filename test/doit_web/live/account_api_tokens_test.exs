@@ -163,7 +163,6 @@ defmodule DoItWeb.AccountApiTokensTest do
       refute panel =~ "Private Notes"
 
       snippet = view |> element("#repo-marker-snippet") |> render()
-      assert snippet =~ first.name
       assert snippet =~ "/initiatives/#{first.id}"
     end
 
@@ -182,7 +181,6 @@ defmodule DoItWeb.AccountApiTokensTest do
       |> render_change()
 
       snippet = view |> element("#repo-marker-snippet") |> render()
-      assert snippet =~ second.name
       assert snippet =~ "/initiatives/#{second.id}"
       refute snippet =~ "/initiatives/#{first.id}"
     end
@@ -200,6 +198,48 @@ defmodule DoItWeb.AccountApiTokensTest do
       assert has_element?(view, "#repo-marker-empty")
       refute has_element?(view, "#repo-marker-initiative")
       refute has_element?(view, "#repo-marker-snippet")
+    end
+
+    test "reload brings in post-mount initiatives and keeps the selection", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, _a} = Initiatives.create_initiative(user, %{"name" => "Alpha"}, agent_access: true)
+      {:ok, _b} = Initiatives.create_initiative(user, %{"name" => "Beta"}, agent_access: true)
+      [_first, second] = Initiatives.list_agent_accessible_initiatives(user)
+
+      {:ok, view, _html} = live(conn, ~p"/account")
+
+      view
+      |> form("#repo-marker-form", %{"initiative_id" => to_string(second.id)})
+      |> render_change()
+
+      {:ok, _c} = Initiatives.create_initiative(user, %{"name" => "Gamma"}, agent_access: true)
+      refute has_element?(view, "#repo-marker-initiative option", "Gamma")
+
+      view |> element("#repo-marker-reload") |> render_click()
+
+      assert has_element?(view, "#repo-marker-initiative option", "Gamma")
+      # The pre-reload selection survives the refetch.
+      snippet = view |> element("#repo-marker-snippet") |> render()
+      assert snippet =~ "/initiatives/#{second.id}"
+    end
+
+    test "reload replaces the empty state once an initiative is AI-enabled", %{
+      conn: conn,
+      user: user
+    } do
+      {:ok, view, _html} = live(conn, ~p"/account")
+      assert has_element?(view, "#repo-marker-empty")
+      assert has_element?(view, "#repo-marker-reload")
+
+      {:ok, _a} = Initiatives.create_initiative(user, %{"name" => "Alpha"}, agent_access: true)
+
+      view |> element("#repo-marker-reload") |> render_click()
+
+      refute has_element?(view, "#repo-marker-empty")
+      assert has_element?(view, "#repo-marker-initiative option", "Alpha")
+      assert has_element?(view, "#repo-marker-snippet")
     end
   end
 end
