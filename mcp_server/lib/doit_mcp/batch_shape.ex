@@ -109,8 +109,11 @@ defmodule DoitMcp.BatchShape do
       lines ->
         block = Enum.join(["Server-computed shape facts:" | lines], "\n")
 
+        # The checkbox fact already printed as a fact line above — append
+        # only the ask, so the numbers state themselves once (m03.04 item
+        # 27.3).
         if facts.checklist_descriptions > 0,
-          do: block <> "\n" <> checklist_question(facts),
+          do: block <> "\n" <> checklist_ask(),
           else: block
     end
   end
@@ -222,11 +225,17 @@ defmodule DoitMcp.BatchShape do
       "entry quoting their instruction — they will be asked to confirm it."
   end
 
+  # Standalone (classify's hold) the question states its numbers; under
+  # facts_block the fact line already did, so only the ask is appended.
   defp checklist_question(facts) do
     "#{facts.checkbox_lines} markdown-checkbox lines sit inside " <>
-      "#{facts.checklist_descriptions} new task descriptions. Checklists are what " <>
-      "DoItList turns into tasks — should these import as subtasks instead? apply keeps " <>
-      "them as description prose; correct with instructions to convert them."
+      "#{facts.checklist_descriptions} new task descriptions. " <> checklist_ask()
+  end
+
+  defp checklist_ask do
+    "Checklists are what DoItList turns into tasks — should these import as subtasks " <>
+      "instead? apply keeps them as description prose; correct with instructions to " <>
+      "convert them."
   end
 
   # --- Op access -------------------------------------------------------------

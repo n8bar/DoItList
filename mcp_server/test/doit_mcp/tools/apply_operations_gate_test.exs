@@ -41,20 +41,30 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     :ok
   end
 
-  # The cumulative describe starts one; everything else runs counter-less
-  # (DoitMcp.ImportGate.Counter degrades to zero/no-op), i.e. single-batch
-  # semantics.
-  defp start_counter do
-    name = :"#{__MODULE__}.Counter"
-    start_supervised!({DoitMcp.ImportGate.Counter, name: name})
+  # Any test that resolves a confirm (form answer or operator_decision
+  # relay) starts the gate's session memory — Counter plus PendingConfirm;
+  # everything else runs memory-less (both degrade to zero/no-op), i.e.
+  # single-batch semantics.
+  defp start_gate_state do
+    counter = :"#{__MODULE__}.Counter"
+    pending = :"#{__MODULE__}.PendingConfirm"
+    start_supervised!({DoitMcp.ImportGate.Counter, name: counter})
+    start_supervised!({DoitMcp.ImportGate.PendingConfirm, name: pending})
 
-    previous = Application.fetch_env(:doit_mcp, :import_gate_counter)
-    Application.put_env(:doit_mcp, :import_gate_counter, name)
+    previous_counter = Application.fetch_env(:doit_mcp, :import_gate_counter)
+    previous_pending = Application.fetch_env(:doit_mcp, :import_gate_pending_confirm)
+    Application.put_env(:doit_mcp, :import_gate_counter, counter)
+    Application.put_env(:doit_mcp, :import_gate_pending_confirm, pending)
 
     on_exit(fn ->
-      case previous do
+      case previous_counter do
         {:ok, value} -> Application.put_env(:doit_mcp, :import_gate_counter, value)
         :error -> Application.delete_env(:doit_mcp, :import_gate_counter)
+      end
+
+      case previous_pending do
+        {:ok, value} -> Application.put_env(:doit_mcp, :import_gate_pending_confirm, value)
+        :error -> Application.delete_env(:doit_mcp, :import_gate_pending_confirm)
       end
     end)
   end
@@ -276,11 +286,42 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end)
   end
 
-  defp execute_ok(ops) do
-    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+  defp execute_ok(params) when is_map(params) do
+    assert {:reply, response, @frame} = ApplyOperations.execute(params, @frame)
     {protocol, decoded, _rest} = decode_json_content(response)
     assert protocol["isError"] == false
     assert decoded["ok"] == true
+  end
+
+  defp execute_ok(ops), do: execute_ok(%{operations: ops})
+
+  # A gated call now returns PROMPTLY (m03.04 item 27.1): the composed
+  # readback rides a NORMAL result tagged confirmation_pending while the
+  # form waits out-of-band — executing inline (no Task) is itself the
+  # no-block assertion, since the old contract parked here for the answer.
+  defp execute_pending(params) do
+    assert {:reply, response, @frame} = ApplyOperations.execute(params, @frame)
+    {protocol, decoded, _rest} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["status"] == "confirmation_pending"
+    assert decoded["applied"] == false
+    decoded
+  end
+
+  # The out-of-band form's answer, delivered to the detached waiter;
+  # awaiting the waiter's exit guarantees the answer's session-memory
+  # effects landed before the test re-calls.
+  defp answer_form(result) do
+    waiter = form_waiter()
+    ref = Process.monitor(waiter)
+    Elicitation.deliver(result)
+    assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 2_000
+  end
+
+  defp form_waiter do
+    session = Process.whereis(:"#{__MODULE__}.FakeSession")
+    [{waiter, :async}] = Registry.lookup(DoitMcp.Elicitation.Registry, session)
+    waiter
   end
 
   test "an aged Initiative's batch at the threshold applies straight through, no elicitation" do
@@ -327,7 +368,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
-  test "operator confirm applies the batch and appends the confirm note" do
+  test "a gated call returns the readback promptly; a form approval lets the re-call flow" do
+    start_gate_state()
     elicitation_capable()
     stub_apply_ok()
 
@@ -335,42 +377,150 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     readback = "Importing PLAN.md as 31 tasks under one new Initiative, two levels deep."
     assumptions = ["Depth taken from markdown heading levels", "Struck-through items skipped"]
 
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{operations: ops, readback: readback, assumptions: assumptions},
-          @frame
-        )
-      end)
+    decoded = execute_pending(%{operations: ops, readback: readback, assumptions: assumptions})
 
+    # The result carries the composed message VERBATIM — readback, the
+    # server's facts (the in-batch Initiative's index_style — always
+    # notable), assumptions, then the decision line naming all three choices
+    # — plus the re-call contract. No `settled` passed → no Settled block;
+    # an in-batch target → no target-style read.
+    expected_message =
+      readback <>
+        "\n\nServer-computed shape facts:\n" <>
+        "- New Initiative \"Import\" leaves index_style unset — tasks render unnumbered." <>
+        "\n\nAssumptions:\n- Depth taken from markdown heading levels\n" <>
+        "- Struck-through items skipped\n\n" <>
+        "Decide: apply — apply this import as read back; correct — don't apply, " <>
+        "your corrections say what to change; hold — don't apply, have the agent " <>
+        "ask you more questions first."
+
+    assert decoded["readback"] == expected_message
+    refute decoded["readback"] =~ "Settled"
+    assert decoded["message"] =~ "operator_decision"
+    assert decoded["message"] =~ "re-call"
+
+    # The form went out out-of-band with the SAME message, on the generous
+    # expiry — the call never waited on it.
     assert_receive {:send_elicitation_request, params, schema, timeout}, 2_000
-
-    # Message: readback verbatim, the server's facts (the in-batch
-    # Initiative's index_style — always notable), assumptions as a list,
-    # then the decision line naming all three choices. No `settled` passed →
-    # no Settled block; an in-batch target → no target-style read.
-    assert params["message"] ==
-             readback <>
-               "\n\nServer-computed shape facts:\n" <>
-               "- New Initiative \"Import\" leaves index_style unset — tasks render unnumbered." <>
-               "\n\nAssumptions:\n- Depth taken from markdown heading levels\n" <>
-               "- Struck-through items skipped\n\n" <>
-               "Decide: apply — apply this import as read back; correct — don't apply, " <>
-               "your corrections say what to change; hold — don't apply, have the agent " <>
-               "ask you more questions first."
-
-    refute params["message"] =~ "Settled"
-
+    assert params["message"] == expected_message
     assert params["requestedSchema"] == schema
     assert %{"type" => "object", "required" => ["decision"], "properties" => props} = schema
     assert props["decision"]["type"] == "string"
     assert props["decision"]["enum"] == ["apply", "correct", "hold"]
     assert props["corrections"]["type"] == "string"
-    assert timeout == to_timeout(minute: 5)
+    assert timeout == to_timeout(minute: 10)
 
+    # The operator answers the form; the session remembers the approval, so
+    # the plain re-call flows — no second form.
+    answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+    execute_ok(ops)
+    refute_received {:send_elicitation_request, _, _, _}
+  end
+
+  test "operator_decision: apply on the pending confirm applies, notes, and settles the session" do
+    start_gate_state()
+    elicitation_capable()
+    stub_get_and_apply(nil)
+
+    ops = existing_initiative_batch(@threshold + 1, 7)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert_receive {:send_elicitation_request, _, _, _}, 2_000
+
+    # The agent relays the operator's chat decision on the re-call.
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: ops, operator_decision: "apply"}, @frame)
+
+    {protocol, decoded, rest} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["ok"] == true
+    assert [%{"type" => "text", "text" => note}] = rest
+    assert note =~ "confirmed"
+
+    # The confirm settled the Initiative: an over-the-line later chunk stays
+    # silent.
+    stub_get_and_apply(nil, 200)
+    execute_ok(existing_initiative_batch(15, 7))
+    refute_received {:send_elicitation_request, _, _, _}
+  end
+
+  test "operator_decision: correct and hold apply nothing and consume the confirm" do
+    start_gate_state()
+    elicitation_capable()
+
+    ops = new_initiative_batch(@threshold + 1)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: ops, operator_decision: "correct"}, @frame)
+
+    {protocol, decoded, _} = decode_json_content(response)
+    assert protocol["isError"] == true
+    assert decoded["applied"] == false
+    assert decoded["message"] =~ "operator decided: correct"
+
+    # Consumed — relaying again finds nothing pending.
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: ops, operator_decision: "correct"}, @frame)
+
+    {_, decoded, _} = decode_json_content(response)
+    assert decoded["message"] =~ "no confirm is pending"
+
+    # hold, over a fresh confirm.
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: ops, operator_decision: "hold"}, @frame)
+
+    {protocol, decoded, _} = decode_json_content(response)
+    assert protocol["isError"] == true
+    assert decoded["applied"] == false
+    assert decoded["message"] =~ "operator decided: hold"
+    assert decoded["message"] =~ "questions"
+  end
+
+  test "operator_decision without a pending confirm is rejected — never a free pass" do
+    start_gate_state()
+    elicitation_capable()
+
+    ops = new_initiative_batch(@threshold + 1)
+
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(
+               %{operations: ops, readback: "Importing 31 tasks.", operator_decision: "apply"},
+               @frame
+             )
+
+    {protocol, decoded, _} = decode_json_content(response)
+    assert protocol["isError"] == true
+    assert decoded["applied"] == false
+    assert decoded["message"] =~ "no confirm is pending"
+    refute_received {:send_elicitation_request, _, _, _}
+  end
+
+  test "an expired form is a no-op; the chat relay still resolves the confirm" do
+    start_gate_state()
+    elicitation_capable()
+    stub_apply_ok()
+    Application.put_env(:doit_mcp, :import_gate_confirm_expiry, 10)
+    on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_confirm_expiry) end)
+
+    ops = new_initiative_batch(@threshold + 1)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert_receive {:send_elicitation_request, _, _, 10}, 2_000
+
+    # The waiter expires unanswered (the tiny window plus the skew second).
+    waiter = form_waiter()
+    ref = Process.monitor(waiter)
+    assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 3_000
+
+    # A late form answer lands nowhere. The chat relay then resolves the
+    # still-pending confirm — the confirm NOTE proves the relay ran (a
+    # leaked late approval would have applied noteless via the gate).
     Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
 
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: ops, operator_decision: "apply"}, @frame)
+
     {protocol, decoded, rest} = decode_json_content(response)
     assert protocol["isError"] == false
     assert decoded["ok"] == true
@@ -378,7 +528,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert note =~ "confirmed"
   end
 
-  test "a mirror batch refuses before any read; the override claim routes to the form" do
+  test "a mirror batch refuses before any read; the override claim routes to the readback" do
+    start_gate_state()
     elicitation_capable()
 
     ops =
@@ -406,36 +557,33 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["message"] =~ "`settled` entry quoting their instruction"
     refute_received {:send_elicitation_request, _, _, _}
 
-    # Override claim (readback + settled): the operator vets it on the form,
-    # with the server's facts printed under the claim.
+    # Override claim (readback + settled): the operator vets it — the
+    # server's facts print under the claim in both the prompt return and the
+    # out-of-band form.
     stub_apply_ok()
 
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{
-            operations: ops,
-            readback: "One task per source file, as the operator asked.",
-            settled: ["Operator: import the docs tree file-per-task"]
-          },
-          @frame
-        )
-      end)
+    override = %{
+      operations: ops,
+      readback: "One task per source file, as the operator asked.",
+      settled: ["Operator: import the docs tree file-per-task"]
+    }
+
+    decoded = execute_pending(override)
+    assert decoded["readback"] =~ "Server-computed shape facts:"
+    assert decoded["readback"] =~ "12 of 12 new task titles look like file paths/names."
+    assert decoded["readback"] =~ "Settled (operator-instructed):"
 
     assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
-    assert params["message"] =~ "Server-computed shape facts:"
-    assert params["message"] =~ "12 of 12 new task titles look like file paths/names."
-    assert params["message"] =~ "Settled (operator-instructed):"
+    assert params["message"] == decoded["readback"]
 
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
-    {protocol, decoded, _rest} = decode_json_content(response)
-    assert protocol["isError"] == false
-    assert decoded["ok"] == true
+    # The form approval covers the batch: the re-call (same claim) applies.
+    answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+    execute_ok(override)
+    refute_received {:send_elicitation_request, _, _, _}
   end
 
   test "a sub-scale checklist batch holds for the subtasks-or-prose call" do
+    start_gate_state()
     elicitation_capable()
 
     ops = [
@@ -463,22 +611,20 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert text =~ "content shape"
     assert text =~ "Re-call apply_operations"
 
-    # With a readback: the form carries the checklist question; apply keeps prose.
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(%{operations: ops, readback: "Adding one setup task."}, @frame)
-      end)
+    # With a readback: the prompt return (and the form, same message) carries
+    # the checklist ask — the checkbox fact printing ONCE (item 27.3).
+    decoded = execute_pending(%{operations: ops, readback: "Adding one setup task."})
+    assert decoded["readback"] =~ "2 markdown-checkbox lines sit inside 1 new descriptions."
+    assert decoded["readback"] =~ "subtasks"
+    assert length(String.split(decoded["readback"], "markdown-checkbox lines")) == 2
 
     assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
-    assert params["message"] =~ "2 markdown-checkbox lines"
-    assert params["message"] =~ "subtasks"
+    assert params["message"] == decoded["readback"]
 
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
-    {protocol, decoded, _rest} = decode_json_content(response)
-    assert protocol["isError"] == false
-    assert decoded["ok"] == true
+    # apply keeps prose: the form approval lets the plain re-call flow.
+    answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+    execute_ok(ops)
+    refute_received {:send_elicitation_request, _, _, _}
   end
 
   test "the kill switch disarms the shape pass with the gate" do
@@ -506,68 +652,53 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
-  test "corrections come back as the tool result and nothing applies" do
+  test "form corrections come back on the re-call and nothing applies" do
+    start_gate_state()
     elicitation_capable()
 
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
-          @frame
-        )
-      end)
-
+    ops = new_initiative_batch(@threshold + 1)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
     assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
     assert params["message"] =~ "Assumptions: none stated."
 
-    Elicitation.deliver(%{
+    answer_form(%{
       "action" => "accept",
       "content" => %{"decision" => "correct", "corrections" => "Milestones as top-level tasks"}
     })
 
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     {protocol, decoded, _} = decode_json_content(response)
     assert protocol["isError"] == true
     assert decoded["applied"] == false
     assert decoded["corrections"] == "Milestones as top-level tasks"
   end
 
-  test "decision correct without corrections text holds the batch" do
+  test "a form correct without corrections text holds the batch on the re-call" do
+    start_gate_state()
     elicitation_capable()
 
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
-          @frame
-        )
-      end)
-
+    ops = new_initiative_batch(@threshold + 1)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
     assert_receive {:send_elicitation_request, _, _, _}, 2_000
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "correct"}})
+    answer_form(%{"action" => "accept", "content" => %{"decision" => "correct"}})
 
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     {protocol, decoded, _} = decode_json_content(response)
     assert protocol["isError"] == true
     assert decoded["applied"] == false
     assert decoded["message"] =~ "no corrections"
   end
 
-  test "decision hold withholds the apply and asks for the interview" do
+  test "a form hold withholds the apply and asks for the interview on the re-call" do
+    start_gate_state()
     elicitation_capable()
 
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
-          @frame
-        )
-      end)
-
+    ops = new_initiative_batch(@threshold + 1)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
     assert_receive {:send_elicitation_request, _, _, _}, 2_000
-    Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "hold"}})
+    answer_form(%{"action" => "accept", "content" => %{"decision" => "hold"}})
 
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     {protocol, decoded, _} = decode_json_content(response)
     assert protocol["isError"] == true
     assert decoded["applied"] == false
@@ -577,72 +708,61 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   end
 
   test "settled dimensions are echoed as their own block for the operator's veto" do
+    start_gate_state()
     elicitation_capable()
 
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{
-            operations: new_initiative_batch(@threshold + 1),
-            readback: "Importing 31 tasks.",
-            settled: ["Depth: two levels (operator's ask)", "Scope: whole plan (knobs)"]
-          },
-          @frame
-        )
-      end)
+    decoded =
+      execute_pending(%{
+        operations: new_initiative_batch(@threshold + 1),
+        readback: "Importing 31 tasks.",
+        settled: ["Depth: two levels (operator's ask)", "Scope: whole plan (knobs)"]
+      })
 
-    assert_receive {:send_elicitation_request, params, _schema, _timeout}, 2_000
-
-    assert params["message"] =~
+    assert decoded["readback"] =~
              "Settled (operator-instructed):\n" <>
                "- Depth: two levels (operator's ask)\n- Scope: whole plan (knobs)"
-
-    Elicitation.deliver(%{"action" => "decline"})
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
-    {_, decoded, _} = decode_json_content(response)
-    assert decoded["applied"] == false
   end
 
-  test "decline and cancel both hold the batch" do
+  test "a form decline latches for the re-call; the next confirm starts fresh" do
+    start_gate_state()
     elicitation_capable()
     ops = new_initiative_batch(@threshold + 1)
 
-    for {action, expected} <- [{"decline", "declined"}, {"cancel", "did not respond"}] do
-      task =
-        Task.async(fn ->
-          ApplyOperations.execute(%{operations: ops, readback: "Importing 31 tasks."}, @frame)
-        end)
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert_receive {:send_elicitation_request, _, _, _}, 2_000
+    answer_form(%{"action" => "decline"})
 
-      assert_receive {:send_elicitation_request, _, _, _}, 2_000
-      Elicitation.deliver(%{"action" => action})
-
-      assert {:reply, response, @frame} = Task.await(task, 5_000)
-      {_, decoded, _} = decode_json_content(response)
-      assert decoded["applied"] == false
-      assert decoded["message"] =~ expected
-    end
-  end
-
-  test "no answer within the window holds the batch" do
-    elicitation_capable()
-    Application.put_env(:doit_mcp, :import_gate_confirm_timeout, 10)
-    on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_confirm_timeout) end)
-
-    task =
-      Task.async(fn ->
-        ApplyOperations.execute(
-          %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
-          @frame
-        )
-      end)
-
-    assert_receive {:send_elicitation_request, _, _, 10}, 2_000
-
-    assert {:reply, response, @frame} = Task.await(task, 5_000)
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
     {_, decoded, _} = decode_json_content(response)
     assert decoded["applied"] == false
-    assert decoded["message"] =~ "did not respond"
+    assert decoded["message"] =~ "declined"
+
+    # Consumed: the same batch gated again starts a fresh confirm, new form.
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert_receive {:send_elicitation_request, _, _, _}, 2_000
+  end
+
+  test "a cancelled form decides nothing — the pending confirm stands for chat or a fresh form" do
+    start_gate_state()
+    elicitation_capable()
+    stub_apply_ok()
+    ops = new_initiative_batch(@threshold + 1)
+
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert_receive {:send_elicitation_request, _, _, _}, 2_000
+    answer_form(%{"action" => "cancel"})
+
+    # No decision latched: the re-call re-prompts with a fresh form, and the
+    # chat relay still resolves the pending confirm.
+    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert_receive {:send_elicitation_request, _, _, _}, 2_000
+
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: ops, operator_decision: "apply"}, @frame)
+
+    {protocol, decoded, _} = decode_json_content(response)
+    assert protocol["isError"] == false
+    assert decoded["ok"] == true
   end
 
   test "an over-threshold existing target gates with no initiative fetch — knobs are parked" do
@@ -713,7 +833,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
   describe "cumulative trigger across chunks (m03.03 item 5.11.2)" do
     test "two sub-threshold chunks crossing the line fire the gate" do
-      start_counter()
+      start_gate_state()
       elicitation_capable()
       stub_get_and_apply(nil)
 
@@ -736,30 +856,23 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
 
     test "post-confirm silence: later chunks into a confirmed Initiative never re-ask" do
-      start_counter()
+      start_gate_state()
       elicitation_capable()
       stub_get_and_apply(nil)
 
-      task =
-        Task.async(fn ->
-          ApplyOperations.execute(
-            %{
-              operations: existing_initiative_batch(@threshold + 1, 7),
-              readback: "Importing 31 tasks."
-            },
-            @frame
-          )
-        end)
+      ops = existing_initiative_batch(@threshold + 1, 7)
+      decoded = execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
 
       # The count-only task_count stub carries no initiative_index_style →
       # the confirm's target-style read fails open and prints no line.
-      assert_receive {:send_elicitation_request, params, _, _}, 2_000
-      refute params["message"] =~ "Target Initiative index_style"
-      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
-      assert {:reply, _response, @frame} = Task.await(task, 5_000)
+      refute decoded["readback"] =~ "Target Initiative index_style"
 
-      # ai_knobs is STILL empty and the window far over the line — but the
-      # operator already confirmed this Initiative this session.
+      assert_receive {:send_elicitation_request, _, _, _}, 2_000
+      answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+      execute_ok(ops)
+
+      # The window far over the line — but the operator already confirmed
+      # this Initiative this session.
       stub_get_and_apply(nil, 200)
       execute_ok(existing_initiative_batch(15, 7))
       refute_received {:send_elicitation_request, _, _, _}
@@ -769,7 +882,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     # session. Revive with the knobs exemption.
     #
     # test "post-knobs silence: once ai_knobs is settled, an over-the-line session stays quiet" do
-    #   start_counter()
+    #   start_gate_state()
     #   elicitation_capable()
     #   stub_get_and_apply("deploy_day: friday")
     #
@@ -783,7 +896,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     # end
 
     test "chunks on a fresh Initiative keep counting across the lid → real-id switch" do
-      start_counter()
+      start_gate_state()
       elicitation_capable()
       stub_create_echo_and_get(57, nil)
 
@@ -807,7 +920,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
 
     test "recorded counts match gate counts across resolution modes: a parent-anchored chunk and an initiative_id chunk share one total" do
-      start_counter()
+      start_gate_state()
       elicitation_capable()
       stub_parent_resolve_and_apply(42, 7)
 
@@ -830,21 +943,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
 
     test "a confirm granted under the lid carries to the created id — later chunks never re-ask" do
-      start_counter()
+      start_gate_state()
       elicitation_capable()
       stub_create_echo_and_get(57, nil)
 
-      task =
-        Task.async(fn ->
-          ApplyOperations.execute(
-            %{operations: new_initiative_batch(@threshold + 1), readback: "Importing 31 tasks."},
-            @frame
-          )
-        end)
-
+      ops = new_initiative_batch(@threshold + 1)
+      execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
       assert_receive {:send_elicitation_request, _, _, _}, 2_000
-      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
-      assert {:reply, _response, @frame} = Task.await(task, 5_000)
+      answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+      execute_ok(ops)
 
       # Knobs still empty and the window far over the line — but the
       # operator's confirm followed the Initiative to its real id.
@@ -876,32 +983,22 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
 
     test "with a readback the operator confirms the fresh import; the confirm settles it" do
-      start_counter()
+      start_gate_state()
       elicitation_capable()
       stub_fresh_create_echo_and_get(57)
 
       # An in-batch Initiative is fresh by definition — the floor gates its
       # 12-add scaffold with no freshness read.
-      task =
-        Task.async(fn ->
-          ApplyOperations.execute(
-            %{
-              operations: new_initiative_batch(12),
-              readback: "Importing the first two milestones from PLAN.md, one level deep."
-            },
-            @frame
-          )
-        end)
+      ops = new_initiative_batch(12)
+
+      execute_pending(%{
+        operations: ops,
+        readback: "Importing the first two milestones from PLAN.md, one level deep."
+      })
 
       assert_receive {:send_elicitation_request, _, _, _}, 2_000
-      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
-
-      assert {:reply, response, @frame} = Task.await(task, 5_000)
-      {protocol, decoded, rest} = decode_json_content(response)
-      assert protocol["isError"] == false
-      assert decoded["ok"] == true
-      assert [%{"type" => "text", "text" => note}] = rest
-      assert note =~ "confirmed"
+      answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+      execute_ok(ops)
 
       # The confirm followed the lid to the real id: the next chunk lands in
       # a STILL-fresh Initiative (the stub vouches), yet nothing re-asks —
@@ -935,34 +1032,30 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       assert text =~ "#{@threshold + 1} tasks"
     end
 
-    test "with a readback the operator is elicited, and a confirm applies the batch" do
+    test "with a readback the confirm carries the target style, and a form approval applies" do
+      start_gate_state()
       elicitation_capable()
-      # task_count serves the target's index_style → the confirm form carries
+      # task_count serves the target's index_style → the readback carries
       # the target-style line even with no shape facts (unremarkable adds).
       stub_parent_resolve_and_apply(42, 7, 0, %{"initiative_index_style" => "none"})
 
-      task =
-        Task.async(fn ->
-          ApplyOperations.execute(
-            %{
-              operations: parent_anchored_batch(@threshold + 1, 42),
-              readback: "Importing 31 tasks under an existing task."
-            },
-            @frame
-          )
-        end)
+      ops = parent_anchored_batch(@threshold + 1, 42)
 
-      assert_receive {:send_elicitation_request, params, _, _}, 2_000
+      decoded =
+        execute_pending(%{
+          operations: ops,
+          readback: "Importing 31 tasks under an existing task."
+        })
 
-      assert params["message"] =~
+      assert decoded["readback"] =~
                "- Target Initiative index_style: none — tasks render unnumbered."
 
-      Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+      assert_receive {:send_elicitation_request, params, _, _}, 2_000
+      assert params["message"] == decoded["readback"]
 
-      assert {:reply, response, @frame} = Task.await(task, 5_000)
-      {protocol, decoded, _} = decode_json_content(response)
-      assert protocol["isError"] == false
-      assert decoded["ok"] == true
+      answer_form(%{"action" => "accept", "content" => %{"decision" => "apply"}})
+      execute_ok(ops)
+      refute_received {:send_elicitation_request, _, _, _}
     end
 
     test "a below-threshold parent-anchored batch applies straight through, one read per unique parent" do

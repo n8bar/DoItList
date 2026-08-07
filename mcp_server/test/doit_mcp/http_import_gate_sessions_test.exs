@@ -33,6 +33,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     end)
 
     start_supervised!(DoitMcp.ImportGate.Counter)
+    start_supervised!(DoitMcp.ImportGate.PendingConfirm)
     start_supervised!({DoitMcp.Server, transport: {:streamable_http, start: true}})
     :ok
   end
@@ -167,6 +168,20 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     post_frame(%{"jsonrpc" => "2.0", "id" => elicitation_id, "result" => result}, headers)
   end
 
+  # Answer the form through the plug, then await the detached waiter's exit
+  # — the guarantee that the answer's session-memory effects landed before
+  # the next POST (m03.04 item 27.1).
+  defp answer_form(session_id, elicitation_id, result, headers) do
+    registry = Anubis.Server.Registry.registry_name(DoitMcp.Server)
+    {:ok, session} = Anubis.Server.Registry.Local.lookup_session(registry, session_id)
+    [{waiter, _value}] = Registry.lookup(DoitMcp.Elicitation.Registry, session)
+    ref = Process.monitor(waiter)
+
+    conn = answer(elicitation_id, result, headers)
+    assert conn.status == 202
+    assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 2_000
+  end
+
   defp tool_result(conn) do
     {is_error, text, rest} = tool_text(conn)
     {is_error, Jason.decode!(text), rest}
@@ -179,12 +194,6 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     assert %{"result" => result} = Jason.decode!(conn.resp_body)
     assert [%{"type" => "text", "text" => text} | rest] = result["content"]
     {result["isError"], text, rest}
-  end
-
-  # Fire a tools/call that will park on the confirm form, so the test can
-  # answer it while the call is still open.
-  defp held_call(message, headers) do
-    Task.async(fn -> post_frame(message, headers) end)
   end
 
   test "one session's confirm settles that session only" do
@@ -200,45 +209,47 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     a_headers = [{"mcp-session-id", session_a} | alpha]
     b_headers = [{"mcp-session-id", session_b} | beta]
 
-    call =
-      held_call(
-        tools_call(2, %{
-          "operations" => fresh_import_ops(@threshold + 1),
-          "readback" => "Importing PLAN.md as #{@threshold + 1} tasks."
-        }),
-        a_headers
-      )
+    a_gated = %{
+      "operations" => fresh_import_ops(@threshold + 1),
+      "readback" => "Importing PLAN.md as #{@threshold + 1} tasks."
+    }
+
+    # A's gated call returns promptly; A approves on the form; A's re-call
+    # applies.
+    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(2, a_gated), a_headers))
+    assert decoded["status"] == "confirmation_pending"
 
     assert_receive {:sse, ^session_a, %{"method" => "elicitation/create", "id" => a_elicit}},
                    5_000
 
-    conn =
-      answer(a_elicit, %{"action" => "accept", "content" => %{"decision" => "apply"}}, a_headers)
+    answer_form(
+      session_a,
+      a_elicit,
+      %{"action" => "accept", "content" => %{"decision" => "apply"}},
+      a_headers
+    )
 
-    assert conn.status == 202
-
-    assert {false, decoded, _rest} = tool_result(Task.await(call, 10_000))
+    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(3, a_gated), a_headers))
     assert decoded["ok"] == true
     assert_received :applied
 
     # Session B continues the SAME import by the real id A's confirm was
-    # carried to — and is held on its own stream: it answered nothing.
-    b_call =
-      held_call(
-        tools_call(2, %{
-          "operations" => chunk_ops(@threshold + 1, 57),
-          "readback" => "Importing the rest of PLAN.md."
-        }),
-        b_headers
-      )
+    # carried to — and is held with its own confirm on its own stream: it
+    # answered nothing.
+    b_gated = %{
+      "operations" => chunk_ops(@threshold + 1, 57),
+      "readback" => "Importing the rest of PLAN.md."
+    }
+
+    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(2, b_gated), b_headers))
+    assert decoded["status"] == "confirmation_pending"
 
     assert_receive {:sse, ^session_b, %{"method" => "elicitation/create", "id" => b_elicit}},
                    5_000
 
-    conn = answer(b_elicit, %{"action" => "decline"}, b_headers)
-    assert conn.status == 202
+    answer_form(session_b, b_elicit, %{"action" => "decline"}, b_headers)
 
-    assert {true, decoded, _rest} = tool_result(Task.await(b_call, 10_000))
+    assert {true, decoded, _rest} = tool_result(post_frame(tools_call(3, b_gated), b_headers))
     assert decoded["applied"] == false
     assert decoded["message"] =~ "declined"
     refute_received :applied
@@ -248,7 +259,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     assert {false, decoded, _rest} =
              tool_result(
                post_frame(
-                 tools_call(3, %{"operations" => chunk_ops(@threshold + 1, 57)}),
+                 tools_call(4, %{"operations" => chunk_ops(@threshold + 1, 57)}),
                  a_headers
                )
              )
@@ -258,7 +269,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     refute_received {:sse, ^session_a, _frame}
   end
 
-  test "a decline latches nothing — the grantor re-elicits and a second session is untouched" do
+  test "a decline resolves once and latches nothing — the grantor re-asks and a second session is untouched" do
     stub_api(self())
 
     alpha = [{"authorization", "Bearer token-alpha"}]
@@ -276,27 +287,27 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
       "readback" => "Importing PLAN.md as #{@threshold + 1} tasks."
     }
 
-    call = held_call(tools_call(2, gated), a_headers)
+    # A: readback out, decline on the form, the re-call reports it once.
+    assert {false, _decoded, _rest} = tool_result(post_frame(tools_call(2, gated), a_headers))
     assert_receive {:sse, ^session_a, %{"method" => "elicitation/create", "id" => first}}, 5_000
-    assert answer(first, %{"action" => "decline"}, a_headers).status == 202
-    assert {true, decoded, _rest} = tool_result(Task.await(call, 10_000))
-    assert decoded["applied"] == false
+    answer_form(session_a, first, %{"action" => "decline"}, a_headers)
 
-    # Nothing latched on A: the same batch asks again.
-    call = held_call(tools_call(3, gated), a_headers)
+    assert {true, decoded, _rest} = tool_result(post_frame(tools_call(3, gated), a_headers))
+    assert decoded["applied"] == false
+    assert decoded["message"] =~ "declined"
+
+    # The pickup consumed it: the same batch asks again, fresh form.
+    assert {false, _decoded, _rest} = tool_result(post_frame(tools_call(4, gated), a_headers))
     assert_receive {:sse, ^session_a, %{"method" => "elicitation/create", "id" => second}}, 5_000
     assert second != first
-    assert answer(second, %{"action" => "decline"}, a_headers).status == 202
-    assert {true, _decoded, _rest} = tool_result(Task.await(call, 10_000))
 
     # And nothing latched on B either — its own form, on its own stream.
-    call = held_call(tools_call(2, gated), b_headers)
+    assert {false, _decoded, _rest} = tool_result(post_frame(tools_call(2, gated), b_headers))
 
     assert_receive {:sse, ^session_b, %{"method" => "elicitation/create", "id" => b_elicit}},
                    5_000
 
-    assert answer(b_elicit, %{"action" => "decline"}, b_headers).status == 202
-    assert {true, _decoded, _rest} = tool_result(Task.await(call, 10_000))
+    answer_form(session_b, b_elicit, %{"action" => "decline"}, b_headers)
 
     refute_received :applied
   end

@@ -88,6 +88,13 @@ defmodule DoitMcp.BatchShapeTest do
       assert block =~ "subtasks"
     end
 
+    test "the checkbox fact prints once — the appended ask repeats no numbers (m03.04 item 27.3)" do
+      block = BatchShape.facts_block([add("Work item", "- [ ] a\n- [ ] b")])
+
+      assert length(String.split(block, "markdown-checkbox lines")) == 2
+      assert block =~ "Checklists are what DoItList turns into tasks"
+    end
+
     test "an initiative add with index_style set prints the sets line" do
       ops = [
         %{

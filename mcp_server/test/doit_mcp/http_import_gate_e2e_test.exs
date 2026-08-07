@@ -12,15 +12,15 @@ defmodule DoitMcp.HttpImportGateE2eTest do
 
   @threshold ImportGate.threshold()
 
-  # The import gate's confirm over the resident HTTP transport (m03.04 item
-  # 23.3), end-to-end through DoitMcp.Http.Plug against the real tree: a
-  # gated batch trips mid-call, the elicitation/create rides the tripping
-  # session's OWN standalone stream (a second session's stream stays clean),
-  # and the operator's answer POST resolves the held call — which only works
-  # because the wrapper reroutes answers to the session's immediate
-  # {:mcp_request, ...} call path (the stock cast path defers them behind
-  # the in-flight tool call: deadlock). Without a stream the gate holds
-  # loudly and immediately instead of hanging or passing.
+  # The import gate's confirm over the resident HTTP transport (m03.04 items
+  # 23.3 and 27.1), end-to-end through DoitMcp.Http.Plug against the real
+  # tree: a gated batch returns PROMPTLY with the readback (never parking on
+  # the transport's dispatch clock), the elicitation/create rides the
+  # tripping session's OWN standalone stream (a second session's stream
+  # stays clean), the operator's answer POST lands in the detached waiter,
+  # and the re-call resolves — approve applies, decline reports. Without a
+  # stream the gate holds loudly and immediately instead of hanging or
+  # passing.
 
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
@@ -35,9 +35,10 @@ defmodule DoitMcp.HttpImportGateE2eTest do
       end
     end)
 
-    # The gate's confirm memory under its production name, plus the real
+    # The gate's session memory under its production names, plus the real
     # HTTP tree the plug routes into.
     start_supervised!(DoitMcp.ImportGate.Counter)
+    start_supervised!(DoitMcp.ImportGate.PendingConfirm)
     start_supervised!({DoitMcp.Server, transport: {:streamable_http, start: true}})
     :ok
   end
@@ -170,6 +171,20 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     post_frame(%{"jsonrpc" => "2.0", "id" => elicitation_id, "result" => result}, headers)
   end
 
+  # Answer the form through the plug, then await the detached waiter's exit
+  # — the guarantee that the answer's session-memory effects landed before
+  # the next POST.
+  defp answer_form(session_id, elicitation_id, result, headers) do
+    registry = Anubis.Server.Registry.registry_name(DoitMcp.Server)
+    {:ok, session} = Anubis.Server.Registry.Local.lookup_session(registry, session_id)
+    [{waiter, _value}] = Registry.lookup(DoitMcp.Elicitation.Registry, session)
+    ref = Process.monitor(waiter)
+
+    conn = answer(elicitation_id, result, headers)
+    assert conn.status == 202
+    assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 2_000
+  end
+
   defp tool_result(conn) do
     assert conn.status == 200
     assert %{"result" => result} = Jason.decode!(conn.resp_body)
@@ -177,7 +192,7 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     {result["isError"], Jason.decode!(text), rest}
   end
 
-  test "a gated import elicits on the tripping session's stream only and applies on approve" do
+  test "a gated import returns the readback promptly, elicits on the tripping session's stream only, and applies on the approved re-call" do
     stub_api(self())
 
     alpha = [{"authorization", "Bearer token-alpha"}]
@@ -188,14 +203,19 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     open_stream(session_b)
 
     a_headers = [{"mcp-session-id", session_a} | alpha]
+    readback = "Importing PLAN.md as #{@threshold + 1} tasks."
 
-    call =
-      Task.async(fn ->
-        post_frame(gated_call(2, "Importing PLAN.md as #{@threshold + 1} tasks."), a_headers)
-      end)
+    # The gated call answers inside the dispatch bound — a NORMAL result
+    # carrying the readback and the re-call contract, nothing applied.
+    assert {false, decoded, _rest} = tool_result(post_frame(gated_call(2, readback), a_headers))
+    assert decoded["status"] == "confirmation_pending"
+    assert decoded["applied"] == false
+    assert decoded["readback"] =~ "Importing PLAN.md"
+    assert decoded["message"] =~ "operator_decision"
+    refute_received :applied
 
-    # The confirm form rides session A's stream while the tools/call is
-    # still unanswered — and ONLY session A's.
+    # The confirm form rides session A's stream out-of-band — and ONLY A's —
+    # carrying the same message the result returned.
     assert_receive {:sse, ^session_a,
                     %{
                       "method" => "elicitation/create",
@@ -204,33 +224,28 @@ defmodule DoitMcp.HttpImportGateE2eTest do
                     }},
                    5_000
 
-    assert message =~ "Importing PLAN.md"
+    assert message == decoded["readback"]
     assert schema["properties"]["decision"]["enum"] == ["apply", "correct", "hold"]
     refute_received {:sse, ^session_b, _frame}
-    refute_received :applied
 
-    # The operator's answer POSTs through the same plug — the reroute under
-    # test: the stock cast path would defer it behind the in-flight call.
-    conn =
-      answer(
-        elicitation_id,
-        %{"action" => "accept", "content" => %{"decision" => "apply"}},
-        a_headers
-      )
+    # The operator approves on the form; the session remembers, so the plain
+    # re-call flows and applies.
+    answer_form(
+      session_a,
+      elicitation_id,
+      %{"action" => "accept", "content" => %{"decision" => "apply"}},
+      a_headers
+    )
 
-    assert conn.status == 202
-
-    assert {false, decoded, rest} = tool_result(Task.await(call, 10_000))
+    assert {false, decoded, _rest} = tool_result(post_frame(gated_call(3, readback), a_headers))
     assert decoded["ok"] == true
     assert_received :applied
-    assert [%{"type" => "text", "text" => note}] = rest
-    assert note =~ "confirmed"
 
     # Session B's stream stayed clean through the whole exchange.
     refute_received {:sse, ^session_b, _frame}
   end
 
-  test "a declined confirm holds the batch unapplied" do
+  test "a declined confirm reports on the re-call and the batch stays unapplied" do
     stub_api(self())
 
     alpha = [{"authorization", "Bearer token-alpha"}]
@@ -238,15 +253,19 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     open_stream(session)
     headers = [{"mcp-session-id", session} | alpha]
 
-    call = Task.async(fn -> post_frame(gated_call(2, "Importing PLAN.md."), headers) end)
+    assert {false, decoded, _rest} =
+             tool_result(post_frame(gated_call(2, "Importing PLAN.md."), headers))
+
+    assert decoded["status"] == "confirmation_pending"
 
     assert_receive {:sse, ^session, %{"method" => "elicitation/create", "id" => elicitation_id}},
                    5_000
 
-    conn = answer(elicitation_id, %{"action" => "decline"}, headers)
-    assert conn.status == 202
+    answer_form(session, elicitation_id, %{"action" => "decline"}, headers)
 
-    assert {true, decoded, _rest} = tool_result(Task.await(call, 10_000))
+    assert {true, decoded, _rest} =
+             tool_result(post_frame(gated_call(3, "Importing PLAN.md."), headers))
+
     assert decoded["applied"] == false
     assert decoded["message"] =~ "declined"
     refute_received :applied
@@ -259,15 +278,9 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     session = handshake(alpha)
     headers = [{"mcp-session-id", session} | alpha]
 
-    # A regression past the stream check would park on the confirm window —
-    # keep it tiny so the failure is milliseconds, not minutes; the correct
-    # path never touches it.
-    Application.put_env(:doit_mcp, :import_gate_confirm_timeout, 100)
-    on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_confirm_timeout) end)
+    conn = post_frame(gated_call(2, "Importing PLAN.md."), headers)
 
-    call = Task.async(fn -> post_frame(gated_call(2, "Importing PLAN.md."), headers) end)
-
-    assert {true, decoded, _rest} = tool_result(Task.await(call, 5_000))
+    assert {true, decoded, _rest} = tool_result(conn)
     assert decoded["applied"] == false
     assert decoded["message"] =~ "no open server-to-client stream"
     assert decoded["message"] =~ "#{@threshold + 1} task-adds"

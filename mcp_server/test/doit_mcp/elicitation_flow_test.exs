@@ -6,14 +6,16 @@ defmodule DoitMcp.ElicitationFlowTest do
   # Session logs its lifecycle; keep test output clean.
   @moduletag :capture_log
 
-  # Proves the import gate's elicitation round trip through a REAL
-  # Anubis.Server.Session — initialize handshake advertising the elicitation
-  # capability, tools/call dispatch, the outbound elicitation/create, the
-  # client's answer routed back through DoitMcp.Server.handle_elicitation/3,
-  # and the parked tool resuming with the operator's decision. The test
-  # process stands in as the transport (the dep's STDIO layer sends via a
-  # GenServer.call it can answer directly); the same flow over the real
-  # HTTP transport lives in DoitMcp.HttpImportGateE2eTest.
+  # Proves the import gate's decoupled elicitation flow through a REAL
+  # Anubis.Server.Session (m03.04 items fix 10 and 27.1) — initialize
+  # handshake advertising the elicitation capability, tools/call dispatch
+  # returning PROMPTLY with the readback while the detached waiter parks the
+  # outbound elicitation/create, the client's answer routed back through
+  # DoitMcp.Server.handle_elicitation/3 into the waiter, and the re-call
+  # picking the operator's decision up. The test process stands in as the
+  # transport (the dep's STDIO layer sends via a GenServer.call it can
+  # answer directly); the same flow over the real HTTP transport lives in
+  # DoitMcp.HttpImportGateE2eTest.
 
   # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on for
   # determinism against the container's ambient environment.
@@ -23,13 +25,17 @@ defmodule DoitMcp.ElicitationFlowTest do
     :ok
   end
 
-  test "a gated apply_operations round-trips operator corrections through a real session" do
+  test "a gated apply_operations returns promptly and round-trips operator corrections through a real session" do
     session_name = :"#{__MODULE__}.Session"
     transport_name = :"#{__MODULE__}.Transport"
     task_sup = :"#{__MODULE__}.TaskSup"
 
     Process.register(self(), transport_name)
     start_supervised!({Task.Supervisor, name: task_sup})
+
+    # The pending-confirm memory under its production name — the decoupled
+    # confirm records the readback here between the call and the re-call.
+    start_supervised!(DoitMcp.ImportGate.PendingConfirm)
 
     start_supervised!(
       {Anubis.Server.Session,
@@ -106,7 +112,8 @@ defmodule DoitMcp.ElicitationFlowTest do
 
     call = Task.async(fn -> GenServer.call(session, {:mcp_request, tools_call, %{}}, 15_000) end)
 
-    # 3. The session sends elicitation/create out through the transport (us).
+    # 3. The detached waiter sends elicitation/create out through the
+    # transport (us) while the tools/call answers on its own clock.
     assert_receive {:"$gen_call", from, {:send, wire}}, 5_000
     GenServer.reply(from, :ok)
 
@@ -122,10 +129,25 @@ defmodule DoitMcp.ElicitationFlowTest do
     assert schema["required"] == ["decision"]
     assert schema["properties"]["decision"]["enum"] == ["apply", "correct", "hold"]
 
-    # 4. The operator supplies corrections — Anubis validates the content
-    # against the requested schema, dispatches handle_elicitation, and the
-    # parked tool resumes: batch NOT applied (an apply would hit the missing
-    # HTTP stub and fail loudly), corrections in the tool result.
+    # 4. The gated call itself returned PROMPTLY — a NORMAL result carrying
+    # the same message the form does, confirmation pending, nothing applied.
+    assert {:ok, reply} = Task.await(call, 15_000)
+    assert %{"result" => result} = Jason.decode!(reply)
+    assert result["isError"] == false
+    assert [%{"type" => "text", "text" => text}] = result["content"]
+
+    pending = Jason.decode!(text)
+    assert pending["status"] == "confirmation_pending"
+    assert pending["applied"] == false
+    assert pending["readback"] == message
+    assert pending["message"] =~ "operator_decision"
+
+    # 5. The operator supplies corrections on the form — Anubis validates the
+    # content against the requested schema, dispatches handle_elicitation,
+    # and the answer lands in the detached waiter (await its exit).
+    [{waiter, _value}] = Registry.lookup(DoitMcp.Elicitation.Registry, session)
+    ref = Process.monitor(waiter)
+
     answer = %{
       "jsonrpc" => "2.0",
       "id" => request_id,
@@ -136,8 +158,13 @@ defmodule DoitMcp.ElicitationFlowTest do
     }
 
     assert {:ok, nil} = GenServer.call(session, {:mcp_request, answer, %{}})
+    assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 5_000
 
-    assert {:ok, reply} = Task.await(call, 15_000)
+    # 6. The re-call picks the corrections up: batch NOT applied (an apply
+    # would hit the missing HTTP stub and fail loudly), corrections in the
+    # tool result.
+    recall = %{tools_call | "id" => 3}
+    assert {:ok, reply} = GenServer.call(session, {:mcp_request, recall, %{}}, 15_000)
     assert %{"result" => result} = Jason.decode!(reply)
     assert result["isError"] == true
     assert [%{"type" => "text", "text" => text}] = result["content"]
