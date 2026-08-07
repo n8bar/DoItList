@@ -128,7 +128,7 @@ defmodule DoItWeb.AgentConnect do
       [
         "## Do It List",
         "Tasks: #{url(~p"/initiatives/#{id}")} — work this tree via the " <>
-          "#{@server_name} MCP server, not a TODO.md."
+          "#{@server_name} MCP server, not a TODO.md or PLAN.md."
       ],
       "\n"
     )

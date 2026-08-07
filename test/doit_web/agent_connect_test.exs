@@ -172,7 +172,7 @@ defmodule DoItWeb.AgentConnectTest do
       assert AgentConnect.repo_marker(@marker_initiative) ==
                "## Do It List\n" <>
                  "Tasks: #{expected_url} — work this tree via the doit-list " <>
-                 "MCP server, not a TODO.md."
+                 "MCP server, not a TODO.md or PLAN.md."
     end
 
     test "the Initiative's name stays out of the paste — the dropdown carries it" do
