@@ -67,6 +67,19 @@ defmodule DoitMcp.BatchShapeTest do
     test "a single stray checkbox line is noise — passes" do
       assert BatchShape.classify([add("Setup", "- [x] done already")]) == :pass
     end
+
+    test "numbered checkboxes hold like bullets — `N.` and `N)` forms both count (m03.04 item 28)" do
+      desc = "1. [x] Define the release package contract.\n2) [ ] Wire the installer."
+
+      assert {:hold, question} = BatchShape.classify([add("Worklist", desc)])
+      assert question =~ "2 markdown-checkbox lines"
+      assert question =~ "subtasks"
+    end
+
+    test "a numbered list without checkbox boxes passes" do
+      desc = "1. Define the contract\n2. Wire the installer\n3. Ship it"
+      assert BatchShape.classify([add("Worklist", desc)]) == :pass
+    end
   end
 
   describe "facts_block/1" do
@@ -86,6 +99,13 @@ defmodule DoitMcp.BatchShapeTest do
       assert block =~ "whole-file sized"
       assert block =~ "2 markdown-checkbox lines sit inside 1 new descriptions."
       assert block =~ "subtasks"
+    end
+
+    test "numbered-checkbox lines land in the checkbox fact (m03.04 item 28)" do
+      ops = [add("Worklist", "10. [X] audit the pattern\n11. [ ] fix it\n12) [x] verify")]
+
+      assert BatchShape.facts_block(ops) =~
+               "3 markdown-checkbox lines sit inside 1 new descriptions."
     end
 
     test "the checkbox fact prints once — the appended ask repeats no numbers (m03.04 item 27.3)" do

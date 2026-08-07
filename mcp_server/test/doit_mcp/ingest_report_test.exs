@@ -367,7 +367,7 @@ defmodule DoitMcp.IngestReportTest do
             "* plain star bullet",
             "-[ ] no space after the bullet",
             "- [y] not a checkbox state",
-            "1. [ ] numbered, not a bullet",
+            "1. numbered without a box",
             "[ ] bare brackets"
           ],
           "\n"
@@ -388,6 +388,39 @@ defmodule DoitMcp.IngestReportTest do
              ]
 
       assert report.checkbox_line_total == 6
+    end
+
+    test "numbered checkbox lines count — `N.` and `N)` forms; boxless or inline never do (m03.04 item 28)" do
+      description =
+        Enum.join(
+          [
+            "Worklist:",
+            "1. [x] Define the release package contract.",
+            "2. [ ] unchecked, dot form",
+            "10) [X] double-digit, paren form",
+            "  3. [ ] indented dot form",
+            "4. plain numbered line, no box",
+            "5.[ ] no space after the marker",
+            "see 6. [x] inline mid-sentence"
+          ],
+          "\n"
+        )
+
+      tree = %{
+        "id" => 2,
+        "ai_knobs" => nil,
+        "root_task_id" => 100,
+        "tasks" => [leaf(1, description), leaf(2, "- [ ] bullet still counts")]
+      }
+
+      report = IngestReport.build(tree)
+
+      assert report.checkbox_lines_in_descriptions == [
+               %{task_id: 1, count: 4},
+               %{task_id: 2, count: 1}
+             ]
+
+      assert report.checkbox_line_total == 5
     end
 
     test "the entry list caps at 20; the total still counts every line" do

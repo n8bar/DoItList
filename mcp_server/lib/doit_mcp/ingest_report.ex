@@ -38,10 +38,11 @@ defmodule DoitMcp.IngestReport do
       after whitespace), as `%{task_id, matched_text}`. Journaling belongs in
       comments; the marker list is a heuristic floor, not a grammar.
     * embedded checklists — `checkbox_lines_in_descriptions`: markdown
-      checkbox lines (`- [ ]` / `- [x]` / `* [ ]` / `* [x]`, case-insensitive
-      x, leading whitespace allowed) in task descriptions, as
-      `%{task_id, count}`, plus an uncapped `checkbox_line_total`. A floor,
-      not a definition — unmarked lists stay a judgment call.
+      checkbox lines (bullet `- [ ]` / `* [x]` and ordered `1. [ ]` / `2) [x]`
+      forms, case-insensitive x, leading whitespace allowed) in task
+      descriptions, as `%{task_id, count}`, plus an uncapped
+      `checkbox_line_total`. A floor, not a definition — lists without a box
+      stay a judgment call.
     * long comments — `long_comments`: comments whose body exceeds
       #{300} characters, as `%{comment_id, task_id}`. The root task's thread
       is exempt — the required post-import audit lives there and is
@@ -270,13 +271,15 @@ defmodule DoitMcp.IngestReport do
   defp on_root_thread?(_comment, nil), do: false
   defp on_root_thread?(comment, root_id), do: comment["task_id"] == root_id
 
-  # A markdown checkbox line: `- [ ]` / `- [x]` / `* [ ]` / `* [x]`,
-  # case-insensitive x, leading whitespace allowed. A floor for embedded
-  # checklists, not a definition — unmarked lists don't match on purpose.
+  # A markdown checkbox line: a bullet (`- [ ]` / `* [x]`) or ordered-list
+  # (`1. [ ]` / `2) [x]`) marker followed by a checkbox box, case-insensitive
+  # x, leading whitespace allowed. A floor for embedded checklists, not a
+  # definition — list lines without a box don't match on purpose (m03.04
+  # item 28).
   @doc false
   # Public only so DoitMcp.BatchShape shares the exact same definition of a
   # checkbox line — the audit tool and the batch pass must never disagree.
-  def checkbox_line_pattern, do: ~r/^[ \t]*[-*][ \t]+\[[ xX]\]/m
+  def checkbox_line_pattern, do: ~r/^[ \t]*(?:[-*]|\d+[.)])[ \t]+\[[ xX]\]/m
 
   defp checkbox_lines({task, _depth}) do
     with text when is_binary(text) <- task["description"],
