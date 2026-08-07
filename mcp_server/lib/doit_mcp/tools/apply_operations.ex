@@ -145,6 +145,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   @confirm_note "Import confirmed by the operator for this session."
 
+  @marker_guidance "If the repo's agent-instruction file (CLAUDE.md, AGENTS.md) has no " <>
+                     "'## Do It List' marker, offer the operator to add it:"
+
   schema do
     field(:operations, {:list, :map}, required: true)
     field(:idempotency_key, :string, required: false)
@@ -182,7 +185,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
         case {gate, shape} do
           {{:gate, info}, _} ->
-            hold_for_confirmation(params, info, frame)
+            hold_for_confirmation(params, info, frame, parent_targets)
 
           {:pass, :hold} ->
             # Shape-held below the size threshold: synthetic info, no target —
@@ -190,10 +193,10 @@ defmodule DoitMcp.Tools.ApplyOperations do
             # session settling.
             adds = ImportGate.count_task_adds(params.operations)
             info = %{task_adds: adds, cumulative: adds, target: nil, fresh: false}
-            hold_for_confirmation(params, info, frame)
+            hold_for_confirmation(params, info, frame, parent_targets)
 
           {:pass, :pass} ->
-            apply_batch(params, frame)
+            apply_batch(params, frame, parent_targets)
         end
     end
   end
@@ -261,23 +264,27 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  defp apply_batch(params, frame, opts \\ []) do
+  defp apply_batch(params, frame, parent_targets, opts \\ []) do
     result =
       Client.operations(params.operations, idempotency_key: Map.get(params, :idempotency_key))
-
-    # Pressure now lives in the DATABASE (inserted_at window) — applied adds
-    # count themselves. Only the operator's confirm needs carrying: granted
-    # under a fresh Initiative's lid, later chunks reference the real id.
-    with {:ok, body} <- result do
-      carry_confirms(params.operations, body)
-    end
 
     {:reply, response, frame} = ToolResult.reply_batch(frame, result)
 
     response =
-      case {result, opts[:note]} do
-        {{:ok, _}, note} when is_binary(note) -> Response.text(response, note)
-        _ -> response
+      case result do
+        {:ok, body} ->
+          # Pressure now lives in the DATABASE (inserted_at window) — applied
+          # adds count themselves. Only the operator's confirm needs carrying:
+          # granted under a fresh Initiative's lid, later chunks reference the
+          # real id.
+          created = carry_confirms(params.operations, body)
+
+          response
+          |> append_note(opts[:note])
+          |> suggest_marker(params.operations, created, parent_targets)
+
+        _ ->
+          response
       end
 
     {:reply, response, frame}
@@ -285,15 +292,64 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   defp carry_confirms(operations, body) do
     results = (is_map(body) && Map.get(body, "results")) || []
+    created = ImportGate.created_initiative_ids(operations, results)
 
-    operations
-    |> ImportGate.created_initiative_ids(results)
-    |> Enum.each(fn {lid, id} ->
+    Enum.each(created, fn {lid, id} ->
       if Counter.confirmed?({:in_batch, lid}), do: Counter.mark_confirmed({:existing, id})
+    end)
+
+    created
+  end
+
+  defp append_note(response, note) when is_binary(note), do: Response.text(response, note)
+  defp append_note(response, _note), do: response
+
+  # An import-shaped apply — task-adds resolved to their target Initiatives,
+  # the gate's own classification reused, never re-derived — ends with the
+  # repo-marker suggestion (m03.04 item 26.2): the guidance line plus the
+  # server-composed marker, read from the initiative list's `repo_marker`
+  # field so the wording never forks from the panel. Once per Initiative per
+  # session (Counter); the repo-file check and the offer are the agent's.
+  # Edit batches resolve no target and stay clean.
+  defp suggest_marker(response, operations, created, parent_targets) do
+    ids =
+      operations
+      |> ImportGate.target_refs(parent_targets)
+      |> Enum.flat_map(fn
+        {:existing, id} -> [id]
+        {:in_batch, lid} -> List.wrap(created[lid])
+      end)
+      |> Enum.uniq()
+      |> Enum.reject(&Counter.confirmed?({:repo_marker, &1}))
+
+    Enum.reduce(markers_for(ids), response, fn {id, marker}, response ->
+      Counter.mark_confirmed({:repo_marker, id})
+      Response.text(response, @marker_guidance <> "\n\n" <> marker)
     end)
   end
 
-  defp hold_for_confirmation(params, info, frame) do
+  # The one list read sourcing the markers — only when something will be
+  # emitted, never per-op. A failed read or a marker-less summary drops the
+  # suggestion (fail-open, ImportPressure's precedent).
+  defp markers_for([]), do: []
+
+  defp markers_for(ids) do
+    case Client.get("/api/v1/initiatives") do
+      {:ok, summaries} when is_list(summaries) ->
+        markers =
+          for %{"id" => id, "repo_marker" => marker} <- summaries,
+              is_binary(marker),
+              into: %{},
+              do: {id, marker}
+
+        for id <- ids, is_binary(markers[id]), do: {id, markers[id]}
+
+      _ ->
+        []
+    end
+  end
+
+  defp hold_for_confirmation(params, info, frame, parent_targets) do
     cond do
       not Elicitation.reachable?() ->
         # The client advertised elicitation but this session has no open
@@ -306,11 +362,17 @@ defmodule DoitMcp.Tools.ApplyOperations do
         {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
 
       true ->
-        confirm_with_operator(params, presence(Map.get(params, :readback)), info, frame)
+        confirm_with_operator(
+          params,
+          presence(Map.get(params, :readback)),
+          info,
+          frame,
+          parent_targets
+        )
     end
   end
 
-  defp confirm_with_operator(params, readback, info, frame) do
+  defp confirm_with_operator(params, readback, info, frame, parent_targets) do
     message =
       confirmation_message(
         readback,
@@ -322,7 +384,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
     case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
       {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
-        handle_answer(params, content, info, frame)
+        handle_answer(params, content, info, frame, parent_targets)
 
       {:ok, %{"action" => "decline"}} ->
         not_applied(frame, %{
@@ -351,7 +413,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "endpoint) and re-apply."
   end
 
-  defp handle_answer(params, content, info, frame) do
+  defp handle_answer(params, content, info, frame, parent_targets) do
     corrections = presence(content["corrections"])
     decision = content["decision"]
 
@@ -362,7 +424,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         # failed apply's retry doesn't re-elicit an already-granted confirm).
         # A shape-hold has no target: its confirm is per-batch, nothing settles.
         if info.target, do: Counter.mark_confirmed(info.target)
-        apply_batch(params, frame, note: @confirm_note)
+        apply_batch(params, frame, parent_targets, note: @confirm_note)
 
       is_binary(corrections) ->
         not_applied(frame, %{

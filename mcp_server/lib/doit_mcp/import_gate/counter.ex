@@ -2,10 +2,12 @@ defmodule DoitMcp.ImportGate.Counter do
   @moduledoc """
   Per-session memory for the confirms the operator granted — import targets,
   and the progress-calc gate's key (`{:progress_calc, id, requested}`, fix
-  17). Pressure decays, sanction persists (m03.04 3.1 iteration 2):
-  task-creation PRESSURE comes from the database's `inserted_at` window
-  (`DoitMcp.ImportPressure`) and is deliberately shared across connections,
-  so this process holds only what the operator said yes to.
+  17) — plus the repo-marker suggestions already emitted (`{:repo_marker,
+  id}`, m03.04 item 26.2), the same say-once shape. Pressure decays, sanction
+  persists (m03.04 3.1 iteration 2): task-creation PRESSURE comes from the
+  database's `inserted_at` window (`DoitMcp.ImportPressure`) and is
+  deliberately shared across connections, so this process holds only
+  session-scoped say-once state.
 
   Rows key on the SESSION process (m03.04 item 23.6): the resident transport
   serves every connected client from one VM, where a flat set would settle an

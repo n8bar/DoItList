@@ -21,6 +21,7 @@ defmodule DoItWeb.Api.Serializer do
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
         "url": "https://doitlist.app/initiatives/12",
+        "repo_marker": "## Do It List\nTasks: https://doitlist.app/initiatives/12 — work this tree via the doit-list MCP server, not a TODO.md or PLAN.md.",
         "role": "owner",
         "progress": 42,
         "root_task_id": 100
@@ -29,7 +30,11 @@ defmodule DoItWeb.Api.Serializer do
   `url` is the Initiative's web address — the operator-facing handle (m03.04
   item 2.14): when telling a human about an Initiative, hand them the URL or
   the name, never a raw id. Composed server-side from the endpoint's public
-  URL config, so a future id-scheme change costs the reader nothing. `role` is
+  URL config, so a future id-scheme change costs the reader nothing.
+  `repo_marker` is the Initiative's two-line snippet for a repo's
+  agent-instruction file (m03.04 item 26.1), composed by
+  `DoItWeb.AgentConnect.repo_marker/1` — the same source the account-page
+  panel renders, so the wording can never fork. `role` is
   the acting user's role on the Initiative (`owner` | `editor` |
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
   system root task's `computed_progress`, 0..100). `root_task_id` is the
@@ -45,6 +50,7 @@ defmodule DoItWeb.Api.Serializer do
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
         "url": "https://doitlist.app/initiatives/12",
+        "repo_marker": "## Do It List\nTasks: https://doitlist.app/initiatives/12 — work this tree via the doit-list MCP server, not a TODO.md or PLAN.md.",
         "role": "owner",
         "progress": 42,
         "progress_calc": "leaf_average",
@@ -55,6 +61,8 @@ defmodule DoItWeb.Api.Serializer do
 
   * `url` — the Initiative's web address, the operator-facing handle (same as
     on the list summary above).
+  * `repo_marker` — the agent-instruction-file snippet (same as on the list
+    summary above).
   * `progress_calc` — how branch progress rolls up: `leaf_average` (every
     descendant leaf counts one unit) or `single_level` (each direct child one
     unit). The agent needs this to predict the effect of a progress write.
@@ -221,6 +229,7 @@ defmodule DoItWeb.Api.Serializer do
 
   alias DoIt.Tasks
   alias DoIt.Tasks.{ActivityEvent, Comment, Task}
+  alias DoItWeb.AgentConnect
 
   @doc "An Initiative list item (`GET /api/v1/initiatives`)."
   def initiative_summary(initiative, role, progress) do
@@ -229,6 +238,7 @@ defmodule DoItWeb.Api.Serializer do
       name: initiative.name,
       subtitle: blank_to_empty(initiative.subtitle),
       url: initiative_url(initiative.id),
+      repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
       progress: progress || 0,
       root_task_id: initiative.root_task_id
@@ -266,6 +276,7 @@ defmodule DoItWeb.Api.Serializer do
       name: initiative.name,
       subtitle: blank_to_empty(subtitle),
       url: initiative_url(initiative.id),
+      repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
       progress: progress || 0,
       progress_calc: initiative.progress_calc,

@@ -149,6 +149,11 @@ defmodule DoitMcp.ApplyOperationsGateTest do
                 "data" => %{"id" => parent_id, "initiative_id" => initiative_id}
               })
 
+            # The post-apply repo-marker read (item 26.2): no summaries, no
+            # suggestion.
+            {"GET", "/api/v1/initiatives"} ->
+              Req.Test.json(conn, %{"data" => []})
+
             # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
             # parked; a revived fetch hits it again.
             {"GET", "/api/v1/initiatives/" <> _} ->
@@ -166,9 +171,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   defp stub_apply_ok(pressure \\ 0) do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       with_pressure(conn, pressure, fn conn ->
-        assert conn.method == "POST"
-        assert conn.request_path == "/api/v1/operations"
-        Req.Test.json(conn, %{"results" => []})
+        case {conn.method, conn.request_path} do
+          # The post-apply repo-marker read (item 26.2): no summaries served,
+          # so no suggestion rides these gate assertions.
+          {"GET", "/api/v1/initiatives"} ->
+            Req.Test.json(conn, %{"data" => []})
+
+          {"POST", "/api/v1/operations"} ->
+            Req.Test.json(conn, %{"results" => []})
+        end
       end)
     end)
   end
@@ -187,6 +198,11 @@ defmodule DoitMcp.ApplyOperationsGateTest do
           # parked; a revived fetch hits it (and the knobs arg matters) again.
           {"GET", "/api/v1/initiatives/7"} ->
             Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
+
+          # The post-apply repo-marker read (item 26.2): no summaries, no
+          # suggestion.
+          {"GET", "/api/v1/initiatives"} ->
+            Req.Test.json(conn, %{"data" => []})
 
           {"POST", "/api/v1/operations"} ->
             Req.Test.json(conn, %{"results" => []})
@@ -213,6 +229,11 @@ defmodule DoitMcp.ApplyOperationsGateTest do
                 }
               ]
             })
+
+          # The post-apply repo-marker read (item 26.2): no summaries, no
+          # suggestion.
+          {"GET", "/api/v1/initiatives"} ->
+            Req.Test.json(conn, %{"data" => []})
 
           {"GET", "/api/v1/initiatives/" <> _} ->
             Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => knobs}})
