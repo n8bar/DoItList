@@ -445,3 +445,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-08-07  Tweak (m03.04): repo-marker snippet cut to two lines -- the URL is the agent's whole handle, so the Initiative name stays in the dropdown and the paste stops restating it.
 2026-08-07  Tweak (m03.04): repo marker also names PLAN.md -- plans are the other file agents default to; the tree owns both, so the paste says "not a TODO.md or PLAN.md".
 2026-08-07  Doc (m03.04): item 26 drafted, imports suggest the repo marker -- the apply response for import-shaped batches hands the agent the composed marker and the offer-it-if-absent guidance, single-sourced via a repo_marker field on the initiative payload; awaits approval to build.
+2026-08-07  Doc (m03.04): Windows proof re-homes to 26.5 (operator call) -- one Windows session tests the PowerShell pastes and the import-time marker offer together; item 25 closes with its built leaves.
