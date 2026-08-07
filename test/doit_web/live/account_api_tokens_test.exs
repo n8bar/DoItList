@@ -84,6 +84,37 @@ defmodule DoItWeb.AccountApiTokensTest do
     refute render(view) =~ "doit_pat_"
   end
 
+  test "connect panel carries both shell variants and the toggle (m03.04 item 25.1)", %{
+    conn: conn
+  } do
+    {:ok, view, _html} = live(conn, ~p"/account")
+
+    view
+    |> form("#api-token-form", api_token: %{label: "Agent"})
+    |> render_submit()
+
+    # Toggle and both panes are in the DOM together — switching is
+    # client-side visibility, no round-trip.
+    assert has_element?(view, "#connect-shell-toggle")
+    assert has_element?(view, "#connect-shell-posix")
+    assert has_element?(view, "#connect-shell-powershell")
+    assert has_element?(view, "#connect-pastes-posix")
+    assert has_element?(view, "#connect-pastes-powershell")
+
+    # The PowerShell pane has its own per-client pastes and copy buttons.
+    for slug <- ["claude-code", "codex", "hermes"] do
+      assert has_element?(view, "#connect-cmd-#{slug}-ps")
+      assert has_element?(view, "#connect-copy-#{slug}-ps")
+    end
+
+    # And carries the PowerShell wording, not bash's.
+    codex_ps = view |> element("#connect-cmd-codex-ps") |> render()
+    assert codex_ps =~ "$env:DOITLIST_API_TOKEN"
+    assert codex_ps =~ "setx DOITLIST_API_TOKEN"
+    refute codex_ps =~ "export"
+    assert view |> element("#connect-cmd-hermes-ps") |> render() =~ "-Encoding utf8"
+  end
+
   test "the plaintext is not re-shown on a fresh mount", %{conn: conn, user: user} do
     {:ok, _} = Accounts.mint_api_token(user, "Existing")
 

@@ -110,6 +110,59 @@ defmodule DoItWeb.AgentConnectTest do
     end
   end
 
+  describe "PowerShell variants (item 25)" do
+    @paste_token "doit_pat_FIXEDTESTTOKEN123"
+    @paste_url "http://doit.test:4004/"
+
+    setup do
+      Application.put_env(:doit, :mcp_public_url, @paste_url)
+      :ok
+    end
+
+    test "claude_code_paste/2 is shell-neutral: the PowerShell line is the POSIX line" do
+      assert AgentConnect.claude_code_paste(@paste_token, :powershell) ==
+               AgentConnect.claude_code_paste(@paste_token, :posix)
+    end
+
+    test "codex_paste/2 :powershell rides $env:, add, and setx in one paste" do
+      paste = AgentConnect.codex_paste(@paste_token, :powershell)
+
+      assert paste ==
+               "$env:DOITLIST_API_TOKEN = '#{@paste_token}'\n" <>
+                 "codex mcp add doit-list --url #{@paste_url} " <>
+                 "--bearer-token-env-var DOITLIST_API_TOKEN\n" <>
+                 "setx DOITLIST_API_TOKEN '#{@paste_token}'   # persists for future shells"
+
+      # 25.2's bar: live session via $env:, persistence via setx, no bash-isms.
+      assert paste =~ "$env:DOITLIST_API_TOKEN"
+      assert paste =~ "setx DOITLIST_API_TOKEN"
+      refute paste =~ "export"
+    end
+
+    test "hermes_paste/2 :powershell appends UTF-8 via Add-Content, not >>" do
+      paste = AgentConnect.hermes_paste(@paste_token, :powershell)
+
+      assert paste ==
+               "hermes mcp add doit-list --url #{@paste_url} --auth header\n" <>
+                 "Add-Content -Path ~/.hermes/.env " <>
+                 "-Value 'MCP_DOIT_LIST_API_KEY=#{@paste_token}' -Encoding utf8"
+
+      # 25.3: `>>` writes UTF-16 on Windows PowerShell 5.1.
+      refute paste =~ ">>"
+    end
+
+    test "client_pastes/2 keeps panel order; /1 defaults to :posix" do
+      assert AgentConnect.client_pastes(@paste_token) ==
+               AgentConnect.client_pastes(@paste_token, :posix)
+
+      assert [
+               {"claude-code", "Claude Code", _},
+               {"codex", "Codex", _},
+               {"hermes", "Hermes Agent", _}
+             ] = AgentConnect.client_pastes(@paste_token, :powershell)
+    end
+  end
+
   describe "repo_marker/1 (item 24.4)" do
     @marker_initiative %DoIt.Initiatives.Initiative{id: 57, name: "Q3 Launch"}
 

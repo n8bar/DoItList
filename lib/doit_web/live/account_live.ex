@@ -654,34 +654,76 @@ defmodule DoItWeb.AccountLive do
                    composed server-side from the endpoint URL and the token just
                    minted — self-contained, runnable as pasted. Lives inside the
                    one-time reveal because the plaintext exists only here;
-                   dismissing the token dismisses the panel with it. --%>
+                   dismissing the token dismisses the panel with it. Both shell
+                   variants render (25.1); the toggle flips visibility
+                   client-side. --%>
                 <div
                   id="agent-connect-panel"
                   class="mt-3 pt-3 border-t border-emerald-200 dark:border-emerald-900 space-y-3"
                 >
-                  <p class="text-sm text-emerald-800 dark:text-emerald-300">
-                    Connect an agent — one paste per client:
-                  </p>
-                  <%= for {slug, name, paste} <- AgentConnect.client_pastes(@new_api_token) do %>
-                    <div id={"connect-client-#{slug}"}>
-                      <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">
-                        {name}
-                      </h4>
-                      <div class="flex items-start gap-2">
-                        <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 px-2 py-1.5"><code
-                          id={"connect-cmd-#{slug}"}
-                          class="font-mono text-xs text-zinc-800 dark:text-zinc-100"
-                        >{paste}</code></pre>
-                        <button
-                          type="button"
-                          id={"connect-copy-#{slug}"}
-                          phx-hook=".CopyText"
-                          data-copy-target={"connect-cmd-#{slug}"}
-                          class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-                        >
-                          Copy
-                        </button>
-                      </div>
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="text-sm text-emerald-800 dark:text-emerald-300">
+                      Connect an agent — one paste per client:
+                    </p>
+                    <div
+                      id="connect-shell-toggle"
+                      phx-hook=".ShellToggle"
+                      role="tablist"
+                      aria-label="Shell"
+                      class="inline-flex shrink-0 rounded border border-emerald-300 dark:border-emerald-800 overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        id="connect-shell-posix"
+                        role="tab"
+                        data-shell="posix"
+                        aria-selected="true"
+                        aria-controls="connect-pastes-posix"
+                        class="px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 aria-selected:bg-emerald-600 aria-selected:text-white dark:aria-selected:bg-emerald-700 dark:aria-selected:text-white"
+                      >
+                        bash / zsh
+                      </button>
+                      <button
+                        type="button"
+                        id="connect-shell-powershell"
+                        role="tab"
+                        data-shell="powershell"
+                        aria-selected="false"
+                        aria-controls="connect-pastes-powershell"
+                        class="px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 aria-selected:bg-emerald-600 aria-selected:text-white dark:aria-selected:bg-emerald-700 dark:aria-selected:text-white"
+                      >
+                        PowerShell
+                      </button>
+                    </div>
+                  </div>
+                  <%= for {shell, shell_slug, suffix} <- [{:posix, "posix", ""}, {:powershell, "powershell", "-ps"}] do %>
+                    <div
+                      id={"connect-pastes-#{shell_slug}"}
+                      role="tabpanel"
+                      class={["space-y-3", shell == :powershell && "hidden"]}
+                    >
+                      <%= for {slug, name, paste} <- AgentConnect.client_pastes(@new_api_token, shell) do %>
+                        <div id={"connect-client-#{slug}#{suffix}"}>
+                          <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">
+                            {name}
+                          </h4>
+                          <div class="flex items-start gap-2">
+                            <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 px-2 py-1.5"><code
+                              id={"connect-cmd-#{slug}#{suffix}"}
+                              class="font-mono text-xs text-zinc-800 dark:text-zinc-100"
+                            >{paste}</code></pre>
+                            <button
+                              type="button"
+                              id={"connect-copy-#{slug}#{suffix}"}
+                              phx-hook=".CopyText"
+                              data-copy-target={"connect-cmd-#{slug}#{suffix}"}
+                              class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+                      <% end %>
                     </div>
                   <% end %>
                 </div>
@@ -716,6 +758,34 @@ defmodule DoItWeb.AccountLive do
                     this.el.textContent = "Copied!"
                     setTimeout(() => { this.el.textContent = original }, 1500)
                   })
+                }
+              }
+            </script>
+
+            <%!-- Shell toggle (25.1): ephemeral client-side state — flips which
+               shell's pastes show, instantly, no server round-trip. A patch
+               re-renders the POSIX default; updated() re-applies the
+               user's selection. --%>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".ShellToggle">
+              export default {
+                mounted() {
+                  this.shell = "posix"
+                  this.el.querySelectorAll("[data-shell]").forEach(btn => {
+                    btn.addEventListener("click", () => {
+                      this.shell = btn.dataset.shell
+                      this.apply()
+                    })
+                  })
+                },
+                updated() { this.apply() },
+                apply() {
+                  this.el.querySelectorAll("[data-shell]").forEach(btn => {
+                    btn.setAttribute("aria-selected", btn.dataset.shell === this.shell ? "true" : "false")
+                  })
+                  for (const shell of ["posix", "powershell"]) {
+                    const pane = document.getElementById("connect-pastes-" + shell)
+                    if (pane) pane.classList.toggle("hidden", shell !== this.shell)
+                  }
                 }
               }
             </script>

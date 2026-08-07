@@ -33,30 +33,38 @@ defmodule DoItWeb.AgentConnect do
 
   @doc """
   All connect pastes for the panel: `{dom_slug, client_name, paste}` per
-  client, in display order.
+  client, in display order. `shell` picks the wording (m03.04 item 25.1):
+  `:posix` (default) or `:powershell`.
   """
-  def client_pastes(token) when is_binary(token) do
+  def client_pastes(token, shell \\ :posix)
+      when is_binary(token) and shell in [:posix, :powershell] do
     [
-      {"claude-code", "Claude Code", claude_code_paste(token)},
-      {"codex", "Codex", codex_paste(token)},
-      {"hermes", "Hermes Agent", hermes_paste(token)}
+      {"claude-code", "Claude Code", claude_code_paste(token, shell)},
+      {"codex", "Codex", codex_paste(token, shell)},
+      {"hermes", "Hermes Agent", hermes_paste(token, shell)}
     ]
   end
 
   @doc """
   Claude Code holds the credential inline, so one line does it all:
-  the `mcp add` with the bearer header.
+  the `mcp add` with the bearer header. Shell-neutral (25.3 audit): tokens
+  are URL-safe Base64 — no `$`, backtick, or quote — so the double-quoted
+  header is the same valid line in POSIX shells and PowerShell.
   """
-  def claude_code_paste(token) when is_binary(token) do
+  def claude_code_paste(token, shell \\ :posix)
+      when is_binary(token) and shell in [:posix, :powershell] do
     ~s(claude mcp add --transport http #{@server_name} #{mcp_url()} --header "Authorization: Bearer #{token}")
   end
 
   @doc """
   Codex's config can't hold the credential — it reads an env var at launch.
   The export rides the same paste (24.3), plus a profile append so future
-  shells have it too.
+  shells have it too. PowerShell (25.2): `$env:` sets the live session,
+  `setx` persists for future shells.
   """
-  def codex_paste(token) when is_binary(token) do
+  def codex_paste(token, shell \\ :posix)
+
+  def codex_paste(token, :posix) when is_binary(token) do
     Enum.join(
       [
         "export DOITLIST_API_TOKEN='#{token}'",
@@ -67,17 +75,42 @@ defmodule DoItWeb.AgentConnect do
     )
   end
 
+  def codex_paste(token, :powershell) when is_binary(token) do
+    Enum.join(
+      [
+        "$env:DOITLIST_API_TOKEN = '#{token}'",
+        "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN",
+        "setx DOITLIST_API_TOKEN '#{token}'   # persists for future shells"
+      ],
+      "\n"
+    )
+  end
+
   @doc """
   Hermes Agent reads the bare token (no `Bearer ` prefix) from
   `~/.hermes/.env` under the `MCP_<SERVER>_API_KEY` name — for server
   `doit-list` that's `MCP_DOIT_LIST_API_KEY`. The append rides the same
-  paste (24.3).
+  paste (24.3). PowerShell (25.3): `>>` writes UTF-16 on Windows
+  PowerShell 5.1, so the variant appends via `Add-Content -Encoding utf8`,
+  which lands UTF-8 on both 5.1 and 7.
   """
-  def hermes_paste(token) when is_binary(token) do
+  def hermes_paste(token, shell \\ :posix)
+
+  def hermes_paste(token, :posix) when is_binary(token) do
     Enum.join(
       [
         "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
         ~s(echo "MCP_DOIT_LIST_API_KEY=#{token}" >> ~/.hermes/.env)
+      ],
+      "\n"
+    )
+  end
+
+  def hermes_paste(token, :powershell) when is_binary(token) do
+    Enum.join(
+      [
+        "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
+        "Add-Content -Path ~/.hermes/.env -Value 'MCP_DOIT_LIST_API_KEY=#{token}' -Encoding utf8"
       ],
       "\n"
     )
