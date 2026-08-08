@@ -18,10 +18,48 @@ defmodule DoitMcp.ElicitationFlowTest do
   # DoitMcp.HttpImportGateE2eTest.
 
   # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on for
-  # determinism against the container's ambient environment.
+  # determinism against the container's ambient environment. The gated hold
+  # parks its confirm behind the API (m03.04 item 30.1), so serve exactly
+  # that surface: consult 404 (nothing recorded), park echoing the pending
+  # row + URL. POST /operations stays UNSERVED on purpose — an apply that
+  # shouldn't happen fails loudly right here.
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
-    on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_enabled) end)
+    previous_req = Application.fetch_env(:doit_mcp, :req_options)
+
+    Application.put_env(:doit_mcp, :req_options,
+      plug: fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/v1/import_confirms/" <> _hash} ->
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{"error" => %{"status" => 404, "code" => "not_found"}})
+
+          {"POST", "/api/v1/import_confirms"} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            parked = Jason.decode!(body)
+
+            Req.Test.json(conn, %{
+              "data" => %{
+                "payload_hash" => parked["payload_hash"],
+                "status" => "pending",
+                "corrections" => nil,
+                "url" => "http://localhost:4000/account#import-confirms"
+              }
+            })
+        end
+      end
+    )
+
+    on_exit(fn ->
+      Application.delete_env(:doit_mcp, :import_gate_enabled)
+
+      case previous_req do
+        {:ok, value} -> Application.put_env(:doit_mcp, :req_options, value)
+        :error -> Application.delete_env(:doit_mcp, :req_options)
+      end
+    end)
+
     :ok
   end
 
@@ -110,7 +148,12 @@ defmodule DoitMcp.ElicitationFlowTest do
       }
     }
 
-    call = Task.async(fn -> GenServer.call(session, {:mcp_request, tools_call, %{}}, 15_000) end)
+    # The park/consult calls are real HTTP (m03.04 item 30.1), so the
+    # request carries a bearer header exactly as it would over a transport.
+    context = %{req_headers: [{"authorization", "Bearer flow-test-token"}]}
+
+    call =
+      Task.async(fn -> GenServer.call(session, {:mcp_request, tools_call, context}, 15_000) end)
 
     # 3. The detached waiter sends elicitation/create out through the
     # transport (us) while the tools/call answers on its own clock.
@@ -140,7 +183,8 @@ defmodule DoitMcp.ElicitationFlowTest do
     assert pending["status"] == "confirmation_pending"
     assert pending["applied"] == false
     assert pending["readback"] == message
-    assert pending["message"] =~ "operator_decision"
+    assert pending["confirm_url"] == "http://localhost:4000/account#import-confirms"
+    assert pending["message"] =~ "confirm_url"
 
     # 5. The operator supplies corrections on the form — Anubis validates the
     # content against the requested schema, dispatches handle_elicitation,
@@ -164,7 +208,7 @@ defmodule DoitMcp.ElicitationFlowTest do
     # would hit the missing HTTP stub and fail loudly), corrections in the
     # tool result.
     recall = %{tools_call | "id" => 3}
-    assert {:ok, reply} = GenServer.call(session, {:mcp_request, recall, %{}}, 15_000)
+    assert {:ok, reply} = GenServer.call(session, {:mcp_request, recall, context}, 15_000)
     assert %{"result" => result} = Jason.decode!(reply)
     assert result["isError"] == true
     assert [%{"type" => "text", "text" => text}] = result["content"]

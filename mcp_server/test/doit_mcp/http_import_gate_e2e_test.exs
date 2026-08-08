@@ -19,8 +19,8 @@ defmodule DoitMcp.HttpImportGateE2eTest do
   # tripping session's OWN standalone stream (a second session's stream
   # stays clean), the operator's answer POST lands in the detached waiter,
   # and the re-call resolves — approve applies, decline reports. Without a
-  # stream the gate holds loudly and immediately instead of hanging or
-  # passing.
+  # stream the gate still parks the in-app confirm and returns its URL
+  # (m03.04 item 30.4) instead of hanging or passing.
 
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
@@ -119,7 +119,9 @@ defmodule DoitMcp.HttpImportGateE2eTest do
   end
 
   # POST /operations reports each apply and echoes the created Initiative's
-  # lid → real id; the task_count clause serves any pressure/style read.
+  # lid → real id; the import-confirm clauses serve the parked confirm
+  # (m03.04 item 30.1) — consult 404, park echoing the pending row + URL;
+  # the task_count clause serves any pressure/style read.
   defp stub_api(test_pid) do
     Application.put_env(:doit_mcp, :req_options,
       plug: fn conn ->
@@ -131,6 +133,25 @@ defmodule DoitMcp.HttpImportGateE2eTest do
               "results" => [
                 %{"index" => 0, "lid" => "i", "status" => "ok", "data" => %{"id" => 57}}
               ]
+            })
+
+          {"GET", "/api/v1/import_confirms/" <> _hash} ->
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{"error" => %{"status" => 404, "code" => "not_found"}})
+
+          {"POST", "/api/v1/import_confirms"} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            parked = Jason.decode!(body)
+            send(test_pid, {:parked, parked})
+
+            Req.Test.json(conn, %{
+              "data" => %{
+                "payload_hash" => parked["payload_hash"],
+                "status" => "pending",
+                "corrections" => nil,
+                "url" => "http://localhost:4000/account#import-confirms"
+              }
             })
 
           {"GET", _task_count} ->
@@ -211,7 +232,9 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     assert decoded["status"] == "confirmation_pending"
     assert decoded["applied"] == false
     assert decoded["readback"] =~ "Importing PLAN.md"
-    assert decoded["message"] =~ "operator_decision"
+    assert decoded["confirm_url"] == "http://localhost:4000/account#import-confirms"
+    assert decoded["message"] =~ "confirm_url"
+    assert_received {:parked, _}
     refute_received :applied
 
     # The confirm form rides session A's stream out-of-band — and ONLY A's —
@@ -271,7 +294,11 @@ defmodule DoitMcp.HttpImportGateE2eTest do
     refute_received :applied
   end
 
-  test "a capable session with no open stream is held loudly and immediately, never hung" do
+  test "a capable session with no open stream parks URL-only — never hung, never skipped" do
+    # The loud no-stream hold retired with m03.04 item 30.4: the in-app
+    # confirm works for every client, so a session whose form can't ride
+    # still parks and gets the URL — promptly, nothing applied, no
+    # elicitation attempted.
     stub_api(self())
 
     alpha = [{"authorization", "Bearer token-alpha"}]
@@ -280,10 +307,11 @@ defmodule DoitMcp.HttpImportGateE2eTest do
 
     conn = post_frame(gated_call(2, "Importing PLAN.md."), headers)
 
-    assert {true, decoded, _rest} = tool_result(conn)
+    assert {false, decoded, _rest} = tool_result(conn)
+    assert decoded["status"] == "confirmation_pending"
     assert decoded["applied"] == false
-    assert decoded["message"] =~ "no open server-to-client stream"
-    assert decoded["message"] =~ "#{@threshold + 1} task-adds"
+    assert decoded["confirm_url"] == "http://localhost:4000/account#import-confirms"
+    assert_received {:parked, _}
     refute_received :applied
   end
 end

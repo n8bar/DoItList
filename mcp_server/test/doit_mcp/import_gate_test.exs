@@ -17,16 +17,12 @@ defmodule DoitMcp.ImportGateTest do
   end
 
   # Effectful inputs that must NOT be reached prove short-circuit order.
-  defp never_elicitation, do: fn -> flunk("capability check must not run") end
   defp never_fresh, do: fn _target -> flunk("fresh? must not run") end
 
   # AI-KNOBS-PARKED (m03.04): the revived `:fetch_initiative` option is
   # required again, so revive re-threads `fetch_initiative:` (this fun / the
   # parked tests' stub fns) through every live evaluate call below.
   # defp never_fetch, do: fn _id -> flunk("initiative fetch must not run") end
-
-  defp yes_elicitation, do: fn -> true end
-  defp no_elicitation, do: fn -> false end
 
   defp task_adds(count, data) do
     for i <- 1..count do
@@ -52,9 +48,7 @@ defmodule DoitMcp.ImportGateTest do
       assert ImportGate.enabled?()
 
       assert {:gate, %{target: {:in_batch, "i"}}} =
-               ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-                 elicitation?: yes_elicitation()
-               )
+               ImportGate.evaluate(new_initiative_batch(@threshold + 1))
     end
 
     test "DOITLIST_IMPORT_GATE=off opts out, counting nothing; any other value stays armed" do
@@ -64,17 +58,13 @@ defmodule DoitMcp.ImportGateTest do
 
       refute ImportGate.enabled?()
 
-      assert ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-               elicitation?: never_elicitation()
-             ) == :pass
+      assert ImportGate.evaluate(new_initiative_batch(@threshold + 1)) == :pass
 
       System.put_env("DOITLIST_IMPORT_GATE", "on")
       assert ImportGate.enabled?()
 
       assert {:gate, %{target: {:in_batch, "i"}}} =
-               ImportGate.evaluate(new_initiative_batch(@threshold + 1),
-                 elicitation?: yes_elicitation()
-               )
+               ImportGate.evaluate(new_initiative_batch(@threshold + 1))
     end
   end
 
@@ -82,7 +72,7 @@ defmodule DoitMcp.ImportGateTest do
     # These run in the AGED lane (`:fresh?` omitted → its pure default,
     # false): an in-batch Initiative is fresh by definition and now meets
     # the fresh floor instead — that lane lives in its own describe below.
-    test "exactly the threshold of task-adds passes without touching capability" do
+    test "exactly the threshold of task-adds passes" do
       # Mixed anchors (initiative_id + parent_id) keep the tight bound;
       # landing exactly ON it is no crossing.
       ops =
@@ -97,7 +87,6 @@ defmodule DoitMcp.ImportGateTest do
           ]
 
       assert ImportGate.evaluate(ops,
-               elicitation?: never_elicitation(),
                parent_targets: %{42 => {:existing, 7}}
              ) == :pass
     end
@@ -112,24 +101,16 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.count_task_adds(ops) == @threshold - 1
 
-      assert ImportGate.evaluate(ops, elicitation?: never_elicitation()) == :pass
+      assert ImportGate.evaluate(ops) == :pass
     end
   end
 
-  describe "evaluate/2 capability (condition 2)" do
-    test "over threshold but no elicitation capability passes" do
-      ops = new_initiative_batch(@threshold + 1)
-
-      assert ImportGate.evaluate(ops, elicitation?: no_elicitation()) == :pass
-    end
-  end
-
-  describe "evaluate/2 gated-target selection (condition 3)" do
+  describe "evaluate/2 gated-target selection (condition 2)" do
     test "an over-threshold existing target gates — knobs parked, every unsettled target asks" do
       ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
 
       assert {:gate, %{task_adds: task_adds, cumulative: total, target: {:existing, 7}}} =
-               ImportGate.evaluate(ops, elicitation?: yes_elicitation())
+               ImportGate.evaluate(ops)
 
       assert task_adds == @threshold + 1
       assert total == @threshold + 1
@@ -152,7 +133,7 @@ defmodule DoitMcp.ImportGateTest do
           end
 
       assert {:gate, %{task_adds: task_adds, target: {:in_batch, "i"}}} =
-               ImportGate.evaluate(existing ++ in_batch, elicitation?: yes_elicitation())
+               ImportGate.evaluate(existing ++ in_batch)
 
       assert task_adds == @threshold + 1
     end
@@ -173,7 +154,7 @@ defmodule DoitMcp.ImportGateTest do
     #   end
     #
     #   assert {:gate, %{target: {:existing, 7}}} =
-    #            ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch)
+    #            ImportGate.evaluate(ops, fetch_initiative: fetch)
     #
     #   assert_received {:fetched, 7}
     #   refute_received {:fetched, _}
@@ -184,14 +165,14 @@ defmodule DoitMcp.ImportGateTest do
     #   fetch = fn _id -> {:ok, %{"ai_knobs" => "  \n"}} end
     #
     #   assert {:gate, _} =
-    #            ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch)
+    #            ImportGate.evaluate(ops, fetch_initiative: fetch)
     # end
     #
     # test "settled ai_knobs passes" do
     #   ops = task_adds(@threshold + 1, %{"initiative_id" => 7})
     #   fetch = fn _id -> {:ok, %{"ai_knobs" => "deploy_day: friday"}} end
     #
-    #   assert ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch) ==
+    #   assert ImportGate.evaluate(ops, fetch_initiative: fetch) ==
     #            :pass
     # end
     #
@@ -199,7 +180,7 @@ defmodule DoitMcp.ImportGateTest do
     #   ops = task_adds(@threshold + 1, %{"initiative_id" => 404})
     #   fetch = fn _id -> {:error, %{status: 404}} end
     #
-    #   assert ImportGate.evaluate(ops, elicitation?: yes_elicitation(), fetch_initiative: fetch) ==
+    #   assert ImportGate.evaluate(ops, fetch_initiative: fetch) ==
     #            :pass
     # end
 
@@ -208,7 +189,7 @@ defmodule DoitMcp.ImportGateTest do
 
       assert ImportGate.target_refs(ops) == []
 
-      assert ImportGate.evaluate(ops, elicitation?: yes_elicitation()) == :pass
+      assert ImportGate.evaluate(ops) == :pass
     end
   end
 
@@ -220,7 +201,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{task_adds: 10, cumulative: ^expected_total, target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
                  cumulative: fn {:existing, 7} -> ImportGate.ramp_threshold() - 3 end
                )
     end
@@ -229,7 +209,6 @@ defmodule DoitMcp.ImportGateTest do
       ops = task_adds(10, %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(ops,
-               elicitation?: never_elicitation(),
                cumulative: fn _ -> ImportGate.ramp_threshold() - 10 end
              ) == :pass
     end
@@ -255,7 +234,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{task_adds: 5, cumulative: ^expected_total, target: {:existing, 8}}} =
                ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
                  cumulative: history
                )
     end
@@ -264,7 +242,6 @@ defmodule DoitMcp.ImportGateTest do
       ops = task_adds(10, %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(ops,
-               elicitation?: yes_elicitation(),
                cumulative: fn _ -> ImportGate.ramp_threshold() + 100 end,
                confirmed?: fn {:existing, 7} -> true end
              ) == :pass
@@ -278,7 +255,6 @@ defmodule DoitMcp.ImportGateTest do
       ops = task_adds(10, %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(ops,
-               elicitation?: never_elicitation(),
                cumulative: fn _ -> @threshold + 20 end
              ) == :pass
     end
@@ -297,7 +273,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
                  cumulative: fn _ -> @threshold end,
                  parent_targets: %{42 => {:existing, 7}}
                )
@@ -357,7 +332,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{task_adds: 9, cumulative: 9, target: {:in_batch, "i"}, fresh: true}} =
                ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
                  fresh?: never_fresh()
                )
     end
@@ -366,7 +340,6 @@ defmodule DoitMcp.ImportGateTest do
       ops = new_initiative_batch(ImportGate.fresh_threshold())
 
       assert ImportGate.evaluate(ops,
-               elicitation?: never_elicitation(),
                fresh?: never_fresh()
              ) == :pass
     end
@@ -376,7 +349,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{task_adds: 12, cumulative: 12, target: {:existing, 7}, fresh: true}} =
                ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
                  fresh?: fn {:existing, 7} -> true end
                )
     end
@@ -385,7 +357,6 @@ defmodule DoitMcp.ImportGateTest do
       ops = task_adds(12, %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(ops,
-               elicitation?: never_elicitation(),
                fresh?: fn {:existing, 7} -> false end
              ) == :pass
     end
@@ -394,7 +365,6 @@ defmodule DoitMcp.ImportGateTest do
       ops = task_adds(12, %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(ops,
-               elicitation?: yes_elicitation(),
                fresh?: fn {:existing, 7} -> true end,
                confirmed?: fn {:existing, 7} -> true end
              ) == :pass
@@ -405,7 +375,6 @@ defmodule DoitMcp.ImportGateTest do
       sub_floor = task_adds(ImportGate.fresh_threshold(), %{"initiative_id" => 7})
 
       assert ImportGate.evaluate(sub_floor,
-               elicitation?: never_elicitation(),
                fresh?: never_fresh()
              ) == :pass
 
@@ -414,7 +383,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{target: {:existing, 7}, fresh: false}} =
                ImportGate.evaluate(over_bound,
-                 elicitation?: yes_elicitation(),
                  fresh?: never_fresh()
                )
     end
@@ -563,7 +531,6 @@ defmodule DoitMcp.ImportGateTest do
 
       assert {:gate, %{task_adds: task_adds, target: {:existing, 7}}} =
                ImportGate.evaluate(ops,
-                 elicitation?: yes_elicitation(),
                  parent_targets: %{42 => {:existing, 7}}
                )
 

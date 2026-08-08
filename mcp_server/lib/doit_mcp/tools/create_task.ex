@@ -15,8 +15,9 @@ defmodule DoitMcp.Tools.CreateTask do
   question goes to the operator here; the batch path carries their one
   readback confirm, and coherent one-list batches ride the ramp without any.
   An initiative the operator has confirmed flows freely, singles included.
-  Like the batch gate, the pause stands aside for clients without
-  elicitation and rides `DOITLIST_IMPORT_GATE=off`.
+  Like the batch gate, the pause holds for every client — the batch path's
+  confirm resolves in the app (m03.04 item 30), so no client capability is
+  load-bearing — and rides `DOITLIST_IMPORT_GATE=off`.
 
   The fresh floor (m03.04 3.1 iteration 3) applies here too: a just-created
   Initiative pauses singles past `ImportGate.fresh_threshold/0` toward the
@@ -28,7 +29,7 @@ defmodule DoitMcp.Tools.CreateTask do
   use Anubis.Server.Component, type: :tool
 
   alias Anubis.Server.Response
-  alias DoitMcp.{Client, Elicitation, ImportGate, ImportPressure, ToolResult}
+  alias DoitMcp.{Client, ImportGate, ImportPressure, ToolResult}
   alias DoitMcp.ImportGate.Counter
 
   schema do
@@ -86,7 +87,7 @@ defmodule DoitMcp.Tools.CreateTask do
   # freshness ride ONE read — the fresh floor must not double the pause's
   # per-call cost.
   defp guard(params) do
-    with true <- ImportGate.enabled?() and Elicitation.client_supports_elicitation?(),
+    with true <- ImportGate.enabled?(),
          {:ok, target} <- destination(params),
          false <- Counter.confirmed?(target) do
       {pressure, fresh?} = ImportPressure.recent_with_freshness(target)

@@ -123,6 +123,24 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
               ]
             })
 
+          {"GET", "/api/v1/import_confirms/" <> _hash} ->
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{"error" => %{"status" => 404, "code" => "not_found"}})
+
+          {"POST", "/api/v1/import_confirms"} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            parked = Jason.decode!(body)
+
+            Req.Test.json(conn, %{
+              "data" => %{
+                "payload_hash" => parked["payload_hash"],
+                "status" => "pending",
+                "corrections" => nil,
+                "url" => "http://localhost:4000/account#import-confirms"
+              }
+            })
+
           {"GET", _task_count} ->
             Req.Test.json(conn, %{"data" => %{"count" => count}})
         end

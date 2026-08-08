@@ -32,17 +32,18 @@ defmodule DoitMcp.ImportGate do
        within the pressure window, or created in this very batch, per the
        injected `:fresh?` fun): a new Initiative's first import meets the
        readback before the scaffold grows, so the operator adjudicates the
-       interpretation (m03.04 3.1 iteration 3),
-    2. the connected client advertised the `elicitation` capability in its
-       initialize handshake (no capability → the gate silently steps aside —
-       no other layer holds the batch), and
-    3. that Initiative's import is still unsettled — the operator has not
+       interpretation (m03.04 3.1 iteration 3), and
+    2. that Initiative's import is still unsettled — the operator has not
        already confirmed one this session.
 
-  All effectful inputs (capability, session counter, confirm memory,
-  freshness read) are injected as funs, so the decision
-  stays unit-testable; the elicitation wiring lives in `DoitMcp.Elicitation`
-  and the flow in `DoitMcp.Tools.ApplyOperations`.
+  The gate holds for EVERY client (m03.04 item 30.4): the confirm resolves
+  in the app — server-recorded, consulted over the API — so no client
+  capability is load-bearing; the elicitation form is a parallel
+  convenience `DoitMcp.Tools.ApplyOperations` sends only where it can ride.
+
+  All effectful inputs (session counter, confirm memory, freshness read)
+  are injected as funs, so the decision stays unit-testable; the confirm
+  flow lives in `DoitMcp.Tools.ApplyOperations`.
   """
 
   @task_add_threshold 32
@@ -97,8 +98,6 @@ defmodule DoitMcp.ImportGate do
 
   Options:
 
-    * `:elicitation?` — zero-arity fun; whether the client advertised the
-      `elicitation` capability (required)
     * `:cumulative` — 1-arity fun (`target -> non_neg_integer`); task-adds
       already applied to that Initiative this session (defaults to zero —
       single-batch semantics)
@@ -117,7 +116,7 @@ defmodule DoitMcp.ImportGate do
       built by the caller at the IO edge (defaults to `%{}` — such adds
       stay uncounted)
 
-  Checks run cheapest-first (kill switch, counts, capability, settled) and
+  Checks run cheapest-first (kill switch, counts, settled) and
   short-circuit, so nothing is counted while `enabled?/0` is false. Returns
   `:pass` or
   `{:gate, %{task_adds: n, cumulative: total, target: target, fresh: bool}}`
@@ -135,7 +134,7 @@ defmodule DoitMcp.ImportGate do
                target: target(),
                fresh: boolean()
              }}
-  def evaluate(operations, opts) when is_list(operations) do
+  def evaluate(operations, opts \\ []) when is_list(operations) do
     cumulative = Keyword.get(opts, :cumulative, fn _target -> 0 end)
     confirmed? = Keyword.get(opts, :confirmed?, fn _target -> false end)
     fresh? = Keyword.get(opts, :fresh?, fn _target -> false end)
@@ -143,7 +142,6 @@ defmodule DoitMcp.ImportGate do
 
     with true <- enabled?(),
          [_ | _] = candidates <- over_threshold(operations, cumulative, parent_targets, fresh?),
-         true <- Keyword.fetch!(opts, :elicitation?).(),
          [_ | _] = unsettled <- Enum.reject(candidates, fn {ref, _, _, _} -> confirmed?.(ref) end) do
       {ref, task_adds, total, fresh} = gated_target(unsettled)
       {:gate, %{task_adds: task_adds, cumulative: total, target: ref, fresh: fresh}}

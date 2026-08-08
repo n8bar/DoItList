@@ -8,15 +8,16 @@ defmodule DoitMcp.ImportGate.PendingConfirm do
   elicitations per session anyway), keyed like `DoitMcp.ImportGate.Counter`:
   the session process, monitored, the row dying with it; `:unscoped` for
   callers outside any request task. The ROW never expires on its own — only
-  the form's waiter does — so the chat relay (`operator_decision`) still
+  the form's waiter does — so the in-app confirm (m03.04 item 30) still
   resolves a long-abandoned form.
 
   A row is `{key, form}` — `key` binds the confirm to the exact batch read
   back (the operations hash); `form` is `:waiting`, or `{:answered, outcome}`
   holding a form decision (decline/correct/hold) until a re-call picks it up
   (a form APPROVAL marks the Counter instead and clears the row). First
-  answer wins: `claim/1` (the chat relay) and `form_answered/2` (the form)
-  serialize through this process, and the loser reads the row's new state.
+  answer wins: `claim/1` (the in-app consult) and `form_answered/2` (the
+  form) serialize through this process, and the loser reads the row's new
+  state.
 
   Every function degrades gracefully — `:none` / no-op — when the process
   isn't running, Counter's precedent.
@@ -49,8 +50,8 @@ defmodule DoitMcp.ImportGate.PendingConfirm do
   def open(key), do: call({:open, session_key(), key}, :ok)
 
   @doc """
-  Consume the pending confirm for `key` — the chat relay's claim, or the
-  form-approval's. `:pending` means the caller's decision wins (row
+  Consume the pending confirm for `key` — the in-app consult's claim, or
+  the form-approval's. `:pending` means the caller's decision wins (row
   deleted); `{:answered, outcome}` means the form already decided (row
   deleted, first answer wins); `:none` means nothing was pending for this
   batch on this session.

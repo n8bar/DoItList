@@ -1,7 +1,10 @@
 defmodule DoItWeb.AccountLive do
   use DoItWeb, :live_view
 
+  import DoItWeb.ImportConfirmComponents
+
   alias DoIt.Accounts
+  alias DoIt.ImportConfirms
   alias DoIt.Initiatives
   alias DoItWeb.AgentConnect
 
@@ -14,9 +17,14 @@ defmodule DoItWeb.AccountLive do
     # assign-only.
     marker_initiatives = Initiatives.list_agent_accessible_initiatives(user)
 
+    # Account-homed import confirms (m03.04 item 30.2): the pending cards, kept
+    # live by the per-user topic — a park appearing IS the notification.
+    if connected?(socket), do: ImportConfirms.subscribe(user.id)
+
     {:ok,
      socket
      |> assign(:page_title, "Account")
+     |> assign(:import_confirms, ImportConfirms.list_pending_for_account(user))
      |> assign(:profile_form, to_form(Accounts.change_profile(user)))
      |> assign(:username_form, to_form(Accounts.change_username(user)))
      |> assign(:password_form, to_form(Accounts.change_password(user)))
@@ -230,6 +238,62 @@ defmodule DoItWeb.AccountLive do
      |> assign(:marker_initiative_id, id)}
   end
 
+  # --- Import confirms (m03.04 item 30.2) ------------------------------------
+  # Server-gated decisions on the account-homed cards: the click/submit latches
+  # in flight (§6.7, data-latch) and the card leaves the pending slot on the
+  # ack — never a faked success. The context guards record-once.
+
+  def handle_event("approve_import_confirm", %{"id" => id}, socket),
+    do: decide_import_confirm(socket, id, "approved", nil)
+
+  def handle_event("hold_import_confirm", %{"id" => id}, socket),
+    do: decide_import_confirm(socket, id, "held", nil)
+
+  def handle_event(
+        "correct_import_confirm",
+        %{"confirm_id" => id, "corrections" => text},
+        socket
+      ),
+      do: decide_import_confirm(socket, id, "corrected", text)
+
+  defp decide_import_confirm(socket, id, status, corrections) do
+    user = socket.assigns.current_user
+
+    socket =
+      case Integer.parse(to_string(id)) do
+        {confirm_id, ""} ->
+          case ImportConfirms.decide(user, confirm_id, status, corrections) do
+            {:ok, _confirm} ->
+              socket
+
+            {:error, :not_pending} ->
+              put_flash(socket, :error, "That confirm was already decided.")
+
+            {:error, :corrections_required} ->
+              put_flash(socket, :error, "Add the correction text first.")
+          end
+
+        _ ->
+          socket
+      end
+
+    {:noreply, assign(socket, :import_confirms, ImportConfirms.list_pending_for_account(user))}
+  end
+
+  # A park/decision on this user's account-homed confirms (per-user topic):
+  # refresh the pending slot so the card appears/clears live. Initiative-homed
+  # events don't render here, so they only cost the re-read guard.
+  @impl true
+  def handle_info({event, %{initiative_id: nil}}, socket)
+      when event in [:import_confirm_parked, :import_confirm_decided] do
+    user = socket.assigns.current_user
+    {:noreply, assign(socket, :import_confirms, ImportConfirms.list_pending_for_account(user))}
+  end
+
+  def handle_info({event, _confirm}, socket)
+      when event in [:import_confirm_parked, :import_confirm_decided],
+      do: {:noreply, socket}
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -298,6 +362,12 @@ defmodule DoItWeb.AccountLive do
             </p>
           </div>
         </div>
+
+        <%!-- Account-homed import confirms (m03.04 item 30.2): bootstrap
+             batches have no Initiative page yet, so their cards land here.
+             The container is the confirm URL's #import-confirms anchor;
+             empty renders nothing visible. --%>
+        <.import_confirm_cards id="import-confirms" confirms={@import_confirms} />
 
         <details
           id="account-profile"

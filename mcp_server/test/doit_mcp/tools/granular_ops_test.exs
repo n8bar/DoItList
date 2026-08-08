@@ -17,7 +17,17 @@ defmodule DoitMcp.Tools.GranularOpsTest do
   are covered by their own test files and are intentionally excluded here.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  # This table is about op-building, not the import guardrails: pin the gate
+  # off so create_task's singles pause (which now holds for every client,
+  # m03.04 item 30.4) doesn't spend a pressure read here. The pause's own
+  # behavior lives in create_task_gate_test.exs.
+  setup do
+    Application.put_env(:doit_mcp, :import_gate_enabled, false)
+    on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_enabled) end)
+    :ok
+  end
 
   @cases [
     {DoitMcp.Tools.AddComment, %{task_id: 42, body: "Looks good"},

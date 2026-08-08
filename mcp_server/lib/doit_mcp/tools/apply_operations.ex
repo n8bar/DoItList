@@ -96,32 +96,37 @@ defmodule DoitMcp.Tools.ApplyOperations do
   dodge the threshold. A confirm the operator granted under a fresh
   Initiative's lid follows it to the real id the response echoes.
 
-  When the total crosses the threshold, the batch is held for the operator
-  when your client supports elicitation. Without a `readback` it is rejected
-  unapplied — re-call with `readback` (your one-paragraph statement of the
-  import shape you're about to build), `assumptions` (your assumption-tagged
-  decisions, one string each), and `settled` (dimensions already settled by
-  the operator's own ask — an explicit depth, a "summarize" instruction —
-  one string each; operator-instructed dimensions go in `settled`, never
-  `assumptions`, and are displayed so the operator can veto a misclaimed
-  tag). WITH a readback the call returns promptly, nothing applied, with
-  `status: "confirmation_pending"` and the composed readback — the same
-  text the confirm form carries. Present that readback to the operator in
-  chat, verbatim, and wait for their decision. When they decide, re-call
-  with the SAME operations plus `operator_decision`: **apply** applies the
-  batch and settles that Initiative for the rest of the session;
-  **correct** applies nothing — revise the batch to the operator's
-  corrections, then re-apply; **hold** applies nothing — the operator wants
-  to be interviewed first: ask your remaining questions, then re-apply.
-  `operator_decision` relays a decision the operator actually made on that
-  readback; it is honored only while the confirm is pending for those exact
-  operations — never a shortcut past the gate. A confirm form is also sent
-  to clients that render elicitation; a form answer counts the same — an
-  approval is remembered by the session, so a plain re-call flows — and the
-  first answer on either channel wins. The form expires after 10 minutes;
-  the chat relay keeps working after that. Clients without elicitation
-  support skip the gate entirely. The confirm holds for the session; it is
-  not persisted across sessions.
+  When the total crosses the threshold, the batch is held for the operator —
+  for EVERY client (m03.04 item 30): the confirm resolves in the app,
+  server-recorded, so no client capability is load-bearing. Without a
+  `readback` the batch is rejected unapplied — re-call with `readback` (your
+  one-paragraph statement of the import shape you're about to build),
+  `assumptions` (your assumption-tagged decisions, one string each), and
+  `settled` (dimensions already settled by the operator's own ask — an
+  explicit depth, a "summarize" instruction — one string each;
+  operator-instructed dimensions go in `settled`, never `assumptions`, and
+  are displayed so the operator can veto a misclaimed tag). WITH a readback
+  the call returns promptly, nothing applied, with `status:
+  "confirmation_pending"`, the composed readback, and `confirm_url` — the
+  server has PARKED the confirm behind the API, and the URL is where the
+  operator decides. Two channels can answer it, first answer wins:
+
+    * **In-app (always works):** show the operator the readback in chat,
+      verbatim, and hand them the `confirm_url` — the app renders the same
+      readback as a card with Approve / Correct / Hold. Their decision is
+      recorded server-side; when they've decided, re-call with the SAME
+      operations and the server's answer resolves the batch — approve
+      applies it and settles that Initiative for the session; correct
+      returns their text (revise, then re-apply); hold applies nothing —
+      ask your remaining questions, then re-apply (the re-ask re-parks).
+    * **Elicitation form (convenience):** clients that render elicitation
+      also get a confirm form carrying the same text; a form answer counts
+      the same, remembered by the session, so a plain re-call flows. The
+      form expires after 10 minutes; the in-app confirm has no clock.
+
+  The decision channel is deliberately one-way: the adapter can only park a
+  confirm and read its state — deciding is not writable through the API, so
+  no agent can approve its own confirm.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -133,8 +138,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
   alias DoitMcp.ImportGate.{Counter, PendingConfirm}
 
   # The out-of-band confirm form's lifetime (m03.04 item 27.2) — generous,
-  # human-paced, retunable; the chat relay (`operator_decision`) keeps
-  # working after it lapses.
+  # human-paced, retunable; the in-app confirm (item 30) has no clock and
+  # keeps working after the form lapses.
   @confirm_form_expiry to_timeout(minute: 10)
 
   @confirm_schema %{
@@ -159,14 +164,13 @@ defmodule DoitMcp.Tools.ApplyOperations do
   @confirm_note "Import confirmed by the operator for this session."
 
   @pending_instructions "Nothing applied yet — the operator must decide first. Show them " <>
-                          "this result's `readback` in chat, verbatim, and wait. When they decide, " <>
-                          "re-call apply_operations with the SAME operations plus " <>
-                          "operator_decision: \"apply\" (they approved — applies as read " <>
-                          "back), \"correct\" (don't apply; revise to their corrections, " <>
-                          "then re-apply), or \"hold\" (don't apply; they want to answer " <>
-                          "your questions first). A confirm form was also sent to your " <>
-                          "client; if the operator answers there, the session remembers it " <>
-                          "and a plain re-call flows. First answer wins."
+                          "this result's `readback` in chat, verbatim, and hand them the " <>
+                          "`confirm_url` — they decide there, in the app (Approve / Correct / " <>
+                          "Hold); the server records it. A confirm form may also have reached " <>
+                          "your client; answering it counts the same — first answer wins. " <>
+                          "When they've decided, re-call apply_operations with the SAME " <>
+                          "operations — the server knows their decision and the re-call " <>
+                          "resolves it."
 
   @marker_guidance "If the repo's agent-instruction file (CLAUDE.md, AGENTS.md) has no " <>
                      "'## Do It List' marker, offer the operator to add it:"
@@ -177,15 +181,6 @@ defmodule DoitMcp.Tools.ApplyOperations do
     field(:readback, :string, required: false)
     field(:assumptions, {:list, :string}, required: false)
     field(:settled, {:list, :string}, required: false)
-
-    field(:operator_decision, :string,
-      required: false,
-      description:
-        "The operator's decision on the pending readback confirm — apply | correct | " <>
-          "hold — relayed AFTER you showed them the readback and they answered. Honored " <>
-          "only while that confirm is pending for these exact operations; never a " <>
-          "shortcut past the gate"
-    )
   end
 
   def execute(params, frame) do
@@ -202,7 +197,6 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
         gate =
           ImportGate.evaluate(params.operations,
-            elicitation?: &Elicitation.client_supports_elicitation?/0,
             # AI-KNOBS-PARKED (m03.04): revive re-adds fetch_initiative (knobs-exemption read).
             # Recent pressure comes from the DATABASE's inserted_at window
             # (m03.04 3.1 iteration 2) — human-rhythm drips decay, gulps
@@ -238,25 +232,22 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  # BatchShape verdict, folded with what the session can actually do:
+  # BatchShape verdict, folded with the confirm contract:
   #   - refusals stand unless the agent claims an operator instruction
-  #     (`readback` + `settled`) AND the client can ask the operator — the
-  #     claim then routes to the confirm form, where the printed facts make a
-  #     false "operator asked for this" vetoable at a glance (fix 18.2's
-  #     precedent);
-  #   - sub-scale holds step aside on a non-elicitation client, exactly like
-  #     the size gate (condition 2) — with no way to ask, prose is the only
-  #     layer there.
+  #     (`readback` + `settled`) — the claim then routes to the confirm,
+  #     where the printed facts make a false "operator asked for this"
+  #     vetoable at a glance (fix 18.2's precedent);
+  #   - sub-scale holds always hold (m03.04 item 30.4): the in-app confirm
+  #     can ask the operator on any client, so no capability steps a hold
+  #     aside anymore.
   defp shape_check(params) do
     if ImportGate.enabled?() do
       case BatchShape.classify(params.operations) do
         {:refuse, message} ->
-          if override_claimed?(params) and Elicitation.client_supports_elicitation?(),
-            do: :hold,
-            else: {:refuse, message}
+          if override_claimed?(params), do: :hold, else: {:refuse, message}
 
         {:hold, _question} ->
-          if Elicitation.client_supports_elicitation?(), do: :hold, else: :pass
+          :hold
 
         :pass ->
           :pass
@@ -279,12 +270,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
   # Resolve the batch's parent-anchored task-adds (`parent_id` = an existing
   # task) to their Initiatives — one GET /api/v1/tasks/:id per unique parent
   # (m03.04 item 2.18) — for the gate's per-target counting. Skipped when the
-  # gate could never fire (kill switch off, or a client without elicitation).
-  # A parent the read can't resolve (404/error) is left out of the map: its
-  # adds keep the old dropped behavior and the apply surfaces the real error.
+  # gate could never fire (kill switch off). A parent the read can't resolve
+  # (404/error) is left out of the map: its adds keep the old dropped
+  # behavior and the apply surfaces the real error.
   defp resolve_parent_targets(operations) do
     with [_ | _] = parent_ids <- ImportGate.existing_parent_ids(operations),
-         true <- ImportGate.enabled?() and Elicitation.client_supports_elicitation?() do
+         true <- ImportGate.enabled?() do
       parent_ids
       |> Enum.flat_map(fn parent_id ->
         case Client.get("/api/v1/tasks/#{parent_id}") do
@@ -386,47 +377,97 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  # A held batch no longer waits on its confirm (m03.04 item 27.1): the
-  # answer arrives either as the relayed `operator_decision` on a re-call
-  # (the chat channel) or on the out-of-band form via the detached waiter —
-  # first one wins, the session remembers.
+  # A held batch never waits on its confirm (m03.04 item 27.1): the answer
+  # arrives on the session's own channels — the out-of-band form via the
+  # detached waiter — or in the APP (item 30): the confirm is parked behind
+  # the API and the operator's decision is server-recorded, consulted here
+  # by payload hash on every re-call. Session channels first (first answer
+  # wins), then the server's record.
   defp hold_for_confirmation(params, info, frame, parent_targets) do
     key = confirm_key(params.operations)
 
-    case presence(Map.get(params, :operator_decision)) do
-      nil -> pending_or_park(params, key, info, frame)
-      decision -> relay_decision(decision, key, params, info, frame, parent_targets)
-    end
-  end
-
-  defp pending_or_park(params, key, info, frame) do
     case PendingConfirm.take_answered(key) do
       {:answered, outcome} ->
         form_outcome(outcome, frame)
 
       :none ->
-        cond do
-          not Elicitation.reachable?() ->
-            # The client advertised elicitation but this session has no open
-            # server-to-client stream for the confirm form to ride (m03.04
-            # item 23.3). Loud and immediate — never a hang, never a silent
-            # pass: held with the server facts, like the pre-elicitation hold.
-            not_applied(frame, %{message: no_stream_message(info)})
-
-          is_nil(presence(Map.get(params, :readback))) ->
-            {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
-
-          true ->
-            park_for_confirmation(params, key, info, frame)
-        end
+        consult_confirm(params, key, info, frame, parent_targets)
     end
   end
 
-  # Open the pending confirm, send the form out-of-band, and return promptly
-  # with the readback — a NORMAL result carrying the operator's decision
-  # contract, never a park inside the transport's dispatch bound. A re-call
-  # while the form is still out lands here too: the row reopens under the
-  # same key and `:already_waiting` skips the second send.
+  # The server-recorded confirm (m03.04 item 30.1): `GET` the newest row for
+  # this exact batch's hash. An approval is honored wherever it was granted
+  # — another session, another client, before an adapter restart — because
+  # the server knows; decisions are not writable through this API, so no
+  # agent can have written it. A consult failure is LOUD (never a silent
+  # pass); 404 just means nothing is parked yet.
+  defp consult_confirm(params, key, info, frame, parent_targets) do
+    case Client.get("/api/v1/import_confirms/#{payload_hash(params.operations)}") do
+      {:ok, %{"status" => "approved"}} ->
+        # Settle exactly as a form grant does: the gate's target (the
+        # session settle) plus this exact batch's key (so a shape-held
+        # re-call flows too), marked before the apply so a failed apply's
+        # retry doesn't re-ask.
+        PendingConfirm.claim(key)
+        if info.target, do: Counter.mark_confirmed(info.target)
+        Counter.mark_confirmed(key)
+        apply_batch(params, frame, parent_targets, note: @confirm_note)
+
+      {:ok, %{"status" => "corrected"} = row} ->
+        decided_outcome(
+          %{decision: "correct", corrections: presence(row["corrections"])},
+          key,
+          params,
+          info,
+          frame
+        )
+
+      {:ok, %{"status" => "held"}} ->
+        decided_outcome(%{decision: "hold", corrections: nil}, key, params, info, frame)
+
+      {:ok, %{"status" => "pending"}} ->
+        # Already parked (this session or an earlier one): don't double-park
+        # — the park POST is idempotent, so the park path returns the same
+        # row and URL (and re-arms the form where one can ride).
+        pending_or_park(params, key, info, frame)
+
+      {:error, %{status: 404}} ->
+        pending_or_park(params, key, info, frame)
+
+      {:error, _} ->
+        confirm_channel_down(frame)
+    end
+  end
+
+  # A recorded correct/hold resolves ONCE per outstanding confirm — the form
+  # outcomes' exact semantics: consumed on pickup, so the NEXT re-call of
+  # the same batch re-parks a fresh confirm (the re-ask; the park POST opens
+  # a fresh pending row past a decided one). With nothing outstanding on
+  # this session (a fresh session, or already consumed), the decided row is
+  # history — re-ask by parking.
+  defp decided_outcome(outcome, key, params, info, frame) do
+    case PendingConfirm.claim(key) do
+      :pending -> form_outcome(outcome, frame)
+      {:answered, form} -> form_outcome(form, frame)
+      :none -> pending_or_park(params, key, info, frame)
+    end
+  end
+
+  defp pending_or_park(params, key, info, frame) do
+    if is_nil(presence(Map.get(params, :readback))) do
+      {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
+    else
+      park_for_confirmation(params, key, info, frame)
+    end
+  end
+
+  # Park the confirm behind the API (m03.04 item 30.1) — readback verbatim,
+  # hash-bound, homed on the target Initiative (account for bootstrap
+  # batches) — then return promptly with the readback and the confirm URL: a
+  # NORMAL result carrying the operator's decision contract, never a park
+  # inside the transport's dispatch bound. The elicitation form rides as a
+  # parallel convenience where it can; a park failure is LOUD — with no
+  # parked confirm there is nothing the operator could answer.
   defp park_for_confirmation(params, key, info, frame) do
     message =
       confirmation_message(
@@ -437,28 +478,63 @@ defmodule DoitMcp.Tools.ApplyOperations do
         Map.get(params, :settled) || []
       )
 
-    PendingConfirm.open(key)
-    target = info.target
-    on_answer = fn result -> form_answer(key, target, result) end
+    case Client.post("/api/v1/import_confirms", park_body(params.operations, message, info)) do
+      {:ok, %{"url" => url}} ->
+        PendingConfirm.open(key)
+        send_form_where_it_rides(message, key, info.target)
 
-    case Elicitation.request_async(message, @confirm_schema, confirm_expiry(), on_answer) do
-      ok when ok in [:ok, {:error, :already_waiting}] ->
         payload = %{
           ok: false,
           applied: false,
           gate: "import_readback_confirm",
           status: "confirmation_pending",
           readback: message,
+          confirm_url: url,
           message: @pending_instructions
         }
 
         {:reply, Response.json(Response.tool(), payload), frame}
 
-      _no_stream_or_session ->
-        # The stream closed between pending_or_park's check and the send —
-        # same loud hold.
-        not_applied(frame, %{message: no_stream_message(info)})
+      _error ->
+        confirm_channel_down(frame)
     end
+  end
+
+  # Only an EXISTING target homes the confirm on its Initiative; a bootstrap
+  # batch (in-batch target) and a shape-hold (no target) home on the account
+  # — their Initiative doesn't exist yet / isn't the confirm's subject.
+  defp park_body(operations, message, info) do
+    base = %{payload_hash: payload_hash(operations), readback: message}
+
+    case info.target do
+      {:existing, id} -> Map.put(base, :initiative_id, id)
+      _ -> base
+    end
+  end
+
+  # The form is a convenience channel (m03.04 item 30.4): it rides only when
+  # the client advertised elicitation AND the session holds an open stream;
+  # anywhere it can't — no capability, no stream, a send that loses the race
+  # — the in-app URL is the channel, so every failure here is a quiet no-op,
+  # never a hold. `:already_waiting` means a form is already out for this
+  # session; the parked row and URL cover the rest.
+  defp send_form_where_it_rides(message, key, target) do
+    if Elicitation.client_supports_elicitation?() and Elicitation.reachable?() do
+      on_answer = fn result -> form_answer(key, target, result) end
+      Elicitation.request_async(message, @confirm_schema, confirm_expiry(), on_answer)
+    end
+
+    :ok
+  end
+
+  defp confirm_channel_down(frame) do
+    not_applied(frame, %{
+      message:
+        "Import gate: this batch needs the operator's confirmation, but the confirm " <>
+          "channel is unavailable — the app's import-confirm API could not be reached. " <>
+          "Batch NOT applied. Re-call when the Do It List server is reachable; the " <>
+          "operator will decide in the app."
+    })
   end
 
   # Runs IN the detached waiter when the client's form answers, with the
@@ -467,7 +543,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   # gate's target (the session settle) plus this exact batch's key (so a
   # shape-held re-call flows too); decline/correct/hold latch on the row for
   # the next re-call to pick up. A stale answer — expired, superseded, or
-  # beaten by the chat relay — is dropped where it lands.
+  # beaten by the in-app decision — is dropped where it lands.
   defp form_answer(key, target, result) do
     case result do
       %{"action" => "accept", "content" => content} when is_map(content) ->
@@ -483,8 +559,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
         record_form_outcome(key, %{decision: "decline", corrections: nil})
 
       _cancel_or_other ->
-        # The form was dismissed, not decided — the chat relay stays open on
-        # the row, and a plain re-call re-arms a fresh form.
+        # The form was dismissed, not decided — the in-app confirm stays
+        # open on the parked row, and a plain re-call re-arms a fresh form.
         :ok
     end
   end
@@ -507,61 +583,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  # The chat channel: the agent relays the decision the operator made on the
-  # readback. Honored only against a pending confirm for these exact
-  # operations — never a free pass on a call that was never read back — and
-  # a form answer that landed first wins (the relay is then a no-op).
-  defp relay_decision(decision, key, params, info, frame, parent_targets) do
-    cond do
-      decision not in ["apply", "correct", "hold"] ->
-        not_applied(frame, %{
-          message:
-            "operator_decision must be \"apply\", \"correct\", or \"hold\" — got " <>
-              "\"#{decision}\". Batch NOT applied."
-        })
-
-      true ->
-        case PendingConfirm.claim(key) do
-          :none ->
-            not_applied(frame, %{message: no_pending_message()})
-
-          {:answered, outcome} ->
-            form_outcome(outcome, frame)
-
-          :pending ->
-            relay_pending_decision(decision, params, info, frame, parent_targets)
-        end
-    end
-  end
-
-  defp relay_pending_decision("apply", params, info, frame, parent_targets) do
-    # The operator's confirm settles this Initiative for the rest of the
-    # session — later chunks must not re-ask (marked before the apply so a
-    # failed apply's retry doesn't re-elicit an already-granted confirm).
-    # A shape-hold has no target: its confirm is per-batch, nothing settles.
-    if info.target, do: Counter.mark_confirmed(info.target)
-    apply_batch(params, frame, parent_targets, note: @confirm_note)
-  end
-
-  defp relay_pending_decision("correct", _params, _info, frame, _parent_targets) do
-    not_applied(frame, %{
-      message:
-        "The operator decided: correct — batch NOT applied. Revise the batch to match " <>
-          "their corrections, then re-apply."
-    })
-  end
-
-  defp relay_pending_decision("hold", _params, _info, frame, _parent_targets) do
-    not_applied(frame, %{
-      message:
-        "The operator decided: hold — batch NOT applied. They want to be interviewed " <>
-          "before this import: ask your remaining questions now (the question budget), " <>
-          "then re-apply."
-    })
-  end
-
-  # A form decision picked up by a re-call — the same guidance the inline
-  # answer used to return.
+  # A recorded decision picked up by a re-call — form or in-app, the same
+  # guidance either way.
   defp form_outcome(outcome, frame) do
     cond do
       is_binary(outcome[:corrections]) ->
@@ -596,25 +619,16 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  defp no_pending_message do
-    "operator_decision was given, but no confirm is pending for this exact batch on this " <>
-      "session — it is honored only after a gated call returned status: " <>
-      "\"confirmation_pending\" for the SAME operations, relaying a decision the operator " <>
-      "actually made on that readback. Batch NOT applied; re-call without " <>
-      "operator_decision to start the confirm."
-  end
-
-  # The pending confirm binds to the exact batch read back — the operations
-  # hash is the key both channels resolve against, and the Counter term a
-  # form-approved shape-hold flows on.
+  # The pending confirm binds to the exact batch read back. Two identities,
+  # two scopes: `confirm_key/1` (phash2) keys the SESSION rows —
+  # Counter/PendingConfirm — and `payload_hash/1` (sha256 hex) is the
+  # portable identity the API row carries, computed exactly as pinned so a
+  # changed batch re-parks and an unchanged one resolves.
   defp confirm_key(operations), do: {:import_batch, :erlang.phash2(operations)}
 
-  defp no_stream_message(%{task_adds: task_adds, cumulative: cumulative}) do
-    "Import gate: this batch needs the operator's confirmation (#{task_adds} task-adds, " <>
-      "#{cumulative} this session), but the confirm form cannot reach them — the client " <>
-      "advertises elicitation yet holds no open server-to-client stream on this session. " <>
-      "Nothing was applied. Connect the standalone stream (a GET against this MCP " <>
-      "endpoint) and re-apply."
+  defp payload_hash(operations) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(operations, [:deterministic]))
+    |> Base.encode16(case: :lower)
   end
 
   defp not_applied(frame, extra) do

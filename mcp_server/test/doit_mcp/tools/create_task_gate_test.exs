@@ -229,16 +229,17 @@ defmodule DoitMcp.CreateTaskGateTest do
     assert_received :created
   end
 
-  test "the pause stands aside without elicitation capability" do
+  test "the pause holds for a client without elicitation too — the app carries the batch path's confirm (m03.04 item 30.4)" do
     fake_session(%{})
     stub_api(@threshold + 100)
 
     assert {:reply, response, @frame} =
-             CreateTask.execute(%{initiative_id: 7, title: "Ungated client"}, @frame)
+             CreateTask.execute(%{initiative_id: 7, title: "Gated client"}, @frame)
 
-    {protocol, _decoded} = decode(response)
-    assert protocol["isError"] == false
-    assert_received :created
+    {protocol, decoded} = decode(response)
+    assert protocol["isError"] == true
+    assert decoded["gate"] == "single_create_pause"
+    refute_received :created
   end
 
   test "the kill switch disarms the pause" do

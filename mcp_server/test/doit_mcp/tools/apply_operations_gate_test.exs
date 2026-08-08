@@ -31,6 +31,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
   @threshold ImportGate.threshold()
   @frame %{test: true}
+  @confirm_url "http://localhost:4000/initiatives/7#import-confirm"
 
   # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on here
   # so these behavior tests stay deterministic against the container's
@@ -41,10 +42,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     :ok
   end
 
-  # Any test that resolves a confirm (form answer or operator_decision
-  # relay) starts the gate's session memory — Counter plus PendingConfirm;
-  # everything else runs memory-less (both degrade to zero/no-op), i.e.
-  # single-batch semantics.
+  # Any test that resolves a confirm (form answer or in-app consult) starts
+  # the gate's session memory — Counter plus PendingConfirm; everything else
+  # runs memory-less (both degrade to zero/no-op), i.e. single-batch
+  # semantics.
   defp start_gate_state do
     counter = :"#{__MODULE__}.Counter"
     pending = :"#{__MODULE__}.PendingConfirm"
@@ -140,6 +141,50 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end
   end
 
+  # Serves the import-confirm API (m03.04 item 30) ahead of a stub's other
+  # clauses. GET by hash answers the adapter's consult: `:none` → 404
+  # (nothing recorded), a map → the row merged over pending defaults. POST
+  # parks — echoing a pending row + the card URL — and reports the decoded
+  # body as {:parked, body} to `reply_to`.
+  defp with_confirm_api(conn, reply_to, consult, fallback) do
+    case {conn.method, conn.request_path} do
+      {"GET", "/api/v1/import_confirms/" <> hash} ->
+        case consult do
+          :none ->
+            conn
+            |> Plug.Conn.put_status(404)
+            |> Req.Test.json(%{"error" => %{"status" => 404, "code" => "not_found"}})
+
+          row when is_map(row) ->
+            defaults = %{
+              "payload_hash" => hash,
+              "status" => "pending",
+              "corrections" => nil,
+              "url" => @confirm_url
+            }
+
+            Req.Test.json(conn, %{"data" => Map.merge(defaults, row)})
+        end
+
+      {"POST", "/api/v1/import_confirms"} ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        parked = Jason.decode!(body)
+        send(reply_to, {:parked, parked})
+
+        Req.Test.json(conn, %{
+          "data" => %{
+            "payload_hash" => parked["payload_hash"],
+            "status" => "pending",
+            "corrections" => nil,
+            "url" => @confirm_url
+          }
+        })
+
+      _ ->
+        fallback.(conn)
+    end
+  end
+
   # GET /api/v1/tasks/:id resolves the anchor parent to its Initiative (and
   # reports each read to the test process, so dedup is assertable); GET
   # /api/v1/initiatives/:id serves the target knobless; POST applies.
@@ -150,7 +195,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       with_pressure(
         conn,
         pressure,
-        fn conn ->
+        &with_confirm_api(&1, reply_to, :none, fn conn ->
           case {conn.method, conn.request_path} do
             {"GET", "/api/v1/tasks/" <> _} ->
               send(reply_to, {:task_read, conn.request_path})
@@ -172,25 +217,31 @@ defmodule DoitMcp.ApplyOperationsGateTest do
             {"POST", "/api/v1/operations"} ->
               Req.Test.json(conn, %{"results" => []})
           end
-        end,
+        end),
         extra
       )
     end)
   end
 
-  defp stub_apply_ok(pressure \\ 0) do
-    Req.Test.stub(DoitMcp.Client, fn conn ->
-      with_pressure(conn, pressure, fn conn ->
-        case {conn.method, conn.request_path} do
-          # The post-apply repo-marker read (item 26.2): no summaries served,
-          # so no suggestion rides these gate assertions.
-          {"GET", "/api/v1/initiatives"} ->
-            Req.Test.json(conn, %{"data" => []})
+  defp stub_apply_ok(pressure \\ 0, consult \\ :none) do
+    reply_to = self()
 
-          {"POST", "/api/v1/operations"} ->
-            Req.Test.json(conn, %{"results" => []})
-        end
-      end)
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      with_pressure(
+        conn,
+        pressure,
+        &with_confirm_api(&1, reply_to, consult, fn conn ->
+          case {conn.method, conn.request_path} do
+            # The post-apply repo-marker read (item 26.2): no summaries served,
+            # so no suggestion rides these gate assertions.
+            {"GET", "/api/v1/initiatives"} ->
+              Req.Test.json(conn, %{"data" => []})
+
+            {"POST", "/api/v1/operations"} ->
+              Req.Test.json(conn, %{"results" => []})
+          end
+        end)
+      )
     end)
   end
 
@@ -200,24 +251,30 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     {protocol, Jason.decode!(text), rest}
   end
 
-  defp stub_get_and_apply(knobs, pressure \\ 0) do
+  defp stub_get_and_apply(knobs, pressure \\ 0, consult \\ :none) do
+    reply_to = self()
+
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      with_pressure(conn, pressure, fn conn ->
-        case {conn.method, conn.request_path} do
-          # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
-          # parked; a revived fetch hits it (and the knobs arg matters) again.
-          {"GET", "/api/v1/initiatives/7"} ->
-            Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
+      with_pressure(
+        conn,
+        pressure,
+        &with_confirm_api(&1, reply_to, consult, fn conn ->
+          case {conn.method, conn.request_path} do
+            # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
+            # parked; a revived fetch hits it (and the knobs arg matters) again.
+            {"GET", "/api/v1/initiatives/7"} ->
+              Req.Test.json(conn, %{"data" => %{"id" => 7, "ai_knobs" => knobs}})
 
-          # The post-apply repo-marker read (item 26.2): no summaries, no
-          # suggestion.
-          {"GET", "/api/v1/initiatives"} ->
-            Req.Test.json(conn, %{"data" => []})
+            # The post-apply repo-marker read (item 26.2): no summaries, no
+            # suggestion.
+            {"GET", "/api/v1/initiatives"} ->
+              Req.Test.json(conn, %{"data" => []})
 
-          {"POST", "/api/v1/operations"} ->
-            Req.Test.json(conn, %{"results" => []})
-        end
-      end)
+            {"POST", "/api/v1/operations"} ->
+              Req.Test.json(conn, %{"results" => []})
+          end
+        end)
+      )
     end)
   end
 
@@ -225,9 +282,60 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   # creates); GET serves its ai_knobs (AI-KNOBS-PARKED: unreached while the
   # gate's knobs fetch is parked; a revived fetch hits it again).
   defp stub_create_echo_and_get(initiative_id, knobs, pressure \\ 0) do
+    reply_to = self()
+
     Req.Test.stub(DoitMcp.Client, fn conn ->
-      with_pressure(conn, pressure, fn conn ->
+      with_pressure(
+        conn,
+        pressure,
+        &with_confirm_api(&1, reply_to, :none, fn conn ->
+          case {conn.method, conn.request_path} do
+            {"POST", "/api/v1/operations"} ->
+              Req.Test.json(conn, %{
+                "results" => [
+                  %{
+                    "index" => 0,
+                    "lid" => "i",
+                    "status" => "ok",
+                    "data" => %{"id" => initiative_id, "type" => "initiative"}
+                  }
+                ]
+              })
+
+            # The post-apply repo-marker read (item 26.2): no summaries, no
+            # suggestion.
+            {"GET", "/api/v1/initiatives"} ->
+              Req.Test.json(conn, %{"data" => []})
+
+            {"GET", "/api/v1/initiatives/" <> _} ->
+              Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => knobs}})
+          end
+        end)
+      )
+    end)
+  end
+
+  # Like stub_create_echo_and_get, but task_count also carries a FRESH
+  # initiative_created_at (m03.04 3.1 iteration 3) — the Initiative is still
+  # inside its freshness window, so fresh?/1 reads true over HTTP.
+  defp stub_fresh_create_echo_and_get(initiative_id, pressure \\ 0) do
+    created = DateTime.utc_now() |> DateTime.add(-2, :minute) |> DateTime.to_iso8601()
+    reply_to = self()
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      with_confirm_api(conn, reply_to, :none, fn conn ->
         case {conn.method, conn.request_path} do
+          {"GET", path} ->
+            if String.ends_with?(path, "/task_count") do
+              Req.Test.json(conn, %{
+                "data" => %{"count" => pressure, "initiative_created_at" => created}
+              })
+            else
+              # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
+              # parked; a revived fetch hits it again.
+              Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
+            end
+
           {"POST", "/api/v1/operations"} ->
             Req.Test.json(conn, %{
               "results" => [
@@ -239,50 +347,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
                 }
               ]
             })
-
-          # The post-apply repo-marker read (item 26.2): no summaries, no
-          # suggestion.
-          {"GET", "/api/v1/initiatives"} ->
-            Req.Test.json(conn, %{"data" => []})
-
-          {"GET", "/api/v1/initiatives/" <> _} ->
-            Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => knobs}})
         end
       end)
-    end)
-  end
-
-  # Like stub_create_echo_and_get, but task_count also carries a FRESH
-  # initiative_created_at (m03.04 3.1 iteration 3) — the Initiative is still
-  # inside its freshness window, so fresh?/1 reads true over HTTP.
-  defp stub_fresh_create_echo_and_get(initiative_id, pressure \\ 0) do
-    created = DateTime.utc_now() |> DateTime.add(-2, :minute) |> DateTime.to_iso8601()
-
-    Req.Test.stub(DoitMcp.Client, fn conn ->
-      case {conn.method, conn.request_path} do
-        {"GET", path} ->
-          if String.ends_with?(path, "/task_count") do
-            Req.Test.json(conn, %{
-              "data" => %{"count" => pressure, "initiative_created_at" => created}
-            })
-          else
-            # AI-KNOBS-PARKED (m03.04): unreached — the gate's knobs fetch is
-            # parked; a revived fetch hits it again.
-            Req.Test.json(conn, %{"data" => %{"id" => initiative_id, "ai_knobs" => nil}})
-          end
-
-        {"POST", "/api/v1/operations"} ->
-          Req.Test.json(conn, %{
-            "results" => [
-              %{
-                "index" => 0,
-                "lid" => "i",
-                "status" => "ok",
-                "data" => %{"id" => initiative_id, "type" => "initiative"}
-              }
-            ]
-          })
-      end
     end)
   end
 
@@ -339,21 +405,28 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
-  test "a client without the elicitation capability skips the gate entirely" do
+  test "a client without the elicitation capability still gates — the app carries the confirm" do
+    start_gate_state()
     fake_session(%{"sampling" => %{}})
     stub_apply_ok()
 
     ops = new_initiative_batch(@threshold + 1)
     refute Elicitation.client_supports_elicitation?()
 
+    # The same readback demand every client meets.
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
-    {_, decoded, _} = decode_json_content(response)
-    assert decoded["ok"] == true
+    assert Response.to_protocol(response)["isError"] == true
+
+    # With one, the confirm parks URL-only: no form to ride, nothing skipped.
+    decoded = execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
+    assert decoded["confirm_url"] == @confirm_url
+    assert_received {:parked, _body}
     refute_received {:send_elicitation_request, _, _, _}
   end
 
   test "gated batch without readback is rejected unapplied, telling the agent what to supply" do
     elicitation_capable()
+    stub_apply_ok()
 
     ops = new_initiative_batch(@threshold + 1)
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
@@ -396,7 +469,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert decoded["readback"] == expected_message
     refute decoded["readback"] =~ "Settled"
-    assert decoded["message"] =~ "operator_decision"
+    assert decoded["confirm_url"] == @confirm_url
+    assert decoded["message"] =~ "confirm_url"
     assert decoded["message"] =~ "re-call"
 
     # The form went out out-of-band with the SAME message, on the generous
@@ -417,87 +491,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:send_elicitation_request, _, _, _}
   end
 
-  test "operator_decision: apply on the pending confirm applies, notes, and settles the session" do
-    start_gate_state()
-    elicitation_capable()
-    stub_get_and_apply(nil)
-
-    ops = existing_initiative_batch(@threshold + 1, 7)
-    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
-    assert_receive {:send_elicitation_request, _, _, _}, 2_000
-
-    # The agent relays the operator's chat decision on the re-call.
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(%{operations: ops, operator_decision: "apply"}, @frame)
-
-    {protocol, decoded, rest} = decode_json_content(response)
-    assert protocol["isError"] == false
-    assert decoded["ok"] == true
-    assert [%{"type" => "text", "text" => note}] = rest
-    assert note =~ "confirmed"
-
-    # The confirm settled the Initiative: an over-the-line later chunk stays
-    # silent.
-    stub_get_and_apply(nil, 200)
-    execute_ok(existing_initiative_batch(15, 7))
-    refute_received {:send_elicitation_request, _, _, _}
-  end
-
-  test "operator_decision: correct and hold apply nothing and consume the confirm" do
-    start_gate_state()
-    elicitation_capable()
-
-    ops = new_initiative_batch(@threshold + 1)
-    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
-
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(%{operations: ops, operator_decision: "correct"}, @frame)
-
-    {protocol, decoded, _} = decode_json_content(response)
-    assert protocol["isError"] == true
-    assert decoded["applied"] == false
-    assert decoded["message"] =~ "operator decided: correct"
-
-    # Consumed — relaying again finds nothing pending.
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(%{operations: ops, operator_decision: "correct"}, @frame)
-
-    {_, decoded, _} = decode_json_content(response)
-    assert decoded["message"] =~ "no confirm is pending"
-
-    # hold, over a fresh confirm.
-    execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
-
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(%{operations: ops, operator_decision: "hold"}, @frame)
-
-    {protocol, decoded, _} = decode_json_content(response)
-    assert protocol["isError"] == true
-    assert decoded["applied"] == false
-    assert decoded["message"] =~ "operator decided: hold"
-    assert decoded["message"] =~ "questions"
-  end
-
-  test "operator_decision without a pending confirm is rejected — never a free pass" do
-    start_gate_state()
-    elicitation_capable()
-
-    ops = new_initiative_batch(@threshold + 1)
-
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(
-               %{operations: ops, readback: "Importing 31 tasks.", operator_decision: "apply"},
-               @frame
-             )
-
-    {protocol, decoded, _} = decode_json_content(response)
-    assert protocol["isError"] == true
-    assert decoded["applied"] == false
-    assert decoded["message"] =~ "no confirm is pending"
-    refute_received {:send_elicitation_request, _, _, _}
-  end
-
-  test "an expired form is a no-op; the chat relay still resolves the confirm" do
+  test "an expired form is a no-op; the in-app decision still resolves the confirm" do
     start_gate_state()
     elicitation_capable()
     stub_apply_ok()
@@ -513,13 +507,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     ref = Process.monitor(waiter)
     assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 3_000
 
-    # A late form answer lands nowhere. The chat relay then resolves the
-    # still-pending confirm — the confirm NOTE proves the relay ran (a
-    # leaked late approval would have applied noteless via the gate).
+    # A late form answer lands nowhere. The operator's in-app approval —
+    # the channel with no clock — then resolves the still-pending confirm on
+    # a plain re-call; the confirm NOTE proves the consult ran (a leaked
+    # late approval would have applied noteless via the gate).
     Elicitation.deliver(%{"action" => "accept", "content" => %{"decision" => "apply"}})
 
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(%{operations: ops, operator_decision: "apply"}, @frame)
+    stub_apply_ok(0, %{"status" => "approved"})
+
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
     {protocol, decoded, rest} = decode_json_content(response)
     assert protocol["isError"] == false
@@ -655,6 +651,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   test "form corrections come back on the re-call and nothing applies" do
     start_gate_state()
     elicitation_capable()
+    stub_apply_ok()
 
     ops = new_initiative_batch(@threshold + 1)
     execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
@@ -676,6 +673,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   test "a form correct without corrections text holds the batch on the re-call" do
     start_gate_state()
     elicitation_capable()
+    stub_apply_ok()
 
     ops = new_initiative_batch(@threshold + 1)
     execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
@@ -692,6 +690,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   test "a form hold withholds the apply and asks for the interview on the re-call" do
     start_gate_state()
     elicitation_capable()
+    stub_apply_ok()
 
     ops = new_initiative_batch(@threshold + 1)
     execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
@@ -710,6 +709,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   test "settled dimensions are echoed as their own block for the operator's veto" do
     start_gate_state()
     elicitation_capable()
+    stub_apply_ok()
 
     decoded =
       execute_pending(%{
@@ -726,6 +726,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   test "a form decline latches for the re-call; the next confirm starts fresh" do
     start_gate_state()
     elicitation_capable()
+    stub_apply_ok()
     ops = new_initiative_batch(@threshold + 1)
 
     execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
@@ -753,12 +754,13 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     answer_form(%{"action" => "cancel"})
 
     # No decision latched: the re-call re-prompts with a fresh form, and the
-    # chat relay still resolves the pending confirm.
+    # in-app decision still resolves the pending confirm.
     execute_pending(%{operations: ops, readback: "Importing 31 tasks."})
     assert_receive {:send_elicitation_request, _, _, _}, 2_000
 
-    assert {:reply, response, @frame} =
-             ApplyOperations.execute(%{operations: ops, operator_decision: "apply"}, @frame)
+    stub_apply_ok(0, %{"status" => "approved"})
+
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 
     {protocol, decoded, _} = decode_json_content(response)
     assert protocol["isError"] == false
@@ -769,12 +771,14 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     elicitation_capable()
     reply_to = self()
 
-    # Only the pressure read may hit the API: the knobs whole-tree read is
-    # parked, and a held batch applies nothing.
+    # Only the pressure read and the confirm consult may hit the API: the
+    # knobs whole-tree read is parked, and a held batch applies nothing.
     Req.Test.stub(DoitMcp.Client, fn conn ->
       with_pressure(conn, 0, fn conn ->
-        send(reply_to, {:unexpected_request, conn.method, conn.request_path})
-        Req.Test.json(conn, %{"data" => %{}})
+        with_confirm_api(conn, reply_to, :none, fn conn ->
+          send(reply_to, {:unexpected_request, conn.method, conn.request_path})
+          Req.Test.json(conn, %{"data" => %{}})
+        end)
       end)
     end)
 
