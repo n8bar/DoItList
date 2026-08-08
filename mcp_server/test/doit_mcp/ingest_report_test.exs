@@ -102,6 +102,7 @@ defmodule DoitMcp.IngestReportTest do
       assert report.top_rank_counts == []
       assert report.top_rank_no_comment_task_ids == []
       assert report.unanchored_reference_candidates == []
+      assert report.sibling_order_mismatches == []
       assert report.path_like_strings == []
       assert report.journal_markers_in_descriptions == []
       assert report.checkbox_lines_in_descriptions == []
@@ -283,6 +284,112 @@ defmodule DoitMcp.IngestReportTest do
                %{task_id: 5, field: "title", matched_text: "M4"},
                %{task_id: 5, field: "description", matched_text: "1.2"}
              ]
+    end
+  end
+
+  describe "build/1 — sibling order vs title numbering" do
+    # Trigger bar (module attributes, retunable): at least 3 labeled members,
+    # at most 1 unlabeled straggler.
+
+    test "a lexicographically created set flags with parent and first divergence (the TermiWeb shape)" do
+      tree = %{
+        "id" => 1,
+        "ai_knobs" => nil,
+        "tasks" => [
+          leaf(1, nil, %{
+            "title" => "Milestones",
+            "children" => [
+              leaf(11, nil, %{"title" => "M1 Foundations"}),
+              leaf(12, nil, %{"title" => "M10 Polish"}),
+              leaf(13, nil, %{"title" => "M11 Ship"}),
+              leaf(14, nil, %{"title" => "M12 Wrap"}),
+              leaf(15, nil, %{"title" => "M2 Core"}),
+              leaf(16, nil, %{"title" => "M3 API"})
+            ]
+          })
+        ]
+      }
+
+      assert IngestReport.build(tree).sibling_order_mismatches == [
+               %{parent_task_id: 1, parent_title: "Milestones", first_divergence: "M10 before M2"}
+             ]
+    end
+
+    test "a shuffled top-level set names the Initiative itself as the parent" do
+      tree = %{
+        "id" => 1,
+        "name" => "TermiWeb",
+        "ai_knobs" => nil,
+        "root_task_id" => 100,
+        "tasks" => [
+          leaf(1, nil, %{"title" => "M1 Foundations"}),
+          leaf(2, nil, %{"title" => "M10 Polish"}),
+          leaf(3, nil, %{"title" => "M2 Core"})
+        ]
+      }
+
+      assert IngestReport.build(tree).sibling_order_mismatches == [
+               %{parent_task_id: 100, parent_title: "TermiWeb", first_divergence: "M10 before M2"}
+             ]
+    end
+
+    test "a numerically ordered set stays silent" do
+      tasks = for i <- [1, 2, 3, 10, 11, 12], do: leaf(i, nil, %{"title" => "M#{i} thing"})
+
+      assert IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => tasks}).sibling_order_mismatches ==
+               []
+    end
+
+    test "descending numbering still flags — anything not non-decreasing diverges" do
+      # The doc's target is the lexicographic shuffle; the simplest correct
+      # reading covers descending too — M12 first is out of numeric position.
+      tasks = for i <- [12, 11, 10, 3], do: leaf(i, nil, %{"title" => "M#{i} thing"})
+
+      assert [%{first_divergence: "M12 before M3"}] =
+               IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => tasks}).sibling_order_mismatches
+    end
+
+    test "an unlabeled set stays silent" do
+      tasks = for i <- [3, 1, 2, 4], do: leaf(i, nil, %{"title" => "Chore #{i}"})
+
+      assert IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => tasks}).sibling_order_mismatches ==
+               []
+    end
+
+    test "a mismatched set below the member floor stays silent" do
+      tasks = [leaf(1, nil, %{"title" => "M10 late"}), leaf(2, nil, %{"title" => "M2 early"})]
+
+      assert IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => tasks}).sibling_order_mismatches ==
+               []
+    end
+
+    test "one unlabeled straggler among 3+ labeled members is still checked; a second silences" do
+      shuffled = [
+        leaf(1, nil, %{"title" => "M1 Foundations"}),
+        leaf(2, nil, %{"title" => "Unnumbered interlude"}),
+        leaf(3, nil, %{"title" => "M10 Polish"}),
+        leaf(4, nil, %{"title" => "M2 Core"})
+      ]
+
+      assert [%{first_divergence: "M10 before M2"}] =
+               IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => shuffled}).sibling_order_mismatches
+
+      two_stragglers = shuffled ++ [leaf(5, nil, %{"title" => "Another interlude"})]
+
+      assert IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => two_stragglers}).sibling_order_mismatches ==
+               []
+    end
+
+    test "dotted-index titles compare numerically per segment, not as strings" do
+      # A string sort would call 1.10 < 1.3 and stay silent.
+      tasks = [
+        leaf(1, nil, %{"title" => "1.2 Alpha"}),
+        leaf(2, nil, %{"title" => "1.10 Beta"}),
+        leaf(3, nil, %{"title" => "1.3 Gamma"})
+      ]
+
+      assert [%{first_divergence: "1.10 before 1.3"}] =
+               IngestReport.build(%{"id" => 1, "ai_knobs" => nil, "tasks" => tasks}).sibling_order_mismatches
     end
   end
 
@@ -576,6 +683,7 @@ defmodule DoitMcp.IngestReportTest do
       assert report["depth_histogram"] == %{"0" => 3, "1" => 2, "2" => 1}
       assert report["no_description_task_ids"] == [11, 12, 3]
       assert report["duplicate_descriptions"] == []
+      assert report["sibling_order_mismatches"] == []
 
       assert List.first(report["top_rank_counts"]) ==
                %{

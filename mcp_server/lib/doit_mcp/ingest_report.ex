@@ -30,6 +30,15 @@ defmodule DoitMcp.IngestReport do
       substrings in titles/descriptions shaped like `M<n>`, a dotted index path
       (2+ segments), or `task <n>`, outside `%<id>` tokens, as
       `%{task_id, field, matched_text}`. Heuristic; false positives expected.
+    * sibling order vs title numbering — `sibling_order_mismatches`: sibling
+      sets whose titles lead with a label + integer (`M<n>` or a dotted
+      index — the reference-candidate shapes anchored at the title start)
+      in a numeric order that is not non-decreasing, as
+      `%{parent_task_id, parent_title, first_divergence}` — the divergence
+      phrased `"M10 before M2"`: the first title out of numeric position,
+      then the one that belongs there. A set measures only with 3+
+      labeled members and at most 1 unlabeled straggler (retunable); the
+      top-level set's parent is the Initiative itself.
     * path-like strings — `path_like_strings`: slash-separated path shapes in
       descriptions, as `%{task_id, matched_text}`.
     * journal markers in descriptions — `journal_markers_in_descriptions`:
@@ -58,6 +67,12 @@ defmodule DoitMcp.IngestReport do
   @long_comment_chars 300
   @preview_chars 120
 
+  # Sibling-order trigger bar (m03.04 item 29) — retunable defaults: a set
+  # measures only with this many labeled members, and only when the labeled
+  # members are all of the set but at most this many stragglers.
+  @min_labeled_siblings 3
+  @max_unlabeled_siblings 1
+
   # Compiled regexes hold a runtime reference (OTP 28+), so they can't live in
   # module attributes — plain functions instead.
 
@@ -75,6 +90,15 @@ defmodule DoitMcp.IngestReport do
       ~r/\bM\d+\b/,
       ~r/\b\d+(?:\.\d+)+\b/,
       ~r/\btask\s+\d+\b/i
+    ]
+  end
+
+  # The reference-candidate shapes re-anchored at the title start: a sibling
+  # is "labeled" when its title leads with `M<n>` or a dotted index.
+  defp title_label_patterns do
+    [
+      ~r/^M\d+\b/,
+      ~r/^\d+(?:\.\d+)+\b/
     ]
   end
 
@@ -117,6 +141,7 @@ defmodule DoitMcp.IngestReport do
       top_rank_counts: top |> top_rank_counts() |> cap(),
       top_rank_no_comment_task_ids: flat |> top_rank_without_comments() |> cap(),
       unanchored_reference_candidates: flat |> Enum.flat_map(&reference_candidates/1) |> cap(),
+      sibling_order_mismatches: tree |> sibling_order_mismatches(flat) |> cap(),
       path_like_strings: flat |> Enum.flat_map(&path_like/1) |> cap(),
       journal_markers_in_descriptions: flat |> Enum.flat_map(&journal_markers/1) |> cap(),
       checkbox_lines_in_descriptions: cap(checkbox_counts),
@@ -231,6 +256,73 @@ defmodule DoitMcp.IngestReport do
     Enum.flat_map(candidate_patterns(), fn pattern ->
       pattern |> Regex.scan(stripped, capture: :first) |> List.flatten()
     end)
+  end
+
+  # Every sibling set in tree order — the top-level set first (its parent is
+  # the Initiative itself; the tree read never lists the root node), then
+  # each branch's children.
+  defp sibling_order_mismatches(tree, flat) do
+    top = {tree["root_task_id"], tree["name"], Map.get(tree, "tasks") || []}
+
+    branches =
+      for {task, _depth} <- flat, children(task) != [] do
+        {task["id"], task["title"], children(task)}
+      end
+
+    Enum.flat_map([top | branches], fn {parent_id, parent_title, siblings} ->
+      case first_numbering_divergence(siblings) do
+        nil ->
+          []
+
+        divergence ->
+          [%{parent_task_id: parent_id, parent_title: parent_title, first_divergence: divergence}]
+      end
+    end)
+  end
+
+  # A set measures only past the trigger bar. At most one pattern can qualify:
+  # a title leads with one shape or neither, so all-but-one under both would
+  # need an impossible 2n - 2 <= n labeled titles at n >= 3.
+  defp first_numbering_divergence(siblings) do
+    Enum.find_value(title_label_patterns(), fn pattern ->
+      labels =
+        siblings
+        |> Enum.map(&title_label(pattern, &1["title"]))
+        |> Enum.reject(&is_nil/1)
+
+      if length(labels) >= @min_labeled_siblings and
+           length(siblings) - length(labels) <= @max_unlabeled_siblings do
+        first_divergence(labels)
+      end
+    end)
+  end
+
+  defp title_label(pattern, title) when is_binary(title) do
+    with [text] <- Regex.run(pattern, title, capture: :first), do: text
+  end
+
+  defp title_label(_pattern, _title), do: nil
+
+  # The first position where the labels as they sit depart from their numeric
+  # sort (stable, so equal numbers never diverge), phrased "M10 before M2".
+  # Any order that is not non-decreasing flags — descending included.
+  defp first_divergence(labels) do
+    keyed = Enum.map(labels, &{&1, label_key(&1)})
+
+    keyed
+    |> Enum.zip(Enum.sort_by(keyed, fn {_text, key} -> key end))
+    |> Enum.find_value(fn {{text, key}, {sorted_text, sorted_key}} ->
+      if key != sorted_key, do: "#{text} before #{sorted_text}"
+    end)
+  end
+
+  # Both label shapes key numerically: "M10" -> [10], "1.10.2" -> [1, 10, 2].
+  # Segment lists compare element-wise, so 1.9 sorts before 1.10.
+  defp label_key(text) do
+    text
+    |> String.trim_leading("M")
+    |> String.split(".")
+    |> Enum.map(&String.to_integer/1)
   end
 
   defp path_like({task, _depth}) do
