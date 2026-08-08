@@ -46,6 +46,9 @@ defmodule DoitMcp.ImportGate do
   flow lives in `DoitMcp.Tools.ApplyOperations`.
   """
 
+  # The three bounds below are stated upfront in the apply_operations tool
+  # words (DoitMcp.Tools.ApplyOperations' moduledoc, m03.04 item 31) —
+  # apply_operations_description_test.exs fails a retune that forgets them.
   @task_add_threshold 32
 
   # The ramp (m03.04 3.1 iteration 2, operator design): a batch that delivers

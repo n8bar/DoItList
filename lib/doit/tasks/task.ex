@@ -80,6 +80,9 @@ defmodule DoIt.Tasks.Task do
     ])
     |> validate_required([:title, :initiative_id, :created_by_id])
     |> validate_length(:title, min: 1, max: 200)
+    # The 8000 cap is stated in the MCP adapter's apply_operations tool words
+    # (m03.04 item 31) and pinned by its description guardrail test — a
+    # retune here (both changesets) must update both.
     |> validate_length(:description, max: 8000)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)
@@ -104,6 +107,7 @@ defmodule DoIt.Tasks.Task do
     ])
     |> validate_required([:title])
     |> validate_length(:title, min: 1, max: 200)
+    # Keep-in-sync: see create_changeset's description-cap note.
     |> validate_length(:description, max: 8000)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)

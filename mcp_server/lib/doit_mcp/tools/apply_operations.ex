@@ -17,6 +17,32 @@ defmodule DoitMcp.Tools.ApplyOperations do
   chunking is fine — but lids resolve within one batch only, so reference
   across chunks by real id.
 
+  ## Import limits — the numbers, upfront
+
+  The import gate (contract below) counts CUMULATIVE task-adds per target
+  Initiative over a trailing time window — chunking doesn't reset it:
+
+    * **The ramp — 32 / 128:** up to 32 task-adds flow on shape alone; the
+      leash stretches to 128 while every batch delivers ONE coherent list —
+      every add under a single parent, at most 32 adds. Bulk, mixed-parent,
+      or oversized batches keep the tight bound and meet the readback
+      confirm.
+    * **Fresh floor — 8:** a just-created Initiative's first import meets
+      the confirm past 8 cumulative task-adds, whatever the batch's
+      coherence; the operator's one confirm settles the Initiative for the
+      session, then the ramp applies.
+    * **Description cap — 8000 characters** per task description, enforced
+      by the API (a 422): trim the prose and cite the source doc's path in
+      a provenance comment — never split the overflow into continuation
+      tasks.
+    * **Ideal import shape:** skeleton first — the Initiative and its
+      top-level parents — then ~32-add chunks, one parent's children
+      apiece, cut deterministically from the source's structure, each chunk
+      carrying a provenance comment naming its source section. That shape
+      rides the ramp and meets at most the one fresh-floor confirm.
+
+  ## Wire format
+
   Each element of `operations` must be a JSON object matching the wire
   format:
 
