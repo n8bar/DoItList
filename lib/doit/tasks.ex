@@ -2859,16 +2859,31 @@ defmodule DoIt.Tasks do
   # `inverse` is the undo payload (m02.06), or nil.
   defp record_event_for(task_id, initiative_id, %User{} = actor, kind, data, inverse) do
     %ActivityEvent{}
-    |> ActivityEvent.changeset(%{
-      task_id: task_id,
-      initiative_id: initiative_id,
-      user_id: actor.id,
-      kind: kind,
-      data: data,
-      inverse_payload: inverse
-    })
+    |> ActivityEvent.changeset(
+      Map.merge(
+        %{
+          task_id: task_id,
+          initiative_id: initiative_id,
+          user_id: actor.id,
+          kind: kind,
+          data: data,
+          inverse_payload: inverse
+        },
+        provenance_attrs(actor)
+      )
+    )
     |> Repo.insert()
   end
+
+  # Execution provenance (m03.04 item 2.33): which actor performed the write.
+  # The token resolver stamps `actor.provenance` on token auth; a browser
+  # session leaves it nil. The label is snapshotted here because revoking a
+  # token hard-deletes its row.
+  defp provenance_attrs(%User{provenance: %{kind: "api_token"} = prov}) do
+    %{actor_kind: "api_token", api_token_id: prov.token_id, api_token_label: prov.token_label}
+  end
+
+  defp provenance_attrs(%User{}), do: %{actor_kind: "browser"}
 
   defp record_diff_events(%Task{} = old, %Task{} = new, %User{} = actor) do
     [

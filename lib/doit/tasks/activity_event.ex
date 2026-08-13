@@ -16,9 +16,17 @@ defmodule DoIt.Tasks.ActivityEvent do
     # the per-(user, Initiative) undo / redo stack.
     field :undone_at, :utc_datetime
 
+    # Execution provenance (m03.04 item 2.33): who actually performed the
+    # write, beside the authorizing `user_id`. Nil = recorded before
+    # provenance existed. `api_token_label` is snapshotted at write time —
+    # revoking a token deletes its row, nilifying `api_token_id`.
+    field :actor_kind, :string
+    field :api_token_label, :string
+
     belongs_to :task, Task
     belongs_to :initiative, Initiative
     belongs_to :user, User
+    belongs_to :api_token, DoIt.Accounts.ApiToken
 
     timestamps(type: :utc_datetime, updated_at: false)
   end
@@ -32,9 +40,13 @@ defmodule DoIt.Tasks.ActivityEvent do
       :kind,
       :data,
       :inverse_payload,
-      :undone_at
+      :undone_at,
+      :actor_kind,
+      :api_token_id,
+      :api_token_label
     ])
     |> validate_required([:task_id, :initiative_id, :kind])
     |> validate_length(:kind, min: 1, max: 60)
+    |> validate_inclusion(:actor_kind, ["browser", "api_token"])
   end
 end

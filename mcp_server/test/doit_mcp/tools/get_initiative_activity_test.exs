@@ -25,6 +25,34 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     assert Jason.decode!(text) == %{"activity" => []}
   end
 
+  # Execution provenance (m03.04 item 2.33) rides the API payload through
+  # untouched — the MCP read serves whatever the activity endpoint says.
+  test "passes provenance fields through untouched" do
+    event = %{
+      "id" => 555,
+      "kind" => "created",
+      "task_id" => 101,
+      "actor_kind" => "api_token",
+      "api_token_id" => 3,
+      "api_token_label" => "planning agent"
+    }
+
+    legacy = %{"id" => 554, "kind" => "created", "task_id" => 100, "actor_kind" => nil}
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      Req.Test.json(conn, %{"data" => [event, legacy]})
+    end)
+
+    frame = %{test: true}
+    assert {:reply, response, ^frame} = GetInitiativeActivity.execute(%{initiative_id: 7}, frame)
+
+    protocol = Response.to_protocol(response)
+    assert protocol["isError"] == false
+
+    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert Jason.decode!(text) == [event, legacy]
+  end
+
   test "omits the query entirely when no optional filters are given" do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       assert conn.query_string == ""

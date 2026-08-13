@@ -126,6 +126,15 @@ defmodule DoIt.Accounts.ApiTokens do
 
       %ApiToken{user: %User{} = user} = token ->
         touch_last_used(token)
+
+        # Stamp execution provenance (m03.04 item 2.33) so writes performed
+        # under this token record the token as the acting actor — the actor
+        # `%User{}` already threads through every context write.
+        user = %{
+          user
+          | provenance: %{kind: "api_token", token_id: token.id, token_label: token.label}
+        }
+
         {:ok, user, token.id}
     end
   end

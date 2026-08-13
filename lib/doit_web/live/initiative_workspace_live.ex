@@ -7584,6 +7584,16 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 class="w-4 h-4 text-[8px]"
               />{(e.user && e.user.name) || "system"}
             </span>
+            <%!-- Execution provenance (m03.04 item 2.33): a token-borne write
+                 was performed by an agent, not typed by the user — badge it
+                 with the token's label (ids are plumbing, never shown). --%>
+            <span
+              :if={e.actor_kind == "api_token"}
+              data-agent-event
+              class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+            >
+              via {e.api_token_label || "agent"}
+            </span>
             · {event_label(e, @members)}
             <span
               :if={Map.get(e.data, "from") || Map.get(e.data, "to")}

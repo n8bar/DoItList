@@ -176,6 +176,9 @@ defmodule DoItWeb.Api.Serializer do
         "task_id": 101,
         "user_id": 7,
         "user_name": "Ada Lovelace",
+        "actor_kind": "api_token",
+        "api_token_id": 3,
+        "api_token_label": "planning agent",
         "data": {"from": 0, "to": 50},
         "inserted_at": "2026-06-26T21:16:46Z"
       }
@@ -186,6 +189,11 @@ defmodule DoItWeb.Api.Serializer do
   (the "review-as-diff" content). The activity endpoint wraps a list of these in
   `data` with a sibling `meta` pagination object — see
   `DoItWeb.Api.InitiativeController`.
+
+  `actor_kind` is execution provenance (m03.04 item 2.33): `"browser"` for a
+  session write, `"api_token"` for a token-borne write (with the token's id and
+  label — label snapshotted at write time, so it survives token revocation),
+  `null` for events recorded before provenance existed.
 
   ## Member — `GET /api/v1/initiatives/:id/members`
 
@@ -420,6 +428,9 @@ defmodule DoItWeb.Api.Serializer do
       task_id: event.task_id,
       user_id: event.user_id,
       user_name: user_name(event.user),
+      actor_kind: event.actor_kind,
+      api_token_id: event.api_token_id,
+      api_token_label: event.api_token_label,
       data: event.data || %{},
       inserted_at: iso8601(event.inserted_at)
     }
