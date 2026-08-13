@@ -318,6 +318,42 @@ defmodule DoIt.Initiatives do
     Initiative.changeset(initiative, attrs)
   end
 
+  # --- Conditional writes (m03.04 item 32) -----------------------------------
+  #
+  # `version` is an integer revision counter on the initiatives row: every
+  # write to the row itself bumps it (content updates, subtitle — Initiative
+  # content even though it lives on the root task — trash/restore,
+  # agent-access, ownership). Membership-row writes (archive/hide, roles) and
+  # derived progress never touch it.
+
+  @doc """
+  Compare a caller's `expected_version` against the Initiative's CURRENT row
+  under a row lock (`FOR UPDATE`): `:ok` on match,
+  `{:error, {:version_conflict, current}}` on mismatch, `{:error, :not_found}`
+  for a vanished row; `nil` expected always passes. Must run inside the same
+  transaction as the guarded write — the lock holds until it ends (mirrors
+  `DoIt.Tasks.check_version/2`).
+  """
+  def check_version(_initiative, nil), do: :ok
+
+  def check_version(%Initiative{id: id}, expected) when is_integer(expected) do
+    case Repo.one(from(i in Initiative, where: i.id == ^id, lock: "FOR UPDATE")) do
+      nil -> {:error, :not_found}
+      %Initiative{version: ^expected} -> :ok
+      %Initiative{} = current -> {:error, {:version_conflict, current}}
+    end
+  end
+
+  # DB-side increment (never computed from a loaded struct) so concurrent
+  # bumps can't collapse into one. Returns the struct with the fresh version.
+  defp bump_version(%Initiative{id: id} = initiative) do
+    {1, [version]} =
+      from(i in Initiative, where: i.id == ^id, select: i.version)
+      |> Repo.update_all(inc: [version: 1])
+
+    %{initiative | version: version}
+  end
+
   @doc "Update an Initiative's editable fields (name, description). Owner stays as-is."
   def update_initiative(%Initiative{} = initiative, attrs) do
     changeset = Initiative.changeset(initiative, stringify_keys(attrs))
@@ -325,6 +361,8 @@ defmodule DoIt.Initiatives do
     index_changed? = Ecto.Changeset.get_change(changeset, :index_style) != nil
 
     with {:ok, updated} <- Repo.update(changeset) do
+      # A no-change update writes nothing and must not bump (item 32).
+      updated = if changeset.changes == %{}, do: updated, else: bump_version(updated)
       # A progress_calc switch invalidates every cached branch value at once;
       # recompute the whole tree so stored roll-ups don't linger in the old
       # mode until the next edit.
@@ -373,12 +411,30 @@ defmodule DoIt.Initiatives do
   is stored as a single space (the column is non-null and a struct-level change
   bypasses the task-title min-1 validation). No-op write path — no activity event.
   """
-  def update_subtitle(%Initiative{root_task_id: root_id}, subtitle) when is_binary(subtitle) do
+  def update_subtitle(%Initiative{root_task_id: root_id} = initiative, subtitle)
+      when is_binary(subtitle) do
     title = if String.trim(subtitle) == "", do: " ", else: subtitle
 
     case Repo.get(Task, root_id) do
-      %Task{} = root -> root |> Ecto.Changeset.change(title: title) |> Repo.update()
-      nil -> {:error, :no_root_task}
+      # Unchanged subtitle: no write, no bump (item 32).
+      %Task{title: ^title} = root ->
+        {:ok, root}
+
+      %Task{} = root ->
+        with {:ok, updated} <- root |> Ecto.Changeset.change(title: title) |> Repo.update() do
+          # The subtitle is Initiative content surfaced on its payloads, so it
+          # bumps the Initiative's version (an expected_version must cover
+          # subtitle staleness); the root task row bumps too, like any task
+          # content write.
+          {1, _} =
+            from(t in Task, where: t.id == ^updated.id) |> Repo.update_all(inc: [version: 1])
+
+          bump_version(initiative)
+          {:ok, updated}
+        end
+
+      nil ->
+        {:error, :no_root_task}
     end
   end
 
@@ -397,6 +453,7 @@ defmodule DoIt.Initiatives do
     initiative
     |> Ecto.Changeset.change(trashed_at: DateTime.utc_now() |> DateTime.truncate(:second))
     |> Repo.update()
+    |> bump_on_ok()
   end
 
   @doc "Restore a trashed Initiative back to every member's dashboard."
@@ -404,7 +461,12 @@ defmodule DoIt.Initiatives do
     initiative
     |> Ecto.Changeset.change(trashed_at: nil)
     |> Repo.update()
+    |> bump_on_ok()
   end
+
+  # Lifecycle flips write the Initiative's own row — intent-bearing (item 32).
+  defp bump_on_ok({:ok, updated}), do: {:ok, bump_version(updated)}
+  defp bump_on_ok(other), do: other
 
   @doc """
   Permanently delete an Initiative. Its tasks, members, and activity cascade
@@ -852,6 +914,8 @@ defmodule DoIt.Initiatives do
           {:ok, updated} =
             initiative |> Ecto.Changeset.change(owner_id: new_owner_id) |> Repo.update()
 
+          updated = bump_version(updated)
+
           {:ok, _} = do_update_member_role(initiative.id, new_owner_id, "owner")
           {:ok, _} = do_update_member_role(initiative.id, old_owner_id, "editor")
           updated
@@ -919,6 +983,7 @@ defmodule DoIt.Initiatives do
   def set_agent_access(%Initiative{} = initiative, on) when is_boolean(on) do
     with {:ok, updated} <-
            initiative |> Ecto.Changeset.change(agent_access: on) |> Repo.update() do
+      updated = bump_version(updated)
       DoIt.Tasks.notify_initiative_updated(updated.id)
       {:ok, updated}
     end

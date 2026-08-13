@@ -170,7 +170,22 @@ defmodule DoItWeb.Api.Operations do
   rejection), `forbidden` (authz / author-only), `not_found` (a target or
   referenced resource is missing), `bad_reference` (a bad/forward/foreign/
   duplicate lid), `unsupported_op` (unknown verb/type/combination),
-  `irreversible_op` (a rejected irreversible op).
+  `irreversible_op` (a rejected irreversible op), `conflict` (a stale
+  `expected_version` — see below).
+
+  ## Conditional writes (m03.04 item 32)
+
+  Task and Initiative reads carry an integer `version` — a revision counter
+  bumped on every intent-bearing write to the record, never by derived
+  roll-up recomputes. An `update task` / `update initiative` op may carry
+  `expected_version` in its `data`: on mismatch nothing applies (the batch
+  rolls back, HTTP **409**), and the per-op `conflict` error carries the
+  serialized **current** record under `current` so the caller re-reads from
+  the response, reconciles, and retries with the fresh version. The compare
+  runs under a row lock inside the batch transaction (`Tasks.check_version/2`
+  / `Initiatives.check_version/2`), so a match can't be invalidated before
+  the write commits. An omitted `expected_version` is exactly today's
+  unconditional write.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -217,10 +232,11 @@ defmodule DoItWeb.Api.Operations do
     {"add", "task"} =>
       ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status),
     {"update", "task"} =>
-      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress),
+      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version),
     {"remove", "task"} => [],
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
-    {"update", "initiative"} => @initiative_content_fields ++ ~w(subtitle state owner_id),
+    {"update", "initiative"} =>
+      @initiative_content_fields ++ ~w(subtitle state owner_id expected_version),
     {"add", "comment"} => ~w(task_id task_lid task body),
     {"update", "comment"} => ~w(body),
     {"remove", "comment"} => [],
@@ -232,12 +248,18 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target)
   }
 
-  @typedoc "A per-op error carries the wire code, message, an optional field pointer, and the batch HTTP status it implies."
+  @typedoc """
+  A per-op error carries the wire code, message, an optional field pointer, and
+  the batch HTTP status it implies. A version conflict (m03.04 item 32) also
+  carries `current` — the serialized current record, so the caller can re-read
+  from the response.
+  """
   @type op_error :: %{
+          optional(:current) => map(),
           code: String.t(),
           message: String.t(),
           pointer: String.t() | nil,
-          http: 403 | 422
+          http: 403 | 409 | 422
         }
 
   @doc """
@@ -367,7 +389,10 @@ defmodule DoItWeb.Api.Operations do
 
   defp wire_error(%{code: code, message: message} = err) do
     base = %{code: code, message: message}
-    if err[:pointer], do: Map.put(base, :pointer, err[:pointer]), else: base
+    base = if err[:pointer], do: Map.put(base, :pointer, err[:pointer]), else: base
+    # A version conflict carries the CURRENT record (m03.04 item 32) so the
+    # caller can re-read straight from the response.
+    if err[:current], do: Map.put(base, :current, err[:current]), else: base
   end
 
   defp maybe_put_lid(map, nil), do: map
@@ -495,9 +520,14 @@ defmodule DoItWeb.Api.Operations do
   end
 
   defp dispatch(user, "update", "task", op, changes) do
+    data = data(op)
+
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
-      update_task_by_concern(user, task, data(op), changes)
+         {:ok, _initiative} <-
+           authorize(user, task.initiative_id, :edit, task_not_found(task.id)),
+         {:ok, expected} <- fetch_expected_version(data),
+         :ok <- check_task_version(task, expected) do
+      update_task_by_concern(user, task, Map.delete(data, "expected_version"), changes)
     end
   end
 
@@ -559,10 +589,20 @@ defmodule DoItWeb.Api.Operations do
          )}
 
       Map.has_key?(data, "state") ->
-        update_initiative_state(user, op, data["state"], changes)
+        with {:ok, expected} <- fetch_expected_version(data) do
+          update_initiative_state(user, op, data["state"], expected, changes)
+        end
 
       true ->
-        update_initiative_content(user, op, data, changes)
+        with {:ok, expected} <- fetch_expected_version(data) do
+          update_initiative_content(
+            user,
+            op,
+            Map.delete(data, "expected_version"),
+            expected,
+            changes
+          )
+        end
     end
   end
 
@@ -958,7 +998,7 @@ defmodule DoItWeb.Api.Operations do
 
   # --- initiative update helpers ---------------------------------------------
 
-  defp update_initiative_state(user, op, state, changes) do
+  defp update_initiative_state(user, op, state, expected, changes) do
     {capability, fun} =
       case state do
         "archived" -> {:view, &Initiatives.archive_initiative/2}
@@ -980,7 +1020,8 @@ defmodule DoItWeb.Api.Operations do
        )}
     else
       with {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
-           {:ok, initiative} <- authorize(user, initiative_id, capability) do
+           {:ok, initiative} <- authorize(user, initiative_id, capability),
+           :ok <- check_initiative_version(initiative, expected) do
         case fun.(user, initiative) do
           {:ok, _} ->
             ok(nil, initiative.id, "initiative", %{
@@ -1001,9 +1042,10 @@ defmodule DoItWeb.Api.Operations do
   defp trash(_user, initiative), do: Initiatives.trash_initiative(initiative)
   defp restore(_user, initiative), do: Initiatives.restore_initiative(initiative)
 
-  defp update_initiative_content(user, op, data, changes) do
+  defp update_initiative_content(user, op, data, expected, changes) do
     with {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
-         {:ok, initiative} <- authorize(user, initiative_id, :edit) do
+         {:ok, initiative} <- authorize(user, initiative_id, :edit),
+         :ok <- check_initiative_version(initiative, expected) do
       attrs = take(data, @initiative_content_fields)
 
       with {:ok, initiative} <- maybe_update_initiative(initiative, attrs),
@@ -1030,6 +1072,85 @@ defmodule DoItWeb.Api.Operations do
   defp maybe_set_subtitle(_initiative, _data), do: :ok
 
   defp reload_initiative(%Initiative{id: id}), do: Initiatives.get_initiative(id)
+
+  # --- conditional writes (m03.04 item 32) -----------------------------------
+  #
+  # An update op may carry `expected_version` — the `version` from the caller's
+  # last read. The compare runs in the domain contexts under a row lock
+  # (`Tasks.check_version/2` / `Initiatives.check_version/2`), inside the
+  # batch's transaction, so a match can't be invalidated before the write
+  # commits. On mismatch the per-op `conflict` error (batch HTTP 409) carries
+  # the CURRENT record so the caller re-reads from the response. Omitted =
+  # exactly the unconditional write.
+
+  defp fetch_expected_version(data) do
+    case Map.get(data, "expected_version") do
+      nil ->
+        {:ok, nil}
+
+      n when is_integer(n) ->
+        {:ok, n}
+
+      other ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "expected_version must be an integer version from a read (got #{inspect(other)}).",
+           422,
+           "expected_version"
+         )}
+    end
+  end
+
+  defp check_task_version(_task, nil), do: :ok
+
+  defp check_task_version(task, expected) do
+    case Tasks.check_version(task, expected) do
+      :ok ->
+        :ok
+
+      {:error, {:version_conflict, current}} ->
+        {:error,
+         version_conflict_error("Task", current.id, current.version, task_result(current))}
+
+      {:error, :not_found} ->
+        {:error, task_not_found(task.id)}
+    end
+  end
+
+  defp check_initiative_version(_initiative, nil), do: :ok
+
+  defp check_initiative_version(initiative, expected) do
+    case Initiatives.check_version(initiative, expected) do
+      :ok ->
+        :ok
+
+      {:error, {:version_conflict, current}} ->
+        {:error,
+         version_conflict_error(
+           "Initiative",
+           current.id,
+           current.version,
+           initiative_result(current)
+         )}
+
+      {:error, :not_found} ->
+        {:error, err(:not_found, "No such Initiative with id #{initiative.id}.", 422)}
+    end
+  end
+
+  defp version_conflict_error(noun, id, current_version, current) do
+    %{
+      code: "conflict",
+      message:
+        "#{noun} #{id} is at version #{current_version} — it changed since your read. " <>
+          "Nothing was applied. Re-read from this error's `current` record, reconcile your " <>
+          "change with it, then retry with the fresh expected_version.",
+      pointer: "expected_version",
+      http: 409,
+      current: current
+    }
+  end
 
   # --- reference / lid resolution --------------------------------------------
 
@@ -1519,7 +1640,8 @@ defmodule DoItWeb.Api.Operations do
       progress: task.computed_progress,
       manual_progress: task.manual_progress,
       priority: task.priority,
-      assignee_id: task.assignee_id
+      assignee_id: task.assignee_id,
+      version: task.version
     }
   end
 
@@ -1530,7 +1652,8 @@ defmodule DoItWeb.Api.Operations do
       name: initiative.name,
       root_task_id: initiative.root_task_id,
       progress_calc: initiative.progress_calc,
-      index_style: initiative.index_style
+      index_style: initiative.index_style,
+      version: initiative.version
       # AI-KNOBS-PARKED (m03.04): not echoed to agents pending the skill rebuild;
       # column retained. Revive: re-add the trailing comma above + this line.
       # ai_knobs: initiative.ai_knobs

@@ -379,6 +379,11 @@ defmodule DoIt.Tasks do
 
         case Repo.update(changeset) do
           {:ok, updated} ->
+            # A no-change update writes nothing and must not bump (item 32's
+            # rule: version tracks writes that changed the row).
+            updated =
+              if changeset.changes == %{}, do: updated, else: bump_task_version(updated)
+
             updated = maybe_set_done_progress(updated, task)
             # Completion (item 14) suppresses the per-task diff events and records
             # one atomic status_changed for the whole flip instead.
@@ -437,6 +442,48 @@ defmodule DoIt.Tasks do
       end)
     end)
     |> sync_links_after_write(attrs)
+  end
+
+  # --- Conditional writes (m03.04 item 32) -----------------------------------
+  #
+  # `version` is an integer revision counter on each task row: every
+  # intent-bearing write to the row bumps it (field updates, moves, status
+  # flips including cascades, delete/restore, undo/redo reversals). Exempt:
+  # derived writes — computed_progress recomputes (batch_persist_progress/1)
+  # and mechanical sort_order renumbering / sort-mode bookkeeping — so rollup
+  # churn on a branch never conflicts a caller editing it.
+
+  @doc """
+  Compare a caller's `expected_version` (from their last read) against the
+  task's CURRENT row under a row lock (`FOR UPDATE`): `:ok` on match,
+  `{:error, {:version_conflict, current}}` with the freshly read task on
+  mismatch, `{:error, :not_found}` for a vanished row. A `nil` expected always
+  passes — the unconditional write keeps today's behavior.
+
+  Must run inside the same transaction as the guarded write: the lock holds
+  until that transaction ends, so a matching check cannot be invalidated by a
+  concurrent writer before the write commits.
+  """
+  def check_version(_task, nil), do: :ok
+
+  def check_version(%Task{id: id}, expected) when is_integer(expected) do
+    case Repo.one(from(t in Task, where: t.id == ^id, lock: "FOR UPDATE")) do
+      nil -> {:error, :not_found}
+      %Task{version: ^expected} -> :ok
+      %Task{} = current -> {:error, {:version_conflict, current}}
+    end
+  end
+
+  # One DB-side increment (version = version + 1 computed in the UPDATE, never
+  # from a loaded struct) so concurrent writers can't collapse two bumps into
+  # one — a reader's matching token must never miss an intervening write.
+  # Returns the struct with the fresh version.
+  defp bump_task_version(%Task{id: id} = task) do
+    {1, [version]} =
+      from(t in Task, where: t.id == ^id, select: t.version)
+      |> Repo.update_all(inc: [version: 1])
+
+    %{task | version: version}
   end
 
   @sort_gap 1000
@@ -779,6 +826,10 @@ defmodule DoIt.Tasks do
       })
       |> Repo.update()
 
+    # A move is intent on the MOVED task (item 32); the sibling renumbers
+    # below are mechanical bookkeeping and stay version-silent.
+    moved = bump_task_version(moved)
+
     # Renumber destination siblings around the inserted position.
     siblings
     |> Enum.with_index()
@@ -915,7 +966,7 @@ defmodule DoIt.Tasks do
 
         {_n, _} =
           from(t in Task, where: t.id in ^ids)
-          |> Repo.update_all(set: [deleted_at: now])
+          |> Repo.update_all(set: [deleted_at: now], inc: [version: 1])
 
         # The "deleted" event lives on the PARENT's timeline (the task drops out
         # of the tree). Every real task has a parent in the single-root model;
@@ -951,7 +1002,7 @@ defmodule DoIt.Tasks do
     Repo.transaction(fn ->
       {_n, _} =
         from(t in Task, where: t.id in ^ids and not is_nil(t.deleted_at))
-        |> Repo.update_all(set: [deleted_at: nil])
+        |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
 
       if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(initiative_id))
       broadcast_change(initiative_id, {:task_created, parent_id || List.first(ids)})
@@ -1203,10 +1254,11 @@ defmodule DoIt.Tasks do
 
     {_n, _} =
       if direction == :undo do
-        from(t in Task, where: t.id in ^ids) |> Repo.update_all(set: [deleted_at: nil])
+        from(t in Task, where: t.id in ^ids)
+        |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
       else
         from(t in Task, where: t.id in ^ids)
-        |> Repo.update_all(set: [deleted_at: now_seconds()])
+        |> Repo.update_all(set: [deleted_at: now_seconds()], inc: [version: 1])
       end
 
     if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(event.initiative_id))
@@ -1224,9 +1276,10 @@ defmodule DoIt.Tasks do
         {_n, _} =
           if direction == :undo do
             from(t in Task, where: t.id in ^ids)
-            |> Repo.update_all(set: [deleted_at: now_seconds()])
+            |> Repo.update_all(set: [deleted_at: now_seconds()], inc: [version: 1])
           else
-            from(t in Task, where: t.id in ^ids) |> Repo.update_all(set: [deleted_at: nil])
+            from(t in Task, where: t.id in ^ids)
+            |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
           end
 
         if task.parent_id,
@@ -1253,6 +1306,8 @@ defmodule DoIt.Tasks do
         |> Repo.update()
         |> case do
           {:ok, updated} ->
+            # An undo/redo restores older content as NEW intent — bump.
+            updated = bump_task_version(updated)
             # Seeded at the task itself (not its parent) so the undone
             # task's OWN computed_progress row refreshes with the reverted
             # manual_progress (item 4.2), synchronously in both routes.
@@ -1308,6 +1363,7 @@ defmodule DoIt.Tasks do
           task
           |> Ecto.Changeset.change(%{status: status, manual_progress: progress})
           |> Repo.update!()
+          |> bump_task_version()
       end
     end)
 
@@ -1584,7 +1640,9 @@ defmodule DoIt.Tasks do
           manual_progress: progress,
           updated_by_id: actor.id,
           updated_at: now
-        ]
+        ],
+        # A cascaded status flip is newer intent on each ancestor (item 32).
+        inc: [version: 1]
       )
 
     Enum.each(ancestors, fn parent ->
@@ -2668,10 +2726,12 @@ defmodule DoIt.Tasks do
     co = if promote_co, do: first_handoff_co(task, leaving_id), else: nil
     new_assignee = co || takeover_id
 
-    {:ok, _} =
+    {:ok, updated} =
       task
       |> Ecto.Changeset.change(assignee_id: new_assignee, updated_by_id: actor.id)
       |> Repo.update()
+
+    bump_task_version(updated)
 
     # Exclusivity: the new primary leaves the co-list (covers a promoted co or
     # a takeover who happened to be a co-assignee).
@@ -2717,6 +2777,8 @@ defmodule DoIt.Tasks do
       task
       |> Ecto.Changeset.change(assignee_id: user_id, updated_by_id: actor.id)
       |> Repo.update()
+
+    updated = bump_task_version(updated)
 
     drop_co_assignee(task.id, user_id)
     record_event(task, actor, "co_assignee_promoted", %{user_id: user_id})

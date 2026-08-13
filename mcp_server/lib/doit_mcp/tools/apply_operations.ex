@@ -91,6 +91,14 @@ defmodule DoitMcp.Tools.ApplyOperations do
   each op object correctly per the wire format above; no reshaping happens
   here.
 
+  ## Conditional updates — `expected_version`
+
+  Task and Initiative reads carry an integer `version`. An update op's `data`
+  may include `"expected_version" => <that version>` — read, then
+  conditionally write: on a stale token the whole batch rolls back (409, per-op
+  code `conflict`) and the error carries the current record under `current`;
+  re-read from it and reconcile before retrying. Omitted = unconditional.
+
   ## Safe retries — `idempotency_key`
 
   Pass an optional `idempotency_key` (any client-chosen string) to make a retry

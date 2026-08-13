@@ -7,6 +7,11 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   `set_initiative_state`) or ownership — those are rejected here or
   handled elsewhere. Updates apply ungated.
 
+  Read, then conditionally write: pass the Initiative's `version` from your
+  latest read as `expected_version` — a stale token applies nothing and
+  returns the current record; re-read from it and reconcile before retrying.
+  Omitted = unconditional write.
+
   (The progress-calc confirm gate is parked — `CALC-GATE-PARKED`, see the
   m03.04 arc doc. The first-ai_knobs-write gate is parked with AI Knobs —
   `AI-KNOBS-PARKED`, see the m03.04 arc doc.)
@@ -86,6 +91,14 @@ defmodule DoitMcp.Tools.UpdateInitiative do
 
     field(:auto_promote_co_assignees, :boolean, required: false)
     field(:viewer_plus, :boolean, required: false)
+
+    field(:expected_version, :integer,
+      required: false,
+      description:
+        "The Initiative's `version` from your latest read; the update is refused with " <>
+          "the current record if it changed since (re-read, reconcile, retry). " <>
+          "Omit to write unconditionally"
+    )
   end
 
   # CALC-GATE-PARKED / AI-KNOBS-PARKED (m03.04): both write gates are parked —
@@ -114,7 +127,8 @@ defmodule DoitMcp.Tools.UpdateInitiative do
         # AI-KNOBS-PARKED (m03.04): revive with the schema field above.
         # :ai_knobs,
         :auto_promote_co_assignees,
-        :viewer_plus
+        :viewer_plus,
+        :expected_version
       ])
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

@@ -24,7 +24,8 @@ defmodule DoItWeb.Api.Serializer do
         "repo_marker": "## Do It List\nTasks: https://doitlist.app/initiatives/12 — work this tree via the doit-list MCP server, not a TODO.md or PLAN.md.",
         "role": "owner",
         "progress": 42,
-        "root_task_id": 100
+        "root_task_id": 100,
+        "version": 3
       }
 
   `url` is the Initiative's web address — the operator-facing handle (m03.04
@@ -56,6 +57,7 @@ defmodule DoItWeb.Api.Serializer do
         "progress_calc": "leaf_average",
         "index_style": "numerical",
         "root_task_id": 100,
+        "version": 3,
         "tasks": [ <task node>, ... ]
       }
 
@@ -101,6 +103,7 @@ defmodule DoItWeb.Api.Serializer do
         "referenced_by": [
           {"source_id": 140, "source_index": "1.3", "source_title": "Plan the launch"}
         ],
+        "version": 5,
         "children": [ <task node>, ... ]
       }
 
@@ -144,13 +147,20 @@ defmodule DoItWeb.Api.Serializer do
     cross-reference this one, each with the `source_id` / `source_index` /
     `source_title`. `[]` when nothing points here. Same single link query feeds
     both directions (no extra round-trip).
+  * `version` — the record's revision counter (m03.04 item 32): bumped on every
+    intent-bearing write to the record itself, never by derived roll-up
+    recomputes. Pass it back as `expected_version` on an update to refuse a
+    stale write; on mismatch nothing applies and the conflict returns the
+    current record. Present on task nodes and on both Initiative payloads
+    (each tracking its own record).
   * `children` — nested task nodes (empty for a leaf).
 
   ## Task ref — `GET /api/v1/tasks/:id`
 
       {
         "id": 101,
-        "initiative_id": 12
+        "initiative_id": 12,
+        "version": 5
       }
 
   The task → Initiative resolver (m03.04 item 2.18.1) — deliberately minimal:
@@ -241,7 +251,8 @@ defmodule DoItWeb.Api.Serializer do
       repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
       progress: progress || 0,
-      root_task_id: initiative.root_task_id
+      root_task_id: initiative.root_task_id,
+      version: initiative.version
     }
   end
 
@@ -285,6 +296,7 @@ defmodule DoItWeb.Api.Serializer do
       # rebuild; column retained. Revive this line.
       # ai_knobs: initiative.ai_knobs,
       root_task_id: initiative.root_task_id,
+      version: initiative.version,
       tasks: task_nodes(tree, ctx, [], 0)
     }
   end
@@ -318,6 +330,7 @@ defmodule DoItWeb.Api.Serializer do
         comment_count: Map.get(ctx.comment_counts, task.id, 0),
         cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
         referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
+        version: task.version,
         children: task_nodes(task.children, ctx, positions, depth + 1)
       }
     end)
@@ -359,7 +372,7 @@ defmodule DoItWeb.Api.Serializer do
 
   @doc "The task → Initiative resolver body (`GET /api/v1/tasks/:id`)."
   def task_ref(%Task{} = task) do
-    %{id: task.id, initiative_id: task.initiative_id}
+    %{id: task.id, initiative_id: task.initiative_id, version: task.version}
   end
 
   @doc """

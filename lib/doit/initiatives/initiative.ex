@@ -30,6 +30,11 @@ defmodule DoIt.Initiatives.Initiative do
     field :agent_access, :boolean, default: false
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
     field :trashed_at, :utc_datetime
+    # Conditional writes (m03.04 item 32): integer revision counter, bumped
+    # DB-side on every write to this row (content, subtitle, lifecycle) —
+    # never cast from params. Callers may send expected_version to refuse a
+    # stale write.
+    field :version, :integer, default: 1
     field :my_role, :string, virtual: true
     # The viewing member's manual index order (initiative_members.sort_order).
     field :my_sort_order, :integer, virtual: true

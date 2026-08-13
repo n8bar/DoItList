@@ -20,6 +20,11 @@ defmodule DoIt.Tasks.Task do
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
+    # Conditional writes (m03.04 item 32): integer revision counter, bumped
+    # DB-side (version = version + 1) on every intent-bearing write — never
+    # cast from params, and never bumped by derived computed_progress
+    # recomputes. Callers may send expected_version to refuse a stale write.
+    field :version, :integer, default: 1
     # Soft-delete (m02.06): a deleted task keeps its row (id, comments,
     # co-assignees, events all preserved) so undo / Trash can restore it. Set
     # programmatically — never cast from user params. Reads filter it out.

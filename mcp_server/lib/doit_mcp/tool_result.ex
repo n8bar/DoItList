@@ -17,6 +17,12 @@ defmodule DoitMcp.ToolResult do
       {:ok, %{"results" => [%{"status" => "error", "error" => op_error} | _]}} ->
         {:reply, Response.error(Response.tool(), op_error["message"]), frame}
 
+      # A version conflict (m03.04 item 32): the batch 409s and the per-op
+      # `conflict` error carries the CURRENT record — surface both so the
+      # caller can reconcile and retry without another read.
+      {:error, %{status: 409, body: %{"results" => results}}} when is_list(results) ->
+        {:reply, Response.error(Response.tool(), conflict_message(results)), frame}
+
       {:error, %{status: status, body: %{"error" => error}}} ->
         {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}
 
@@ -25,6 +31,21 @@ defmodule DoitMcp.ToolResult do
 
       {:error, %{reason: reason}} ->
         {:reply, Response.error(Response.tool(), "Request failed: #{inspect(reason)}"), frame}
+    end
+  end
+
+  # The offending op's conflict message plus its `current` record as JSON.
+  # Falls back to the bare message if the shape ever lacks `current`.
+  defp conflict_message(results) do
+    case Enum.find_value(results, fn r -> r["error"] end) do
+      %{"message" => message, "current" => current} ->
+        message <> " Current record: " <> Jason.encode!(current)
+
+      %{"message" => message} ->
+        message
+
+      _ ->
+        "(409) The record changed since your read — re-read and retry."
     end
   end
 

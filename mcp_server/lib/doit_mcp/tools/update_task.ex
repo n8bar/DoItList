@@ -7,6 +7,11 @@ defmodule DoitMcp.Tools.UpdateTask do
   (`set_task_co_assignees`) are separate tools, matching the API's
   "one concern per update" rule.
 
+  Read, then conditionally write: pass the task's `version` from your latest
+  read as `expected_version` — a stale token applies nothing and returns the
+  current record; re-read from it and reconcile before retrying. Omitted =
+  unconditional write.
+
   Editing more than a couple of tasks in one pass → use `apply_operations`
   as one batch instead of looping this tool.
   """
@@ -22,6 +27,14 @@ defmodule DoitMcp.Tools.UpdateTask do
     field(:priority, :string, required: false)
     field(:assignee_id, :integer, required: false)
     field(:manual_progress, :integer, required: false)
+
+    field(:expected_version, :integer,
+      required: false,
+      description:
+        "The task's `version` from your latest read; the update is refused with the " <>
+          "current record if the task changed since (re-read, reconcile, retry). " <>
+          "Omit to write unconditionally"
+    )
   end
 
   def execute(params, frame) do
@@ -32,7 +45,8 @@ defmodule DoitMcp.Tools.UpdateTask do
         :description,
         :priority,
         :assignee_id,
-        :manual_progress
+        :manual_progress,
+        :expected_version
       ])
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

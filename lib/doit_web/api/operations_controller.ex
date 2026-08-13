@@ -11,9 +11,10 @@ defmodule DoItWeb.Api.OperationsController do
   renders.
 
     * Batch committed → `200` with `{"results": [...]}`.
-    * Batch rolled back → `403` (the offending op failed authorization) or `422`,
-      with the top-level `error` plus the per-op `results` (offending op flagged
-      `error`, the rest `not_applied`).
+    * Batch rolled back → `403` (the offending op failed authorization), `409`
+      (a stale `expected_version` — the per-op `conflict` error carries the
+      current record), or `422`, with the top-level `error` plus the per-op
+      `results` (offending op flagged `error`, the rest `not_applied`).
     * Batch over the `@max_batch_size` cap → `422` single-error naming the count
       and the limit (rejected before any DB work).
     * Malformed body (no non-empty `operations` array) → `422` single-error.

@@ -50,11 +50,11 @@ defmodule DoItWeb.Api.TaskReadTest do
     %{owner: owner, viewer: viewer, stranger: stranger, ini: ini, task: task}
   end
 
-  test "the owner reads exactly {id, initiative_id}", ctx do
+  test "the owner reads exactly {id, initiative_id, version}", ctx do
     conn = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/tasks/#{ctx.task.id}")
 
     assert %{"data" => data} = json_response(conn, 200)
-    assert data == %{"id" => ctx.task.id, "initiative_id" => ctx.ini.id}
+    assert data == %{"id" => ctx.task.id, "initiative_id" => ctx.ini.id, "version" => 1}
   end
 
   test "a viewer-role member can read it too", ctx do
