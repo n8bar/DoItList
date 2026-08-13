@@ -7570,8 +7570,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic">
           Loading…
         </p>
+        <%!-- status_changed shows since m03.04 item 2.35: it's been one atomic
+             event per flip since m02.06 item 14 (the per-task spam the old
+             filter hid is long gone) and no-op flips no longer record. --%>
         <ul data-async-list class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
-          <li :for={e <- @activity} :if={e.kind != "status_changed"}>
+          <li :for={e <- @activity}>
             <span class="text-zinc-500 dark:text-zinc-400">
               <.local_time value={e.inserted_at} format="%b %-d %H:%M" />
             </span>
@@ -7596,10 +7599,16 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </span>
             · {event_label(e, @members)}
             <span
-              :if={Map.get(e.data, "from") || Map.get(e.data, "to")}
+              :if={(Map.get(e.data, "from") || Map.get(e.data, "to")) && e.kind != "status_changed"}
               class="text-zinc-500 dark:text-zinc-400"
             >
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
+            </span>
+            <%!-- Cascade exposure (m03.04 item 2.35): a completion/reopen that
+                 carried other tasks along says so — count only, ids are
+                 plumbing. --%>
+            <span :if={cascaded_count(e) > 0} data-cascade class="text-zinc-500 dark:text-zinc-400">
+              +{cascaded_count(e)} cascaded
             </span>
           </li>
         </ul>
@@ -7694,7 +7703,22 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # Undo / redo feed entries (m02.06 item 8) — labeled, never hiding the round-trip.
   defp event_label(%{kind: "undid", data: d}, _members), do: "undid #{d["of"] || "a change"}"
   defp event_label(%{kind: "redid", data: d}, _members), do: "redid #{d["of"] || "a change"}"
+
+  # Status flips read as their outcome (m03.04 item 2.35) — the label carries
+  # the transition, so the generic (from → to) span skips this kind.
+  defp event_label(%{kind: "status_changed", data: %{"to" => "done"}}, _members), do: "completed"
+  defp event_label(%{kind: "status_changed", data: %{"to" => "open"}}, _members), do: "reopened"
+  defp event_label(%{kind: "status_changed"}, _members), do: "changed status"
   defp event_label(%{kind: kind}, _members), do: kind
+
+  # How many other tasks a status_changed's cascade flipped (m03.04 item 2.35);
+  # 0 for every other kind or a legacy payload, which renders no marker.
+  defp cascaded_count(event) do
+    case Tasks.cascaded_ids(event) do
+      nil -> 0
+      ids -> length(ids)
+    end
+  end
 
   defp event_username(%{"user_id" => uid}, members) do
     case Enum.find(members, &(&1.user_id == uid)) do

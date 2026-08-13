@@ -201,6 +201,13 @@ defmodule DoItWeb.Api.Serializer do
   derived at read time from the event's undo payload, so pre-existing events
   answer too; an event whose payload lacks them omits both fields.
 
+  A `status_changed` event covers a completion/reopen's whole cascade in one
+  record (its `task_id` is the acted task); `cascaded_ids` lists the other
+  tasks the flip carried along — cascaded ancestors/descendants — so a reader
+  can tell explicit completion from inherited (m03.04 item 2.35). `[]` means
+  the flip touched only the acted task; a legacy per-task event omits the
+  field. Derived at read time from the undo payload, like the deletion ids.
+
   ## Member — `GET /api/v1/initiatives/:id/members`
 
       {
@@ -441,6 +448,7 @@ defmodule DoItWeb.Api.Serializer do
       inserted_at: iso8601(event.inserted_at)
     }
     |> Map.merge(deleted_ids_fields(event))
+    |> Map.merge(cascade_fields(event))
   end
 
   # A `child_deleted` event's `inverse_payload` already names the deleted child
@@ -458,6 +466,18 @@ defmodule DoItWeb.Api.Serializer do
   end
 
   defp deleted_ids_fields(_event), do: %{}
+
+  # A `status_changed` event's undo payload names every task the cascade
+  # flipped — expose the non-acted ones as `cascaded_ids` (m03.04 item 2.35),
+  # derived at read time so pre-existing events answer too. `[]` pins "no
+  # cascade"; anything short of the undo shape omits the field rather than
+  # crashing the read. `inverse_payload` itself never crosses the API.
+  defp cascade_fields(event) do
+    case Tasks.cascaded_ids(event) do
+      nil -> %{}
+      ids -> %{cascaded_ids: ids}
+    end
+  end
 
   @doc "One Initiative member with their role (`GET /api/v1/initiatives/:id/members`)."
   def member(membership) do

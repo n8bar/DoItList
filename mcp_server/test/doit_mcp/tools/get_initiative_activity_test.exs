@@ -79,6 +79,31 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     assert Jason.decode!(text) == [event]
   end
 
+  # Cascade exposure (m03.04 item 2.35) likewise rides the API payload through
+  # untouched — `cascaded_ids` reaches the MCP client as served.
+  test "passes cascade id fields through untouched" do
+    event = %{
+      "id" => 557,
+      "kind" => "status_changed",
+      "task_id" => 101,
+      "data" => %{"from" => "open", "to" => "done"},
+      "cascaded_ids" => [100, 42]
+    }
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      Req.Test.json(conn, %{"data" => [event]})
+    end)
+
+    frame = %{test: true}
+    assert {:reply, response, ^frame} = GetInitiativeActivity.execute(%{initiative_id: 7}, frame)
+
+    protocol = Response.to_protocol(response)
+    assert protocol["isError"] == false
+
+    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert Jason.decode!(text) == [event]
+  end
+
   test "omits the query entirely when no optional filters are given" do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       assert conn.query_string == ""

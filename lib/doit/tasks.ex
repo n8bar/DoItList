@@ -1533,14 +1533,28 @@ defmodule DoIt.Tasks do
   # what keeps one logical completion from fragmenting into per-ancestor
   # progress_changed events, one of which (on an out-of-domain root) would
   # otherwise wall a viewer+ off from undoing their own completion.
+  #
+  # A flip that changed nothing anywhere (completing an already-done task —
+  # every entry a no-op) records no event (m03.04 item 2.35): no write
+  # happened, so there is nothing to log or undo, matching item 32's rule
+  # that a no-op bumps nothing.
   defp record_status_event(%Task{} = acted, %User{} = actor, [acted_entry | _] = affected) do
-    record_event(
-      acted,
-      actor,
-      "status_changed",
-      %{from: acted_entry["from_status"], to: acted_entry["to_status"]},
-      %{"affected" => affected}
-    )
+    if Enum.all?(affected, &noop_entry?/1) do
+      :ok
+    else
+      record_event(
+        acted,
+        actor,
+        "status_changed",
+        %{from: acted_entry["from_status"], to: acted_entry["to_status"]},
+        %{"affected" => affected}
+      )
+    end
+  end
+
+  defp noop_entry?(entry) do
+    entry["from_status"] == entry["to_status"] and
+      entry["from_progress"] == entry["to_progress"]
   end
 
   # These two only ever climb one level at a time — that part was already
@@ -2331,6 +2345,27 @@ defmodule DoIt.Tasks do
   defp clamp_limit(n) when is_integer(n) and n > @activity_max_limit, do: @activity_max_limit
   defp clamp_limit(n) when is_integer(n), do: n
   defp clamp_limit(_), do: @activity_default_limit
+
+  @doc """
+  Ids of the tasks a `status_changed` event's cascade actually flipped besides
+  the acted task (m03.04 item 2.35) — derived at read time from the undo
+  payload, so pre-existing events answer too. `[]` when the flip touched only
+  the acted task; `nil` for any other kind or a payload short of the undo
+  shape (legacy per-task rows), so callers can omit rather than guess.
+  """
+  def cascaded_ids(%ActivityEvent{
+        kind: "status_changed",
+        task_id: acted_id,
+        inverse_payload: %{"affected" => affected}
+      })
+      when is_list(affected) do
+    for %{"task_id" => id} = entry <- affected,
+        id != acted_id,
+        not noop_entry?(entry),
+        do: id
+  end
+
+  def cascaded_ids(_event), do: nil
 
   # --- Co-assignees (m02.05 item 12.1) --------------------------------------
 
