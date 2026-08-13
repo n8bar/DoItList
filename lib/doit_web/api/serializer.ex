@@ -195,6 +195,12 @@ defmodule DoItWeb.Api.Serializer do
   label — label snapshotted at write time, so it survives token revocation),
   `null` for events recorded before provenance existed.
 
+  A `child_deleted` event (whose `task_id` is the *parent*) additionally
+  carries `deleted_task_id` — the deleted child's stable id — and
+  `deleted_ids` — its whole deleted subtree's ids (m03.04 item 2.34). Both are
+  derived at read time from the event's undo payload, so pre-existing events
+  answer too; an event whose payload lacks them omits both fields.
+
   ## Member — `GET /api/v1/initiatives/:id/members`
 
       {
@@ -434,7 +440,24 @@ defmodule DoItWeb.Api.Serializer do
       data: event.data || %{},
       inserted_at: iso8601(event.inserted_at)
     }
+    |> Map.merge(deleted_ids_fields(event))
   end
+
+  # A `child_deleted` event's `inverse_payload` already names the deleted child
+  # (`"task_id"`) and its subtree (`"deleted_ids"`) for undo — expose them as
+  # `deleted_task_id`/`deleted_ids` (m03.04 item 2.34). Derived at read time so
+  # pre-existing events answer too; anything short of the undo shape omits both
+  # fields rather than crashing the read. `inverse_payload` itself never
+  # crosses the API.
+  defp deleted_ids_fields(%{
+         kind: "child_deleted",
+         inverse_payload: %{"task_id" => task_id, "deleted_ids" => ids}
+       })
+       when is_integer(task_id) and is_list(ids) do
+    %{deleted_task_id: task_id, deleted_ids: ids}
+  end
+
+  defp deleted_ids_fields(_event), do: %{}
 
   @doc "One Initiative member with their role (`GET /api/v1/initiatives/:id/members`)."
   def member(membership) do

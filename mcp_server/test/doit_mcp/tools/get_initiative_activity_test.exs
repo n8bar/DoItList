@@ -53,6 +53,32 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     assert Jason.decode!(text) == [event, legacy]
   end
 
+  # Deletion ids (m03.04 item 2.34) likewise ride the API payload through
+  # untouched — `deleted_task_id`/`deleted_ids` reach the MCP client as served.
+  test "passes deletion id fields through untouched" do
+    event = %{
+      "id" => 556,
+      "kind" => "child_deleted",
+      "task_id" => 101,
+      "data" => %{"title" => "Branch"},
+      "deleted_task_id" => 102,
+      "deleted_ids" => [102, 103, 104]
+    }
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      Req.Test.json(conn, %{"data" => [event]})
+    end)
+
+    frame = %{test: true}
+    assert {:reply, response, ^frame} = GetInitiativeActivity.execute(%{initiative_id: 7}, frame)
+
+    protocol = Response.to_protocol(response)
+    assert protocol["isError"] == false
+
+    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert Jason.decode!(text) == [event]
+  end
+
   test "omits the query entirely when no optional filters are given" do
     Req.Test.stub(DoitMcp.Client, fn conn ->
       assert conn.query_string == ""
