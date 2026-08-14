@@ -67,7 +67,7 @@ defmodule DoItWeb.AgentConnectTest do
 
     test "claude_code_paste/1 is one line: the add with the inline bearer header" do
       assert AgentConnect.claude_code_paste(@paste_token) ==
-               "claude mcp add --transport http doit-list #{@paste_url} " <>
+               "claude mcp add --transport http doitlist #{@paste_url} " <>
                  ~s(--header "Authorization: Bearer #{@paste_token}")
     end
 
@@ -76,7 +76,7 @@ defmodule DoItWeb.AgentConnectTest do
 
       assert paste ==
                "export DOITLIST_API_TOKEN='#{@paste_token}'\n" <>
-                 "codex mcp add doit-list --url #{@paste_url} " <>
+                 "codex mcp add doitlist --url #{@paste_url} " <>
                  "--bearer-token-env-var DOITLIST_API_TOKEN\n" <>
                  ~s(echo "export DOITLIST_API_TOKEN='#{@paste_token}'" >> ~/.bashrc) <>
                  "   # or your shell's profile"
@@ -84,19 +84,19 @@ defmodule DoItWeb.AgentConnectTest do
       # 24.3's bar spelled out: the credential export, the add, and the
       # profile append all in the same paste.
       assert paste =~ "export DOITLIST_API_TOKEN='#{@paste_token}'"
-      assert paste =~ "codex mcp add doit-list"
+      assert paste =~ "codex mcp add doitlist"
       assert paste =~ ">> ~/.bashrc"
     end
 
-    test "hermes_paste/1 appends the bare token under MCP_DOIT_LIST_API_KEY" do
+    test "hermes_paste/1 appends the bare token under MCP_DOITLIST_API_KEY" do
       paste = AgentConnect.hermes_paste(@paste_token)
 
       assert paste ==
-               "hermes mcp add doit-list --url #{@paste_url} --auth header\n" <>
-                 ~s(echo "MCP_DOIT_LIST_API_KEY=#{@paste_token}" >> ~/.hermes/.env)
+               "hermes mcp add doitlist --url #{@paste_url} --auth header\n" <>
+                 ~s(echo "MCP_DOITLIST_API_KEY=#{@paste_token}" >> ~/.hermes/.env)
 
       [_add_line, env_line] = String.split(paste, "\n")
-      assert env_line =~ "MCP_DOIT_LIST_API_KEY=#{@paste_token}"
+      assert env_line =~ "MCP_DOITLIST_API_KEY=#{@paste_token}"
       # Bare token: Hermes prepends the scheme itself, so no Bearer prefix here.
       refute env_line =~ "Bearer "
     end
@@ -129,7 +129,7 @@ defmodule DoItWeb.AgentConnectTest do
 
       assert paste ==
                "$env:DOITLIST_API_TOKEN = '#{@paste_token}'\n" <>
-                 "codex mcp add doit-list --url #{@paste_url} " <>
+                 "codex mcp add doitlist --url #{@paste_url} " <>
                  "--bearer-token-env-var DOITLIST_API_TOKEN\n" <>
                  "setx DOITLIST_API_TOKEN '#{@paste_token}'   # persists for future shells"
 
@@ -143,9 +143,9 @@ defmodule DoItWeb.AgentConnectTest do
       paste = AgentConnect.hermes_paste(@paste_token, :powershell)
 
       assert paste ==
-               "hermes mcp add doit-list --url #{@paste_url} --auth header\n" <>
+               "hermes mcp add doitlist --url #{@paste_url} --auth header\n" <>
                  "Add-Content -Path ~/.hermes/.env " <>
-                 "-Value 'MCP_DOIT_LIST_API_KEY=#{@paste_token}' -Encoding utf8"
+                 "-Value 'MCP_DOITLIST_API_KEY=#{@paste_token}' -Encoding utf8"
 
       # 25.3: `>>` writes UTF-16 on Windows PowerShell 5.1.
       refute paste =~ ">>"
@@ -171,7 +171,7 @@ defmodule DoItWeb.AgentConnectTest do
 
       assert AgentConnect.repo_marker(@marker_initiative) ==
                "## Do It List\n" <>
-                 "Tasks: #{expected_url} — work this tree via the doit-list " <>
+                 "Tasks: #{expected_url} — work this tree via the doitlist " <>
                  "MCP server, not a TODO.md or PLAN.md."
     end
 

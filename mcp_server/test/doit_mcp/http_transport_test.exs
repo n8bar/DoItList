@@ -196,7 +196,7 @@ defmodule DoitMcp.HttpTransportTest do
 
     resp = Req.post!(req, url: "/", json: initialize_message(1))
     assert resp.status == 200
-    assert %{"result" => %{"serverInfo" => %{"name" => "doit-list"}}} = resp.body
+    assert %{"result" => %{"serverInfo" => %{"name" => "doitlist"}}} = resp.body
     [session_id] = Req.Response.get_header(resp, "mcp-session-id")
 
     resp =

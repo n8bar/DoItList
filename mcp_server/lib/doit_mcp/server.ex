@@ -6,7 +6,7 @@ defmodule DoitMcp.Server do
   """
 
   use Anubis.Server,
-    name: "doit-list",
+    name: "doitlist",
     version: "0.1.0",
     capabilities: [:tools, :resources]
 

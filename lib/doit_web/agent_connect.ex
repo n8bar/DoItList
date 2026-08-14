@@ -10,7 +10,7 @@ defmodule DoItWeb.AgentConnect do
 
   use DoItWeb, :verified_routes
 
-  @server_name "doit-list"
+  @server_name "doitlist"
 
   @doc """
   The public URL agents connect to, with exactly one trailing slash.
@@ -89,7 +89,7 @@ defmodule DoItWeb.AgentConnect do
   @doc """
   Hermes Agent reads the bare token (no `Bearer ` prefix) from
   `~/.hermes/.env` under the `MCP_<SERVER>_API_KEY` name — for server
-  `doit-list` that's `MCP_DOIT_LIST_API_KEY`. The append rides the same
+  `doitlist` that's `MCP_DOITLIST_API_KEY`. The append rides the same
   paste (24.3). PowerShell (25.3): `>>` writes UTF-16 on Windows
   PowerShell 5.1, so the variant appends via `Add-Content -Encoding utf8`,
   which lands UTF-8 on both 5.1 and 7.
@@ -100,7 +100,7 @@ defmodule DoItWeb.AgentConnect do
     Enum.join(
       [
         "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
-        ~s(echo "MCP_DOIT_LIST_API_KEY=#{token}" >> ~/.hermes/.env)
+        ~s(echo "MCP_DOITLIST_API_KEY=#{token}" >> ~/.hermes/.env)
       ],
       "\n"
     )
@@ -110,7 +110,7 @@ defmodule DoItWeb.AgentConnect do
     Enum.join(
       [
         "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
-        "Add-Content -Path ~/.hermes/.env -Value 'MCP_DOIT_LIST_API_KEY=#{token}' -Encoding utf8"
+        "Add-Content -Path ~/.hermes/.env -Value 'MCP_DOITLIST_API_KEY=#{token}' -Encoding utf8"
       ],
       "\n"
     )

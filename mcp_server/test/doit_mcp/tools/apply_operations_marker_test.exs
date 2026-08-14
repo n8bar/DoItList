@@ -15,7 +15,7 @@ defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
 
   @marker "## Do It List\n" <>
             "Tasks: http://localhost:4000/initiatives/7 — work this tree via the " <>
-            "doit-list MCP server, not a TODO.md or PLAN.md."
+            "doitlist MCP server, not a TODO.md or PLAN.md."
 
   @guidance "If the repo's agent-instruction file (CLAUDE.md, AGENTS.md) has no " <>
               "'## Do It List' marker, offer the operator to add it:"
