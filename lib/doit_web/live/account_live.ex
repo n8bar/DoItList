@@ -158,6 +158,12 @@ defmodule DoItWeb.AccountLive do
 
   # --- API tokens (m03.01 worklist 1.2) --------------------------------------
 
+  # Tracks the typed label server-side; without this the post-mint form reset
+  # never diffs against the client's typed value, so the textbox kept its text.
+  def handle_event("validate_api_token", %{"api_token" => params}, socket) do
+    {:noreply, assign(socket, :api_token_form, to_form(params, as: :api_token))}
+  end
+
   def handle_event("mint_api_token", %{"api_token" => %{"label" => label}}, socket) do
     user = socket.assigns.current_user
 
@@ -881,15 +887,17 @@ defmodule DoItWeb.AccountLive do
             <.form
               for={@api_token_form}
               id="api-token-form"
+              phx-change="validate_api_token"
               phx-submit="mint_api_token"
               class="space-y-2"
             >
               <.input
                 field={@api_token_form[:label]}
                 type="text"
-                label="Label (optional)"
+                label="Label"
                 placeholder="e.g. Claude Code, laptop CLI"
                 autocomplete="off"
+                required
               />
               <p class="text-xs text-zinc-500 dark:text-zinc-400">
                 A name to recognize this token later.

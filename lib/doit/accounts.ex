@@ -144,7 +144,7 @@ defmodule DoIt.Accounts do
   # Per-user Bearer tokens. Implementation lives in `DoIt.Accounts.ApiTokens`;
   # delegated here so callers use the context as the single front door.
 
-  defdelegate mint_api_token(user, label \\ nil), to: ApiTokens
+  defdelegate mint_api_token(user, label), to: ApiTokens
   defdelegate max_active_api_tokens(), to: ApiTokens
   defdelegate list_api_tokens(user), to: ApiTokens
   defdelegate revoke_api_token(user, id), to: ApiTokens

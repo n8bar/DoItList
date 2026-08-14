@@ -58,6 +58,32 @@ defmodule DoItWeb.AccountApiTokensTest do
     refute render(view) =~ "doit_pat_"
   end
 
+  test "minting clears the label box; a blank label mints nothing", %{conn: conn, user: user} do
+    {:ok, view, _html} = live(conn, ~p"/account")
+
+    # The typed value is tracked via phx-change, so the post-mint reset
+    # actually diffs the input back to empty (the bug: it kept its text).
+    view
+    |> form("#api-token-form", api_token: %{label: "My CLI"})
+    |> render_change()
+
+    view
+    |> form("#api-token-form", api_token: %{label: "My CLI"})
+    |> render_submit()
+
+    assert [%{label: "My CLI"}] = Accounts.list_api_tokens(user)
+    refute view |> element("#api-token-form input[name='api_token[label]']") |> render() =~
+             "My CLI"
+
+    # Blank label: server rejects (the browser's `required` gates it client-side).
+    view
+    |> form("#api-token-form", api_token: %{label: "   "})
+    |> render_submit()
+
+    assert render(view) =~ "Couldn&#39;t mint token."
+    assert [_only_the_first] = Accounts.list_api_tokens(user)
+  end
+
   test "minting shows the connect panel; dismissing removes it with the reveal", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/account")
 

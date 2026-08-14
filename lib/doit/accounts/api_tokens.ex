@@ -42,14 +42,15 @@ defmodule DoIt.Accounts.ApiTokens do
   def max_active_api_tokens, do: @max_active_tokens
 
   @doc """
-  Mint a new token for `user` with an optional `label`.
+  Mint a new token for `user`, labeled so it's recognizable in the Active
+  tokens list (required — blank rejects).
 
   Returns `{:ok, {plaintext, %ApiToken{}}}` — the only time the plaintext is
   available — `{:error, changeset}` if the label is invalid, or
   `{:error, :token_limit_reached}` once the user is at `max_active_api_tokens/0`
   (revoke one to mint another).
   """
-  def mint_api_token(%User{} = user, label \\ nil) do
+  def mint_api_token(%User{} = user, label) do
     if count_active_tokens(user) >= @max_active_tokens do
       {:error, :token_limit_reached}
     else
