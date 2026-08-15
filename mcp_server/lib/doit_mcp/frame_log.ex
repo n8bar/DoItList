@@ -80,7 +80,7 @@ defmodule DoitMcp.FrameLog do
   Replace every credential-bearing field of a decoded frame: a `token` or
   `authorization` field at any depth, and any value that is itself a bearer
   header. Shapes and replacements are `DoitMcp.Redaction`'s, shared with the
-  log filter (m03.04 2.5.7).
+  log filter (m03.04 2.2.1.7).
   """
   @spec redact(term()) :: term()
   def redact(frame) when is_map(frame) do

@@ -103,7 +103,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   same key replays that stored response instead of re-applying the batch. The
   key binds to the exact payload — a revised batch takes a new key.
 
-  ## Import readback — a record, not a stop (m03.04 2.29)
+  ## Import readback — a record, not a stop (m03.04 2.8.4)
 
   Operator consent for imports rides the standing agent-access grant the
   operator flipped on the Initiative, so the server never stops an import to
@@ -122,7 +122,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   the current batch crosses the batch's bound: 32 normally, 128 for a
   coherent one-list batch (every add under one parent, at most 32 adds —
   each such unit lands as one reviewable increment; the ramp). Adds anchored
-  on an EXISTING task's `parent_id` count too (m03.04 2.26): the
+  on an EXISTING task's `parent_id` count too (m03.04 2.8.1): the
   adapter resolves each unique parent to its Initiative through
   `GET /api/v1/tasks/:id` — one read per unique parent per batch — before
   the classifier runs, so growing an existing tree can't dodge the
@@ -244,7 +244,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     %{response | isError: true}
   end
 
-  # Whether this apply must carry the import's record (m03.04 2.29.1): an
+  # Whether this apply must carry the import's record (m03.04 2.8.4.1): an
   # import-shaped batch (the classifier fired), or an operator-confirmed
   # shape override. Either way the readback is required — its absence is an
   # agent-facing refusal teaching the re-call, never a stop for a human. The
@@ -293,7 +293,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   # Resolve the batch's parent-anchored task-adds (`parent_id` = an existing
   # task) to their Initiatives — one GET /api/v1/tasks/:id per unique parent
-  # (m03.04 2.26) — for the classifier's per-target counting. Skipped
+  # (m03.04 2.8.1) — for the classifier's per-target counting. Skipped
   # when the classifier could never fire (kill switch off). A parent the read
   # can't resolve (404/error) is left out of the map: its adds keep the old
   # dropped behavior and the apply surfaces the real error.
@@ -344,7 +344,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     {:reply, response, frame}
   end
 
-  # One record settles the Initiative for the session (m03.04 2.29.1) —
+  # One record settles the Initiative for the session (m03.04 2.8.4.1) —
   # later chunks flow without re-asking; create_task's singles pause reads
   # the same memory.
   defp settle_record(nil), do: :ok
@@ -362,8 +362,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   # Post the import's record — the composed readback — as a provenance
-  # comment on the target Initiative's root task (m03.04 2.29.1).
-  # Root-thread comments may run long by design (m03.04 2.16), so the record
+  # comment on the target Initiative's root task (m03.04 2.8.4.1).
+  # Root-thread comments may run long by design (m03.04 2.4.3), so the record
   # is exempt from the long-comment lint by home. A failure never unwinds
   # the applied batch — the response asks the agent to post the record
   # itself.
@@ -473,7 +473,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   # An import-shaped apply — task-adds resolved to their target Initiatives,
   # the classifier's own resolution reused, never re-derived — ends with the
-  # repo-marker suggestion (m03.04 2.4.2): the guidance line plus the
+  # repo-marker suggestion (m03.04 2.1.4.2): the guidance line plus the
   # server-composed marker, read from the initiative list's `repo_marker`
   # field so the wording never forks from the panel. Once per Initiative per
   # session (Counter); the repo-file check and the offer are the agent's.

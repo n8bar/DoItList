@@ -29,11 +29,11 @@ defmodule DoItWeb.Api.Serializer do
       }
 
   `url` is the Initiative's web address — the operator-facing handle (m03.04
-  m03.04 2.3): when telling a human about an Initiative, hand them the URL or
+  m03.04 2.1.3): when telling a human about an Initiative, hand them the URL or
   the name, never a raw id. Composed server-side from the endpoint's public
   URL config, so a future id-scheme change costs the reader nothing.
   `repo_marker` is the Initiative's two-line snippet for a repo's
-  agent-instruction file (m03.04 2.4.1), composed by
+  agent-instruction file (m03.04 2.1.4.1), composed by
   `DoItWeb.AgentConnect.repo_marker/1` — the same source the account-page
   panel renders, so the wording can never fork. `role` is
   the acting user's role on the Initiative (`owner` | `editor` |
@@ -147,7 +147,7 @@ defmodule DoItWeb.Api.Serializer do
     cross-reference this one, each with the `source_id` / `source_index` /
     `source_title`. `[]` when nothing points here. Same single link query feeds
     both directions (no extra round-trip).
-  * `version` — the record's revision counter (m03.04 2.25): bumped on every
+  * `version` — the record's revision counter (m03.04 2.7.4): bumped on every
     intent-bearing write to the record itself, never by derived roll-up
     recomputes. Pass it back as `expected_version` on an update to refuse a
     stale write; on mismatch nothing applies and the conflict returns the
@@ -163,7 +163,7 @@ defmodule DoItWeb.Api.Serializer do
         "version": 5
       }
 
-  The task → Initiative resolver (m03.04 2.26.1) — deliberately minimal:
+  The task → Initiative resolver (m03.04 2.8.1.1) — deliberately minimal:
   just enough for a caller holding a bare task id (e.g. a `parent_id`) to
   learn which Initiative it belongs to. The full task shape lives in the
   Initiative tree read above.
@@ -190,21 +190,21 @@ defmodule DoItWeb.Api.Serializer do
   `data` with a sibling `meta` pagination object — see
   `DoItWeb.Api.InitiativeController`.
 
-  `actor_kind` is execution provenance (m03.04 2.34): `"browser"` for a
+  `actor_kind` is execution provenance (m03.04 2.10.1): `"browser"` for a
   session write, `"api_token"` for a token-borne write (with the token's id and
   label — label snapshotted at write time, so it survives token revocation),
   `null` for events recorded before provenance existed.
 
   A `child_deleted` event (whose `task_id` is the *parent*) additionally
   carries `deleted_task_id` — the deleted child's stable id — and
-  `deleted_ids` — its whole deleted subtree's ids (m03.04 2.35). Both are
+  `deleted_ids` — its whole deleted subtree's ids (m03.04 2.10.2). Both are
   derived at read time from the event's undo payload, so pre-existing events
   answer too; an event whose payload lacks them omits both fields.
 
   A `status_changed` event covers a completion/reopen's whole cascade in one
   record (its `task_id` is the acted task); `cascaded_ids` lists the other
   tasks the flip carried along — cascaded ancestors/descendants — so a reader
-  can tell explicit completion from inherited (m03.04 2.36). `[]` means
+  can tell explicit completion from inherited (m03.04 2.10.3). `[]` means
   the flip touched only the acted task; a legacy per-task event omits the
   field. Derived at read time from the undo payload, like the deletion ids.
 
@@ -357,7 +357,7 @@ defmodule DoItWeb.Api.Serializer do
     end)
   end
 
-  # The Initiative's web URL — the operator-facing handle (m03.04 2.3) —
+  # The Initiative's web URL — the operator-facing handle (m03.04 2.1.3) —
   # composed from the endpoint's public URL config via verified routes.
   defp initiative_url(id), do: url(~p"/initiatives/#{id}")
 
@@ -416,7 +416,7 @@ defmodule DoItWeb.Api.Serializer do
 
   # A `child_deleted` event's `inverse_payload` already names the deleted child
   # (`"task_id"`) and its subtree (`"deleted_ids"`) for undo — expose them as
-  # `deleted_task_id`/`deleted_ids` (m03.04 2.35). Derived at read time so
+  # `deleted_task_id`/`deleted_ids` (m03.04 2.10.2). Derived at read time so
   # pre-existing events answer too; anything short of the undo shape omits both
   # fields rather than crashing the read. `inverse_payload` itself never
   # crosses the API.
@@ -431,7 +431,7 @@ defmodule DoItWeb.Api.Serializer do
   defp deleted_ids_fields(_event), do: %{}
 
   # A `status_changed` event's undo payload names every task the cascade
-  # flipped — expose the non-acted ones as `cascaded_ids` (m03.04 2.36),
+  # flipped — expose the non-acted ones as `cascaded_ids` (m03.04 2.10.3),
   # derived at read time so pre-existing events answer too. `[]` pins "no
   # cascade"; anything short of the undo shape omits the field rather than
   # crashing the read. `inverse_payload` itself never crosses the API.

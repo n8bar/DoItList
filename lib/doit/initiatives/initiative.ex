@@ -23,14 +23,14 @@ defmodule DoIt.Initiatives.Initiative do
     # m03.04 item 3.4: per-Initiative constants store for AI agents — plain text
     # the product stores but never interprets.
     field :ai_knobs, :string
-    # m03.04 2.14: per-Initiative agent access, off by default. Off means
+    # m03.04 2.4.1: per-Initiative agent access, off by default. Off means
     # the /api/v1 surface treats this Initiative as not-found. Never cast from
     # params — the UI flips it via Initiatives.set_agent_access/2 (owner-only)
     # and the API create path grants it server-side at creation.
     field :agent_access, :boolean, default: false
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
     field :trashed_at, :utc_datetime
-    # Conditional writes (m03.04 2.25): integer revision counter, bumped
+    # Conditional writes (m03.04 2.7.4): integer revision counter, bumped
     # DB-side on every write to this row (content, subtitle, lifecycle) —
     # never cast from params. Callers may send expected_version to refuse a
     # stale write.
@@ -52,7 +52,7 @@ defmodule DoIt.Initiatives.Initiative do
     # without the attach renders no row.
     field :members, :any, virtual: true, default: []
     # Whether the VIEWING user's next member add here needs the one-time
-    # agent-trust confirm (m03.04 2.15): they administer it, it's
+    # agent-trust confirm (m03.04 2.4.2): they administer it, it's
     # agent-accessible, and they haven't acknowledged yet. Batch-attached by
     # `Initiatives.list_visible_initiatives/1` for the rail's collaborator-add
     # paths (menu + drag); defaults false so a struct built without the attach

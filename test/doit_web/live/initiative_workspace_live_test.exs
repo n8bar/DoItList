@@ -138,7 +138,7 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     conn: conn,
     alpha: alpha
   } do
-    # Knobs are usable only while agent access is on (m03.04 2.14.3).
+    # Knobs are usable only while agent access is on (m03.04 2.4.1.3).
     {:ok, _} = Initiatives.set_agent_access(alpha, true)
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
 

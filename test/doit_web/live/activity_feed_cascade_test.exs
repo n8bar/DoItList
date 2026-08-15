@@ -1,7 +1,7 @@
 defmodule DoItWeb.ActivityFeedCascadeTest do
   @moduledoc """
   The task pane's activity feed shows completion events with their cascade
-  (m03.04 2.36): a status_changed line renders (the m02-era hide is gone
+  (m03.04 2.10.3): a status_changed line renders (the m02-era hide is gone
   now that flips are one atomic event and no-ops don't record), and a flip
   that carried other tasks along wears a compact "+N cascaded" marker — a
   count, never ids. A single-task flip stays marker-free.

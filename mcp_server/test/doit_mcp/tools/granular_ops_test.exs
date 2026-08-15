@@ -21,7 +21,7 @@ defmodule DoitMcp.Tools.GranularOpsTest do
 
   # This table is about op-building, not the import guardrails: pin the gate
   # off so create_task's singles pause (which now holds for every client,
-  # m03.04 2.28.4) doesn't spend a pressure read here. The pause's own
+  # m03.04 2.8.3.4) doesn't spend a pressure read here. The pause's own
   # behavior lives in create_task_gate_test.exs.
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, false)

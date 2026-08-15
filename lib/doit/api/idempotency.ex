@@ -37,9 +37,9 @@ defmodule DoIt.Api.Idempotency do
   # How long a stored response stays replayable. Retunable.
   @retention_hours 24
 
-  # How long a same-key request waits for the holder of its lock (m03.04 2.24).
+  # How long a same-key request waits for the holder of its lock (m03.04 2.7.3).
   # Must cover the batch transaction's deliberate 60s bound
-  # (DoItWeb.Api.Operations, m03.04 2.23) so a waiter outlives the slowest
+  # (DoItWeb.Api.Operations, m03.04 2.7.2) so a waiter outlives the slowest
   # legitimate holder instead of raising mid-wait.
   @lock_wait_timeout 75_000
 
@@ -95,7 +95,7 @@ defmodule DoIt.Api.Idempotency do
 
   @doc """
   Serialize the controller's whole fetch → apply → store window for
-  `(user, key)` (m03.04 2.24).
+  `(user, key)` (m03.04 2.7.3).
 
   The lookup-then-execute sequence is check-then-act: without a lock, two
   same-key requests in flight together both fetch a miss and both execute — a

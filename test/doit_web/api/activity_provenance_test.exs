@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.ActivityProvenanceTest do
   @moduledoc """
-  Execution provenance on activity events (m03.04 2.34): a browser-session
+  Execution provenance on activity events (m03.04 2.10.1): a browser-session
   write records `actor_kind: "browser"`; a token-borne write records the token
   (kind + id + label snapshotted at write time); both serialize on
   `GET /api/v1/initiatives/:id/activity`; legacy pre-provenance rows (null

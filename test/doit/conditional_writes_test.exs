@@ -1,6 +1,6 @@
 defmodule DoIt.ConditionalWritesTest do
   @moduledoc """
-  Conditional writes (m03.04 2.25) at the context level: the `version`
+  Conditional writes (m03.04 2.7.4) at the context level: the `version`
   revision counter bumps on every intent-bearing write, stays still on derived
   roll-up recomputes, and `check_version/2` passes a matching token, conflicts
   a stale one with the current record, and waves a `nil` token through.

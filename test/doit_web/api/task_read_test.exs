@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.TaskReadTest do
   @moduledoc """
-  The task → Initiative resolver (m03.04 2.26.1): `GET /api/v1/tasks/:id`.
+  The task → Initiative resolver (m03.04 2.8.1.1): `GET /api/v1/tasks/:id`.
 
   View-gated through the task's Initiative, but UNIFORMLY 404: a garbage or
   unknown id, a soft-deleted task, agent access off, and a task the caller

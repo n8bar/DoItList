@@ -1,6 +1,6 @@
 defmodule DoItWeb.AgentConnectTest do
   @moduledoc """
-  m03.04 2.1.1: `DoItWeb.AgentConnect.mcp_url/0` — both lanes: the
+  m03.04 2.1.1.1: `DoItWeb.AgentConnect.mcp_url/0` — both lanes: the
   `:mcp_public_url` override, and composition from the endpoint's public host
   plus `:mcp_public_port` when unset. Item 24.2/24.3: the per-client connect
   pastes — exact text, credential included, runnable as pasted.

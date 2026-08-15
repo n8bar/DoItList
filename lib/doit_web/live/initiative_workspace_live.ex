@@ -247,7 +247,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:role, role)
     |> assign(:can_edit, Initiatives.can_edit?(role))
     |> assign(:can_admin, Initiatives.can_admin?(role))
-    # m03.04 2.14.4: whether THIS admin already acknowledged the
+    # m03.04 2.4.1.4: whether THIS admin already acknowledged the
     # agent-trust confirm here — the client reads it (via #agent-trust-state)
     # to decide at click whether the confirm opens. Per (admin, Initiative),
     # so it survives sessions and never re-shows once true.
@@ -1318,7 +1318,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # stores but never interprets, so nothing else re-renders on a change. The
   # typed text is already visible client-side; the debounced save is acked with
   # the same pulsed "Saved" tick as the subtitle (§6.7). Usable only while
-  # agent access is on (m03.04 2.14.3) — the control renders disabled when off;
+  # agent access is on (m03.04 2.4.1.3) — the control renders disabled when off;
   # this guard is the server-side backstop for a stale client.
   def handle_event("set_ai_knobs", %{"ai_knobs" => value}, socket) do
     cond do
@@ -1375,13 +1375,13 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  # m03.04 2.14.3: the owner's AI-access switch. The checkbox flips
+  # m03.04 2.4.1.3: the owner's AI-access switch. The checkbox flips
   # client-side at click (instant optimistic ack, §6; app.js holds the flip
   # behind the client-opened trust confirm when enabling over existing
   # members) and settles on the "agent-access-saved" push_event — saved tick
   # on success, honest revert of the box on refusal/failure (§6, must not
   # lie). Enabling over existing members records the one-time agent-trust
-  # acknowledgement (m03.04 2.14.4): the client showed the confirm for exactly
+  # acknowledgement (m03.04 2.4.1.4): the client showed the confirm for exactly
   # that predicate, so the commit is the acceptance.
   def handle_event("set_agent_access", params, socket) do
     if not socket.assigns.can_admin do
@@ -2129,7 +2129,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
          role in ~w(editor viewer) do
       actor = socket.assigns.current_user
 
-      # m03.04 2.14.4: a promotion on an agent-accessible Initiative is
+      # m03.04 2.4.1.4: a promotion on an agent-accessible Initiative is
       # gated by the client-opened trust confirm. Proof-carrying: the ack
       # records only when Proceed injected `trust_confirmed` — never from an
       # ungated push that merely matches the trigger predicate.
@@ -2170,7 +2170,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           {:noreply, put_flash(socket, :error, "No user with that email or username.")}
 
         user ->
-          # m03.04 2.14.4: a member add on an agent-accessible Initiative
+          # m03.04 2.4.1.4: a member add on an agent-accessible Initiative
           # is gated by the client-opened trust confirm. Proof-carrying: the
           # ack records only when Proceed injected `trust_confirmed`, never from
           # an ungated push matching the trigger predicate.
@@ -2364,7 +2364,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   end
 
   defp do_add_collaborator_to(socket, user, iid, uid, trust_confirmed?) do
-    # Core shared with /assigned (m03.04 2.16) — DoItWeb.CollaboratorAdd owns
+    # Core shared with /assigned (m03.04 2.4.3) — DoItWeb.CollaboratorAdd owns
     # the proof-carrying ack rules (2.16).
     {ok?, ack?, socket} = CollaboratorAdd.add_as_viewer(socket, user, iid, uid, trust_confirmed?)
 
@@ -3140,7 +3140,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   this.handleEvent("ai-knobs-saved", () => {
                     if (window.DoitSavedTick) window.DoitSavedTick("ai-knobs-saved-tick");
                   });
-                  // AI-access settle (m03.04 2.14.3): the checkbox flipped
+                  // AI-access settle (m03.04 2.4.1.3): the checkbox flipped
                   // client-side at click; the server replies with the persisted
                   // state — re-assert it (the honest revert when refused) and
                   // tick Saved only on a real success (never lie).
@@ -4350,7 +4350,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
           <.archive_confirm />
           <.remove_member_confirm :if={@can_admin} />
-          <%!-- m03.04 2.14.4: render-known state the client reads at click
+          <%!-- m03.04 2.4.1.4: render-known state the client reads at click
                time to decide whether the agent-trust confirm must open (fresh
                DOM, no round trip — UX_GUARDRAILS 6.5). Lives OUTSIDE the
                ignored dialog below so it patches as the flag / members / the
@@ -6168,7 +6168,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       <%= cond do %>
         <% Tasks.comment_deleted?(@comment) -> %>
-          <%!-- Tombstone (m03.04 2.17): the row survives so thread shape +
+          <%!-- Tombstone (m03.04 2.5.1): the row survives so thread shape +
                references hold, shown as deleted. --%>
           <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
         <% true -> %>
@@ -6215,7 +6215,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               <% end %>
             </div>
           </div>
-          <%!-- Inline editor (m03.04 2.7) — author-only, rendered hidden;
+          <%!-- Inline editor (m03.04 2.2.3) — author-only, rendered hidden;
                the "comment-edit" applier reveals it when this comment is
                the client-owned commentEditId. Save stays server-owned; the
                context re-checks authorship. The Edit button seeds + focuses
@@ -6256,7 +6256,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           </form>
       <% end %>
 
-      <%!-- Prior-versions popup (m03.04 2.7): a minimal inline panel listing
+      <%!-- Prior-versions popup (m03.04 2.2.3): a minimal inline panel listing
            earlier bodies, NEWEST FIRST (the `versions` preload is ordered
            desc in list_comments/1). Open/close is CLIENT-OWNED (m02.09 WL3
            3.3, §6.5): rendered statically + hidden, carries
@@ -6636,7 +6636,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </form>
           </div>
 
-          <%!-- m03.04 2.14.3: per-Initiative AI access, owner-only, off by
+          <%!-- m03.04 2.4.1.3: per-Initiative AI access, owner-only, off by
                default. The checkbox flips client-side at click (§6 optimistic
                ack; app.js holds the flip behind the client-opened trust confirm
                when enabling over existing members) and settles on the
@@ -6673,7 +6673,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                plain text the product stores but never interprets. Debounced
                save-on-blur; the "Saved" tick pulsed on "ai-knobs-saved" is the
                ack for the otherwise-invisible write (§6.7, same as subtitle).
-               Usable only while AI access is on (m03.04 2.14.3): the derived
+               Usable only while AI access is on (m03.04 2.4.1.3): the derived
                state reads in the control itself — disabled textarea + swapped
                copy — not a separate badge. --%>
           <%!-- AI-KNOBS-PARKED (m03.04): temporarily off the UI so knobs don't
@@ -7483,7 +7483,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic">
           Loading…
         </p>
-        <%!-- status_changed shows since m03.04 2.36: it's been one atomic
+        <%!-- status_changed shows since m03.04 2.10.3: it's been one atomic
              event per flip since m02.06 item 14 (the per-task spam the old
              filter hid is long gone) and no-op flips no longer record. --%>
         <ul data-async-list class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
@@ -7500,7 +7500,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 class="w-4 h-4 text-[8px]"
               />{(e.user && e.user.name) || "system"}
             </span>
-            <%!-- Execution provenance (m03.04 2.34): a token-borne write
+            <%!-- Execution provenance (m03.04 2.10.1): a token-borne write
                  was performed by an agent, not typed by the user — badge it
                  with the token's label (ids are plumbing, never shown). --%>
             <span
@@ -7517,7 +7517,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             >
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
             </span>
-            <%!-- Cascade exposure (m03.04 2.36): a completion/reopen that
+            <%!-- Cascade exposure (m03.04 2.10.3): a completion/reopen that
                  carried other tasks along says so — count only, ids are
                  plumbing. --%>
             <span :if={cascaded_count(e) > 0} data-cascade class="text-zinc-500 dark:text-zinc-400">
@@ -7617,14 +7617,14 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   defp event_label(%{kind: "undid", data: d}, _members), do: "undid #{d["of"] || "a change"}"
   defp event_label(%{kind: "redid", data: d}, _members), do: "redid #{d["of"] || "a change"}"
 
-  # Status flips read as their outcome (m03.04 2.36) — the label carries
+  # Status flips read as their outcome (m03.04 2.10.3) — the label carries
   # the transition, so the generic (from → to) span skips this kind.
   defp event_label(%{kind: "status_changed", data: %{"to" => "done"}}, _members), do: "completed"
   defp event_label(%{kind: "status_changed", data: %{"to" => "open"}}, _members), do: "reopened"
   defp event_label(%{kind: "status_changed"}, _members), do: "changed status"
   defp event_label(%{kind: kind}, _members), do: kind
 
-  # How many other tasks a status_changed's cascade flipped (m03.04 2.36);
+  # How many other tasks a status_changed's cascade flipped (m03.04 2.10.3);
   # 0 for every other kind or a legacy payload, which renders no marker.
   defp cascaded_count(event) do
     case Tasks.cascaded_ids(event) do

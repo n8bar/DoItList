@@ -9,7 +9,7 @@ defmodule DoItWeb.AccountLive do
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
 
-    # Repo-marker panel (m03.04 2.1.4): names + ids only, loaded at mount,
+    # Repo-marker panel (m03.04 2.1.1.4): names + ids only, loaded at mount,
     # reloadable from the panel. Which one is selected is ephemeral UI state —
     # assign-only.
     marker_initiatives = Initiatives.list_agent_accessible_initiatives(user)
@@ -207,7 +207,7 @@ defmodule DoItWeb.AccountLive do
     {:noreply, assign(socket, :new_api_token, nil)}
   end
 
-  # Repo-marker select (m03.04 2.1.4): a name+URL swap on an already-loaded
+  # Repo-marker select (m03.04 2.1.1.4): a name+URL swap on an already-loaded
   # list — no work proportional to any tree.
   def handle_event("select_marker_initiative", %{"initiative_id" => id}, socket) do
     id = String.to_integer(id)
@@ -674,7 +674,7 @@ defmodule DoItWeb.AccountLive do
                   </button>
                 </div>
 
-                <%!-- Connect panel (m03.04 2.1.2/24.3): per-client pastes
+                <%!-- Connect panel (m03.04 2.1.1.2/24.3): per-client pastes
                    composed server-side from the endpoint URL and the token just
                    minted — self-contained, runnable as pasted. Lives inside the
                    one-time reveal because the plaintext exists only here;
@@ -837,7 +837,7 @@ defmodule DoItWeb.AccountLive do
               </div>
             </.form>
 
-            <%!-- Repo marker (m03.04 2.1.4), the second paste: a few lines
+            <%!-- Repo marker (m03.04 2.1.1.4), the second paste: a few lines
                for the repo's agent-instruction file naming the Initiative and
                its URL, so a connected agent works the tree instead of starting
                a TODO.md. Holds no secret, so it renders always — never locked

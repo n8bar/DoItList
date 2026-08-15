@@ -17,7 +17,7 @@ defmodule DoitMcp.ToolResult do
       {:ok, %{"results" => [%{"status" => "error", "error" => op_error} | _]}} ->
         {:reply, Response.error(Response.tool(), op_error["message"]), frame}
 
-      # A version conflict (m03.04 2.25): the batch 409s and the per-op
+      # A version conflict (m03.04 2.7.4): the batch 409s and the per-op
       # `conflict` error carries the CURRENT record — surface both so the
       # caller can reconcile and retry without another read.
       {:error, %{status: 409, body: %{"results" => results}}} when is_list(results) ->

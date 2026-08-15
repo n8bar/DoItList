@@ -25,7 +25,7 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     assert Jason.decode!(text) == %{"activity" => []}
   end
 
-  # Execution provenance (m03.04 2.34) rides the API payload through
+  # Execution provenance (m03.04 2.10.1) rides the API payload through
   # untouched — the MCP read serves whatever the activity endpoint says.
   test "passes provenance fields through untouched" do
     event = %{
@@ -53,7 +53,7 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     assert Jason.decode!(text) == [event, legacy]
   end
 
-  # Deletion ids (m03.04 2.35) likewise ride the API payload through
+  # Deletion ids (m03.04 2.10.2) likewise ride the API payload through
   # untouched — `deleted_task_id`/`deleted_ids` reach the MCP client as served.
   test "passes deletion id fields through untouched" do
     event = %{
@@ -79,7 +79,7 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     assert Jason.decode!(text) == [event]
   end
 
-  # Cascade exposure (m03.04 2.36) likewise rides the API payload through
+  # Cascade exposure (m03.04 2.10.3) likewise rides the API payload through
   # untouched — `cascaded_ids` reaches the MCP client as served.
   test "passes cascade id fields through untouched" do
     event = %{

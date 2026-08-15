@@ -20,7 +20,7 @@ defmodule DoIt.Tasks.Task do
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
-    # Conditional writes (m03.04 2.25): integer revision counter, bumped
+    # Conditional writes (m03.04 2.7.4): integer revision counter, bumped
     # DB-side (version = version + 1) on every intent-bearing write — never
     # cast from params, and never bumped by derived computed_progress
     # recomputes. Callers may send expected_version to refuse a stale write.
@@ -86,7 +86,7 @@ defmodule DoIt.Tasks.Task do
     |> validate_required([:title, :initiative_id, :created_by_id])
     |> validate_length(:title, min: 1, max: 200)
     # The 8000 cap is stated in the MCP adapter's apply_operations tool words
-    # (m03.04 2.18) and pinned by its description guardrail test — a
+    # (m03.04 2.5.2) and pinned by its description guardrail test — a
     # retune here (both changesets) must update both.
     |> validate_length(:description, max: 8000)
     |> validate_inclusion(:status, @statuses)

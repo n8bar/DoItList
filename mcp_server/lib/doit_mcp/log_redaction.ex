@@ -1,6 +1,6 @@
 defmodule DoitMcp.LogRedaction do
   @moduledoc """
-  Credentials never reach the container log (m03.04 2.5.7).
+  Credentials never reach the container log (m03.04 2.2.1.7).
 
   The dep's transport-error path logs whole requests: a failed session call
   inspects the `GenServer.call` exit reason, which carries the request

@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
   @moduledoc """
-  The repo-marker suggestion on import-shaped applies (m03.04 2.4.2): a
+  The repo-marker suggestion on import-shaped applies (m03.04 2.1.4.2): a
   successful apply whose task-adds resolve to a target Initiative — the
   import gate's own batch classification, reused — ends with the guidance
   line plus the API-composed `repo_marker`; edit batches stay clean; one

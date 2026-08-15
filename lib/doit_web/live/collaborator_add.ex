@@ -2,7 +2,7 @@ defmodule DoItWeb.CollaboratorAdd do
   @moduledoc """
   The rail's collaborator add — click/drag onto an initiative entry — shared
   by every LiveView that renders the rail: the workspace and `/assigned`
-  (m03.04 2.15/2.21).
+  (m03.04 2.4.2/2.21).
 
   Owns the core the views must not let drift: add as viewer, the
   proof-carrying trust ack (`trust_confirmed` is injected ONLY by the trust

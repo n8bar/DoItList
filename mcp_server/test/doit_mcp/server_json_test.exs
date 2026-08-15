@@ -1,7 +1,7 @@
 defmodule DoitMcp.ServerJsonTest do
   use ExUnit.Case, async: true
 
-  # Registry-descriptor pinning (m03.04 2.1.5). server.json is authored
+  # Registry-descriptor pinning (m03.04 2.1.1.5). server.json is authored
   # here and publishes at M05; these assertions keep its structure honest as
   # the adapter evolves — they do not reimplement registry validation (the
   # descriptor was validated against the 2025-12-11 server.schema.json when

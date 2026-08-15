@@ -9,7 +9,7 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
 
   @moduletag :capture_log
 
-  # 401 recovery on the resident HTTP transport (m03.04 2.5.3),
+  # 401 recovery on the resident HTTP transport (m03.04 2.2.1.3),
   # end-to-end through DoitMcp.Http.Plug against the real tree: a rejected
   # bearer raises the paste-a-fresh-token form on that session's OWN stream;
   # the accepted token overrides that session's header token for the rest of

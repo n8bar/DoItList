@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.SerializerRepoMarkerTest do
   @moduledoc """
-  `repo_marker` on initiative payloads (m03.04 2.4.1) — the two-line
+  `repo_marker` on initiative payloads (m03.04 2.1.4.1) — the two-line
   agent-instruction-file snippet.
 
   Pure serializer unit tests: both initiative reads — the list summary and

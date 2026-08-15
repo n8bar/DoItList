@@ -89,7 +89,7 @@ defmodule DoitMcp.CreateTaskGateTest do
     assert decoded["message"] =~ "minutes"
     assert decoded["message"] =~ "apply_operations"
     assert decoded["message"] =~ "one list at a time"
-    # The no-stop recovery words (m03.04 2.29): the readback record, not
+    # The no-stop recovery words (m03.04 2.8.4): the readback record, not
     # an operator confirm.
     assert decoded["message"] =~ "`readback`"
     assert decoded["message"] =~ "without a stop"
@@ -109,7 +109,7 @@ defmodule DoitMcp.CreateTaskGateTest do
     refute_received :created
   end
 
-  test "a just-created initiative pauses at the normal threshold — the fresh floor is retired (m03.04 2.29.2)" do
+  test "a just-created initiative pauses at the normal threshold — the fresh floor is retired (m03.04 2.8.4.2)" do
     # Floor-level pressure (the retired floor was 8) flows like any other.
     stub_api(8)
 

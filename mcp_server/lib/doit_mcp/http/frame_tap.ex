@@ -1,6 +1,6 @@
 defmodule DoitMcp.Http.FrameTap do
   @moduledoc """
-  The connection-side half of the HTTP frame capture (m03.04 2.5.5):
+  The connection-side half of the HTTP frame capture (m03.04 2.2.1.5):
   every JSON-RPC frame this service reads or writes on a connection, handed
   to `DoitMcp.FrameLog` tagged with its session.
 

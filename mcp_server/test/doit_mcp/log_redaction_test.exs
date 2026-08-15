@@ -10,7 +10,7 @@ defmodule DoitMcp.LogRedactionTest do
 
   require Logger
 
-  # Credentials never reach the container log (m03.04 2.5.7): the dep's
+  # Credentials never reach the container log (m03.04 2.2.1.7): the dep's
   # transport-error path logs whole requests — bearer header included — so a
   # failed call would write a live token in plaintext on a multi-user
   # service. The guarantee is a Logger primary filter, so no dep version and

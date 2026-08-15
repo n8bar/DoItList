@@ -318,7 +318,7 @@ defmodule DoitMcp.ImportGateTest do
     end
   end
 
-  describe "the retired fresh floor (m03.04 2.29.2)" do
+  describe "the retired fresh floor (m03.04 2.8.4.2)" do
     test "a just-created Initiative's small first import flows like any other" do
       # 9 adds under one in-batch Initiative: coherent, under every bound.
       # The retired fresh floor (8) held exactly this; it flows now.
@@ -346,7 +346,7 @@ defmodule DoitMcp.ImportGateTest do
     end
   end
 
-  describe "fresh-initiative rekey (m03.04 2.10.2)" do
+  describe "fresh-initiative rekey (m03.04 2.2.6.2)" do
     test "created_initiative_ids/2 maps only initiative-add lids from ok results" do
       ops = new_initiative_batch(2)
 
@@ -406,7 +406,7 @@ defmodule DoitMcp.ImportGateTest do
     end
   end
 
-  describe "parent-anchored adds (m03.04 2.26)" do
+  describe "parent-anchored adds (m03.04 2.8.1)" do
     test "existing_parent_ids/1 lists unique bare parent_ids in batch order" do
       ops = [
         %{"op" => "add", "type" => "task", "lid" => "a", "data" => %{"parent_id" => 42}},

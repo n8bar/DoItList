@@ -3,7 +3,7 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
 
   alias DoitMcp.ImportGate
 
-  # m03.04 2.18 (reswept by item 36.3): the tool words state the import
+  # m03.04 2.5.2 (reswept by item 36.3): the tool words state the import
   # classifier's numbers upfront and carry the no-stop model — readback as
   # record, never a confirm. Each bound is asserted through ImportGate's own
   # exposed functions, so a retune that forgets the tool words fails here
@@ -24,7 +24,7 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       assert description =~ "at most #{ImportGate.threshold()} adds"
     end
 
-    test "carries the no-stop model, not the confirm contract (m03.04 2.29.3)", %{
+    test "carries the no-stop model, not the confirm contract (m03.04 2.8.4.3)", %{
       description: description
     } do
       assert description =~ "never stops an import"

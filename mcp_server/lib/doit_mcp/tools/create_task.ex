@@ -11,7 +11,7 @@ defmodule DoitMcp.Tools.CreateTask do
   the DATABASE's recent-creation window (`DoitMcp.ImportPressure`), shared
   with the batch classifier — a human-rhythm drip of creates decays out, a
   loop accumulates. Past the threshold, one-at-a-time creation pauses with
-  an agent-facing redirect — never a stop for the operator (m03.04 2.29):
+  an agent-facing redirect — never a stop for the operator (m03.04 2.8.4):
   the batch path carries the import's one readback record, and coherent
   one-list batches ride the ramp without any. An initiative whose readback
   was recorded this session flows freely, singles included. The pause rides

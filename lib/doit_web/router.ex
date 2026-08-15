@@ -50,7 +50,7 @@ defmodule DoItWeb.Router do
     get "/initiatives/:id/task_count", InitiativeController, :task_count
     get "/initiatives/:id/tasks/:task_id/comments", CommentController, :index
 
-    # Task → Initiative resolver (m03.04 2.26.1): the one read keyed on a
+    # Task → Initiative resolver (m03.04 2.8.1.1): the one read keyed on a
     # bare task id, so the MCP import gate can count parent_id-anchored adds.
     # Deviates from the policy above on purpose: unknown ids AND tasks the
     # caller can't view are a UNIFORM 404 — a bare task id is no existence

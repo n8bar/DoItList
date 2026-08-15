@@ -54,7 +54,7 @@ defmodule DoitMcp.BatchShapeTest do
     end
   end
 
-  describe "classify/1 sub-scale checklist refusal (m03.04 2.29.2)" do
+  describe "classify/1 sub-scale checklist refusal (m03.04 2.8.4.2)" do
     test "one checklist-bearing description refuses with the subtasks-or-ask recovery" do
       ops = [add("Setup", "Steps:\n- [ ] install\n- [ ] configure"), add("Cleanup")]
 
@@ -69,7 +69,7 @@ defmodule DoitMcp.BatchShapeTest do
       assert BatchShape.classify([add("Setup", "- [x] done already")]) == :pass
     end
 
-    test "numbered checkboxes refuse like bullets — `N.` and `N)` forms both count (m03.04 2.31)" do
+    test "numbered checkboxes refuse like bullets — `N.` and `N)` forms both count (m03.04 2.9.2)" do
       desc = "1. [x] Define the release package contract.\n2) [ ] Wire the installer."
 
       assert {:refuse, message} = BatchShape.classify([add("Worklist", desc)])
@@ -101,14 +101,14 @@ defmodule DoitMcp.BatchShapeTest do
       assert block =~ "2 markdown-checkbox lines sit inside 1 new descriptions."
     end
 
-    test "numbered-checkbox lines land in the checkbox fact (m03.04 2.31)" do
+    test "numbered-checkbox lines land in the checkbox fact (m03.04 2.9.2)" do
       ops = [add("Worklist", "10. [X] audit the pattern\n11. [ ] fix it\n12) [x] verify")]
 
       assert BatchShape.facts_block(ops) =~
                "3 markdown-checkbox lines sit inside 1 new descriptions."
     end
 
-    test "the checkbox fact prints once, facts only — no ask rides the record (m03.04 2.29.1)" do
+    test "the checkbox fact prints once, facts only — no ask rides the record (m03.04 2.8.4.1)" do
       block = BatchShape.facts_block([add("Work item", "- [ ] a\n- [ ] b")])
 
       assert length(String.split(block, "markdown-checkbox lines")) == 2

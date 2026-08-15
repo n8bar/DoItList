@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.ActivityDeletedIdsTest do
   @moduledoc """
-  Deletion events name the deleted child (m03.04 2.35): a `child_deleted`
+  Deletion events name the deleted child (m03.04 2.10.2): a `child_deleted`
   event serializes `deleted_task_id` (the deleted child) and `deleted_ids` (its
   whole subtree), derived at read time from the undo `inverse_payload` — so a
   fresh delete and a pre-existing event both answer; a degenerate payload omits
