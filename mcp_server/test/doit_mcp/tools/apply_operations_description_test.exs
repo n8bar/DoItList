@@ -3,9 +3,11 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
 
   alias DoitMcp.ImportGate
 
-  # m03.04 item 31: the tool words state the gate's numbers upfront. Each
-  # bound is asserted through ImportGate's own exposed functions, so a
-  # retune that forgets the tool words fails here instead of drifting.
+  # m03.04 item 31 (reswept by item 36.3): the tool words state the import
+  # classifier's numbers upfront and carry the no-stop model — readback as
+  # record, never a confirm. Each bound is asserted through ImportGate's own
+  # exposed functions, so a retune that forgets the tool words fails here
+  # instead of drifting.
   describe "published tool description" do
     setup do
       # Collapsed whitespace so assertions survive the moduledoc's line wraps.
@@ -16,14 +18,22 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       %{description: description}
     end
 
-    test "names the ramp from the gate's exposed bounds", %{description: description} do
+    test "names the ramp from the classifier's exposed bounds", %{description: description} do
       assert description =~ "up to #{ImportGate.threshold()} task-adds"
       assert description =~ "stretches to #{ImportGate.ramp_threshold()} while"
       assert description =~ "at most #{ImportGate.threshold()} adds"
     end
 
-    test "names the fresh floor from the gate's exposed bound", %{description: description} do
-      assert description =~ "past #{ImportGate.fresh_threshold()} cumulative task-adds"
+    test "carries the no-stop model, not the confirm contract (m03.04 item 36.3)", %{
+      description: description
+    } do
+      assert description =~ "never stops an import"
+      assert description =~ "provenance comment on the target Initiative's root task"
+      assert description =~ "`operator_confirmed: true`"
+      assert description =~ "Operator-confirmed in chat"
+      refute description =~ "fresh floor"
+      refute description =~ "confirm_url"
+      refute description =~ "confirmation_pending"
     end
 
     test "names the description cap and its overflow doctrine", %{description: description} do

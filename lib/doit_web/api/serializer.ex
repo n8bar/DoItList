@@ -396,43 +396,6 @@ defmodule DoItWeb.Api.Serializer do
     %{id: task.id, initiative_id: task.initiative_id, version: task.version}
   end
 
-  @doc """
-  An import confirm (m03.04 item 30.1 — `POST /api/v1/import_confirms` and
-  `GET /api/v1/import_confirms/:payload_hash`):
-
-      {
-        "payload_hash": "9f2c…",
-        "status": "pending",
-        "readback": "Importing PLAN.md as 31 tasks…",
-        "corrections": null,
-        "initiative_id": 12,
-        "url": "https://doitlist.app/initiatives/12#import-confirm",
-        "inserted_at": "2026-08-07T21:16:46Z"
-      }
-
-  `url` is the operator-facing handle (the `url` / `repo_marker` precedent):
-  the page the confirm card renders on — the Initiative workspace for an
-  Initiative-homed confirm, the account page for a bootstrap (account-homed)
-  one, each anchored to the card's DOM id. Composed server-side, so the
-  adapter hands the operator a working address, never a raw id.
-  """
-  def import_confirm(confirm) do
-    %{
-      payload_hash: confirm.payload_hash,
-      status: confirm.status,
-      readback: confirm.readback,
-      corrections: confirm.corrections,
-      initiative_id: confirm.initiative_id,
-      url: import_confirm_url(confirm),
-      inserted_at: iso8601(confirm.inserted_at)
-    }
-  end
-
-  defp import_confirm_url(%{initiative_id: nil}), do: url(~p"/account") <> "#import-confirms"
-
-  defp import_confirm_url(%{initiative_id: id}),
-    do: url(~p"/initiatives/#{id}") <> "#import-confirm"
-
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do
     %{

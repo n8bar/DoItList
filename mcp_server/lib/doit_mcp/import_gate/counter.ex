@@ -1,13 +1,14 @@
 defmodule DoitMcp.ImportGate.Counter do
   @moduledoc """
-  Per-session memory for the confirms the operator granted — import targets,
-  and the progress-calc gate's key (`{:progress_calc, id, requested}`, fix
-  17) — plus the repo-marker suggestions already emitted (`{:repo_marker,
-  id}`, m03.04 item 26.2), the same say-once shape. Pressure decays, sanction
-  persists (m03.04 3.1 iteration 2): task-creation PRESSURE comes from the
-  database's `inserted_at` window (`DoitMcp.ImportPressure`) and is
-  deliberately shared across connections, so this process holds only
-  session-scoped say-once state.
+  Per-session say-once memory — import targets whose readback was recorded
+  this session (m03.04 item 36: one record per import, not one per chunk),
+  the progress-calc gate's key (`{:progress_calc, id, requested}`, fix 17,
+  parked), and the repo-marker suggestions already emitted (`{:repo_marker,
+  id}`, m03.04 item 26.2). Pressure decays, the record persists (m03.04 3.1
+  iteration 2): task-creation PRESSURE comes from the database's
+  `inserted_at` window (`DoitMcp.ImportPressure`) and is deliberately shared
+  across connections, so this process holds only session-scoped say-once
+  state.
 
   Rows key on the SESSION process (m03.04 item 23.6): the resident transport
   serves every connected client from one VM, where a flat set would settle an
@@ -44,17 +45,17 @@ defmodule DoitMcp.ImportGate.Counter do
   end
 
   @doc """
-  Remember a confirm the operator granted this session — an import target,
-  or one of the other gates' keys.
+  Remember a say-once event for this session — an import target whose
+  readback was recorded, or one of the other guards' keys.
   """
   @spec mark_confirmed(term()) :: :ok
   def mark_confirmed(target), do: call({:mark_confirmed, session_key(), target}, :ok)
 
-  @doc "Whether the operator already granted this confirm on THIS session."
+  @doc "Whether this key was already marked on THIS session."
   @spec confirmed?(term()) :: boolean()
   def confirmed?(target), do: call({:confirmed?, session_key(), target}, false)
 
-  @doc "The sessions currently holding confirms (tests, diagnostics)."
+  @doc "The sessions currently holding rows (tests, diagnostics)."
   @spec sessions() :: [pid() | :unscoped]
   def sessions, do: call(:sessions, [])
 

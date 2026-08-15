@@ -25,13 +25,10 @@ defmodule DoitMcp.Application do
 
   def children(_env) do
     [
-      # The import gate's confirm memory, keyed per session (m03.04 item
-      # 23.6) — before the transport tree so a tool call can never race
-      # its start.
+      # The import classifier's record memory, keyed per session (m03.04
+      # item 23.6) — before the transport tree so a tool call can never
+      # race its start.
       DoitMcp.ImportGate.Counter,
-      # The confirm currently awaiting the operator, keyed per session
-      # (m03.04 item 27.1) — same ordering rule.
-      DoitMcp.ImportGate.PendingConfirm,
       # Session-keyed elicitation waiters and per-session 401-recovery state
       # (m03.04 item 23.3) — same never-race-a-tool-call ordering.
       {Registry, keys: :unique, name: DoitMcp.Elicitation.Registry},

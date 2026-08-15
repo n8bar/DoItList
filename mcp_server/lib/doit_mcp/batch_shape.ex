@@ -1,30 +1,29 @@
 defmodule DoitMcp.BatchShape do
   @moduledoc """
   One validation pass over a batch's content shape, run by `apply_operations`
-  before anything posts (m03.04 3.1 iteration 1). One pass, three buckets —
-  not a mechanism per failure:
+  before anything posts (m03.04 3.1 iteration 1; refusal-only since item 36
+  — no verdict stops for a human). Two buckets:
 
-    * `{:refuse, message}` — mechanically certain garbage at batch scale:
+    * `{:refuse, message}` — content shape the import should not land as:
       a file-mirror import (path-like titles + whole-file descriptions),
       embedded checklists at scale (the dropped task layer as description
-      markup), boilerplate (one description stamped across dozens of tasks).
-      The message teaches at the moment of action and names the override
-      path: an operator-instructed shape re-calls with `readback` plus a
-      `settled` entry quoting the instruction, and the operator vets it on
-      the confirm form.
-    * `{:hold, question}` — sub-scale checklist content: checkboxable lines
-      are what this product turns into tasks, so the operator decides
-      subtasks-vs-prose; too ambiguous to refuse, too on-the-nose to ignore.
+      markup), boilerplate (one description stamped across dozens of tasks),
+      and sub-scale checklist descriptions (checkboxable lines are what this
+      product turns into tasks — import them as subtasks). Every message
+      teaches at the moment of action and names the override path: a shape
+      the operator explicitly asked for re-calls with `operator_confirmed:
+      true` plus `readback` after the agent confirms with them in chat; the
+      attestation is stamped into the import's provenance record.
     * `:pass` — nothing notable.
 
-  `facts_block/1` renders the same counts for the gate's confirm form (nil
-  when nothing is notable), so any held batch shows the server's numbers
-  under the agent's readback — a rosy readback can't hide the shape. An
+  `facts_block/1` renders the same counts for the import's provenance record
+  (nil when nothing is notable), so a recorded readback shows the server's
+  numbers under the agent's words — a rosy readback can't hide the shape. An
   initiative ADD is always notable: its `index_style` fact prints per add,
-  so a held batch that bootstraps an Initiative always shows the operator
-  how the imported tree will render (numbered or not).
+  so a recorded bootstrap always shows how the imported tree will render
+  (numbered or not).
 
-  Pure; adapter-side judgment like every gate (the API stays dumb — thin-layer
+  Pure; adapter-side judgment like every guard (the API stays dumb — thin-layer
   guardrail). Thresholds are retunable module attributes. Checkbox detection
   shares `DoitMcp.IngestReport.checkbox_line_pattern/0` so the audit tool and
   this pass can never disagree on what a checklist is.
@@ -53,11 +52,13 @@ defmodule DoitMcp.BatchShape do
   @boilerplate_repeats 10
   @boilerplate_min_chars 20
 
-  @type verdict :: {:refuse, String.t()} | {:hold, String.t()} | :pass
+  @type verdict :: {:refuse, String.t()} | :pass
 
   @doc """
-  Classify a batch's content shape. Refusals compose every tripped reason
-  into one teaching message; the hold question is the checklist ask.
+  Classify a batch's content shape. Scale-certain refusals compose every
+  tripped reason into one teaching message; a sub-scale checklist refuses
+  on its own message, whose recovery is subtasks or the operator's chat
+  confirm (m03.04 item 36.2).
   """
   @spec classify([map()]) :: verdict()
   def classify(operations) do
@@ -69,16 +70,17 @@ defmodule DoitMcp.BatchShape do
 
       [] ->
         if facts.checklist_descriptions > 0,
-          do: {:hold, checklist_question(facts)},
+          do: {:refuse, checklist_message(facts)},
           else: :pass
     end
   end
 
   @doc """
-  The server-computed counts for a held batch's confirm form — nil when
-  nothing is notable (the form then carries no facts section). An initiative
-  add is always notable: each one contributes an `index_style` line, read
-  purely from the op's data. Facts only — `classify/1` verdicts don't move.
+  The server-computed counts for an import's provenance record — nil when
+  nothing is notable (the record then carries no facts section). An
+  initiative add is always notable: each one contributes an `index_style`
+  line, read purely from the op's data. Facts only — `classify/1` verdicts
+  don't move.
   """
   @spec facts_block([map()]) :: String.t() | nil
   def facts_block(operations) do
@@ -103,18 +105,8 @@ defmodule DoitMcp.BatchShape do
     lines = initiative_style_lines(operations) ++ task_lines
 
     case lines do
-      [] ->
-        nil
-
-      lines ->
-        block = Enum.join(["Server-computed shape facts:" | lines], "\n")
-
-        # The checkbox fact already printed as a fact line above — append
-        # only the ask, so the numbers state themselves once (m03.04 item
-        # 27.3).
-        if facts.checklist_descriptions > 0,
-          do: block <> "\n" <> checklist_ask(),
-          else: block
+      [] -> nil
+      lines -> Enum.join(["Server-computed shape facts:" | lines], "\n")
     end
   end
 
@@ -221,21 +213,20 @@ defmodule DoitMcp.BatchShape do
       ". Import the work inside the documents — completable items become tasks, nested " <>
       "as the source nests them — not the documents themselves; cite a source file by " <>
       "path in a provenance comment instead of pasting its contents. If the operator " <>
-      "explicitly asked for this exact shape, re-call with `readback` plus a `settled` " <>
-      "entry quoting their instruction — they will be asked to confirm it."
+      "explicitly asked for this exact shape, confirm it with them in chat, then " <>
+      "re-call with `operator_confirmed: true` plus `readback` — the attestation is " <>
+      "stamped into the import's provenance record."
   end
 
-  # Standalone (classify's hold) the question states its numbers; under
-  # facts_block the fact line already did, so only the ask is appended.
-  defp checklist_question(facts) do
-    "#{facts.checkbox_lines} markdown-checkbox lines sit inside " <>
-      "#{facts.checklist_descriptions} new task descriptions. " <> checklist_ask()
-  end
-
-  defp checklist_ask do
-    "Checklists are what DoItList turns into tasks — should these import as subtasks " <>
-      "instead? apply keeps them as description prose; correct with instructions to " <>
-      "convert them."
+  # The sub-scale checklist refusal (m03.04 item 36.2) — the recovery words:
+  # subtasks, or the operator's chat confirm.
+  defp checklist_message(facts) do
+    "Batch shape refused — nothing was applied. #{facts.checkbox_lines} " <>
+      "markdown-checkbox lines sit inside #{facts.checklist_descriptions} new task " <>
+      "descriptions, and checklists are what DoItList turns into tasks. Import them " <>
+      "as subtasks instead — or ask the operator in chat; if they want the checklists " <>
+      "kept as description prose, re-call with `operator_confirmed: true` plus " <>
+      "`readback`."
   end
 
   # --- Op access -------------------------------------------------------------

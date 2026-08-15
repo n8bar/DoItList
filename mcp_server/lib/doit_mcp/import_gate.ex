@@ -1,12 +1,14 @@
 defmodule DoitMcp.ImportGate do
   @moduledoc """
-  Pure decision logic for `apply_operations`' import gate (m03.04 fix 10):
-  a first big import into an Initiative gets held for the operator's readback
-  confirmation instead of applying blind.
+  Pure decision logic for `apply_operations`' import classification (m03.04
+  fix 10, demoted from gate to record by item 36): an import-shaped batch no
+  longer stops for a confirm — operator consent rides the standing
+  `agent_access` grant — but it must carry a `readback`, which the apply
+  records as a provenance comment on the target Initiative's root task.
 
-  The gate ships ARMED: `enabled?/0` — `DOITLIST_IMPORT_GATE=off` opts out;
-  any other value, including unset, arms it — is `evaluate/2`'s very first,
-  cheapest check, before anything is counted or fetched.
+  The classifier ships ARMED: `enabled?/0` — `DOITLIST_IMPORT_GATE=off` opts
+  out; any other value, including unset, arms it — is `evaluate/2`'s very
+  first, cheapest check, before anything is counted or fetched.
 
   The trigger is CUMULATIVE over a trailing time window (m03.04 items 3.11.2
   and 3.1 iteration 2): sub-cap chunking is sanctioned, so no single batch
@@ -20,33 +22,23 @@ defmodule DoitMcp.ImportGate do
   (`GET /api/v1/tasks/:id`) at the IO edge (`existing_parent_ids/1` lists
   the ids), keeping this module pure. A fresh Initiative switches keys
   mid-import — created under a lid, referenced by real id from the next
-  chunk on — so a confirm granted under the lid is carried to the real id
-  (`created_initiative_ids/2`). An armed gate holds the batch only when ALL
-  of these hold:
+  chunk on — so a readback recorded under the lid is carried to the real id
+  (`created_initiative_ids/2`). An armed classifier calls the batch
+  import-shaped only when BOTH hold:
 
     1. some Initiative's cumulative task-adds — session total plus this
        batch — cross the batch's bound: `threshold/0` normally,
        `ramp_threshold/0` for a coherent one-list batch (`coherent_unit?/1`
-       — each such unit lands as one reviewable increment) — OR cross
-       `fresh_threshold/0` while the target Initiative is FRESH (created
-       within the pressure window, or created in this very batch, per the
-       injected `:fresh?` fun): a new Initiative's first import meets the
-       readback before the scaffold grows, so the operator adjudicates the
-       interpretation (m03.04 3.1 iteration 3), and
-    2. that Initiative's import is still unsettled — the operator has not
-       already confirmed one this session.
+       — each such unit lands as one reviewable increment), and
+    2. that Initiative's readback is still unrecorded this session — one
+       record per import, not one per chunk.
 
-  The gate holds for EVERY client (m03.04 item 30.4): the confirm resolves
-  in the app — server-recorded, consulted over the API — so no client
-  capability is load-bearing; the elicitation form is a parallel
-  convenience `DoitMcp.Tools.ApplyOperations` sends only where it can ride.
-
-  All effectful inputs (session counter, confirm memory, freshness read)
-  are injected as funs, so the decision stays unit-testable; the confirm
-  flow lives in `DoitMcp.Tools.ApplyOperations`.
+  All effectful inputs (session record memory, pressure read) are injected
+  as funs, so the decision stays unit-testable; the readback-record flow
+  lives in `DoitMcp.Tools.ApplyOperations`.
   """
 
-  # The three bounds below are stated upfront in the apply_operations tool
+  # The two bounds below are stated upfront in the apply_operations tool
   # words (DoitMcp.Tools.ApplyOperations' moduledoc, m03.04 item 31) —
   # apply_operations_description_test.exs fails a retune that forgets them.
   @task_add_threshold 32
@@ -55,22 +47,14 @@ defmodule DoitMcp.ImportGate do
   # ONE reviewable list — every add under a single parent, at most
   # @task_add_threshold adds — earns the long leash, because each such unit
   # lands visibly in the app between batches. Anything else (bulk, mixed
-  # parents, oversized) keeps the tight threshold and meets the one readback
-  # confirm. Both retunable; powers of two by operator taste.
+  # parents, oversized) keeps the tight threshold and carries the one
+  # readback record. Both retunable; powers of two by operator taste.
   @ramp_threshold 128
 
-  # The fresh floor (m03.04 3.1 iteration 3, recommended default, retunable,
-  # powers of two): a just-created Initiative's first import confirms once
-  # past 8 cumulative task-adds, whatever the batch's coherence — the
-  # operator adjudicates the agent's interpretation (source, selection,
-  # coverage) at the start, then the confirm settles the session and the
-  # ramp takes over.
-  @fresh_task_add_threshold 8
-
-  @typedoc "The Initiative a gated batch imports into."
+  @typedoc "The Initiative an import-shaped batch imports into."
   @type target :: {:in_batch, String.t()} | {:existing, term()}
 
-  @doc "Cumulative task-add count above which an import is gated."
+  @doc "Cumulative task-add count above which a batch is import-shaped."
   @spec threshold() :: pos_integer()
   def threshold, do: @task_add_threshold
 
@@ -78,14 +62,10 @@ defmodule DoitMcp.ImportGate do
   @spec ramp_threshold() :: pos_integer()
   def ramp_threshold, do: @ramp_threshold
 
-  @doc "The fresh floor: cumulative bound for a just-created Initiative's first import."
-  @spec fresh_threshold() :: pos_integer()
-  def fresh_threshold, do: @fresh_task_add_threshold
-
   @doc """
-  Whether the gate is armed: on by default; `DOITLIST_IMPORT_GATE=off` in
-  the adapter's environment opts out (or the `:import_gate_enabled` app-env
-  override in tests).
+  Whether the classifier is armed: on by default; `DOITLIST_IMPORT_GATE=off`
+  in the adapter's environment opts out (or the `:import_gate_enabled`
+  app-env override in tests).
   """
   @spec enabled?() :: boolean()
   def enabled? do
@@ -97,36 +77,28 @@ defmodule DoitMcp.ImportGate do
   end
 
   @doc """
-  Decide whether a batch must be held for operator confirmation.
+  Decide whether a batch is import-shaped — its readback must be recorded
+  before/as it applies (no stop: the caller applies and posts the record in
+  one motion, m03.04 item 36).
 
   Options:
 
     * `:cumulative` — 1-arity fun (`target -> non_neg_integer`); task-adds
       already applied to that Initiative this session (defaults to zero —
       single-batch semantics)
-    * `:confirmed?` — 1-arity fun (`target -> boolean`); whether the operator
-      already confirmed an import into that Initiative this session
-      (defaults to false)
-    * `:fresh?` — 1-arity fun (`target -> boolean`); whether the target
-      Initiative was created inside the pressure window (defaults to false —
-      a pure default that preserves the pre-floor semantics). Consulted
-      cheapest-first: ONLY for a target in the band
-      `fresh_threshold/0 < total <= bound` (below the floor it can't matter;
-      above the bound the target gates regardless), and never for an
-      `{:in_batch, _}` target — fresh by definition, no IO
+    * `:confirmed?` — 1-arity fun (`target -> boolean`); whether an import
+      readback was already recorded for that Initiative this session — one
+      record per import, not one per chunk (defaults to false)
     * `:parent_targets` — `%{parent_id => target}` map resolving the batch's
       parent-anchored adds (`existing_parent_ids/1`) to their Initiatives,
       built by the caller at the IO edge (defaults to `%{}` — such adds
       stay uncounted)
 
-  Checks run cheapest-first (kill switch, counts, settled) and
+  Checks run cheapest-first (kill switch, counts, recorded) and
   short-circuit, so nothing is counted while `enabled?/0` is false. Returns
-  `:pass` or
-  `{:gate, %{task_adds: n, cumulative: total, target: target, fresh: bool}}`
-  — `task_adds` is this batch's count for the gated target, `cumulative` the
-  session total including it, and `fresh` true iff the target gated through
-  the fresh band (total within the batch's bound — the floor, not the bound,
-  was crossed).
+  `:pass` or `{:gate, %{task_adds: n, cumulative: total, target: target}}` —
+  `task_adds` is this batch's count for the flagged target and `cumulative`
+  the session total including it.
   """
   @spec evaluate([map()], keyword()) ::
           :pass
@@ -134,20 +106,18 @@ defmodule DoitMcp.ImportGate do
              %{
                task_adds: pos_integer(),
                cumulative: pos_integer(),
-               target: target(),
-               fresh: boolean()
+               target: target()
              }}
   def evaluate(operations, opts \\ []) when is_list(operations) do
     cumulative = Keyword.get(opts, :cumulative, fn _target -> 0 end)
     confirmed? = Keyword.get(opts, :confirmed?, fn _target -> false end)
-    fresh? = Keyword.get(opts, :fresh?, fn _target -> false end)
     parent_targets = Keyword.get(opts, :parent_targets, %{})
 
     with true <- enabled?(),
-         [_ | _] = candidates <- over_threshold(operations, cumulative, parent_targets, fresh?),
-         [_ | _] = unsettled <- Enum.reject(candidates, fn {ref, _, _, _} -> confirmed?.(ref) end) do
-      {ref, task_adds, total, fresh} = gated_target(unsettled)
-      {:gate, %{task_adds: task_adds, cumulative: total, target: ref, fresh: fresh}}
+         [_ | _] = candidates <- over_threshold(operations, cumulative, parent_targets),
+         [_ | _] = unsettled <- Enum.reject(candidates, fn {ref, _, _} -> confirmed?.(ref) end) do
+      {ref, task_adds, total} = gated_target(unsettled)
+      {:gate, %{task_adds: task_adds, cumulative: total, target: ref}}
     else
       _ -> :pass
     end
@@ -190,10 +160,10 @@ defmodule DoitMcp.ImportGate do
   lid → real id for the Initiatives an applied batch created, read from the
   apply response's per-op results (each echoes the op's `"lid"` beside the
   created resource's `"data"`). Later chunks can only reference a created
-  Initiative by real id, so a confirm the operator granted under the lid is
-  carried to the real id — the sanction survives the lid → id switch
-  (pressure needs no carrying: it lives in the database's `inserted_at`).
-  An unreadable results shape maps nothing.
+  Initiative by real id, so a readback recorded under the lid is carried to
+  the real id — the record survives the lid → id switch (pressure needs no
+  carrying: it lives in the database's `inserted_at`). An unreadable
+  results shape maps nothing.
   """
   @spec created_initiative_ids([map()], term()) :: %{String.t() => term()}
   def created_initiative_ids(operations, results) when is_list(results) do
@@ -307,37 +277,17 @@ defmodule DoitMcp.ImportGate do
   end
 
   # Targets whose session total (counter plus this batch) crosses the
-  # batch's bound — or the fresh floor, for a target the injected fresh? fun
-  # vouches was just created — as {ref, batch_adds, total, fresh} in batch
-  # order; `fresh` marks a target gated through the fresh band (total within
-  # the bound). Clause order is the IO guard: over-bound gates without
-  # consulting fresh? (it gates regardless), and the floor check runs BEFORE
-  # fresh? so a sub-floor target never triggers the read.
-  defp over_threshold(operations, cumulative, parent_targets, fresh?) do
+  # batch's bound, as {ref, batch_adds, total} in batch order.
+  defp over_threshold(operations, cumulative, parent_targets) do
     # The ramp: one-list batches get the long leash; bulk, mixed-parent, or
-    # oversized batches keep the tight bound and meet the readback confirm.
+    # oversized batches keep the tight bound and carry the readback record.
     bound = if coherent_unit?(operations), do: @ramp_threshold, else: @task_add_threshold
 
     operations
     |> count_by_target(parent_targets)
     |> Enum.map(fn {ref, n} -> {ref, n, n + cumulative.(ref)} end)
-    |> Enum.flat_map(fn {ref, n, total} ->
-      cond do
-        total > bound ->
-          [{ref, n, total, false}]
-
-        total > @fresh_task_add_threshold and fresh_target?(ref, fresh?) ->
-          [{ref, n, total, true}]
-
-        true ->
-          []
-      end
-    end)
+    |> Enum.filter(fn {_ref, _n, total} -> total > bound end)
   end
-
-  # An Initiative created in this very batch is fresh by definition — no IO.
-  defp fresh_target?({:in_batch, _lid}, _fresh?), do: true
-  defp fresh_target?(ref, fresh?), do: fresh?.(ref)
 
   defp resolve_ref(op, by_lid, parent_targets, seen) do
     data = Map.get(op, "data") || %{}
@@ -373,12 +323,13 @@ defmodule DoitMcp.ImportGate do
     end
   end
 
-  # The gated target: the first {:in_batch, _} candidate wins, else the first
-  # candidate in batch order — an in-batch Initiative is unsettled by
-  # definition, and with knobs parked (m03.04) every unsettled over-threshold
-  # target gates. Candidates are never empty here, so one always returns.
+  # The flagged target: the first {:in_batch, _} candidate wins, else the
+  # first candidate in batch order — an in-batch Initiative is unrecorded by
+  # definition, and with knobs parked (m03.04) every unrecorded
+  # over-threshold target flags. Candidates are never empty here, so one
+  # always returns.
   defp gated_target([first | _] = candidates) do
-    Enum.find(candidates, first, fn {ref, _n, _total, _fresh} -> match?({:in_batch, _}, ref) end)
+    Enum.find(candidates, first, fn {ref, _n, _total} -> match?({:in_batch, _}, ref) end)
   end
 
   # AI-KNOBS-PARKED (m03.04): the knobs exemption — an existing over-threshold
@@ -389,6 +340,8 @@ defmodule DoitMcp.ImportGate do
   # with-clause step `{:ok, gated} <- knobless_target(unsettled,
   # Keyword.fetch!(opts, :fetch_initiative))`), its @doc texts below, and the
   # parked tests (import_gate_test.exs, apply_operations_gate_test.exs).
+  # (Candidate tuples were {ref, n, total, fresh} when this parked; the fresh
+  # element retired with the fresh floor, item 36.)
   #
   # @doc options entry:
   #   * `:fetch_initiative` — 1-arity fun (`id -> {:ok, map} | {:error, term}`)
@@ -401,9 +354,9 @@ defmodule DoitMcp.ImportGate do
   # # An in-batch Initiative is unsettled by definition; otherwise the first
   # # existing candidate (batch order) whose fetched knobs are empty gates.
   # defp knobless_target(candidates, fetch) do
-  #   case Enum.find(candidates, fn {ref, _n, _total, _fresh} -> match?({:in_batch, _}, ref) end) do
+  #   case Enum.find(candidates, fn {ref, _n, _total} -> match?({:in_batch, _}, ref) end) do
   #     nil ->
-  #       Enum.find_value(candidates, :pass, fn {{:existing, id}, _n, _total, _fresh} = candidate ->
+  #       Enum.find_value(candidates, :pass, fn {{:existing, id}, _n, _total} = candidate ->
   #         case fetch.(id) do
   #           {:ok, initiative} ->
   #             if knobs_empty?(Map.get(initiative, "ai_knobs")), do: {:ok, candidate}

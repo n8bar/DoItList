@@ -26,19 +26,6 @@ defmodule DoitMcp.RequestSession do
     :ok
   end
 
-  @doc """
-  Adopt another request's session identity — for a detached waiter acting on
-  that request's behalf after its task returned (m03.04 item 27.1), so
-  session-keyed state (Counter, pending confirms) reads the same rows the
-  request did. Both values come from the originating task's `pid/0`/`id/0`,
-  nil included.
-  """
-  @spec adopt(pid() | nil, String.t() | nil) :: :ok
-  def adopt(pid, id) do
-    Process.put(@key, %{pid: pid, id: id})
-    :ok
-  end
-
   @doc "The session process serving this request, or nil outside a request task."
   @spec pid() :: pid() | nil
   def pid do

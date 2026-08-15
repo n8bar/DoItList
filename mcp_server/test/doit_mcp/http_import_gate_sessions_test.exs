@@ -5,19 +5,18 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
 
   import Plug.Test, only: [conn: 3]
 
-  alias Anubis.Server.Transport.StreamableHTTP
   alias DoitMcp.ImportGate
 
   @moduletag :capture_log
 
   @threshold ImportGate.threshold()
 
-  # Gate state per session on the resident transport (m03.04 item 23.6). One
-  # VM serves every connected client, so the confirm memory has to be keyed:
-  # the operator's confirm settles an Initiative for the session that granted
-  # it and for no other. Recent-creation PRESSURE is deliberately not session
-  # state — it is the database's window (3.1 iteration 2), shared by design —
-  # so a second session sees it in full.
+  # Record state per session on the resident transport (m03.04 items 23.6 and
+  # 36). One VM serves every connected client, so the readback-record memory
+  # has to be keyed: a recorded import settles an Initiative for the session
+  # that recorded it and for no other. Recent-creation PRESSURE is
+  # deliberately not session state — it is the database's window (3.1
+  # iteration 2), shared by design — so a second session sees it in full.
 
   setup do
     Application.put_env(:doit_mcp, :import_gate_enabled, true)
@@ -33,7 +32,6 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     end)
 
     start_supervised!(DoitMcp.ImportGate.Counter)
-    start_supervised!(DoitMcp.ImportGate.PendingConfirm)
     start_supervised!({DoitMcp.Server, transport: {:streamable_http, start: true}})
     :ok
   end
@@ -61,7 +59,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
       "params" => %{
         "protocolVersion" => "2025-06-18",
         "clientInfo" => %{"name" => "http-gate-sessions", "version" => "1.0"},
-        "capabilities" => %{"elicitation" => %{}}
+        "capabilities" => %{}
       }
     }
 
@@ -79,67 +77,33 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     session_id
   end
 
-  # Stand-in for the session's standalone GET stream — see
-  # DoitMcp.HttpImportGateE2eTest for the rationale.
-  defp open_stream(session_id) do
-    test = self()
-    transport = Anubis.Server.Registry.transport_name(DoitMcp.Server, :streamable_http)
-
-    spawn_link(fn ->
-      :ok = StreamableHTTP.register_sse_handler(transport, session_id)
-      send(test, {:stream_open, session_id})
-      stream_loop(test, session_id)
-    end)
-
-    assert_receive {:stream_open, ^session_id}, 2_000
-    :ok
-  end
-
-  defp stream_loop(test, session_id) do
-    receive do
-      {:sse_message, wire} ->
-        send(test, {:sse, session_id, Jason.decode!(wire)})
-        stream_loop(test, session_id)
-
-      _other ->
-        stream_loop(test, session_id)
-    end
-  end
-
-  # POST /operations reports each apply and echoes the created Initiative's
-  # lid → real id; the GET clause serves the database's pressure window at
-  # `count` (no initiative_created_at — the target reads as aged, so the
-  # normal bounds apply).
+  # POST /operations reports each apply — a record comment post reports as
+  # {:applied, [comment_op]}, so tests can tell the batch from its record —
+  # and echoes a created Initiative's lid → real id + root_task_id; the GET
+  # clauses serve the database's pressure window at `count` and the
+  # initiative list (the record's root lookup for existing targets).
   defp stub_api(test_pid, count \\ 0) do
     Application.put_env(:doit_mcp, :req_options,
       plug: fn conn ->
         case {conn.method, conn.request_path} do
           {"POST", "/api/v1/operations"} ->
-            send(test_pid, :applied)
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            ops = Jason.decode!(body)["operations"] || []
+            send(test_pid, {:applied, ops})
 
             Req.Test.json(conn, %{
               "results" => [
-                %{"index" => 0, "lid" => "i", "status" => "ok", "data" => %{"id" => 57}}
+                %{
+                  "index" => 0,
+                  "lid" => "i",
+                  "status" => "ok",
+                  "data" => %{"id" => 57, "type" => "initiative", "root_task_id" => 570}
+                }
               ]
             })
 
-          {"GET", "/api/v1/import_confirms/" <> _hash} ->
-            conn
-            |> Plug.Conn.put_status(404)
-            |> Req.Test.json(%{"error" => %{"status" => 404, "code" => "not_found"}})
-
-          {"POST", "/api/v1/import_confirms"} ->
-            {:ok, body, conn} = Plug.Conn.read_body(conn)
-            parked = Jason.decode!(body)
-
-            Req.Test.json(conn, %{
-              "data" => %{
-                "payload_hash" => parked["payload_hash"],
-                "status" => "pending",
-                "corrections" => nil,
-                "url" => "http://localhost:4000/account#import-confirms"
-              }
-            })
+          {"GET", "/api/v1/initiatives"} ->
+            Req.Test.json(conn, %{"data" => [%{"id" => 57, "root_task_id" => 570}]})
 
           {"GET", _task_count} ->
             Req.Test.json(conn, %{"data" => %{"count" => count}})
@@ -182,98 +146,59 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     }
   end
 
-  defp answer(elicitation_id, result, headers) do
-    post_frame(%{"jsonrpc" => "2.0", "id" => elicitation_id, "result" => result}, headers)
-  end
-
-  # Answer the form through the plug, then await the detached waiter's exit
-  # — the guarantee that the answer's session-memory effects landed before
-  # the next POST (m03.04 item 27.1).
-  defp answer_form(session_id, elicitation_id, result, headers) do
-    registry = Anubis.Server.Registry.registry_name(DoitMcp.Server)
-    {:ok, session} = Anubis.Server.Registry.Local.lookup_session(registry, session_id)
-    [{waiter, _value}] = Registry.lookup(DoitMcp.Elicitation.Registry, session)
-    ref = Process.monitor(waiter)
-
-    conn = answer(elicitation_id, result, headers)
-    assert conn.status == 202
-    assert_receive {:DOWN, ^ref, :process, ^waiter, _reason}, 2_000
-  end
-
   defp tool_result(conn) do
-    {is_error, text, rest} = tool_text(conn)
-    {is_error, Jason.decode!(text), rest}
-  end
-
-  # The readback-required refusal is prose, not the JSON payload the applied
-  # and held answers carry.
-  defp tool_text(conn) do
     assert conn.status == 200
     assert %{"result" => result} = Jason.decode!(conn.resp_body)
     assert [%{"type" => "text", "text" => text} | rest] = result["content"]
-    {result["isError"], text, rest}
+    {result["isError"], Jason.decode!(text), rest}
   end
 
-  test "one session's confirm settles that session only" do
+  defp assert_batch_applied do
+    assert_receive {:applied, [%{"type" => type} | _]}, 2_000
+    refute type == "comment"
+  end
+
+  defp assert_record_posted do
+    assert_receive {:applied, [%{"type" => "comment", "data" => %{"body" => body}}]}, 2_000
+    assert body =~ "Import record — readback as applied:"
+    body
+  end
+
+  test "one session's record settles that session only" do
     stub_api(self())
 
     alpha = [{"authorization", "Bearer token-alpha"}]
     beta = [{"authorization", "Bearer token-beta"}]
     session_a = handshake(alpha)
     session_b = handshake(beta)
-    open_stream(session_a)
-    open_stream(session_b)
 
     a_headers = [{"mcp-session-id", session_a} | alpha]
     b_headers = [{"mcp-session-id", session_b} | beta]
 
-    a_gated = %{
-      "operations" => fresh_import_ops(@threshold + 1),
+    ops = fresh_import_ops(@threshold + 1)
+
+    # A's import-shaped batch without a readback meets the agent-facing
+    # refusal — no stop, no operator step.
+    assert {true, decoded, _rest} =
+             tool_result(post_frame(tools_call(2, %{"operations" => ops}), a_headers))
+
+    assert decoded["gate"] == "import_readback"
+    refute_received {:applied, _ops}
+
+    # With the readback it applies straight through and the record lands on
+    # the created Initiative's root.
+    gated = %{
+      "operations" => ops,
       "readback" => "Importing PLAN.md as #{@threshold + 1} tasks."
     }
 
-    # A's gated call returns promptly; A approves on the form; A's re-call
-    # applies.
-    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(2, a_gated), a_headers))
-    assert decoded["status"] == "confirmation_pending"
-
-    assert_receive {:sse, ^session_a, %{"method" => "elicitation/create", "id" => a_elicit}},
-                   5_000
-
-    answer_form(
-      session_a,
-      a_elicit,
-      %{"action" => "accept", "content" => %{"decision" => "apply"}},
-      a_headers
-    )
-
-    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(3, a_gated), a_headers))
+    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(3, gated), a_headers))
     assert decoded["ok"] == true
-    assert_received :applied
+    assert_batch_applied()
+    assert_record_posted()
 
-    # Session B continues the SAME import by the real id A's confirm was
-    # carried to — and is held with its own confirm on its own stream: it
-    # answered nothing.
-    b_gated = %{
-      "operations" => chunk_ops(@threshold + 1, 57),
-      "readback" => "Importing the rest of PLAN.md."
-    }
-
-    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(2, b_gated), b_headers))
-    assert decoded["status"] == "confirmation_pending"
-
-    assert_receive {:sse, ^session_b, %{"method" => "elicitation/create", "id" => b_elicit}},
-                   5_000
-
-    answer_form(session_b, b_elicit, %{"action" => "decline"}, b_headers)
-
-    assert {true, decoded, _rest} = tool_result(post_frame(tools_call(3, b_gated), b_headers))
-    assert decoded["applied"] == false
-    assert decoded["message"] =~ "declined"
-    refute_received :applied
-
-    # And A's own confirm still stands for the rest of A's session — the
-    # single-session semantics are unchanged: no second form, straight apply.
+    # A's record follows the Initiative to its real id: the next over-bound
+    # chunk flows with no readback and posts no second record.
     assert {false, decoded, _rest} =
              tool_result(
                post_frame(
@@ -283,51 +208,31 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
              )
 
     assert decoded["ok"] == true
-    assert_received :applied
-    refute_received {:sse, ^session_a, _frame}
-  end
+    assert_batch_applied()
+    refute_received {:applied, _ops}
 
-  test "a decline resolves once and latches nothing — the grantor re-asks and a second session is untouched" do
-    stub_api(self())
+    # Session B continues the SAME import — but it recorded nothing, so its
+    # over-bound chunk is refused until it states its own readback.
+    assert {true, decoded, _rest} =
+             tool_result(
+               post_frame(
+                 tools_call(2, %{"operations" => chunk_ops(@threshold + 1, 57)}),
+                 b_headers
+               )
+             )
 
-    alpha = [{"authorization", "Bearer token-alpha"}]
-    beta = [{"authorization", "Bearer token-beta"}]
-    session_a = handshake(alpha)
-    session_b = handshake(beta)
-    open_stream(session_a)
-    open_stream(session_b)
+    assert decoded["gate"] == "import_readback"
+    refute_received {:applied, _ops}
 
-    a_headers = [{"mcp-session-id", session_a} | alpha]
-    b_headers = [{"mcp-session-id", session_b} | beta]
-
-    gated = %{
-      "operations" => fresh_import_ops(@threshold + 1),
-      "readback" => "Importing PLAN.md as #{@threshold + 1} tasks."
+    b_gated = %{
+      "operations" => chunk_ops(@threshold + 1, 57),
+      "readback" => "Importing the rest of PLAN.md."
     }
 
-    # A: readback out, decline on the form, the re-call reports it once.
-    assert {false, _decoded, _rest} = tool_result(post_frame(tools_call(2, gated), a_headers))
-    assert_receive {:sse, ^session_a, %{"method" => "elicitation/create", "id" => first}}, 5_000
-    answer_form(session_a, first, %{"action" => "decline"}, a_headers)
-
-    assert {true, decoded, _rest} = tool_result(post_frame(tools_call(3, gated), a_headers))
-    assert decoded["applied"] == false
-    assert decoded["message"] =~ "declined"
-
-    # The pickup consumed it: the same batch asks again, fresh form.
-    assert {false, _decoded, _rest} = tool_result(post_frame(tools_call(4, gated), a_headers))
-    assert_receive {:sse, ^session_a, %{"method" => "elicitation/create", "id" => second}}, 5_000
-    assert second != first
-
-    # And nothing latched on B either — its own form, on its own stream.
-    assert {false, _decoded, _rest} = tool_result(post_frame(tools_call(2, gated), b_headers))
-
-    assert_receive {:sse, ^session_b, %{"method" => "elicitation/create", "id" => b_elicit}},
-                   5_000
-
-    answer_form(session_b, b_elicit, %{"action" => "decline"}, b_headers)
-
-    refute_received :applied
+    assert {false, decoded, _rest} = tool_result(post_frame(tools_call(3, b_gated), b_headers))
+    assert decoded["ok"] == true
+    assert_batch_applied()
+    assert_record_posted()
   end
 
   test "recent-creation pressure crosses sessions — it is the database's window, not the VM's" do
@@ -337,13 +242,13 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
 
     beta = [{"authorization", "Bearer token-beta"}]
     session = handshake(beta)
-    open_stream(session)
     headers = [{"mcp-session-id", session} | beta]
 
-    assert {true, text, _rest} =
-             tool_text(post_frame(tools_call(2, %{"operations" => chunk_ops(1, 57)}), headers))
+    assert {true, decoded, _rest} =
+             tool_result(post_frame(tools_call(2, %{"operations" => chunk_ops(1, 57)}), headers))
 
-    assert text =~ "201 this session"
-    refute_received :applied
+    assert decoded["gate"] == "import_readback"
+    assert decoded["message"] =~ "201 this session"
+    refute_received {:applied, _ops}
   end
 end

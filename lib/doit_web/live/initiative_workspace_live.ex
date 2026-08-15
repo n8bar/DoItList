@@ -11,9 +11,8 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   import Ecto.Query, only: [from: 2]
   import DoItWeb.AssignedComponents
-  import DoItWeb.ImportConfirmComponents
 
-  alias DoIt.{Accounts, ImportConfirms, Initiatives, Repo, Tasks}
+  alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
   alias DoIt.Tasks.Progress
   alias DoIt.Tasks.Tree
@@ -53,11 +52,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     # for the life of the mount, never re-done on a hop.
     if connected?(socket) do
       Phoenix.PubSub.subscribe(DoIt.PubSub, DoItWeb.Presence.global_topic())
-
-      # Import confirms (m03.04 item 30.2): per-user topic, shell-level like
-      # the presence subscription — parks/decisions for the OPEN Initiative
-      # refresh its pending cards live (the card appearing IS the notification).
-      ImportConfirms.subscribe(user.id)
     end
 
     {:ok,
@@ -259,7 +253,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     # so it survives sessions and never re-shows once true.
     |> assign(:agent_trust_acked, Initiatives.agent_trust_acked?(user.id, initiative.id))
     |> assign(:members, Initiatives.list_members(initiative.id))
-    |> assign(:import_confirms, ImportConfirms.list_pending_for_initiative(user, initiative.id))
     |> assign(:selected_task_id, nil)
     |> assign(:selected_task, nil)
     |> assign(:selected_staff_pool, nil)
@@ -340,7 +333,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:can_admin, false)
     |> assign(:agent_trust_acked, false)
     |> assign(:members, [])
-    |> assign(:import_confirms, [])
     |> assign(:selected_task_id, nil)
     |> assign(:selected_task, nil)
     |> assign(:selected_staff_pool, nil)
@@ -1261,24 +1253,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   def handle_event("dismiss_archive_prompt", _params, socket) do
     {:noreply, assign(socket, :show_archive_prompt, false)}
   end
-
-  # --- Import confirms (m03.04 item 30.2) ------------------------------------
-  # Server-gated decisions on the Initiative-homed cards: the click/submit
-  # latches in flight (§6.7, data-latch) and the card leaves the pending slot
-  # on the ack — never a faked success. The context guards record-once.
-
-  def handle_event("approve_import_confirm", %{"id" => id}, socket),
-    do: decide_import_confirm(socket, id, "approved", nil)
-
-  def handle_event("hold_import_confirm", %{"id" => id}, socket),
-    do: decide_import_confirm(socket, id, "held", nil)
-
-  def handle_event(
-        "correct_import_confirm",
-        %{"confirm_id" => id, "corrections" => text},
-        socket
-      ),
-      do: decide_import_confirm(socket, id, "corrected", text)
 
   # Per-user Hide (m02.08 item 4.3): the lighter "off my dashboard" move. Sets
   # `hidden_at` on the caller's own row only; never confirms.
@@ -2698,47 +2672,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  # Record the operator's decision on an import confirm they own (m03.04 item
-  # 30.2), then refresh the pending slot. The context guards record-once
-  # (`{:error, :not_pending}` when a parallel channel or tab decided first).
-  defp decide_import_confirm(socket, id, status, corrections) do
-    user = socket.assigns.current_user
-
-    socket =
-      case parse_id(id) do
-        nil ->
-          socket
-
-        confirm_id ->
-          case ImportConfirms.decide(user, confirm_id, status, corrections) do
-            {:ok, _confirm} ->
-              socket
-
-            {:error, :not_pending} ->
-              put_flash(socket, :error, "That confirm was already decided.")
-
-            {:error, :corrections_required} ->
-              put_flash(socket, :error, "Add the correction text first.")
-          end
-      end
-
-    {:noreply, refresh_import_confirms(socket)}
-  end
-
-  defp refresh_import_confirms(socket) do
-    case socket.assigns[:initiative] do
-      %{id: iid} ->
-        assign(
-          socket,
-          :import_confirms,
-          ImportConfirms.list_pending_for_initiative(socket.assigns.current_user, iid)
-        )
-
-      _ ->
-        socket
-    end
-  end
-
   # --- PubSub ---------------------------------------------------------------
 
   # Deferred non-critical loads (see mount): the tree already painted and the
@@ -2840,20 +2773,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       {:noreply, assign(socket, :initiative, initiative)}
     else
       _ -> {:noreply, socket}
-    end
-  end
-
-  # An import confirm was parked/decided for this user (m03.04 item 30.2).
-  # Only a confirm homed on the OPEN Initiative renders here — refresh its
-  # pending cards; list mode and other homes are a no-op.
-  def handle_info({event, confirm}, socket)
-      when event in [:import_confirm_parked, :import_confirm_decided] do
-    case socket.assigns[:initiative] do
-      %{id: iid} when iid == confirm.initiative_id ->
-        {:noreply, refresh_import_confirms(socket)}
-
-      _ ->
-        {:noreply, socket}
     end
   end
 
@@ -3772,12 +3691,6 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   initiative_progress={@initiative_progress}
                   can_edit={@can_edit}
                 />
-
-                <%!-- Initiative-homed import confirms (m03.04 item 30.2): a
-                 gated MCP apply parked its readback for THIS Initiative; the
-                 operator decides here. The container is the confirm URL's
-                 #import-confirm anchor; empty renders nothing visible. --%>
-                <.import_confirm_cards id="import-confirm" confirms={@import_confirms} />
 
                 <%!-- Archive-on-completion prompt (m02.08 item 4.1): a dismissible
                  nudge when the roll-up hits 100%. It only OFFERS to archive —

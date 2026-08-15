@@ -19,7 +19,7 @@ defmodule DoitMcp.BatchShapeTest do
       assert message =~ "12 of 12 new task titles look like file paths/names"
       assert message =~ "whole-file sized"
       assert message =~ "file-mirror import"
-      assert message =~ "`settled` entry quoting their instruction"
+      assert message =~ "`operator_confirmed: true` plus `readback`"
     end
 
     test "mirror needs both signals — path titles alone pass" do
@@ -54,26 +54,27 @@ defmodule DoitMcp.BatchShapeTest do
     end
   end
 
-  describe "classify/1 checklist hold" do
-    test "one checklist-bearing description holds with the subtasks question" do
+  describe "classify/1 sub-scale checklist refusal (m03.04 item 36.2)" do
+    test "one checklist-bearing description refuses with the subtasks-or-ask recovery" do
       ops = [add("Setup", "Steps:\n- [ ] install\n- [ ] configure"), add("Cleanup")]
 
-      assert {:hold, question} = BatchShape.classify(ops)
-      assert question =~ "2 markdown-checkbox lines"
-      assert question =~ "subtasks"
-      assert question =~ "apply keeps them as description prose"
+      assert {:refuse, message} = BatchShape.classify(ops)
+      assert message =~ "2 markdown-checkbox lines"
+      assert message =~ "Import them as subtasks instead"
+      assert message =~ "ask the operator in chat"
+      assert message =~ "`operator_confirmed: true`"
     end
 
     test "a single stray checkbox line is noise — passes" do
       assert BatchShape.classify([add("Setup", "- [x] done already")]) == :pass
     end
 
-    test "numbered checkboxes hold like bullets — `N.` and `N)` forms both count (m03.04 item 28)" do
+    test "numbered checkboxes refuse like bullets — `N.` and `N)` forms both count (m03.04 item 28)" do
       desc = "1. [x] Define the release package contract.\n2) [ ] Wire the installer."
 
-      assert {:hold, question} = BatchShape.classify([add("Worklist", desc)])
-      assert question =~ "2 markdown-checkbox lines"
-      assert question =~ "subtasks"
+      assert {:refuse, message} = BatchShape.classify([add("Worklist", desc)])
+      assert message =~ "2 markdown-checkbox lines"
+      assert message =~ "subtasks"
     end
 
     test "a numbered list without checkbox boxes passes" do
@@ -87,7 +88,7 @@ defmodule DoitMcp.BatchShapeTest do
       assert BatchShape.facts_block([add("Build the parser"), add("Ship v1.2")]) == nil
     end
 
-    test "prints every nonzero fact plus the checklist question when present" do
+    test "prints every nonzero fact" do
       ops = [
         add("docs/a.md", String.duplicate("y", 2_000)),
         add("Work item", "- [ ] a\n- [ ] b")
@@ -98,7 +99,6 @@ defmodule DoitMcp.BatchShapeTest do
       assert block =~ "1 of 2 new task titles look like file paths/names."
       assert block =~ "whole-file sized"
       assert block =~ "2 markdown-checkbox lines sit inside 1 new descriptions."
-      assert block =~ "subtasks"
     end
 
     test "numbered-checkbox lines land in the checkbox fact (m03.04 item 28)" do
@@ -108,11 +108,11 @@ defmodule DoitMcp.BatchShapeTest do
                "3 markdown-checkbox lines sit inside 1 new descriptions."
     end
 
-    test "the checkbox fact prints once — the appended ask repeats no numbers (m03.04 item 27.3)" do
+    test "the checkbox fact prints once, facts only — no ask rides the record (m03.04 item 36.1)" do
       block = BatchShape.facts_block([add("Work item", "- [ ] a\n- [ ] b")])
 
       assert length(String.split(block, "markdown-checkbox lines")) == 2
-      assert block =~ "Checklists are what DoItList turns into tasks"
+      refute block =~ "Checklists are what DoItList turns into tasks"
     end
 
     test "an initiative add with index_style set prints the sets line" do
