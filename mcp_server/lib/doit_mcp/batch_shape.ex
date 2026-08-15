@@ -58,7 +58,7 @@ defmodule DoitMcp.BatchShape do
   Classify a batch's content shape. Scale-certain refusals compose every
   tripped reason into one teaching message; a sub-scale checklist refuses
   on its own message, whose recovery is subtasks or the operator's chat
-  confirm (m03.04 item 36.2).
+  confirm (m03.04 2.29.2).
   """
   @spec classify([map()]) :: verdict()
   def classify(operations) do
@@ -218,7 +218,7 @@ defmodule DoitMcp.BatchShape do
       "stamped into the import's provenance record."
   end
 
-  # The sub-scale checklist refusal (m03.04 item 36.2) — the recovery words:
+  # The sub-scale checklist refusal (m03.04 2.29.2) — the recovery words:
   # subtasks, or the operator's chat confirm.
   defp checklist_message(facts) do
     "Batch shape refused — nothing was applied. #{facts.checkbox_lines} " <>

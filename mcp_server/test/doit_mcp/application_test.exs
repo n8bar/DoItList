@@ -49,7 +49,7 @@ defmodule DoitMcp.ApplicationTest do
     assert bandit_opts[:port] == 4004
     assert bandit_opts[:ip] == {0, 0, 0, 0}
 
-    # The wrapper plug (m03.04 item 23.3): elicitation answers reroute to
+    # The wrapper plug (m03.04 2.5.3): elicitation answers reroute to
     # the immediate session call path; everything else is the stock plug.
     assert {DoitMcp.Http.Plug, server: DoitMcp.Server} = bandit_opts[:plug]
   end

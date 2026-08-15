@@ -11,7 +11,7 @@ defmodule DoIt.Accounts.User do
     field :current_password, :string, virtual: true, redact: true
     field :theme, :string
 
-    # Execution provenance (m03.04 item 2.33): how this actor is acting right
+    # Execution provenance (m03.04 2.34): how this actor is acting right
     # now. Nil = browser session (the default); the API token resolver stamps
     # `%{kind: "api_token", token_id: id, token_label: label}` so event
     # recording can say which actor performed a write. Never persisted.

@@ -128,7 +128,7 @@ defmodule DoIt.Accounts.ApiTokens do
       %ApiToken{user: %User{} = user} = token ->
         touch_last_used(token)
 
-        # Stamp execution provenance (m03.04 item 2.33) so writes performed
+        # Stamp execution provenance (m03.04 2.34) so writes performed
         # under this token record the token as the acting actor — the actor
         # `%User{}` already threads through every context write.
         user = %{

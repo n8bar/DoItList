@@ -1,6 +1,6 @@
 defmodule DoitMcp.ApplyOperationsGateTest do
   @moduledoc """
-  The no-stop import model (m03.04 item 36): an import-shaped batch applies
+  The no-stop import model (m03.04 2.29): an import-shaped batch applies
   without a stop once it carries a `readback`, which the apply posts as a
   provenance comment on the target Initiative's root task; a batch without
   one meets an agent-facing refusal teaching the re-call. Shape refusals
@@ -263,7 +263,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["message"] =~ "#{@threshold + 1} tasks"
     assert decoded["message"] =~ "no operator step is needed"
     assert decoded["message"] =~ "provenance comment on the target Initiative's root task"
-    # The over-ramp recovery words: chunk (m03.04 item 36.2).
+    # The over-ramp recovery words: chunk (m03.04 2.29.2).
     assert decoded["message"] =~ "at most #{ImportGate.threshold()} adds"
     assert decoded["message"] =~ "#{ImportGate.ramp_threshold()} cumulative"
 
@@ -451,7 +451,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert Enum.any?(rest, &(&1["text"] =~ "root_task_id"))
   end
 
-  describe "parent-anchored adds (m03.04 item 2.18)" do
+  describe "parent-anchored adds (m03.04 2.26)" do
     test "an over-threshold parent-anchored batch demands the record — no dodging via parent_id" do
       stub_apply()
 

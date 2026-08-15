@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.ConditionalWritesApiTest do
   @moduledoc """
-  Conditional writes over `POST /api/v1/operations` (m03.04 item 32): a
+  Conditional writes over `POST /api/v1/operations` (m03.04 2.25): a
   matching `expected_version` applies, a stale one 409s with the per-op
   `conflict` error carrying the current record and ZERO writes (whole batch
   rolled back), an omitted one keeps today's unconditional behavior. Plus the

@@ -5,7 +5,7 @@ defmodule DoitMcp.ImportGateCounterTest do
 
   alias DoitMcp.ImportGate.Counter
 
-  # The gate's confirm memory keys on the SESSION (m03.04 item 23.6): the
+  # The gate's confirm memory keys on the SESSION (m03.04 2.5.6): the
   # resident HTTP VM serves every connected client at once, so a flat set
   # would settle an Initiative for sessions that never answered anything.
   # Each keyed session is monitored and its row dies with it.

@@ -444,7 +444,7 @@ defmodule DoIt.Tasks do
     |> sync_links_after_write(attrs)
   end
 
-  # --- Conditional writes (m03.04 item 32) -----------------------------------
+  # --- Conditional writes (m03.04 2.25) -----------------------------------
   #
   # `version` is an integer revision counter on each task row: every
   # intent-bearing write to the row bumps it (field updates, moves, status
@@ -1535,7 +1535,7 @@ defmodule DoIt.Tasks do
   # otherwise wall a viewer+ off from undoing their own completion.
   #
   # A flip that changed nothing anywhere (completing an already-done task —
-  # every entry a no-op) records no event (m03.04 item 2.35): no write
+  # every entry a no-op) records no event (m03.04 2.36): no write
   # happened, so there is nothing to log or undo, matching item 32's rule
   # that a no-op bumps nothing.
   defp record_status_event(%Task{} = acted, %User{} = actor, [acted_entry | _] = affected) do
@@ -2164,7 +2164,7 @@ defmodule DoIt.Tasks do
   """
   def get_comment(comment_id), do: Repo.get(Comment, comment_id)
 
-  # A tombstoned comment is presented as deleted (item 2.3) — both markers set.
+  # A tombstoned comment is presented as deleted (m03.04 2.17) — both markers set.
   def comment_deleted?(%Comment{deleted_by_id: id}), do: not is_nil(id)
 
   # Soft-delete / restore a comment for the undo engine (m02.06 item 14.5).
@@ -2195,7 +2195,7 @@ defmodule DoIt.Tasks do
 
   @doc """
   Edit a comment's body (m02.08 worklist 3 item 2.2). Authorization lives here,
-  not in the view (item 2.4): only the comment's **author** may edit. The prior
+  not in the view (m03.04 2.19): only the comment's **author** may edit. The prior
   body is captured to `comment_versions` first so the edit popup can surface
   earlier text, then the live `body` is overwritten in one transaction.
   Broadcasts `{:comment_changed, task_id}` so open viewers refresh live.
@@ -2240,7 +2240,7 @@ defmodule DoIt.Tasks do
 
   @doc """
   Delete a comment (m02.08 worklist 3 item 2.3). Authorization lives here
-  (item 2.4): only the **author** may delete. A soft delete — the row stays with
+  (m03.04 2.19): only the **author** may delete. A soft delete — the row stays with
   `deleted_at` + `deleted_by_id` set, leaving a "comment deleted" tombstone so
   the thread shape + references survive (never a row delete). Broadcasts so open
   viewers refresh live.
@@ -2348,7 +2348,7 @@ defmodule DoIt.Tasks do
 
   @doc """
   Ids of the tasks a `status_changed` event's cascade actually flipped besides
-  the acted task (m03.04 item 2.35) — derived at read time from the undo
+  the acted task (m03.04 2.36) — derived at read time from the undo
   payload, so pre-existing events answer too. `[]` when the flip touched only
   the acted task; `nil` for any other kind or a payload short of the undo
   shape (legacy per-task rows), so callers can omit rather than guess.
@@ -2910,7 +2910,7 @@ defmodule DoIt.Tasks do
     |> Repo.insert()
   end
 
-  # Execution provenance (m03.04 item 2.33): which actor performed the write.
+  # Execution provenance (m03.04 2.34): which actor performed the write.
   # The token resolver stamps `actor.provenance` on token auth; a browser
   # session leaves it nil. The label is snapshotted here because revoking a
   # token hard-deletes its row.

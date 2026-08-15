@@ -16,7 +16,7 @@ defmodule DoIt.Tasks.ActivityEvent do
     # the per-(user, Initiative) undo / redo stack.
     field :undone_at, :utc_datetime
 
-    # Execution provenance (m03.04 item 2.33): who actually performed the
+    # Execution provenance (m03.04 2.34): who actually performed the
     # write, beside the authorizing `user_id`. Nil = recorded before
     # provenance existed. `api_token_label` is snapshotted at write time —
     # revoking a token deletes its row, nilifying `api_token_id`.

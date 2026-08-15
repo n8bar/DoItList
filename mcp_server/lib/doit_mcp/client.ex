@@ -65,7 +65,7 @@ defmodule DoitMcp.Client do
   # (installed per request task by DoitMcp.Server.handle_request/2) — never a
   # VM-wide token, which would hand one session another's identity (m03.04
   # item 23.2). A rejected or absent credential runs the per-session recovery
-  # ladder (TokenRecovery.Http, m03.04 item 23.3) HERE, on the one path every
+  # ladder (TokenRecovery.Http, m03.04 2.5.3) HERE, on the one path every
   # tool and resource shares: elicit over THAT session's own stream, retry
   # once with an accepted token, actionable guidance on every other outcome —
   # all of it in the standard error envelope, so ToolResult/ResourceResult
@@ -87,7 +87,7 @@ defmodule DoitMcp.Client do
   defp recover_unauthorized(attempt) do
     case TokenRecovery.Http.recover() do
       {:ok, fresh_token} ->
-        # The accept→retry window, per session (m03.04 2.20 mirrored):
+        # The accept→retry window, per session (m03.04 2.13 mirrored):
         # TokenRecovery.Http holds this session's verify-in-flight guard so
         # a concurrent 401 on the SAME session joins this recovery instead
         # of re-eliciting; the `after` clears it on every exit. Holder-only:

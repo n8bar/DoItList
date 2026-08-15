@@ -497,7 +497,7 @@ defmodule DoitMcp.IngestReportTest do
       assert report.checkbox_line_total == 6
     end
 
-    test "numbered checkbox lines count — `N.` and `N)` forms; boxless or inline never do (m03.04 item 28)" do
+    test "numbered checkbox lines count — `N.` and `N)` forms; boxless or inline never do (m03.04 2.31)" do
       description =
         Enum.join(
           [

@@ -67,7 +67,7 @@ defmodule DoitMcp.IngestReport do
   @long_comment_chars 300
   @preview_chars 120
 
-  # Sibling-order trigger bar (m03.04 item 29) — retunable defaults: a set
+  # Sibling-order trigger bar (m03.04 2.32) — retunable defaults: a set
   # measures only with this many labeled members, and only when the labeled
   # members are all of the set but at most this many stragglers.
   @min_labeled_siblings 3

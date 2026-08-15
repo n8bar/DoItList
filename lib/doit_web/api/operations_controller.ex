@@ -32,7 +32,7 @@ defmodule DoItWeb.Api.OperationsController do
   stored: a rolled-back batch and the pre-execution rejections (batch-too-large,
   malformed body) commit nothing and store nothing, so an honest retry of them
   re-executes. Same-key requests **in flight together** serialize on a
-  per-`(user, key)` advisory lock (m03.04 2.19), so a racing retry waits, then
+  per-`(user, key)` advisory lock (m03.04 2.24), so a racing retry waits, then
   replays — it can never double-apply. With no header, behavior is exactly as
   above and no lock is taken. The key itself is enforced server-side here; the
   MCP tool merely forwards it.
@@ -53,7 +53,7 @@ defmodule DoItWeb.Api.OperationsController do
         payload_hash = Idempotency.payload_hash(operations)
 
         # The whole fetch -> apply -> store window holds the (user, key)
-        # advisory lock (m03.04 2.19): a same-key request racing this one
+        # advisory lock (m03.04 2.24): a same-key request racing this one
         # blocks here, then fetches the winner's stored response and replays.
         Idempotency.with_key_lock(user, key, fn ->
           case Idempotency.fetch(user, key, payload_hash) do

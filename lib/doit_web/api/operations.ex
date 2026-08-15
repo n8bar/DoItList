@@ -118,7 +118,7 @@ defmodule DoItWeb.Api.Operations do
   ever touch the caller's own membership row); a notification op authorizes by
   ownership. A single unauthorized op fails the **whole** batch.
 
-  **Agent access** (m03.04 item 2.12.2): every per-op authorize runs through
+  **Agent access** (m03.04 2.14.2): every per-op authorize runs through
   `Authz.fetch_initiative/3`, so an op targeting an Initiative with agent access
   **off** fails `not_found` before any work — masked to the op's own target
   shape (a task/comment inside it reads as "no such task/comment"), so the
@@ -173,7 +173,7 @@ defmodule DoItWeb.Api.Operations do
   `irreversible_op` (a rejected irreversible op), `conflict` (a stale
   `expected_version` — see below).
 
-  ## Conditional writes (m03.04 item 32)
+  ## Conditional writes (m03.04 2.25)
 
   Task and Initiative reads carry an integer `version` — a revision counter
   bumped on every intent-bearing write to the record, never by derived
@@ -207,7 +207,7 @@ defmodule DoItWeb.Api.Operations do
   # atomic batch, well inside the deliberate transaction bound below.
   @max_batch_size 150
 
-  # The whole batch runs in ONE synchronous Repo.transaction (m03.04 item 2.17).
+  # The whole batch runs in ONE synchronous Repo.transaction (m03.04 2.23).
   # The timeout is DELIBERATE — a generous cushion over the worst-case cap batch
   # on a grown tree (~15-20 s observed on a thrashing shared host), not the
   # driver's tight 15 s default, which a legit batch breaches under load and
@@ -250,7 +250,7 @@ defmodule DoItWeb.Api.Operations do
 
   @typedoc """
   A per-op error carries the wire code, message, an optional field pointer, and
-  the batch HTTP status it implies. A version conflict (m03.04 item 32) also
+  the batch HTTP status it implies. A version conflict (m03.04 2.25) also
   carries `current` — the serialized current record, so the caller can re-read
   from the response.
   """
@@ -390,7 +390,7 @@ defmodule DoItWeb.Api.Operations do
   defp wire_error(%{code: code, message: message} = err) do
     base = %{code: code, message: message}
     base = if err[:pointer], do: Map.put(base, :pointer, err[:pointer]), else: base
-    # A version conflict carries the CURRENT record (m03.04 item 32) so the
+    # A version conflict carries the CURRENT record (m03.04 2.25) so the
     # caller can re-read straight from the response.
     if err[:current], do: Map.put(base, :current, err[:current]), else: base
   end
@@ -553,7 +553,7 @@ defmodule DoItWeb.Api.Operations do
       attrs = take(data, @initiative_content_fields)
 
       # API/MCP-created Initiatives are agent-accessible from birth (m03.04
-      # item 2.12.1) — granted server-side by the context, never cast from the
+      # m03.04 2.14.1) — granted server-side by the context, never cast from the
       # op's data (agent_access isn't an accepted key above).
       case Initiatives.create_initiative(user, attrs, agent_access: true) do
         {:ok, initiative} ->
@@ -1073,7 +1073,7 @@ defmodule DoItWeb.Api.Operations do
 
   defp reload_initiative(%Initiative{id: id}), do: Initiatives.get_initiative(id)
 
-  # --- conditional writes (m03.04 item 32) -----------------------------------
+  # --- conditional writes (m03.04 2.25) -----------------------------------
   #
   # An update op may carry `expected_version` — the `version` from the caller's
   # last read. The compare runs in the domain contexts under a row lock
@@ -1483,7 +1483,7 @@ defmodule DoItWeb.Api.Operations do
   end
 
   # A task inside an agent-access-off Initiative reads as nonexistent (m03.04
-  # item 2.12.2). Masking lives at the task-resolution funnel — not behind each
+  # m03.04 2.14.2). Masking lives at the task-resolution funnel — not behind each
   # op's authorize override — so EVERY path that reaches a task (a `parent_id`,
   # a link endpoint, a target ref) inherits the no-existence-leak guarantee by
   # default, and a future op path can't reintroduce the leak by forgetting an
@@ -1511,7 +1511,7 @@ defmodule DoItWeb.Api.Operations do
 
   # Resolve the Initiative and run the capability check through the SAME role
   # predicates the LiveView uses. fetch_initiative returns :not_found (unknown
-  # id, or agent access off — m03.04 item 2.12.2) or :forbidden (role denies);
+  # id, or agent access off — m03.04 2.14.2) or :forbidden (role denies);
   # map both onto per-op errors. `not_found_override` masks the not-found for
   # task/comment-targeted ops: a target inside a flagged-off Initiative must
   # fail EXACTLY like a nonexistent target (same code + message as load_task /

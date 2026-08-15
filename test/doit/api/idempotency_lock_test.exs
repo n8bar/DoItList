@@ -1,6 +1,6 @@
 defmodule DoIt.Api.IdempotencyLockTest do
   @moduledoc """
-  Mutual exclusion for `Idempotency.with_key_lock/3` (m03.04 2.19).
+  Mutual exclusion for `Idempotency.with_key_lock/3` (m03.04 2.24).
 
   Each task starts its OWN sandbox owner, so the two lock calls contend on two
   real Postgres sessions — on the usual shared sandbox connection the advisory

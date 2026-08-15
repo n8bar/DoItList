@@ -39,7 +39,7 @@ defmodule DoItWeb.AssignedLive do
   end
 
   # The rail renders here too, so a collaborator drag-drop lands on this view
-  # (m03.04 2.21) — same shared core and trust gating as the workspace's rail
+  # (m03.04 2.16) — same shared core and trust gating as the workspace's rail
   # path. Malformed ids no-op with ok:false so the optimistic chip is pulled
   # (MUST NOT LIE) rather than crashing.
   def handle_event(

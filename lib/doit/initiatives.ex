@@ -25,7 +25,7 @@ defmodule DoIt.Initiatives do
   caller's own membership row, so this never affects anyone else's view. The
   archived ones resurface via `list_archived_initiatives/1`.
 
-  `agent_access_only: true` (m03.04 item 2.12.2) additionally filters to
+  `agent_access_only: true` (m03.04 2.14.2) additionally filters to
   Initiatives with agent access on — the /api/v1 list uses it so an agent's
   token never even enumerates a flagged-off Initiative. The web UI never passes
   it, so the human's dashboard is unaffected.
@@ -86,7 +86,7 @@ defmodule DoIt.Initiatives do
     end)
   end
 
-  # Batch-set the virtual `:trust_confirm_required` flag (m03.04 item 2.16):
+  # Batch-set the virtual `:trust_confirm_required` flag (m03.04 2.15):
   # the rail's collaborator add is a member add, so on an agent-accessible
   # Initiative this user administers it needs the one-time trust confirm until
   # they acknowledge. ONE query over the acks for the candidate set (no N+1);
@@ -121,7 +121,7 @@ defmodule DoIt.Initiatives do
 
   @doc """
   Agent-accessible Initiatives for the given user, as `%{id: id, name: name}`
-  maps — the repo-marker panel's option list (m03.04 item 24.4). Same
+  maps — the repo-marker panel's option list (m03.04 2.1.4). Same
   visibility rules and ordering as `list_visible_initiatives/2` with
   `agent_access_only: true` (member, not trashed, not archived/hidden, agent
   access on), but names and ids only — no members, progress, or trees.
@@ -239,7 +239,7 @@ defmodule DoIt.Initiatives do
   Initiative Defaults" (m02.04 §2.2) seed the progress calc and the root
   task's sort — explicit attrs still win.
 
-  `agent_access: true` (m03.04 item 2.12.1) grants agent access at creation —
+  `agent_access: true` (m03.04 2.14.1) grants agent access at creation —
   the API/MCP create path passes it (an agent creating an Initiative can
   obviously reach it); it's applied server-side as a struct-level change, never
   cast from `attrs`. UI-created Initiatives omit it and land off.
@@ -280,7 +280,7 @@ defmodule DoIt.Initiatives do
   end
 
   # agent_access is deliberately NOT in the changeset's cast list; the API
-  # create path grants it here, server-side (m03.04 item 2.12.1).
+  # create path grants it here, server-side (m03.04 2.14.1).
   defp maybe_grant_agent_access(changeset, opts) do
     if Keyword.get(opts, :agent_access, false) do
       Ecto.Changeset.change(changeset, agent_access: true)
@@ -318,7 +318,7 @@ defmodule DoIt.Initiatives do
     Initiative.changeset(initiative, attrs)
   end
 
-  # --- Conditional writes (m03.04 item 32) -----------------------------------
+  # --- Conditional writes (m03.04 2.25) -----------------------------------
   #
   # `version` is an integer revision counter on the initiatives row: every
   # write to the row itself bumps it (content updates, subtitle — Initiative
@@ -966,7 +966,7 @@ defmodule DoIt.Initiatives do
   def can_admin?("owner"), do: true
   def can_admin?(_), do: false
 
-  # --- Agent access (m03.04 item 2.12) ---------------------------------------
+  # --- Agent access (m03.04 2.14) ---------------------------------------
   #
   # A token exposes every Initiative its user can see, and other members'
   # content is a prompt-injection surface — so agent access is per-Initiative,
@@ -1000,7 +1000,7 @@ defmodule DoIt.Initiatives do
 
   @doc """
   Record the admin's one-time agent-trust acknowledgement for this Initiative
-  (m03.04 item 2.12.4) — after it the trust confirm never shows again for this
+  (m03.04 2.14.4) — after it the trust confirm never shows again for this
   (admin, Initiative), across sessions. Ids are set programmatically (never
   cast); idempotent via the unique index.
   """
@@ -1027,7 +1027,7 @@ defmodule DoIt.Initiatives do
 
   @doc """
   Whether `admin`'s next `action` on `initiative` needs the one-time
-  agent-trust confirm (m03.04 item 2.12.4). Never once the admin has
+  agent-trust confirm (m03.04 2.14.4). Never once the admin has
   acknowledged for this Initiative. Actions:
 
     * `:enable_agent_access` — turning the flag on while members besides the

@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.ConditionalWritesTest do
   @moduledoc """
-  Conditional writes through the adapter (m03.04 item 32.3): `update_task` /
+  Conditional writes through the adapter (m03.04 2.25.3): `update_task` /
   `update_initiative` thread `expected_version` into their one-op batch, a 409
   conflict reply surfaces the message PLUS the current record, and the tool
   words carry the read-then-conditionally-write contract.

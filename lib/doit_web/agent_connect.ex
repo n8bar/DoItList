@@ -1,7 +1,7 @@
 defmodule DoItWeb.AgentConnect do
   @moduledoc """
   Composes the agent-facing MCP endpoint URL from instance config, and the
-  per-client connect pastes built from it (m03.04 item 24.2/24.3).
+  per-client connect pastes built from it (m03.04 2.1.2/24.3).
 
   Each paste function takes the just-minted plaintext token and returns the
   full text a user pastes into their shell — self-contained: runnable as
@@ -33,7 +33,7 @@ defmodule DoItWeb.AgentConnect do
 
   @doc """
   All connect pastes for the panel: `{dom_slug, client_name, paste}` per
-  client, in display order. `shell` picks the wording (m03.04 item 25.1):
+  client, in display order. `shell` picks the wording (m03.04 2.2.1):
   `:posix` (default) or `:powershell`.
   """
   def client_pastes(token, shell \\ :posix)
@@ -117,7 +117,7 @@ defmodule DoItWeb.AgentConnect do
   end
 
   @doc """
-  Repo-marker snippet (m03.04 item 24.4), the second paste: two markdown
+  Repo-marker snippet (m03.04 2.1.4), the second paste: two markdown
   lines for the repo's agent-instruction file. The URL is the whole handle —
   the Initiative's name stays in the panel's dropdown, not the paste. The URL
   composes from the endpoint's public URL config via verified routes — same

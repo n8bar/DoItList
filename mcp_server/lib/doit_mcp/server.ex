@@ -75,8 +75,8 @@ defmodule DoitMcp.Server do
 
   # Every request runs in its own task with the transport's context on the
   # frame, which carries the request's headers, so install the bearer token
-  # as this task's API credential before dispatch (m03.04 item 23.2). The
-  # session identity rides along (m03.04 item 23.3) so elicitation and the
+  # as this task's API credential before dispatch (m03.04 2.5.2). The
+  # session identity rides along (m03.04 2.5.3) so elicitation and the
   # per-session 401 recovery can reach THIS request's session. The body is
   # the default this callback overrides — Anubis's stock routing into
   # tool/resource handlers.

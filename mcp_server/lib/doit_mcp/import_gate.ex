@@ -18,7 +18,7 @@ defmodule DoitMcp.ImportGate do
   human-rhythm drip decays and a reconnect resets nothing). An add anchored
   on an EXISTING task's `parent_id` — the most common import shape, growing
   an existing tree — resolves through the caller-built `parent_targets` map
-  (m03.04 item 2.18): the caller reads each unique parent once
+  (m03.04 2.26): the caller reads each unique parent once
   (`GET /api/v1/tasks/:id`) at the IO edge (`existing_parent_ids/1` lists
   the ids), keeping this module pure. A fresh Initiative switches keys
   mid-import — created under a lid, referenced by real id from the next
@@ -39,7 +39,7 @@ defmodule DoitMcp.ImportGate do
   """
 
   # The two bounds below are stated upfront in the apply_operations tool
-  # words (DoitMcp.Tools.ApplyOperations' moduledoc, m03.04 item 31) —
+  # words (DoitMcp.Tools.ApplyOperations' moduledoc, m03.04 2.18) —
   # apply_operations_description_test.exs fails a retune that forgets them.
   @task_add_threshold 32
 
@@ -79,7 +79,7 @@ defmodule DoitMcp.ImportGate do
   @doc """
   Decide whether a batch is import-shaped — its readback must be recorded
   before/as it applies (no stop: the caller applies and posts the record in
-  one motion, m03.04 item 36).
+  one motion, m03.04 2.29).
 
   Options:
 

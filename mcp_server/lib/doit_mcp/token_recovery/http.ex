@@ -1,6 +1,6 @@
 defmodule DoitMcp.TokenRecovery.Http do
   @moduledoc """
-  Revoked-token recovery without config surgery (m03.04 items 2.13 + 23.3).
+  Revoked-token recovery without config surgery (m03.04 2.12 + 23.3).
 
   A dead token still connects — the MCP handshake makes no API call — and
   then 401s every tool call; before this ladder, recovery meant hand-editing
@@ -20,7 +20,7 @@ defmodule DoitMcp.TokenRecovery.Http do
       no-answer timeout does not latch. While an accepted token's verify
       retry is in flight, a concurrent 401 on the SAME session joins that
       recovery instead of raising a second form (the per-session
-      verify-in-flight guard, m03.04 2.20); sessions with valid tokens
+      verify-in-flight guard, m03.04 2.13); sessions with valid tokens
       proceed untouched throughout.
 
   The operator's lasting fix is the Authorization header in this server's
@@ -103,7 +103,7 @@ defmodule DoitMcp.TokenRecovery.Http do
       not Elicitation.reachable?() ->
         # The client could answer a form, but this session holds no open
         # server-to-client stream to carry one — straight to guidance, never
-        # a hang (m03.04 item 23.3).
+        # a hang (m03.04 2.5.3).
         {:error, no_stream_message()}
 
       true ->

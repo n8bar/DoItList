@@ -1,16 +1,16 @@
 defmodule DoitMcp.ImportGate.Counter do
   @moduledoc """
   Per-session say-once memory — import targets whose readback was recorded
-  this session (m03.04 item 36: one record per import, not one per chunk),
+  this session (m03.04 2.29: one record per import, not one per chunk),
   the progress-calc gate's key (`{:progress_calc, id, requested}`, fix 17,
   parked), and the repo-marker suggestions already emitted (`{:repo_marker,
-  id}`, m03.04 item 26.2). Pressure decays, the record persists (m03.04 3.1
+  id}`, m03.04 2.4.2). Pressure decays, the record persists (m03.04 3.1
   iteration 2): task-creation PRESSURE comes from the database's
   `inserted_at` window (`DoitMcp.ImportPressure`) and is deliberately shared
   across connections, so this process holds only session-scoped say-once
   state.
 
-  Rows key on the SESSION process (m03.04 item 23.6): the resident transport
+  Rows key on the SESSION process (m03.04 2.5.6): the resident transport
   serves every connected client from one VM, where a flat set would settle an
   Initiative for sessions that answered nothing. The key is
   `DoitMcp.RequestSession`'s session pid. Each keyed session is monitored and

@@ -1,6 +1,6 @@
 defmodule DoitMcp.SessionToken do
   @moduledoc """
-  The per-request API credential on the HTTP transport (m03.04 item 23.2).
+  The per-request API credential on the HTTP transport (m03.04 2.5.2).
 
   On streamable HTTP every MCP request arrives with its own `Authorization`
   header, which anubis surfaces to handlers through the frame

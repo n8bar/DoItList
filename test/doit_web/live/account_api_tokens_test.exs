@@ -2,7 +2,7 @@ defmodule DoItWeb.AccountApiTokensTest do
   @moduledoc """
   The account page's "API tokens" section (m03.01 worklist 1.2): mint reveals
   the plaintext once, the token lists, dismissing hides the plaintext for good,
-  and revoke removes it. Plus the agent-connect panel (m03.04 item 24.2):
+  and revoke removes it. Plus the agent-connect panel (m03.04 2.1.2):
   per-client pastes riding the one-time reveal, gone with the dismiss.
   """
   use DoItWeb.ConnCase, async: true
@@ -110,7 +110,7 @@ defmodule DoItWeb.AccountApiTokensTest do
     refute render(view) =~ "doit_pat_"
   end
 
-  test "connect panel carries both shell variants and the toggle (m03.04 item 25.1)", %{
+  test "connect panel carries both shell variants and the toggle (m03.04 2.2.1)", %{
     conn: conn
   } do
     {:ok, view, _html} = live(conn, ~p"/account")
@@ -163,7 +163,7 @@ defmodule DoItWeb.AccountApiTokensTest do
     assert Accounts.list_api_tokens(user) == []
   end
 
-  describe "repo-marker panel (m03.04 item 24.4)" do
+  describe "repo-marker panel (m03.04 2.1.4)" do
     test "lists only agent-accessible initiatives and composes the snippet", %{
       conn: conn,
       user: user

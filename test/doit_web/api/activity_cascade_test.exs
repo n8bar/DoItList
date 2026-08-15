@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.ActivityCascadeTest do
   @moduledoc """
-  Status events suppress no-ops and expose the cascade (m03.04 item 2.35):
+  Status events suppress no-ops and expose the cascade (m03.04 2.36):
   completing an already-done task records nothing and writes nothing (the
   Initiative 64 done→done noise); a recorded `status_changed` serializes
   `cascaded_ids` — the other tasks the flip carried along — derived at read

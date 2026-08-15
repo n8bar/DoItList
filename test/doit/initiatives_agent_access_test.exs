@@ -1,6 +1,6 @@
 defmodule DoIt.InitiativesAgentAccessTest do
   @moduledoc """
-  m03.04 item 2.12 — per-Initiative agent access, off by default, and the
+  m03.04 2.14 — per-Initiative agent access, off by default, and the
   one-time agent-trust acknowledgement:
 
     * creation defaults both ways: UI-created Initiatives land off; the
@@ -185,7 +185,7 @@ defmodule DoIt.InitiativesAgentAccessTest do
     end
   end
 
-  describe "list_agent_accessible_initiatives/1 (m03.04 item 24.4)" do
+  describe "list_agent_accessible_initiatives/1 (m03.04 2.1.4)" do
     test "returns id+name for agent-accessible member Initiatives only" do
       me = user("Ann")
       other = user("Bob")

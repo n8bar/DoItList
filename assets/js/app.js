@@ -1083,7 +1083,7 @@ function syncRail() {
 // it never touches the server. It teleports between phx-update="ignore"
 // slots, so no patch can disturb it mid-typing; create_task reads the two
 // hidden inputs the client sets here.
-// The placeholder gets a hint that Up/Down relocate the form (item 2.2): the
+// The placeholder gets a hint that Up/Down relocate the form (m03.04 2.7): the
 // base intent + the reposition signifier, so the keyboard affordance is visible.
 const ADD_MOVE_HINT = "  (↑↓ to move)"
 const DoitAddForm = {
@@ -3351,7 +3351,7 @@ document.addEventListener("click", (e) => {
   const uid = btn.dataset.userId
   const iid = btn.dataset.initiativeId
   if (!uid || !iid) return
-  // m03.04 item 2.16: the rail add is a member add — on an agent-accessible
+  // m03.04 2.15: the rail add is a member add — on an agent-accessible
   // initiative it rides the same one-time trust confirm as the members panel.
   // Decide AT CLICK from the rail entry's render-known data attribute (§6.5,
   // no round trip); the optimistic stand-in waits for the decision, so Cancel
@@ -3370,7 +3370,7 @@ document.addEventListener("click", (e) => {
 })
 
 // Whether the rail's collaborator add onto initiative `iid` needs the one-time
-// agent-trust confirm (m03.04 item 2.16): the rail entry carries the
+// agent-trust confirm (m03.04 2.15): the rail entry carries the
 // render-known per-initiative state (server-computed; its rail refresh flips
 // it once the committed add records the ack). No entry → no confirm — the
 // server's proof-carrying predicate still can't burn an ack from a bare push.
@@ -3587,7 +3587,7 @@ document.addEventListener("keydown", (e) => {
   if (m && !m.hidden && !removeMemberInFlight) m.hidden = true
 })
 
-// Agent-trust confirm (m03.04 items 2.12.4 + 2.16, UX_GUARDRAILS 6.5): the
+// Agent-trust confirm (m03.04 2.14.4 + 2.16, UX_GUARDRAILS 6.5): the
 // one-time "trust this initiative's members with AI access" dialog,
 // client-opened at the click with NO round trip. The decision reads
 // #agent-trust-state (fresh DOM at click time — the server re-renders it as
@@ -3653,7 +3653,7 @@ function openAgentTrustConfirm(opts) {
     // so run the revert path, never the action. (Unreachable in practice:
     // the workspace renders the dialog whenever #agent-trust-state does AND
     // whenever any rail entry carries data-trust-confirm=true; /assigned
-    // mirrors the rail rule — m03.04 2.21.)
+    // mirrors the rail rule — m03.04 2.16.)
     if (opts.cancel) opts.cancel()
     return
   }
@@ -6385,7 +6385,7 @@ Hooks.CollaboratorDrag = {
       this.suppressClick()
       if (this.target) {
         const entry = this.target
-        // m03.04 item 2.16 (§6.5, decide-at-drop): the entry's render-known
+        // m03.04 2.15 (§6.5, decide-at-drop): the entry's render-known
         // trust state gates the drop exactly like the menu path — the confirm
         // opens client-side with no round trip, the pending chip waits for
         // Proceed, and Cancel drops nothing and pushes nothing.

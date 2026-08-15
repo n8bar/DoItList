@@ -550,7 +550,7 @@ defmodule DoItWeb.Layouts do
       <nav id="rail-initiatives" class="space-y-0.5">
         <%!-- The rail only renders inside the kept-mounted workspace LiveView, so
              list<->detail here is a same-module push_patch (no remount).
-             data-trust-confirm (m03.04 item 2.16): render-known agent-trust
+             data-trust-confirm (m03.04 2.15): render-known agent-trust
              state for the rail's collaborator add (menu + drag) — the client
              decides AT click/drop whether the one-time trust confirm opens
              (UX_GUARDRAILS 6.5, no round trip); the server's rail refresh
@@ -833,7 +833,7 @@ defmodule DoItWeb.Layouts do
   # How many member avatars the rail entry shows before collapsing the rest
   # into a "+N" overflow (m02.09 WL3.5). Sized for the 17rem rail width.
   @doc """
-  Agent-trust confirm dialog (m03.04 items 2.12.4/2.16/2.21) — the one
+  Agent-trust confirm dialog (m03.04 2.14.4/2.16/2.21) — the one
   client-opened modal (UX_GUARDRAILS 6.5) shared by every path that adds or
   promotes a member on an agent-accessible initiative: the workspace's
   settings panes and the rail's collaborator add on any page rendering the

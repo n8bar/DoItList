@@ -10,7 +10,7 @@ defmodule DoitMcp.HttpTransportTest do
   # Session/transport lifecycles log; keep test output clean.
   @moduletag :capture_log
 
-  # The resident HTTP transport (m03.04 item 23): per-session bearer tokens
+  # The resident HTTP transport (m03.04 2.5): per-session bearer tokens
   # on the API path (23.2) and anubis's stock session hygiene (23.4), driven
   # through the real tree — registry, dynamic session supervisor, transport —
   # via the same plug Bandit serves, plus one smoke over a real listener.
@@ -135,7 +135,7 @@ defmodule DoitMcp.HttpTransportTest do
     session = handshake([])
     conn = post_frame(get_me_call(2), [{"mcp-session-id", session}])
 
-    # Same 401-driven guidance a dead token surfaces (m03.04 item 2.13) —
+    # Same 401-driven guidance a dead token surfaces (m03.04 2.12) —
     # and no API round trip at all: there is no credential to send.
     assert {true, text} = tool_result(conn)
     assert text =~ "(401)"
@@ -157,7 +157,7 @@ defmodule DoitMcp.HttpTransportTest do
     assert Enum.any?(tools, &(&1["name"] == "get_me"))
 
     # The recreated session runs on the stock idle default — the no-override
-    # proof at runtime (m03.04 item 23.4).
+    # proof at runtime (m03.04 2.5.4).
     registry = Anubis.Server.Registry.registry_name(DoitMcp.Server)
 
     {:ok, session_pid} =

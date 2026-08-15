@@ -1,6 +1,6 @@
 defmodule DoItWeb.AgentAccessSettingsTest do
   @moduledoc """
-  m03.04 items 2.12.3 / 2.12.4 — the workspace side of per-Initiative agent
+  m03.04 2.14.3 / 2.12.4 — the workspace side of per-Initiative agent
   access:
 
     * the owner-only AI-access checkbox and the knobs control whose
@@ -11,7 +11,7 @@ defmodule DoItWeb.AgentAccessSettingsTest do
     * server-side ack recording on both trigger paths (enable-over-members,
       member add / promote), after which `data-acked` flips true for good — the
       second occurrence for the same (admin, Initiative) shows no confirm;
-    * the rail collaborator-add path (m03.04 item 2.16): each rail entry
+    * the rail collaborator-add path (m03.04 2.15): each rail entry
       carries `data-trust-confirm`, the render-known state the client reads at
       click/drop, and the committing `add_collaborator_to` records the same
       proof-carrying ack.

@@ -27,7 +27,7 @@ defmodule DoItWeb.Api.InitiativeController do
   @doc """
   List the Initiatives the acting user belongs to (no per-Initiative authz: the
   query is already scoped to their memberships). Filtered to agent-accessible
-  Initiatives (m03.04 item 2.12.2) — a flagged-off one never appears, matching
+  Initiatives (m03.04 2.14.2) — a flagged-off one never appears, matching
   the 404 its direct reads return.
   """
   def index(conn, _params) do

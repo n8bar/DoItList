@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.SerializerUrlTest do
   @moduledoc """
-  `url` on initiative payloads (m03.04 item 2.14) — the operator-facing handle.
+  `url` on initiative payloads (m03.04 2.3) — the operator-facing handle.
 
   Pure serializer unit tests: the URL is composed from the endpoint's public
   URL config (scheme + host, never hard-coded), and it is present on BOTH

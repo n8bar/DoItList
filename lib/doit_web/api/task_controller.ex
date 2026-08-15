@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.TaskController do
   @moduledoc """
-  The one read keyed on a bare task id (m03.04 item 2.18.1):
+  The one read keyed on a bare task id (m03.04 2.26.1):
 
     * `GET /api/v1/tasks/:id` — `show`, the task → Initiative resolver.
 

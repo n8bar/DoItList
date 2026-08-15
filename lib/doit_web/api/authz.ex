@@ -36,7 +36,7 @@ defmodule DoItWeb.Api.Authz do
 
     * A non-integer / unknown id → `{:error, :not_found}` (404). A garbage id
       never raises an Ecto cast error — it's parsed defensively first.
-    * Agent access off (m03.04 item 2.12.2) → `{:error, :not_found}` (404) for
+    * Agent access off (m03.04 2.14.2) → `{:error, :not_found}` (404) for
       **everyone**, ahead of the role check — indistinguishable from a
       nonexistent id, so a token can't even prove the Initiative exists. The
       human's per-Initiative checkbox is the trust approval; this is its

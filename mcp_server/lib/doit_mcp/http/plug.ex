@@ -1,6 +1,6 @@
 defmodule DoitMcp.Http.Plug do
   @moduledoc """
-  The adapter's front door on streamable HTTP (m03.04 item 23.3): Anubis's
+  The adapter's front door on streamable HTTP (m03.04 2.5.3): Anubis's
   stock `Anubis.Server.Transport.StreamableHTTP.Plug` for every request
   shape but ONE — a client POST carrying a JSON-RPC *response or error* (the
   answer to a server-initiated request, e.g. an elicitation form) is
@@ -22,7 +22,7 @@ defmodule DoitMcp.Http.Plug do
 
   Both frame-carrying shapes — a POST and the standalone GET stream — also
   get `DoitMcp.Http.FrameTap` installed on the way in, which is what puts
-  the session's frames in its own log (m03.04 item 23.5). The well-known
+  the session's frames in its own log (m03.04 2.5.5). The well-known
   metadata route and DELETE carry no frames, so neither is tapped.
   """
 

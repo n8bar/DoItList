@@ -7,7 +7,7 @@ defmodule DoitMcp.TokenRecovery.Sessions do
   ever persisted anywhere; every row dies with its session (each keyed pid
   is monitored, a DOWN clears its row), and the verify guard dies with its
   verifier — a killed request task can never wedge a session's recovery
-  (m03.04 2.20).
+  (m03.04 2.13).
   """
 
   use GenServer

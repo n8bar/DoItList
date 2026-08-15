@@ -29,7 +29,7 @@ defmodule DoItWeb.Api.OperationsScaleTest do
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
 
-  # The deliberate transaction bound (m03.04 item 2.17), NOT the driver's old
+  # The deliberate transaction bound (m03.04 2.23), NOT the driver's old
   # 15s default: the batch must complete within our chosen 60s cushion — far
   # above the seconds it really takes, far below the adapter's 90_000ms receive
   # timeout. Asserting this bound (not the driver default) is what 2.17.2 wants.

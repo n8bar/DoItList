@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.AgentAccessTest do
   @moduledoc """
-  m03.04 item 2.12.2 — the per-Initiative agent-access flag gating the whole
+  m03.04 2.14.2 — the per-Initiative agent-access flag gating the whole
   /api/v1 surface, server-enforced ahead of any work:
 
     * the list filters to agent-accessible Initiatives only;

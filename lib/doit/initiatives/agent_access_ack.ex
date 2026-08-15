@@ -1,6 +1,6 @@
 defmodule DoIt.Initiatives.AgentAccessAck do
   @moduledoc """
-  The one-time agent-trust acknowledgement (m03.04 item 2.12.4): a row per
+  The one-time agent-trust acknowledgement (m03.04 2.14.4): a row per
   (admin user, Initiative) recording that this admin saw and accepted the
   trust confirm — they're trusting the Initiative's current AND future
   members' content to be read by their AI agents (member content is a
