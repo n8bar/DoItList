@@ -139,7 +139,7 @@ defmodule DoitMcp.HttpTransportTest do
     # and no API round trip at all: there is no credential to send.
     assert {true, text} = tool_result(conn)
     assert text =~ "(401)"
-    assert text =~ "rejected this session's API token"
+    assert text =~ "No minted DoItList API token matches what this session presents"
     refute_received {:api_call, _headers}
   end
 

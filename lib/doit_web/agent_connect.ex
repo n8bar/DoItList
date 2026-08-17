@@ -58,9 +58,17 @@ defmodule DoItWeb.AgentConnect do
 
   @doc """
   Codex's config can't hold the credential — it reads an env var at launch.
-  The export rides the same paste (24.3), plus a profile append so future
-  shells have it too. PowerShell (25.2): `$env:` sets the live session,
-  `setx` persists for future shells.
+  The export rides the same paste (m03.04 2.1.1.3), plus persistence so
+  future shells have it too. Persistence comes BEFORE `codex mcp add`
+  (m03.04 2.1.5): the add is the line that reads as success, and a reader
+  who stops there must already be persisted.
+
+  PowerShell (2.1.2.2): `$env:` sets the live session; `setx` writes the
+  registry, which only shells opened fresh from the OS pick up — shells
+  spawned by an already-running host (a terminal app, an editor) inherit
+  the host's snapshot and never see it — so the paste also appends the
+  `$env:` line to `$PROFILE` (creating its folder if missing; UTF-8, the
+  Hermes paste's pattern), which every new session sources.
   """
   def codex_paste(token, shell \\ :posix)
 
@@ -68,8 +76,8 @@ defmodule DoItWeb.AgentConnect do
     Enum.join(
       [
         "export DOITLIST_API_TOKEN='#{token}'",
-        "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN",
-        ~s(echo "export DOITLIST_API_TOKEN='#{token}'" >> ~/.bashrc   # or your shell's profile)
+        ~s(echo "export DOITLIST_API_TOKEN='#{token}'" >> ~/.bashrc   # or your shell's profile),
+        "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN"
       ],
       "\n"
     )
@@ -79,8 +87,10 @@ defmodule DoItWeb.AgentConnect do
     Enum.join(
       [
         "$env:DOITLIST_API_TOKEN = '#{token}'",
-        "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN",
-        "setx DOITLIST_API_TOKEN '#{token}'   # persists for future shells"
+        "setx DOITLIST_API_TOKEN '#{token}'",
+        "New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null; " <>
+          "Add-Content -Path $PROFILE -Value '$env:DOITLIST_API_TOKEN = ''#{token}''' -Encoding utf8",
+        "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN"
       ],
       "\n"
     )

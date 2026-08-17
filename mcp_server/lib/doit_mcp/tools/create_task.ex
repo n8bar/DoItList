@@ -33,6 +33,7 @@ defmodule DoitMcp.Tools.CreateTask do
     field(:assignee_id, :integer, required: false)
     field(:manual_progress, :integer, required: false)
     field(:position, :integer, required: false)
+    field(:done, :boolean, required: false)
   end
 
   def execute(params, frame) do
@@ -63,7 +64,8 @@ defmodule DoitMcp.Tools.CreateTask do
         :priority,
         :assignee_id,
         :manual_progress,
-        :position
+        :position,
+        :done
       ])
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

@@ -213,11 +213,14 @@ defmodule DoitMcp.HttpFrameLogTest do
       headers: headers
     )
 
-    call = Task.async(fn -> Req.post!(req, url: "/", json: get_me_call(2), headers: headers) end)
+    # The 401 returns at once with the paste-a-fresh-token form out on this
+    # session's stream (m03.04 2.3.3); the answer lands out-of-band.
+    call = Req.post!(req, url: "/", json: get_me_call(2), headers: headers)
+    assert [%{"result" => %{"isError" => true}}] = sse_frames(call.body)
 
-    # The 401 raises the paste-a-fresh-token form on this session's stream.
     frame = await_sse_frame(stream)
     assert frame["method"] == "elicitation/create"
+    waiter = monitor_waiter(session)
 
     answer =
       Req.post!(req,
@@ -231,27 +234,33 @@ defmodule DoitMcp.HttpFrameLogTest do
       )
 
     assert answer.status == 202
+    assert_receive {:DOWN, ^waiter, :process, _pid, :normal}, 5_000
 
-    # The held call resolved on the retry with the pasted token.
-    assert [%{"result" => %{"isError" => false}}] = sse_frames(Task.await(call, 15_000).body)
+    # The re-call rides the pasted token.
+    recall = Req.post!(req, url: "/", json: get_me_call(3), headers: headers)
+    assert [%{"result" => %{"isError" => false}}] = sse_frames(recall.body)
     sync()
 
     session_lines = lines(root, session)
 
-    # The server-to-client request went out on the stream, and the tool
-    # answer came back as an SSE-shaped POST response: both captured, though
-    # the stock plug wrote both.
+    # The server-to-client request went out on the stream, and both tool
+    # answers came back as SSE-shaped POST responses: all captured, though
+    # the stock plug wrote them.
     assert Enum.any?(
              session_lines,
              &(&1["dir"] == "out" and &1["frame"]["method"] == "elicitation/create")
            )
 
     assert Enum.any?(session_lines, &(&1["dir"] == "out" and &1["frame"]["id"] == 2))
+    assert Enum.any?(session_lines, &(&1["dir"] == "out" and &1["frame"]["id"] == 3))
 
     # The answer arrived carrying a pasted token; the log holds the field,
     # redacted.
     assert answer_line =
-             Enum.find(session_lines, &(&1["frame"]["result"]["content"]["token"] != nil))
+             Enum.find(
+               session_lines,
+               &match?(%{"frame" => %{"result" => %{"content" => %{"token" => _}}}}, &1)
+             )
 
     assert answer_line["dir"] == "in"
     assert answer_line["frame"]["result"]["content"]["token"] == "[redacted]"
@@ -362,6 +371,16 @@ defmodule DoitMcp.HttpFrameLogTest do
 
     assert resp.status == 200
     resp
+  end
+
+  # The out-of-band waiter parked on this session's form (m03.04 2.3.3):
+  # its exit is the point at which the paste has landed, so the re-call
+  # never races it.
+  defp monitor_waiter(session_id) do
+    registry = Anubis.Server.Registry.registry_name(DoitMcp.Server)
+    {:ok, session} = Anubis.Server.Registry.Local.lookup_session(registry, session_id)
+    [{waiter, :async}] = Registry.lookup(DoitMcp.Elicitation.Registry, session)
+    Process.monitor(waiter)
   end
 
   defp await_sse_frame(stream) do

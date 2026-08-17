@@ -7,36 +7,34 @@ defmodule DoitMcp.TokenRecovery.Http do
   MCP client config. The whole policy is here, keyed to the session
   (`DoitMcp.TokenRecovery.Sessions`):
 
-    * `credential/0` — the session's in-memory override when a recovery
-      installed one, else the bearer header this request arrived with
-      (`DoitMcp.SessionToken`); never a VM-wide token.
-    * `recover/0` — a session's FIRST 401 raises the same paste-a-fresh-token
-      form, riding that session's own server→client stream. The accepted
-      token is held in memory KEYED TO THAT SESSION only, overriding its
-      header token for the rest of the session — NEVER written to the
-      refresh file or anywhere global, never visible to another session.
-      A session with no open stream skips the form — straight to guidance.
-      Declined, unusable, or rejected-again latches that session failed; a
-      no-answer timeout does not latch. While an accepted token's verify
-      retry is in flight, a concurrent 401 on the SAME session joins that
-      recovery instead of raising a second form (the per-session
-      verify-in-flight guard, m03.04 2.3.2); sessions with valid tokens
-      proceed untouched throughout.
+    * `credential/0` — the session's override when a paste installed one
+      (`:unverified` until a call proves it), else the bearer header this
+      request arrived with (`DoitMcp.SessionToken`); never a VM-wide token.
+    * `recover/0` — a session's FIRST 401 sends the paste-a-fresh-token form
+      on that session's own stream and RETURNS AT ONCE with the actionable
+      error (m03.04 2.3.3) — a supervised waiter owns the human-paced wait.
+      The paste is held in memory KEYED TO THAT SESSION only, over its header
+      token for the rest of the session — never persisted, never visible to
+      another session — and the next call proves it: a 401 there latches the
+      session (no elicit loop on a bad paste); form open or paste unproven, a
+      further 401 on the SAME session says so or reuses the paste, never a
+      second form (2.3.2). Declined, cancelled, or unusable latches; a
+      no-answer timeout does not; no open stream skips the form — straight to
+      guidance. Valid-token sessions proceed untouched.
 
-  The operator's lasting fix is the Authorization header in this server's
-  entry in the MCP client configuration — the one place a session's
-  credential comes from.
+  The operator's lasting fix is the client's token source: the launching
+  shell's env var, or the Authorization header in this server's MCP client
+  config entry.
   """
 
   alias DoitMcp.{Elicitation, RequestSession, SessionToken}
   alias DoitMcp.TokenRecovery.Sessions
 
   # A generous paste window — a human has to go mint a token in the web app.
-  # Same as the import gate's readback confirm.
   @elicit_timeout to_timeout(minute: 5)
 
   # Tokens are url-base64-ish; a paste outside this set is never a token —
-  # reject it before it burns the one retry.
+  # reject it before it burns the one verify.
   @token_format ~r|\A[A-Za-z0-9._+/=-]+\z|
 
   @token_schema %{
@@ -51,25 +49,32 @@ defmodule DoitMcp.TokenRecovery.Http do
     "required" => ["token"]
   }
 
+  # The fact every 401 outcome states, and the lasting fix — an unmatched
+  # token is most often the launching shell's env var, not a revocation.
+  @no_match "No minted DoItList API token matches what this session presents."
+  @source_fix "check DOITLIST_API_TOKEN in the shell that launched the client " <>
+                "(or the Authorization header in the MCP client config), then reconnect."
+
   @doc """
-  This request's API credential: the session's override if a recovery
-  installed one, else the request's bearer header, else `:absent`.
+  This request's API credential: the session's override if a paste installed
+  one — `{:unverified, token}` until a call proves it — else the request's
+  bearer header, else `:absent`.
   """
-  @spec credential() :: {:ok, String.t()} | :absent
+  @spec credential() :: {:ok, String.t()} | {:unverified, String.t()} | :absent
   def credential do
     with session when is_pid(session) <- RequestSession.pid(),
-         {:ok, token} <- Sessions.override(session) do
-      {:ok, token}
+         {status, token} when status in [:verified, :unverified] <- Sessions.override(session) do
+      if status == :verified, do: {:ok, token}, else: {:unverified, token}
     else
       _ -> SessionToken.fetch()
     end
   end
 
   @doc """
-  The 401 policy — see the moduledoc ladder. Returns `{:ok, fresh_token}`
-  when the operator supplied a usable replacement (already installed for
-  this session; the caller retries once with it), or `{:error, message}`
-  with the actionable message to surface instead of the bare 401 line.
+  The 401 policy — see the moduledoc ladder. Returns `{:ok, token}` when a
+  paste already installed this session's replacement (the caller proves it
+  with one attempt), or `{:error, message}` with the actionable message to
+  surface instead of the bare 401 line — promptly, on every path.
   """
   @spec recover() :: {:ok, String.t()} | {:error, String.t()}
   def recover do
@@ -80,76 +85,65 @@ defmodule DoitMcp.TokenRecovery.Http do
   end
 
   defp recover(session) do
-    cond do
-      Sessions.failed?(session) ->
-        {:error,
-         "A replacement token was already declined or rejected this session — " <>
-           "not asking again. " <> manual_fix_message()}
+    case Sessions.override(session) do
+      {:unverified, token} ->
+        # A paste landed while this call's header attempt was out — the
+        # override is this session's credential now: prove it rather than
+        # raise a second form (the join, m03.04 2.3.2).
+        {:ok, token}
 
-      Sessions.verifying?(session) ->
-        # A fresh token was accepted moments ago on THIS session and its
-        # verify retry is still in flight — join that recovery: retry with
-        # the installed override instead of raising a second form (m03.04
-        # 2.20, per session). A dead override latches via the joiner's retry
-        # exactly like the verifier's would.
-        case Sessions.override(session) do
-          {:ok, token} -> {:ok, token}
-          :none -> {:error, manual_fix_message()}
+      _verified_or_none ->
+        cond do
+          Sessions.failed?(session) ->
+            {:error,
+             "A replacement token was already declined or rejected this session — " <>
+               "not asking again. " <> manual_fix_message()}
+
+          not Elicitation.client_supports_elicitation?() ->
+            {:error, manual_fix_message()}
+
+          not Elicitation.reachable?() ->
+            # The client could answer a form, but this session holds no open
+            # server-to-client stream to carry one — straight to guidance,
+            # never a hang (m03.04 2.2.1.3).
+            {:error, no_stream_message()}
+
+          true ->
+            elicit_fresh_token(session)
         end
-
-      not Elicitation.client_supports_elicitation?() ->
-        {:error, manual_fix_message()}
-
-      not Elicitation.reachable?() ->
-        # The client could answer a form, but this session holds no open
-        # server-to-client stream to carry one — straight to guidance, never
-        # a hang (m03.04 2.2.1.3).
-        {:error, no_stream_message()}
-
-      true ->
-        elicit_fresh_token(session)
     end
   end
 
   @doc """
-  Called when the retry with a freshly pasted token 401'd too: latches this
-  session failed (no elicit loop on a bad paste), drops its verify guard,
-  and returns the message.
+  Called when the pasted token's proving attempt 401'd too: latches this
+  session failed (no elicit loop on a bad paste) and returns the message.
   """
   @spec refreshed_token_rejected() :: String.t()
   def refreshed_token_rejected do
-    if session = RequestSession.pid() do
-      Sessions.mark_failed(session)
-      Sessions.conclude_verify(session)
-    end
+    if session = RequestSession.pid(), do: Sessions.mark_failed(session)
 
     "The freshly pasted token was rejected too (401) — not asking again this " <>
       "session. " <> manual_fix_message()
   end
 
   @doc """
-  Drop this session's verify guard. The client calls this in an `after`
-  around the verify retry, so every exit — success, rejection, raise —
-  clears it. Holder-only (`Sessions.conclude_verify/1`): a joiner's pass
-  leaves the verifier's guard alone.
+  Called when the pasted token's proving attempt got any answer short of a
+  401: it is this session's proven credential from here on.
   """
-  @spec verify_concluded() :: :ok
-  def verify_concluded do
-    if session = RequestSession.pid(), do: Sessions.conclude_verify(session)
+  @spec refreshed_token_verified() :: :ok
+  def refreshed_token_verified do
+    if session = RequestSession.pid(), do: Sessions.mark_verified(session)
     :ok
   end
 
   @doc """
   The recovery instructions every non-recovery 401 outcome carries — the
-  HTTP flavor: the fix lives in the client config's Authorization header,
-  not a launcher-host token file.
+  HTTP flavor: the fix lives at the client's token source, not a
+  launcher-host token file.
   """
   @spec manual_fix_message() :: String.t()
   def manual_fix_message do
-    "DoItList rejected this session's API token (revoked or expired). Fix: put a " <>
-      "fresh API token in the Authorization header of this server's entry in the " <>
-      "MCP client configuration — Bearer <fresh token> — then reconnect this " <>
-      "MCP server."
+    @no_match <> " Fix: " <> @source_fix
   end
 
   defp no_stream_message do
@@ -157,51 +151,52 @@ defmodule DoitMcp.TokenRecovery.Http do
       "server-to-client stream to carry the form. " <> manual_fix_message()
   end
 
+  # The form goes out on the session's stream; the call returns at once
+  # (m03.04 2.3.3). The waiter lands the answer through land/2.
   defp elicit_fresh_token(session) do
-    case Elicitation.request(form_message(), @token_schema, timeout()) do
-      {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
-        accept(session, String.trim(to_string(content["token"] || "")))
+    case Elicitation.request_async(form_message(), @token_schema, timeout(), &land(session, &1)) do
+      :ok ->
+        {:error,
+         @no_match <>
+           " A fresh-token form is open on the client — answer it, then re-call. Or " <>
+           @source_fix}
 
-      {:ok, %{"action" => _declined_or_cancelled}} ->
-        Sessions.mark_failed(session)
-        {:error, "Token refresh declined — the call was not retried. " <> manual_fix_message()}
+      {:error, :already_waiting} ->
+        {:error,
+         "The fresh-token form is still open on the client — answer it, then re-call. Or " <>
+           @source_fix}
 
       {:error, :no_sse_handler} ->
         # The stream closed between the ladder's check and the send.
         {:error, no_stream_message()}
 
-      {:error, _timeout_no_session_or_busy} ->
-        # Not a refusal — don't latch; a later call may catch the operator
-        # at the keyboard.
-        {:error,
-         "Asked the operator for a fresh token but got no answer — the call was not " <>
-           "retried. Retry when they're available, or: " <> manual_fix_message()}
+      {:error, _no_session_or_waiter_died} ->
+        {:error, manual_fix_message()}
     end
   end
 
-  defp accept(session, token) do
+  # Runs in the waiter when the operator answers: a usable paste installs
+  # the override, unverified — the session's next call proves it; anything
+  # else latches. In-memory, keyed to the session — never persisted, never
+  # global. A no-answer timeout never reaches here, so it never latches.
+  defp land(session, %{"action" => "accept", "content" => content}) when is_map(content) do
+    token = String.trim(to_string(content["token"] || ""))
+
     if token != "" and Regex.match?(@token_format, token) do
-      # Override installed BEFORE the caller's verify retry, guard up so a
-      # concurrent 401 on this session joins instead of re-asking (2.20).
-      # In-memory, keyed to the session — never persisted, never global.
       Sessions.put_override(session, token)
-      Sessions.begin_verify(session)
-      {:ok, token}
     else
       Sessions.mark_failed(session)
-
-      {:error,
-       "The pasted token wasn't usable (empty, or contains characters no token has) — " <>
-         "nothing retried, not asking again this session. " <> manual_fix_message()}
     end
   end
 
+  defp land(session, _declined_or_cancelled), do: Sessions.mark_failed(session)
+
   defp form_message do
-    "DoItList rejected this session's API token (401 — likely revoked). Paste a " <>
-      "fresh API token to continue: it takes effect immediately (the failed call " <>
-      "retries once) and holds for this session only — nothing is stored. For " <>
-      "future connects, update the Authorization header in this server's entry " <>
-      "in the MCP client configuration. Or decline and update it there yourself."
+    @no_match <>
+      " Paste a fresh token: the next call uses it, held for this session only — " <>
+      "nothing is stored. Lasting fix: DOITLIST_API_TOKEN in the shell that launched " <>
+      "the client (or the Authorization header in the MCP client config). Or decline " <>
+      "and fix it there."
   end
 
   defp timeout do

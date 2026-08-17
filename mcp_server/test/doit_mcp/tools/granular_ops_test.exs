@@ -50,6 +50,13 @@ defmodule DoitMcp.Tools.GranularOpsTest do
        "type" => "task",
        "data" => %{"initiative_id" => 1, "title" => "Draft the outline"}
      }},
+    # `done` rides the create (m03.04 2.5.4): a completed item is one op.
+    {DoitMcp.Tools.CreateTask, %{initiative_id: 1, title: "Already done", done: true},
+     %{
+       "op" => "add",
+       "type" => "task",
+       "data" => %{"initiative_id" => 1, "title" => "Already done", "done" => true}
+     }},
     {DoitMcp.Tools.DeleteComment, %{comment_id: 9},
      %{"op" => "remove", "type" => "comment", "id" => 9}},
     {DoitMcp.Tools.DeleteTask, %{task_id: 12}, %{"op" => "remove", "type" => "task", "id" => 12}},

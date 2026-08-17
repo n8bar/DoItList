@@ -69,12 +69,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   A lid only resolves to an EARLIER op's `add` of the matching `type` —
   never a later or wrong-type one. Worked example — bootstrap an Initiative
-  and its first task, then mark it done, in one call:
+  and its first task, created done (`done` completes on add and update
+  alike — one op, never an add plus a flip), in one call:
 
       [
         %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "New project"}},
-        %{"op" => "add", "type" => "task", "lid" => "t1", "data" => %{"initiative_lid" => "i", "title" => "First task"}},
-        %{"op" => "update", "type" => "task", "lid" => "t1", "data" => %{"done" => true}}
+        %{"op" => "add", "type" => "task", "lid" => "t1", "data" => %{"initiative_lid" => "i", "title" => "First task", "done" => true}}
       ]
 
   When the bootstrapped Initiative imports a hierarchical source, set

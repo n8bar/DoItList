@@ -66,10 +66,11 @@ defmodule DoitMcp.Client do
   # VM-wide token, which would hand one session another's identity (m03.04
   # item 23.2). A rejected or absent credential runs the per-session recovery
   # ladder (TokenRecovery.Http, m03.04 2.2.1.3) HERE, on the one path every
-  # tool and resource shares: elicit over THAT session's own stream, retry
-  # once with an accepted token, actionable guidance on every other outcome —
-  # all of it in the standard error envelope, so ToolResult/ResourceResult
-  # render it with zero per-tool code.
+  # tool and resource shares: the form goes out over THAT session's own
+  # stream and the call returns at once with actionable guidance (m03.04
+  # 2.3.3); a pasted token's first use is its proof — all of it in the
+  # standard error envelope, so ToolResult/ResourceResult render it with
+  # zero per-tool code.
   defp dispatch(attempt) do
     case TokenRecovery.Http.credential() do
       {:ok, token} ->
@@ -77,6 +78,10 @@ defmodule DoitMcp.Client do
           {:ok, %Req.Response{status: 401}} -> recover_unauthorized(attempt)
           other -> translate(other)
         end
+
+      {:unverified, token} ->
+        # A paste landed on this session; this call proves it.
+        verify(attempt, token)
 
       :absent ->
         # No credential at all — same ladder, minus the doomed round trip.
@@ -86,26 +91,28 @@ defmodule DoitMcp.Client do
 
   defp recover_unauthorized(attempt) do
     case TokenRecovery.Http.recover() do
-      {:ok, fresh_token} ->
-        # The accept→retry window, per session (m03.04 2.3.2 mirrored):
-        # TokenRecovery.Http holds this session's verify-in-flight guard so
-        # a concurrent 401 on the SAME session joins this recovery instead
-        # of re-eliciting; the `after` clears it on every exit. Holder-only:
-        # a joiner's pass through here leaves the verifier's guard alone.
-        try do
-          case attempt.(fresh_token) do
-            {:ok, %Req.Response{status: 401}} ->
-              unauthorized_error(TokenRecovery.Http.refreshed_token_rejected())
+      # A paste landed while this call's attempt was out (the join, m03.04
+      # 2.3.2) — prove it here rather than raise a second form.
+      {:ok, fresh_token} -> verify(attempt, fresh_token)
+      {:error, message} -> unauthorized_error(message)
+    end
+  end
 
-            other ->
-              translate(other)
-          end
-        after
-          TokenRecovery.Http.verify_concluded()
-        end
+  # One attempt with a pasted token: a 401 latches the session (no elicit
+  # loop on a bad paste); any HTTP answer short of that proves it for the
+  # rest of the session. A transport error proves nothing — the next call
+  # tries again.
+  defp verify(attempt, token) do
+    case attempt.(token) do
+      {:ok, %Req.Response{status: 401}} ->
+        unauthorized_error(TokenRecovery.Http.refreshed_token_rejected())
 
-      {:error, message} ->
-        unauthorized_error(message)
+      {:ok, %Req.Response{}} = answered ->
+        TokenRecovery.Http.refreshed_token_verified()
+        translate(answered)
+
+      transport_error ->
+        translate(transport_error)
     end
   end
 

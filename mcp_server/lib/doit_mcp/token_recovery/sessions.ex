@@ -1,13 +1,18 @@
 defmodule DoitMcp.TokenRecovery.Sessions do
   @moduledoc """
   Per-session token-recovery state for the HTTP transport (m03.04 item
-  23.3): the in-memory override a successful refresh installed, the failed
-  latch, and the verify-in-flight guard — each keyed by the session PROCESS,
-  so one session's recovery can never bleed into another's. Nothing here is
-  ever persisted anywhere; every row dies with its session (each keyed pid
-  is monitored, a DOWN clears its row), and the verify guard dies with its
-  verifier — a killed request task can never wedge a session's recovery
-  (m03.04 2.3.2).
+  23.3): the in-memory override a paste installed, whether a call has proved
+  it yet, and the failed latch — each keyed by the session PROCESS, so one
+  session's recovery can never bleed into another's. Nothing here is ever
+  persisted anywhere; every row dies with its session (each keyed pid is
+  monitored, a DOWN clears its row).
+
+  An override lands UNVERIFIED (m03.04 2.3.3): the session's next API call
+  proves it — a non-401 answer marks it verified, a 401 latches the session
+  and drops it — and until then every 401 on that session reuses it instead
+  of raising another form (the join, m03.04 2.3.2). The state is a flag, not
+  a holding process, so a killed request task can never wedge a session's
+  recovery: the next call simply proves the paste again.
   """
 
   use GenServer
@@ -16,16 +21,22 @@ defmodule DoitMcp.TokenRecovery.Sessions do
     GenServer.start_link(__MODULE__, :ok, name: Keyword.get(opts, :name, __MODULE__))
   end
 
-  @doc "The session's override token, if a recovery installed one."
-  @spec override(pid()) :: {:ok, String.t()} | :none
+  @doc "The session's override token, if a paste installed one, and whether a call has proved it."
+  @spec override(pid()) :: {:verified, String.t()} | {:unverified, String.t()} | :none
   def override(session) do
     GenServer.call(__MODULE__, {:override, session})
   end
 
-  @doc "Install the session's override token (never persisted, never global)."
+  @doc "Install the session's override token, unverified (never persisted, never global)."
   @spec put_override(pid(), String.t()) :: :ok
   def put_override(session, token) do
     GenServer.call(__MODULE__, {:put_override, session, token})
+  end
+
+  @doc "The override's first non-401 answer: it is this session's proven credential now."
+  @spec mark_verified(pid()) :: :ok
+  def mark_verified(session) do
+    GenServer.call(__MODULE__, {:mark_verified, session})
   end
 
   @doc "Whether this session's recovery already failed (declined/rejected latch)."
@@ -34,35 +45,13 @@ defmodule DoitMcp.TokenRecovery.Sessions do
     GenServer.call(__MODULE__, {:failed?, session})
   end
 
-  @doc "Latch this session failed — later 401s go straight to guidance."
+  @doc """
+  Latch this session failed and drop any override — later 401s go straight
+  to guidance, on the header token the session presents.
+  """
   @spec mark_failed(pid()) :: :ok
   def mark_failed(session) do
     GenServer.call(__MODULE__, {:mark_failed, session})
-  end
-
-  @doc "Whether a freshly accepted token's verify retry is in flight on this session."
-  @spec verifying?(pid()) :: boolean()
-  def verifying?(session) do
-    GenServer.call(__MODULE__, {:verifying?, session})
-  end
-
-  @doc """
-  Raise the verify-in-flight guard with the CALLER as verifier. A guard
-  already up stays up — already-guarded is the correct reading.
-  """
-  @spec begin_verify(pid()) :: :ok
-  def begin_verify(session) do
-    GenServer.call(__MODULE__, {:begin_verify, session, self()})
-  end
-
-  @doc """
-  Drop the verify guard — holder-only: a joiner concluding its own retry
-  leaves the verifier's guard alone, and a verifier killed outright needs no
-  call at all (its monitor clears the guard).
-  """
-  @spec conclude_verify(pid()) :: :ok
-  def conclude_verify(session) do
-    GenServer.call(__MODULE__, {:conclude_verify, session, self()})
   end
 
   @impl GenServer
@@ -72,15 +61,32 @@ defmodule DoitMcp.TokenRecovery.Sessions do
 
   @impl GenServer
   def handle_call({:override, session}, _from, state) do
-    case get_in(state.rows, [session, Access.key(:override)]) do
-      nil -> {:reply, :none, state}
-      token -> {:reply, {:ok, token}, state}
+    case state.rows[session] do
+      %{override: token, verified: true} when is_binary(token) ->
+        {:reply, {:verified, token}, state}
+
+      %{override: token} when is_binary(token) ->
+        {:reply, {:unverified, token}, state}
+
+      _none ->
+        {:reply, :none, state}
     end
   end
 
   def handle_call({:put_override, session, token}, _from, state) do
     state = ensure_row(state, session)
-    {:reply, :ok, put_in(state.rows[session].override, token)}
+    row = %{state.rows[session] | override: token, verified: false}
+    {:reply, :ok, put_in(state.rows[session], row)}
+  end
+
+  def handle_call({:mark_verified, session}, _from, state) do
+    case state.rows[session] do
+      %{override: token} when is_binary(token) ->
+        {:reply, :ok, put_in(state.rows[session].verified, true)}
+
+      _no_override ->
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call({:failed?, session}, _from, state) do
@@ -89,32 +95,8 @@ defmodule DoitMcp.TokenRecovery.Sessions do
 
   def handle_call({:mark_failed, session}, _from, state) do
     state = ensure_row(state, session)
-    {:reply, :ok, put_in(state.rows[session].failed, true)}
-  end
-
-  def handle_call({:verifying?, session}, _from, state) do
-    {:reply, get_in(state.rows, [session, Access.key(:verifier)]) != nil, state}
-  end
-
-  def handle_call({:begin_verify, session, verifier}, _from, state) do
-    state = ensure_row(state, session)
-
-    case state.rows[session].verifier do
-      nil ->
-        ref = Process.monitor(verifier)
-        state = put_in(state.rows[session].verifier, verifier)
-        {:reply, :ok, put_in(state.monitors[ref], {:verifier, session, verifier})}
-
-      _already_guarded ->
-        {:reply, :ok, state}
-    end
-  end
-
-  def handle_call({:conclude_verify, session, caller}, _from, state) do
-    case state.rows[session] do
-      %{verifier: ^caller} -> {:reply, :ok, put_in(state.rows[session].verifier, nil)}
-      _other_or_none -> {:reply, :ok, state}
-    end
+    row = %{state.rows[session] | failed: true, override: nil, verified: false}
+    {:reply, :ok, put_in(state.rows[session], row)}
   end
 
   @impl GenServer
@@ -123,17 +105,8 @@ defmodule DoitMcp.TokenRecovery.Sessions do
 
     state =
       case tag do
-        {:session, session} ->
-          %{state | rows: Map.delete(state.rows, session)}
-
-        {:verifier, session, verifier} ->
-          case state.rows[session] do
-            %{verifier: ^verifier} -> put_in(state.rows[session].verifier, nil)
-            _other_or_none -> state
-          end
-
-        nil ->
-          state
+        {:session, session} -> %{state | rows: Map.delete(state.rows, session)}
+        nil -> state
       end
 
     {:noreply, state}
@@ -144,7 +117,7 @@ defmodule DoitMcp.TokenRecovery.Sessions do
       state
     else
       ref = Process.monitor(session)
-      state = put_in(state.rows[session], %{override: nil, failed: false, verifier: nil})
+      state = put_in(state.rows[session], %{override: nil, verified: false, failed: false})
       put_in(state.monitors[ref], {:session, session})
     end
   end

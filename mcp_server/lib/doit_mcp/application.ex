@@ -30,8 +30,11 @@ defmodule DoitMcp.Application do
       # race its start.
       DoitMcp.ImportGate.Counter,
       # Session-keyed elicitation waiters and per-session 401-recovery state
-      # (m03.04 2.2.1.3) — same never-race-a-tool-call ordering.
+      # (m03.04 2.2.1.3) — same never-race-a-tool-call ordering. The task
+      # supervisor hosts the out-of-band waiters (m03.04 2.3.3): a form
+      # outlives the transport-bounded call that raised it.
       {Registry, keys: :unique, name: DoitMcp.Elicitation.Registry},
+      {Task.Supervisor, name: DoitMcp.TaskSupervisor},
       DoitMcp.TokenRecovery.Sessions,
       # Per-session frame capture (m03.04 2.2.1.5) — before the transport
       # tree so a session's first frame can't outrun the logger.

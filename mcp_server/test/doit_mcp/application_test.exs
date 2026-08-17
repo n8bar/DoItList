@@ -16,6 +16,7 @@ defmodule DoitMcp.ApplicationTest do
 
     counter = Enum.find_index(children, &(&1 == DoitMcp.ImportGate.Counter))
     registry = Enum.find_index(children, &match?({Registry, _}, &1))
+    tasks = Enum.find_index(children, &(&1 == {Task.Supervisor, name: DoitMcp.TaskSupervisor}))
     sessions = Enum.find_index(children, &(&1 == DoitMcp.TokenRecovery.Sessions))
     frame_log = Enum.find_index(children, &(&1 == DoitMcp.FrameLog))
     server = Enum.find_index(children, &match?({DoitMcp.Server, _}, &1))
@@ -23,17 +24,20 @@ defmodule DoitMcp.ApplicationTest do
 
     assert counter, "expected DoitMcp.ImportGate.Counter in children"
     assert registry, "expected the elicitation waiter Registry in children"
+    assert tasks, "expected the out-of-band waiters' Task.Supervisor in children"
     assert sessions, "expected DoitMcp.TokenRecovery.Sessions in children"
     assert frame_log, "expected DoitMcp.FrameLog in children"
     assert server, "expected the DoitMcp.Server transport tree in children"
     assert bandit, "expected a Bandit listener in children"
 
     # The gate's counter — and the elicitation/recovery state (m03.04 item
-    # 23.3) — must never race a tool call, and the listener must not accept
-    # requests before the tree can take them. Frame
-    # capture (23.5) joins that rule: no session's first frame outruns it.
+    # 23.3, the waiters' supervisor with it, 2.3.3) — must never race a tool
+    # call, and the listener must not accept requests before the tree can
+    # take them. Frame capture (23.5) joins that rule: no session's first
+    # frame outruns it.
     assert counter < server
     assert registry < server
+    assert tasks < server
     assert sessions < server
     assert frame_log < server
     assert server < bandit

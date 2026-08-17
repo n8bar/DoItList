@@ -230,7 +230,7 @@ defmodule DoItWeb.Api.Operations do
   # notification, update link) so its own error is never preempted.
   @accepted_data_keys %{
     {"add", "task"} =>
-      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status),
+      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done),
     {"update", "task"} =>
       ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version),
     {"remove", "task"} => [],
@@ -479,6 +479,28 @@ defmodule DoItWeb.Api.Operations do
     err(:unprocessable_entity, message, 422, key)
   end
 
+  # `done` on an add is the completion word (m03.04 2.5.4) — one word across
+  # add and update, so a completed source item is one op, not an add plus a
+  # flip. It becomes the create path's `status: "done"` — which rolls up and
+  # reconciles ancestors exactly like a post-create flip — with progress
+  # snapped to 100 the way `Tasks.maybe_set_done_progress/2` snaps a flip;
+  # `false` is the open default. Non-boolean: the update op's own 422.
+  defp add_done_to_status(%{"done" => done} = data) do
+    case done do
+      true ->
+        {:ok,
+         data |> Map.delete("done") |> Map.merge(%{"status" => "done", "manual_progress" => 100})}
+
+      false ->
+        {:ok, Map.delete(data, "done")}
+
+      _ ->
+        {:error, err(:unprocessable_entity, "\"done\" must be true or false.", 422, "done")}
+    end
+  end
+
+  defp add_done_to_status(data), do: {:ok, data}
+
   defp fetch_verb(%{"op" => verb}) when verb in @verbs, do: {:ok, verb}
 
   defp fetch_verb(%{"op" => other}),
@@ -498,9 +520,8 @@ defmodule DoItWeb.Api.Operations do
   # ---- task -----------------------------------------------------------------
 
   defp dispatch(user, "add", "task", op, changes) do
-    data = data(op)
-
     with {:ok, lid} <- register_lid(op, changes),
+         {:ok, data} <- add_done_to_status(data(op)),
          {:ok, initiative_id, parent_id, parent_ref} <- resolve_task_parentage(data, changes),
          {:ok, %Task{} = parent} <- load_parent(parent_id, parent_ref),
          :ok <- parent_in_initiative(parent, initiative_id),

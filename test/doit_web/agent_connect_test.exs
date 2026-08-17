@@ -71,21 +71,23 @@ defmodule DoItWeb.AgentConnectTest do
                  ~s(--header "Authorization: Bearer #{@paste_token}")
     end
 
-    test "codex_paste/1 rides export, add, and profile append in one paste" do
+    test "codex_paste/1 rides export, profile append, then add — persistence before the add" do
       paste = AgentConnect.codex_paste(@paste_token)
 
       assert paste ==
                "export DOITLIST_API_TOKEN='#{@paste_token}'\n" <>
-                 "codex mcp add doitlist --url #{@paste_url} " <>
-                 "--bearer-token-env-var DOITLIST_API_TOKEN\n" <>
                  ~s(echo "export DOITLIST_API_TOKEN='#{@paste_token}'" >> ~/.bashrc) <>
-                 "   # or your shell's profile"
+                 "   # or your shell's profile\n" <>
+                 "codex mcp add doitlist --url #{@paste_url} " <>
+                 "--bearer-token-env-var DOITLIST_API_TOKEN"
 
-      # 24.3's bar spelled out: the credential export, the add, and the
-      # profile append all in the same paste.
-      assert paste =~ "export DOITLIST_API_TOKEN='#{@paste_token}'"
-      assert paste =~ "codex mcp add doitlist"
-      assert paste =~ ">> ~/.bashrc"
+      # 2.1.1.3's bar: the credential export, the profile append, and the
+      # add all in the same paste — and (2.1.5) the add LAST, so a reader
+      # who stops at the line that reads as success is already persisted.
+      [export_line, append_line, add_line] = String.split(paste, "\n")
+      assert export_line =~ "export DOITLIST_API_TOKEN='#{@paste_token}'"
+      assert append_line =~ ">> ~/.bashrc"
+      assert add_line =~ "codex mcp add doitlist"
     end
 
     test "hermes_paste/1 appends the bare token under MCP_DOITLIST_API_KEY" do
@@ -124,18 +126,31 @@ defmodule DoItWeb.AgentConnectTest do
                AgentConnect.claude_code_paste(@paste_token, :posix)
     end
 
-    test "codex_paste/2 :powershell rides $env:, add, and setx in one paste" do
+    test "codex_paste/2 :powershell rides $env:, setx, $PROFILE append, then add" do
       paste = AgentConnect.codex_paste(@paste_token, :powershell)
 
       assert paste ==
                "$env:DOITLIST_API_TOKEN = '#{@paste_token}'\n" <>
+                 "setx DOITLIST_API_TOKEN '#{@paste_token}'\n" <>
+                 "New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null; " <>
+                 "Add-Content -Path $PROFILE " <>
+                 "-Value '$env:DOITLIST_API_TOKEN = ''#{@paste_token}''' -Encoding utf8\n" <>
                  "codex mcp add doitlist --url #{@paste_url} " <>
-                 "--bearer-token-env-var DOITLIST_API_TOKEN\n" <>
-                 "setx DOITLIST_API_TOKEN '#{@paste_token}'   # persists for future shells"
+                 "--bearer-token-env-var DOITLIST_API_TOKEN"
 
-      # 25.2's bar: live session via $env:, persistence via setx, no bash-isms.
-      assert paste =~ "$env:DOITLIST_API_TOKEN"
-      assert paste =~ "setx DOITLIST_API_TOKEN"
+      # 2.1.2.2's bar: live session via $env:, no bash-isms; 2.1.5's bar:
+      # persistence that survives the shell host — the registry (setx) AND
+      # the profile every new session sources — and both BEFORE the add.
+      [env_line, setx_line, profile_line, add_line] = String.split(paste, "\n")
+      assert env_line =~ "$env:DOITLIST_API_TOKEN"
+      assert setx_line =~ "setx DOITLIST_API_TOKEN"
+      assert profile_line =~ "Add-Content -Path $PROFILE"
+      assert profile_line =~ "-Encoding utf8"
+      # The profile line is created if missing, never truncated: a directory
+      # New-Item, not a file one.
+      assert profile_line =~ "New-Item -ItemType Directory -Force (Split-Path $PROFILE)"
+      refute profile_line =~ "-ItemType File"
+      assert add_line =~ "codex mcp add doitlist"
       refute paste =~ "export"
     end
 
