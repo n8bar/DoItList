@@ -21,7 +21,9 @@ defmodule DoitMcp.BatchShape do
   numbers under the agent's words — a rosy readback can't hide the shape. An
   initiative ADD is always notable: its `index_style` fact prints per add,
   so a recorded bootstrap always shows how the imported tree will render
-  (numbered or not).
+  (numbered or not). An import-scale batch whose task-adds all arrive open
+  is notable too (`open_only_adds/1`) — a stated fact, never a gate: a
+  genuinely fresh plan has zero completed items.
 
   Pure; adapter-side judgment like every guard (the API stays dumb — thin-layer
   guardrail). Thresholds are retunable module attributes. Checkbox detection
@@ -96,7 +98,9 @@ defmodule DoitMcp.BatchShape do
           facts.checkbox_lines > 0 &&
             "- #{facts.checkbox_lines} markdown-checkbox lines sit inside #{facts.checklist_descriptions} new descriptions.",
           facts.top_repeated_description >= 2 &&
-            "- One description string repeats on #{facts.top_repeated_description} tasks."
+            "- One description string repeats on #{facts.top_repeated_description} tasks.",
+          facts.adds >= @mirror_min_adds && facts.done_adds == 0 &&
+            "- All #{facts.adds} new tasks arrive open — none marked done."
         ],
         &is_binary/1
       )
@@ -108,6 +112,19 @@ defmodule DoitMcp.BatchShape do
       [] -> nil
       lines -> Enum.join(["Server-computed shape facts:" | lines], "\n")
     end
+  end
+
+  @doc """
+  The batch's task-add count when an import-scale batch (the mirror floor)
+  creates every task open — nil otherwise (any done add, or sub-scale). A
+  done add carries `"done" => true` or `"status" => "done"`, the API's
+  completion vocabulary (`add_done_to_status`). A stated fact, never a
+  gate — `classify/1` verdicts don't move on done-ness.
+  """
+  @spec open_only_adds([map()]) :: pos_integer() | nil
+  def open_only_adds(operations) do
+    facts = analyze(operations)
+    if facts.adds >= @mirror_min_adds and facts.done_adds == 0, do: facts.adds
   end
 
   # --- Facts -----------------------------------------------------------------
@@ -148,6 +165,7 @@ defmodule DoitMcp.BatchShape do
 
     %{
       adds: length(adds),
+      done_adds: Enum.count(adds, &done_add?/1),
       pathlike_titles: Enum.count(adds, &pathlike_title?(add_field(&1, "title"))),
       long_descriptions:
         Enum.count(adds, fn op ->
@@ -158,6 +176,12 @@ defmodule DoitMcp.BatchShape do
       checkbox_lines: Enum.sum(checklist_counts),
       top_repeated_description: top_repeated_description(adds)
     }
+  end
+
+  # A task-add created complete: `"done" => true`, or the completed status
+  # set directly — the API's `add_done_to_status` vocabulary, exactly.
+  defp done_add?(op) do
+    add_field(op, "done") == true or add_field(op, "status") == "done"
   end
 
   defp top_repeated_description(adds) do

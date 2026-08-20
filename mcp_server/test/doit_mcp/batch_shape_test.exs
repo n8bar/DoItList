@@ -149,4 +149,34 @@ defmodule DoitMcp.BatchShapeTest do
       assert block =~ ~s(- New Initiative "a/b.md" leaves index_style unset)
     end
   end
+
+  describe "open-only import fact (m03.04 2.8.6)" do
+    test "an import-scale batch with zero done adds states the fact — verdict unmoved" do
+      ops = for i <- 1..12, do: add("Item #{i}")
+
+      assert BatchShape.open_only_adds(ops) == 12
+      assert BatchShape.facts_block(ops) =~ "- All 12 new tasks arrive open — none marked done."
+      assert BatchShape.classify(ops) == :pass
+    end
+
+    test "any done add — `done: true` or `status: \"done\"` — drops the fact" do
+      open = for i <- 1..11, do: add("Item #{i}")
+
+      for done_data <- [%{"done" => true}, %{"status" => "done"}] do
+        data = Map.merge(%{"initiative_lid" => "i", "title" => "Shipped"}, done_data)
+        ops = [%{"op" => "add", "type" => "task", "data" => data} | open]
+
+        assert BatchShape.open_only_adds(ops) == nil
+        assert BatchShape.facts_block(ops) == nil
+        assert BatchShape.classify(ops) == :pass
+      end
+    end
+
+    test "a sub-floor all-open batch is not notable" do
+      ops = for i <- 1..9, do: add("Item #{i}")
+
+      assert BatchShape.open_only_adds(ops) == nil
+      assert BatchShape.facts_block(ops) == nil
+    end
+  end
 end

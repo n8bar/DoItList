@@ -31,11 +31,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
       by the API (a 422): trim the prose and cite the source doc's path in
       a provenance comment — never split the overflow into continuation
       tasks.
-    * **Ideal import shape:** skeleton first — the Initiative and its
-      top-level parents — then ~32-add chunks, one parent's children
-      apiece, cut deterministically from the source's structure, each chunk
-      carrying a provenance comment naming its source section. That shape
-      rides the ramp and needs at most the one readback record.
+    * **Ideal import shape:** the source WHOLE — completed items arrive
+      `done: true`, or roll-up progress lies — skeleton first (Initiative +
+      top-level parents), then ~32-add chunks of one parent's children, cut
+      from the source, each with a provenance comment naming its section;
+      rides the ramp, at most the one readback record.
 
   ## Wire format
 
@@ -335,6 +335,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
           response
           |> post_record(record, body)
+          |> note_open_only(params.operations)
           |> suggest_marker(params.operations, created, parent_targets)
 
         _ ->
@@ -470,6 +471,27 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   defp target_style_line(_target), do: nil
+
+  # An import-scale apply whose task-adds all arrive open ends with the
+  # scope recovery words (the PLAN.md drive filtered to unchecked items at
+  # read time and imported open-only, unasked — roll-up progress read 0%
+  # on a misrepresented tree). BatchShape's count, guidance only — never
+  # a gate: a genuinely fresh plan has zero completed items.
+  defp note_open_only(response, operations) do
+    case BatchShape.open_only_adds(operations) do
+      nil ->
+        response
+
+      adds ->
+        Response.text(
+          response,
+          "All #{adds} imported tasks arrived open. If the source marks items " <>
+            "complete, they import as adds with `done: true` (or `update` ops now) — " <>
+            "roll-up progress is wrong without them. Narrowing an import to open " <>
+            "items only is the operator's call, not a default."
+        )
+    end
+  end
 
   # An import-shaped apply — task-adds resolved to their target Initiatives,
   # the classifier's own resolution reused, never re-derived — ends with the

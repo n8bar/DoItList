@@ -44,7 +44,11 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       assert description =~ "continuation tasks"
     end
 
-    test "states the ideal import shape", %{description: description} do
+    test "states the ideal import shape — scope before shape (m03.04 2.8.6)", %{
+      description: description
+    } do
+      assert description =~ "the source WHOLE — completed items arrive `done: true`"
+      assert description =~ "roll-up progress lies"
       assert description =~ "skeleton first"
       assert description =~ "provenance comment"
     end
