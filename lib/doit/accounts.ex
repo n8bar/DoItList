@@ -93,8 +93,14 @@ defmodule DoIt.Accounts do
     Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
   end
 
+  # Batch-memoized (m03.04 2.7.5.2): every task create in an operations batch
+  # reads the initiative owner's defaults — serve repeats from the batch memo.
+  # No operation in the batch surface writes preferences; update_preferences/2
+  # busts anyway as a safety net. Outside a batch scope: a plain read, as before.
   def get_preferences_by_user_id(user_id) do
-    Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
+    DoIt.BatchMemo.fetch({:user_prefs, user_id}, fn ->
+      Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
+    end)
   end
 
   def change_preferences(%UserPreferences{} = prefs, attrs \\ %{}) do
@@ -106,6 +112,10 @@ defmodule DoIt.Accounts do
     |> get_preferences()
     |> UserPreferences.changeset(attrs)
     |> Repo.insert_or_update()
+    |> tap(fn
+      {:ok, _} -> DoIt.BatchMemo.bust({:user_prefs, user.id})
+      _ -> :ok
+    end)
   end
 
   @doc """

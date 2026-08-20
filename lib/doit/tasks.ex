@@ -315,7 +315,9 @@ defmodule DoIt.Tasks do
   # preferences, whoever creates the task, so an initiative behaves one way.
   # `put_new` throughout: explicit attrs from the caller win.
   defp apply_task_defaults(attrs, initiative_id, parent_id) do
-    case Repo.get(DoIt.Initiatives.Initiative, initiative_id) do
+    # Through the context (not a raw Repo.get) so the batch memo serves the
+    # row an op already loaded to authorize (m03.04 2.7.5.2).
+    case DoIt.Initiatives.get_initiative(initiative_id) do
       nil ->
         attrs
 
@@ -410,6 +412,14 @@ defmodule DoIt.Tasks do
             # three separate chain walks for one logical edit).
             old_parent = task.parent_id
             new_parent = updated.parent_id
+
+            # The generic changeset can also carry parent/sort fields (the
+            # move/sort paths have their own busts; this covers direct calls) —
+            # a chain- or mode-shape change drops the memoized sort resolutions.
+            if old_parent != new_parent or task.sort_mode != updated.sort_mode or
+                 task.sort_reverse != updated.sort_reverse,
+               do: DoIt.BatchMemo.bust_tag(:resolved_sort)
+
             mode = progress_calc_mode(updated.initiative_id)
 
             if old_parent && old_parent != new_parent,
@@ -829,6 +839,10 @@ defmodule DoIt.Tasks do
     # A move is intent on the MOVED task (item 32); the sibling renumbers
     # below are mechanical bookkeeping and stay version-silent.
     moved = bump_task_version(moved)
+
+    # A reparent changes the inheritance chain of the whole moved subtree —
+    # drop every memoized sort resolution (m03.04 2.7.5.2's simplest-safe rule).
+    DoIt.BatchMemo.bust_tag(:resolved_sort)
 
     # Renumber destination siblings around the inserted position.
     siblings
@@ -1557,13 +1571,11 @@ defmodule DoIt.Tasks do
       entry["from_progress"] == entry["to_progress"]
   end
 
-  # These two only ever climb one level at a time — that part was already
-  # cheap. What used to cost was routing each level's write through
-  # `flip_status/3` (a full `update_task/4`, its own recompute pass, its own
-  # `Repo.update!`): one write per ancestor instead of one write for the
-  # whole chain. `collect_*_flips/1` below stays a pure read-only walk
-  # (unchanged in shape from before); `commit_status_cascade/4` does the one
-  # batched write afterward.
+  # The chain is fetched in ONE recursive CTE (`ancestor_chain_tasks/1`,
+  # m03.04 2.7.5.2) instead of a `Repo.get` per level, and the write side was
+  # already batched: `flip_status/3` per level (a full `update_task/4` each)
+  # became `commit_status_cascade/4`'s single query. `collect_*_flips` below
+  # stay pure read-only walks over the fetched chain.
   #
   # No progress recompute happens here, and that's not an oversight: progress
   # is a pure function of LEAF state (`DoIt.Tasks.Progress`) — an ancestor's
@@ -1576,6 +1588,7 @@ defmodule DoIt.Tasks do
 
   defp check_completed_ancestors(parent_id, actor) do
     parent_id
+    |> ancestor_chain_tasks()
     |> collect_completed_flips(nil)
     |> commit_status_cascade(actor, "done", 100)
   end
@@ -1589,25 +1602,19 @@ defmodule DoIt.Tasks do
   # originally toggled) is the one exception: its own `flip_status/3` call
   # already committed before this walk starts, so the first level needs no
   # substitute.
-  defp collect_completed_flips(nil, _pending), do: []
+  defp collect_completed_flips([], _pending), do: []
 
-  defp collect_completed_flips(parent_id, pending) do
-    case Repo.get(Task, parent_id) do
-      nil ->
-        []
+  defp collect_completed_flips([parent | rest], pending) do
+    siblings =
+      Repo.all(from t in Task, where: t.parent_id == ^parent.id and is_nil(t.deleted_at))
 
-      parent ->
-        siblings =
-          Repo.all(from t in Task, where: t.parent_id == ^parent.id and is_nil(t.deleted_at))
+    all_done? =
+      siblings != [] and Enum.all?(siblings, &(&1.id == pending or &1.status == "done"))
 
-        all_done? =
-          siblings != [] and Enum.all?(siblings, &(&1.id == pending or &1.status == "done"))
-
-        if all_done? and parent.status != "done" do
-          [parent | collect_completed_flips(parent.parent_id, parent.id)]
-        else
-          []
-        end
+    if all_done? and parent.status != "done" do
+      [parent | collect_completed_flips(rest, parent.id)]
+    else
+      []
     end
   end
 
@@ -1615,23 +1622,23 @@ defmodule DoIt.Tasks do
 
   defp uncheck_done_ancestors(parent_id, actor) do
     parent_id
-    |> collect_done_flips()
+    |> ancestor_chain_tasks()
+    |> Enum.filter(&(&1.status == "done"))
     |> commit_status_cascade(actor, "open", 0)
   end
 
-  defp collect_done_flips(nil), do: []
+  # `task_id`'s own row plus every ancestor, nearest-first, as `%Task{}`
+  # structs — one recursive CTE (`ancestor_chain_query/1`) replacing the old
+  # one-`Repo.get`-per-level climb (m03.04 2.7.5.2). NOT memoized: the walks
+  # over it read `status`, which same-batch cascades flip mid-batch.
+  defp ancestor_chain_tasks(task_id) do
+    rows =
+      task_id
+      |> ancestor_chain_query()
+      |> Repo.all()
+      |> Enum.map(&Ecto.put_meta(&1, source: Task.__schema__(:source)))
 
-  defp collect_done_flips(parent_id) do
-    case Repo.get(Task, parent_id) do
-      nil ->
-        []
-
-      %Task{status: "done"} = parent ->
-        [parent | collect_done_flips(parent.parent_id)]
-
-      parent ->
-        collect_done_flips(parent.parent_id)
-    end
+    build_chain(Map.new(rows, &{&1.id, &1}), task_id)
   end
 
   # Batch every ancestor's status + manual_progress flip into one query,
@@ -1855,14 +1862,16 @@ defmodule DoIt.Tasks do
 
   Accepts a `%Task{}`, a task id, or `nil`. The walk terminates at the
   Initiative's root task (`parent_id IS NULL`) — sort lives only on tasks.
+
+  The chain rides ONE recursive CTE (`ancestor_chain_query/1`) instead of a
+  `Repo.get` per level, and inside a batch memo scope (m03.04 2.7.5.2) the
+  resolution memoizes per task id — busted whenever a task's `sort_mode` or
+  `parent_id` changes (`set_sort_body/4`, `perform_move/4`).
   """
   def resolve_sort(nil), do: {"manual", false}
 
   def resolve_sort(task_id) when is_integer(task_id) do
-    case Repo.get(Task, task_id) do
-      nil -> {"manual", false}
-      %Task{} = task -> resolve_sort(task)
-    end
+    DoIt.BatchMemo.fetch({:resolved_sort, task_id}, fn -> resolve_sort_by_chain(task_id) end)
   end
 
   def resolve_sort(%Task{sort_mode: mode, sort_reverse: rev}) when is_binary(mode),
@@ -1872,6 +1881,44 @@ defmodule DoIt.Tasks do
   def resolve_sort(%Task{parent_id: nil}), do: {"manual", false}
 
   def resolve_sort(%Task{parent_id: parent_id}), do: resolve_sort(parent_id)
+
+  # One ancestors-CTE fetch of the chain's sort fields, resolved root-down in
+  # memory. While a batch memo scope is active, the resolution for EVERY chain
+  # node is written through — later ops under the same ancestry skip the query.
+  # A missing id resolves to manual, matching the old `Repo.get -> nil` walk.
+  defp resolve_sort_by_chain(task_id) do
+    rows =
+      task_id
+      |> ancestor_chain_query()
+      |> select([t], %{
+        id: t.id,
+        parent_id: t.parent_id,
+        sort_mode: t.sort_mode,
+        sort_reverse: t.sort_reverse
+      })
+      |> Repo.all()
+
+    case build_chain(Map.new(rows, &{&1.id, &1}), task_id) do
+      [] ->
+        {"manual", false}
+
+      chain ->
+        # Nearest-first from build_chain; resolve from the root DOWN so each
+        # node inherits its parent's already-resolved pair. The reduce's final
+        # value is the nearest node's — `task_id`'s own resolution.
+        chain
+        |> Enum.reverse()
+        |> Enum.reduce({"manual", false}, fn node, inherited ->
+          resolved =
+            if is_binary(node.sort_mode),
+              do: {node.sort_mode, node.sort_reverse},
+              else: inherited
+
+          DoIt.BatchMemo.put({:resolved_sort, node.id}, resolved)
+          resolved
+        end)
+    end
+  end
 
   @doc """
   Set the sort mode and direction on a branch task. When `mode` names an
@@ -1988,6 +2035,10 @@ defmodule DoIt.Tasks do
       })
 
     with {:ok, updated} <- Repo.update(changeset) do
+      # A sort_mode/sort_reverse write changes what the subtree below inherits —
+      # drop every memoized sort resolution (m03.04 2.7.5.2's simplest-safe rule).
+      DoIt.BatchMemo.bust_tag(:resolved_sort)
+
       if task.sort_mode != updated.sort_mode or task.sort_reverse != updated.sort_reverse do
         record_event(updated, actor, "sort_changed", %{
           from: %{mode: task.sort_mode, reverse: task.sort_reverse},
@@ -2034,18 +2085,14 @@ defmodule DoIt.Tasks do
     if mark_resorted(parent_id) == :already_resorted do
       :ok
     else
-      case Repo.get(Task, parent_id) do
-        nil ->
-          :ok
-
-        %Task{} = parent ->
-          case resolve_sort(parent) do
-            {"manual", _} -> :ok
-            {mode, reverse} -> resort_children(parent.id, mode, reverse)
-          end
-
-          :ok
+      # resolve_sort/1 rides the chain CTE (and the batch memo) — a missing
+      # parent resolves to manual, same no-op as the old `Repo.get -> nil`.
+      case resolve_sort(parent_id) do
+        {"manual", _} -> :ok
+        {mode, reverse} -> resort_children(parent_id, mode, reverse)
       end
+
+      :ok
     end
   end
 
@@ -2990,13 +3037,16 @@ defmodule DoIt.Tasks do
   rather than at the ~10 mutator call sites: `:inline` runs the chain in the
   caller's transaction (the pre-item-4 behavior, pinned in config/test.exs);
   `:async` queues a post-commit enqueue to `DoIt.Tasks.RollupDebounce`
-  instead. Moves keep both chains covered either way — they call this once
+  instead; inside an operations batch (`with_deferred_rollup/1`, m03.04
+  2.7.5.3) the seed is deferred to one batch-end reconcile per touched
+  branch. Moves keep both chains covered either way — they call this once
   for the old parent and once for the new, and each call routes identically.
   """
   def recompute_ancestors(nil, _mode), do: :ok
 
   def recompute_ancestors(task_id, mode) when is_integer(task_id) do
     case rollup_strategy() do
+      :deferred -> defer_rollup_seed(task_id)
       :inline -> reconcile_ancestor_chain(task_id, mode)
       :async -> enqueue_rollup(task_id)
     end
@@ -3013,6 +3063,10 @@ defmodule DoIt.Tasks do
   # recompute seeds at the task itself.
   defp recompute_self_and_ancestors(%Task{id: id} = task, mode) do
     case rollup_strategy() do
+      :deferred ->
+        reconcile_self_row(task, mode)
+        defer_rollup_seed(task.parent_id)
+
       :inline ->
         reconcile_ancestor_chain(id, mode)
 
@@ -3024,14 +3078,21 @@ defmodule DoIt.Tasks do
     Repo.get!(Task, id)
   end
 
-  # The configured recompute route, with a process-scoped inline override:
-  # `preview_move`/`preview_create` classify completion flips by diffing
-  # ancestor `computed_progress` across their rolled-back dry-run body, which
-  # only works when the recompute runs inside that transaction.
+  # The configured recompute route, with two process-scoped overrides:
+  # `:rollup_force_inline` — `preview_move`/`preview_create` classify
+  # completion flips by diffing ancestor `computed_progress` across their
+  # rolled-back dry-run body, which only works when the recompute runs inside
+  # that transaction; `:rollup_deferred` — the operations batch scope
+  # (`with_deferred_rollup/1`, m03.04 2.7.5.3): the write's own row is still
+  # reconciled synchronously, ancestors are seeded for one reconcile per
+  # touched branch at batch end. Force-inline wins (a preview never runs
+  # inside a batch, but the priority keeps the dry-run contract absolute).
   defp rollup_strategy do
-    if Process.get(:rollup_force_inline),
-      do: :inline,
-      else: Application.get_env(:doit, :rollup_recompute, :inline)
+    cond do
+      Process.get(:rollup_force_inline) -> :inline
+      Process.get(:rollup_deferred) -> :deferred
+      true -> Application.get_env(:doit, :rollup_recompute, :inline)
+    end
   end
 
   defp with_inline_rollup(fun) do
@@ -3042,6 +3103,85 @@ defmodule DoIt.Tasks do
     after
       unless previous, do: Process.delete(:rollup_force_inline)
     end
+  end
+
+  @doc """
+  Enter the batch roll-up deferral scope (m03.04 2.7.5.3) — the
+  `with_resort_batching` pattern at the operations-batch boundary. Inside it,
+  `recompute_ancestors/2` / `recompute_self_and_ancestors/2` still write the
+  acted task's OWN row synchronously (each per-op response echoes exactly that
+  row) but record the touched branch (the parent id) instead of reconciling
+  the ancestor chain once per op; `flush_deferred_rollup/0` — the batch's
+  final step, still inside its transaction — reconciles each touched branch
+  once. Mid-batch cascade decisions are unaffected: they read `status`
+  columns, which flip per op, never the deferred `computed_progress`.
+  Reentrant; teardown in `after`. Single-op paths never enter the scope and
+  reconcile exactly as before.
+  """
+  def with_deferred_rollup(fun) do
+    if Process.get(:rollup_deferred) do
+      fun.()
+    else
+      Process.put(:rollup_deferred, MapSet.new())
+
+      try do
+        fun.()
+      after
+        Process.delete(:rollup_deferred)
+      end
+    end
+  end
+
+  @doc """
+  Reconcile every branch seeded under `with_deferred_rollup/1` — once per
+  touched branch, not per op. One query groups live seeds by Initiative
+  (a seed soft-deleted later in the batch drops out, mirroring
+  `run_rollup_pass/2`'s rule — writing a dead row would corrupt its Trash
+  state); each Initiative then runs its mode's chain reconcile over the
+  deduped seed set. Runs inside the batch transaction (the caller's final
+  step), so committed rows and queued broadcasts carry final values; resorts
+  run under a fresh dedup scope so progress-sorted parents order on the
+  final numbers.
+  """
+  def flush_deferred_rollup do
+    case Process.get(:rollup_deferred) do
+      nil ->
+        :ok
+
+      seeds ->
+        Process.put(:rollup_deferred, MapSet.new())
+        reconcile_deferred_seeds(MapSet.to_list(seeds))
+    end
+  end
+
+  defp reconcile_deferred_seeds([]), do: :ok
+
+  defp reconcile_deferred_seeds(seed_ids) do
+    seeds_by_initiative =
+      from(t in Task,
+        where: t.id in ^seed_ids and is_nil(t.deleted_at),
+        select: {t.initiative_id, t.id}
+      )
+      |> Repo.all()
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    with_resort_batching(fn ->
+      Enum.each(seeds_by_initiative, fn {initiative_id, ids} ->
+        reconcile_seed_set(ids, progress_calc_mode(initiative_id))
+      end)
+
+      {:ok, :deferred_rollup}
+    end)
+
+    :ok
+  end
+
+  defp defer_rollup_seed(nil), do: :ok
+
+  defp defer_rollup_seed(task_id) do
+    seeds = Process.get(:rollup_deferred)
+    Process.put(:rollup_deferred, MapSet.put(seeds, task_id))
+    :ok
   end
 
   # Queue the debounce enqueue as a post-commit side effect, riding the same
@@ -3185,16 +3325,20 @@ defmodule DoIt.Tasks do
   end
 
   # The per-initiative calc setting (Initiative pane → Settings). Schemaless
-  # read keeps Tasks from depending on the Initiatives schema.
+  # read keeps Tasks from depending on the Initiatives schema. Batch-memoized
+  # (m03.04 2.7.5.2); any initiative-row write busts the key alongside
+  # `{:initiative, id}` (see `DoIt.Initiatives`' version bump).
   defp progress_calc_mode(initiative_id) do
-    calc =
-      Repo.one(
-        from i in "initiatives",
-          where: i.id == type(^initiative_id, :integer),
-          select: i.progress_calc
-      )
+    DoIt.BatchMemo.fetch({:initiative_progress_calc, initiative_id}, fn ->
+      calc =
+        Repo.one(
+          from i in "initiatives",
+            where: i.id == type(^initiative_id, :integer),
+            select: i.progress_calc
+        )
 
-    if calc == "single_level", do: :single_level, else: :leaf_average
+      if calc == "single_level", do: :single_level, else: :leaf_average
+    end)
   end
 
   # --- Chain-scoped recompute (the per-edit hot path) -------------------------

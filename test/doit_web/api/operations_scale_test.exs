@@ -13,9 +13,9 @@ defmodule DoItWeb.Api.OperationsScaleTest do
   This file pins both halves at drive-4 scale — a cap-sized (150-op) batch
   against a several-hundred-task tree:
 
-    * the batch completes WELL inside the adapter's 30s receive timeout
-      (5.8.1 measured ~2.8s here at 345 tasks; the bound leaves ~4x slack
-      for CI noise while still failing on any tree-sized-per-op regression);
+    * the batch completes WELL inside the adapter's receive timeout
+      (after m03.04 2.7.5's per-op query cuts — batch memo + batch-end
+      roll-up — the cap batch measures ~1.6-2.6s here at 300+ tasks);
     * an open-workspace subscriber hears a per-batch handful of messages,
       not ~150 per-op ones.
 
@@ -29,11 +29,15 @@ defmodule DoItWeb.Api.OperationsScaleTest do
   alias DoIt.{Accounts, Initiatives, Repo, Tasks}
   alias DoIt.Tasks.Task
 
-  # The deliberate transaction bound (m03.04 2.7.2), NOT the driver's old
-  # 15s default: the batch must complete within our chosen 60s cushion — far
-  # above the seconds it really takes, far below the adapter's 90_000ms receive
-  # timeout. Asserting this bound (not the driver default) is what 2.17.2 wants.
-  @batch_deadline_ms 60_000
+  # Tightened to the post-2.7.5 cost (item 2.7.5.4): the cap batch measures
+  # ~1.6-2.6s isolated on this rig, but 15.5s was observed under full-suite
+  # load (Postgres background churn after 600 tests — the same contention that
+  # once blew the old 15s driver default; async: false doesn't shield against
+  # it). 30s rides that out with ~2x slack while staying half the deliberate
+  # 60s transaction bound (m03.04 2.7.2) and a third of the adapter's 90_000ms
+  # receive timeout. This deadline only catches tree-sized-per-op blowups
+  # (minutes at cap scale); the sharp per-op guard is the query-budget test.
+  @batch_deadline_ms 30_000
 
   @seed_tasks 300
 
@@ -171,8 +175,8 @@ defmodule DoItWeb.Api.OperationsScaleTest do
     elapsed_ms = div(elapsed_us, 1000)
 
     assert elapsed_ms < @batch_deadline_ms,
-           "cap-sized batch took #{elapsed_ms}ms — should complete within the deliberate " <>
-             "#{@batch_deadline_ms}ms transaction bound (adapter receive timeout is 90_000ms)"
+           "cap-sized batch took #{elapsed_ms}ms — should complete within the #{@batch_deadline_ms}ms " <>
+             "bound (~4-5x the measured ~1.6-2.6s; transaction bound 60s, adapter receive timeout 90s)"
 
     # Broadcasts are per BATCH now (5.8.2): one task_created reload signal —
     # not one per created task — no superseded task_updated patches, and one

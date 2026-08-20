@@ -232,7 +232,13 @@ defmodule DoIt.Initiatives do
   end
 
   def get_initiative!(id), do: Repo.get!(Initiative, id)
-  def get_initiative(id), do: Repo.get(Initiative, id)
+
+  # Batch-memoized (m03.04 2.7.5.2): inside an operations batch repeated loads
+  # of the same Initiative are served from the batch memo; every initiative-row
+  # write busts the key (see bump_version/1). Outside a batch scope this is a
+  # plain Repo.get, exactly as before.
+  def get_initiative(id),
+    do: DoIt.BatchMemo.fetch({:initiative, id}, fn -> Repo.get(Initiative, id) end)
 
   @doc """
   Create an Initiative and make the creator its owner. The owner's "My
@@ -346,11 +352,16 @@ defmodule DoIt.Initiatives do
 
   # DB-side increment (never computed from a loaded struct) so concurrent
   # bumps can't collapse into one. Returns the struct with the fresh version.
+  # Every intent-bearing initiative-row write funnels through here, so this is
+  # also the single bust point for the row's batch-memo keys (m03.04 2.7.5.2):
+  # a later op in the same batch re-reads the fresh row.
   defp bump_version(%Initiative{id: id} = initiative) do
     {1, [version]} =
       from(i in Initiative, where: i.id == ^id, select: i.version)
       |> Repo.update_all(inc: [version: 1])
 
+    DoIt.BatchMemo.bust({:initiative, id})
+    DoIt.BatchMemo.bust({:initiative_progress_calc, id})
     %{initiative | version: version}
   end
 
@@ -530,6 +541,9 @@ defmodule DoIt.Initiatives do
       )
       |> Repo.update_all(set: [{field, value}])
 
+    # Doesn't change the role, but it IS a membership-row write — bust per the
+    # simplest-safe batch-memo rule (m03.04 2.7.5.2).
+    DoIt.BatchMemo.bust_tag(:member_role)
     {:ok, count}
   end
 
@@ -777,12 +791,19 @@ defmodule DoIt.Initiatives do
     |> Map.new()
   end
 
+  # Batch-memoized (m03.04 2.7.5.2): an operations batch authorizes the same
+  # {initiative, user} pair once per op — serve repeats from the batch memo.
+  # Any membership-row write busts the :member_role tag; a nil (non-member) is
+  # never stored, so a same-batch add_member is always seen. Outside a batch
+  # scope this is a plain query, exactly as before.
   def get_role(initiative_id, user_id) do
-    Repo.one(
-      from m in InitiativeMember,
-        where: m.initiative_id == ^initiative_id and m.user_id == ^user_id,
-        select: m.role
-    )
+    DoIt.BatchMemo.fetch({:member_role, initiative_id, user_id}, fn ->
+      Repo.one(
+        from m in InitiativeMember,
+          where: m.initiative_id == ^initiative_id and m.user_id == ^user_id,
+          select: m.role
+      )
+    end)
   end
 
   @doc """
@@ -796,6 +817,7 @@ defmodule DoIt.Initiatives do
     |> Repo.insert()
     |> tap(fn
       {:ok, _} ->
+        DoIt.BatchMemo.bust_tag(:member_role)
         record_collaborators(initiative_id, user_id)
         broadcast_members_changed(initiative_id)
         notify_membership(actor, user_id, initiative_id, "member_added")
@@ -840,6 +862,7 @@ defmodule DoIt.Initiatives do
     |> Repo.delete_all()
     |> tap(fn
       {n, _} when n > 0 ->
+        DoIt.BatchMemo.bust_tag(:member_role)
         broadcast_members_changed(initiative_id)
         notify_membership(actor, user_id, initiative_id, "member_removed")
 
@@ -952,8 +975,17 @@ defmodule DoIt.Initiatives do
   # broadcasts once, after commit).
   defp do_update_member_role(initiative_id, user_id, role) do
     case Repo.get_by(InitiativeMember, initiative_id: initiative_id, user_id: user_id) do
-      nil -> {:error, :not_found}
-      member -> member |> InitiativeMember.changeset(%{role: role}) |> Repo.update()
+      nil ->
+        {:error, :not_found}
+
+      member ->
+        member
+        |> InitiativeMember.changeset(%{role: role})
+        |> Repo.update()
+        |> tap(fn
+          {:ok, _} -> DoIt.BatchMemo.bust_tag(:member_role)
+          _ -> :ok
+        end)
     end
   end
 

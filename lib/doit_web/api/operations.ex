@@ -321,9 +321,29 @@ defmodule DoItWeb.Api.Operations do
           run_op(user, op, index, changes)
         end)
       end)
+      # Batch-end roll-up (m03.04 2.7.5.3): each op deferred its ancestor
+      # recompute into the batch scope below; reconcile every touched branch
+      # ONCE here — the batch's final step, still inside the transaction, so
+      # committed rows and queued broadcasts carry final values. Per-op
+      # results are unaffected: they echo only the op's own row, which each
+      # op wrote synchronously.
+      |> Ecto.Multi.run(:rollup, fn _repo, _changes ->
+        {:ok, Tasks.flush_deferred_rollup()}
+      end)
 
     try do
-      result = Repo.transaction(multi, timeout: @batch_transaction_timeout)
+      # Two batch scopes in the with_resort_batching pattern (m03.04 2.7.5.2/.3),
+      # both torn down in their own `after`: the read memo (Initiative rows,
+      # member roles, user preferences, resolved sort chains — busted by any
+      # same-batch write to the entity) and the roll-up deferral the :rollup
+      # step flushes. Single-op paths never enter either scope.
+      result =
+        DoIt.BatchMemo.with_scope(fn ->
+          Tasks.with_deferred_rollup(fn ->
+            Repo.transaction(multi, timeout: @batch_transaction_timeout)
+          end)
+        end)
+
       # Every PubSub message queued by a context fn during the batch (task,
       # member, AND notification broadcasts all route through DoIt.Broadcast)
       # fires now on commit, or is dropped on rollback — the all-or-nothing
@@ -1280,7 +1300,8 @@ defmodule DoItWeb.Api.Operations do
   # or derived from the resolved parent task.
   defp resolve_task_parentage(data, changes) do
     with {:ok, parent_id} <- resolve_ref_field(data, "parent", changes, "task", required: false),
-         {:ok, initiative_id} <- resolve_initiative_for_create(data, changes, parent_id) do
+         {:ok, initiative_id, loaded_parent} <-
+           resolve_initiative_for_create(data, changes, parent_id) do
       cond do
         is_nil(initiative_id) ->
           {:error,
@@ -1306,7 +1327,9 @@ defmodule DoItWeb.Api.Operations do
           end
 
         true ->
-          {:ok, initiative_id, parent_id, :explicit}
+          # When the Initiative was derived FROM the parent, that load is
+          # threaded through so load_parent/2 doesn't repeat it (m03.04 2.7.5).
+          {:ok, initiative_id, parent_id, loaded_parent || :explicit}
       end
     end
   end
@@ -1334,20 +1357,26 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  # Returns {:ok, initiative_id, loaded_parent}: when the Initiative is derived
+  # from the parent task, the loaded (and agent-access-masked) parent rides
+  # along so the create path doesn't load it a second time.
   defp resolve_initiative_for_create(data, changes, parent_id) do
     cond do
       is_binary(data["initiative_lid"]) or Map.has_key?(data, "initiative_id") or
           Map.has_key?(data, "initiative") ->
-        resolve_ref_field(data, "initiative", changes, "initiative", required: false)
+        with {:ok, initiative_id} <-
+               resolve_ref_field(data, "initiative", changes, "initiative", required: false) do
+          {:ok, initiative_id, nil}
+        end
 
       not is_nil(parent_id) ->
         case load_task(parent_id) do
-          {:ok, %Task{initiative_id: id}} -> {:ok, id}
+          {:ok, %Task{initiative_id: id} = parent} -> {:ok, id, parent}
           error -> error
         end
 
       true ->
-        {:ok, nil}
+        {:ok, nil, nil}
     end
   end
 
@@ -1473,7 +1502,11 @@ defmodule DoItWeb.Api.Operations do
   # as no-such-task (load_task). A DERIVED root parent (the caller named only the
   # Initiative, so its root became the parent) loads unmasked: authorize then
   # masks it to the Initiative shape the caller actually referenced, keeping the
-  # flagged-off error indistinguishable from a nonexistent Initiative here.
+  # flagged-off error indistinguishable from a nonexistent Initiative here. A
+  # parent that resolve_initiative_for_create/3 already loaded (and masked) is
+  # reused, not re-fetched (m03.04 2.7.5).
+  defp load_parent(_id, %Task{} = loaded), do: {:ok, loaded}
+
   defp load_parent(id, :explicit), do: load_task(id)
 
   defp load_parent(id, :derived) do

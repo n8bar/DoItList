@@ -72,6 +72,7 @@ defmodule DoItWeb.AccountApiTokensTest do
     |> render_submit()
 
     assert [%{label: "My CLI"}] = Accounts.list_api_tokens(user)
+
     refute view |> element("#api-token-form input[name='api_token[label]']") |> render() =~
              "My CLI"
 
