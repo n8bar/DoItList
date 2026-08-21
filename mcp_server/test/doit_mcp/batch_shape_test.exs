@@ -161,17 +161,41 @@ defmodule DoitMcp.BatchShapeTest do
     end
   end
 
-  describe "open-only bootstrap refusal (m03.04 2.8.7)" do
-    test "a bootstrap with import-scale all-open adds refuses naming both recoveries" do
-      assert {:refuse, message} = BatchShape.classify(bootstrap(10))
-      assert message =~ "All 10 tasks bootstrapping the new Initiative arrive open"
-      assert message =~ "arrive as adds with `done: true`"
-      assert message =~ "genuinely has no completed items"
-      assert message =~ "`operator_confirmed: true` plus `readback`"
+  describe "open-only bootstrap refusal (m03.04 2.8.7 / 2.8.8)" do
+    test "a bootstrap with import-scale all-open adds refuses with the park info" do
+      assert {:refuse_open_only, info} = BatchShape.classify(bootstrap(10))
+      assert info == %{adds: 10, initiative_name: "Plan"}
 
-      # The fact stays beside the refusal — an override's record still
+      # The fact stays beside the refusal — an approved apply's record still
       # carries the server's count.
       assert BatchShape.open_only_adds(bootstrap(10)) == 10
+    end
+
+    test "the parked message carries both recoveries — done adds, or the operator's in-app click" do
+      message = BatchShape.open_only_message(%{adds: 10, initiative_name: "Plan"})
+
+      assert message =~ "All 10 tasks bootstrapping the new Initiative arrive open"
+      assert message =~ "adds with `done: true`"
+      assert message =~ "one-click approval in the app"
+      assert message =~ "re-send this SAME batch unchanged"
+      # Attestation vocabulary is retired for THIS refusal.
+      refute message =~ "operator_confirmed"
+    end
+
+    test "the declined message latches — change the batch or talk to the operator" do
+      message = BatchShape.open_only_declined_message(%{adds: 10, initiative_name: "Plan"})
+
+      assert message =~ "operator declined"
+      assert message =~ "adds with `done: true`"
+      assert message =~ "talk to the operator"
+      refute message =~ "operator_confirmed"
+    end
+
+    test "the park name falls back to (unnamed) on a blank initiative add" do
+      [%{"data" => data} = initiative | rest] = bootstrap(10)
+      ops = [%{initiative | "data" => Map.put(data, "name", "  ")} | rest]
+
+      assert {:refuse_open_only, %{initiative_name: "(unnamed)"}} = BatchShape.classify(ops)
     end
 
     test "one done add is the whole-import signal — passes" do

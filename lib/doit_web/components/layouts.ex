@@ -37,6 +37,10 @@ defmodule DoItWeb.Layouts do
 
   # Where a notification row links: the deep-linked task when one is in `data`
   # (worklist 1 item 7's `/initiatives/:id?task=<id>`), else the Initiative.
+  # An import-approval ask (m03.04 2.8.8) has no Initiative yet — it links to
+  # the account page's cards.
+  defp notif_href(%{kind: "import_approval_requested"}), do: ~p"/account"
+
   defp notif_href(%{data: %{"task_id" => task_id, "initiative_id" => init_id}})
        when not is_nil(task_id) do
     ~p"/initiatives/#{init_id}?task=#{task_id}"
@@ -62,8 +66,14 @@ defmodule DoItWeb.Layouts do
       "unassigned" -> "#{who} unassigned you from " <> task_phrase(title)
       "co_assigned" -> "#{who} added you as a co-assignee on " <> task_phrase(title)
       "co_unassigned" -> "#{who} removed you as a co-assignee from " <> task_phrase(title)
+      "import_approval_requested" -> import_approval_line(notif)
       _ -> "#{who} updated something"
     end
+  end
+
+  defp import_approval_line(notif) do
+    name = get_in(notif.data, ["initiative_name"]) || "a new Initiative"
+    "An agent wants to import “#{name}” — approve or dismiss on your account page"
   end
 
   defp task_phrase(nil), do: "a task"

@@ -396,6 +396,35 @@ defmodule DoItWeb.Api.Serializer do
     %{id: task.id, initiative_id: task.initiative_id, version: task.version}
   end
 
+  @doc """
+  An import approval (m03.04 2.8.8 — `POST /api/v1/import_approvals` and
+  `GET /api/v1/import_approvals/:payload_hash`):
+
+      {
+        "payload_hash": "9f2c…",
+        "status": "pending",
+        "task_count": 20,
+        "initiative_name": "TermiWeb",
+        "url": "https://doitlist.app/account#import-approvals",
+        "inserted_at": "2026-08-20T21:16:46Z"
+      }
+
+  `url` is the operator-facing handle (the `url` / `repo_marker` precedent):
+  the account page the approval card renders on, anchored to the cards'
+  container. Composed server-side, so the adapter hands the operator a
+  working address, never a raw id.
+  """
+  def import_approval(approval) do
+    %{
+      payload_hash: approval.payload_hash,
+      status: approval.status,
+      task_count: approval.task_count,
+      initiative_name: approval.initiative_name,
+      url: url(~p"/account") <> "#import-approvals",
+      inserted_at: iso8601(approval.inserted_at)
+    }
+  end
+
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do
     %{

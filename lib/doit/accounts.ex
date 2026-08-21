@@ -86,6 +86,18 @@ defmodule DoIt.Accounts do
   end
 
   @doc """
+  The import-approval ceremony's account-level off-switch (m03.04 2.8.9).
+  Takes an explicit boolean — never cast from a params map — so the toggle on
+  the account page (session-authed UI) is the ONLY write path; the field sits
+  in no changeset cast list and no API surface reaches it.
+  """
+  def set_skip_import_approvals(%User{} = user, on) when is_boolean(on) do
+    user
+    |> Ecto.Changeset.change(skip_import_approvals: on)
+    |> Repo.update()
+  end
+
+  @doc """
   The user's preferences row, or an unsaved defaults struct when they've
   never changed anything — callers read either the same way.
   """

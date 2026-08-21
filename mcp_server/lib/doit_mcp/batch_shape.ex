@@ -8,15 +8,21 @@ defmodule DoitMcp.BatchShape do
       a file-mirror import (path-like titles + whole-file descriptions),
       embedded checklists at scale (the dropped task layer as description
       markup), boilerplate (one description stamped across dozens of tasks),
-      sub-scale checklist descriptions (checkboxable lines are what this
-      product turns into tasks — import them as subtasks), and open-only
-      bootstrap imports (m03.04 2.8.7: a new Initiative with import-scale
-      task-adds, none arriving done — the dropped completed layer). Every
-      message teaches at the moment of action and names the override path: a
-      shape the operator explicitly asked for re-calls with
+      and sub-scale checklist descriptions (checkboxable lines are what this
+      product turns into tasks — import them as subtasks). Every message
+      teaches at the moment of action and names the override path: a shape
+      the operator explicitly asked for re-calls with
       `operator_confirmed: true` plus `readback` after the agent confirms
       with them in chat; the attestation is stamped into the import's
       provenance record.
+    * `{:refuse_open_only, info}` — the open-only bootstrap import (m03.04
+      2.8.7: a new Initiative with import-scale task-adds, none arriving
+      done — the dropped completed layer). Its override is NOT attestation:
+      the adapter parks the refused import for the operator's one-click
+      in-app approval (m03.04 2.8.8) and picks the message —
+      `open_only_message/1` (parked, both recoveries) or
+      `open_only_declined_message/1` (the operator dismissed the park).
+      `info` carries `adds` and `initiative_name` for the park.
     * `:pass` — nothing notable.
 
   `facts_block/1` renders the same counts for the import's provenance record
@@ -59,13 +65,15 @@ defmodule DoitMcp.BatchShape do
   @boilerplate_repeats 10
   @boilerplate_min_chars 20
 
-  @type verdict :: {:refuse, String.t()} | :pass
+  @type open_only_info :: %{adds: pos_integer(), initiative_name: String.t()}
+  @type verdict :: {:refuse, String.t()} | {:refuse_open_only, open_only_info()} | :pass
 
   @doc """
   Classify a batch's content shape. Scale-certain refusals compose every
   tripped reason into one teaching message; a sub-scale checklist refuses
   on its own message, whose recovery is subtasks or the operator's chat
-  confirm (m03.04 2.8.4.2).
+  confirm (m03.04 2.8.4.2); an open-only bootstrap returns its park info —
+  the caller parks and picks the message (m03.04 2.8.8).
   """
   @spec classify([map()]) :: verdict()
   def classify(operations) do
@@ -77,9 +85,15 @@ defmodule DoitMcp.BatchShape do
 
       [] ->
         cond do
-          open_only_bootstrap?(facts) -> {:refuse, open_only_message(facts)}
-          facts.checklist_descriptions > 0 -> {:refuse, checklist_message(facts)}
-          true -> :pass
+          open_only_bootstrap?(facts) ->
+            {:refuse_open_only,
+             %{adds: facts.adds, initiative_name: first_initiative_name(operations)}}
+
+          facts.checklist_descriptions > 0 ->
+            {:refuse, checklist_message(facts)}
+
+          true ->
+            :pass
         end
     end
   end
@@ -149,15 +163,7 @@ defmodule DoitMcp.BatchShape do
   # key, nil, or blank) is itself the fact — the tasks render unnumbered.
   defp initiative_style_lines(operations) do
     for op <- operations, initiative_add?(op) do
-      name =
-        case add_field(op, "name") do
-          name when is_binary(name) ->
-            if String.trim(name) == "", do: "(unnamed)", else: name
-
-          _ ->
-            "(unnamed)"
-        end
-
+      name = initiative_display_name(op)
       style = add_field(op, "index_style")
 
       if is_binary(style) and String.trim(style) != "" do
@@ -267,13 +273,50 @@ defmodule DoitMcp.BatchShape do
     facts.initiative_adds > 0 and facts.adds >= @mirror_min_adds and facts.done_adds == 0
   end
 
-  defp open_only_message(facts) do
-    "Batch shape refused — nothing was applied. All #{facts.adds} tasks bootstrapping " <>
-      "the new Initiative arrive open — the open-only import signature. The source " <>
-      "imports WHOLE: items it marks complete arrive as adds with `done: true`, or " <>
-      "roll-up progress lies. If the operator chose open-only, or the source genuinely " <>
-      "has no completed items, re-call with `operator_confirmed: true` plus `readback` " <>
-      "— the attestation lands in the import's record."
+  @doc """
+  The open-only bootstrap refusal once the import is PARKED for the
+  operator (m03.04 2.8.8) — both recoveries, no attestation: this refusal's
+  only override is the operator's in-app click.
+  """
+  @spec open_only_message(open_only_info()) :: String.t()
+  def open_only_message(%{adds: adds}) do
+    "Batch shape refused — nothing was applied. All #{adds} tasks bootstrapping the " <>
+      "new Initiative arrive open — the open-only import signature. The source " <>
+      "imports WHOLE: include the items it marks complete as adds with `done: true` " <>
+      "and re-send, or roll-up progress lies. If the plan is genuinely all-open, or " <>
+      "the operator chose open-only, this import now awaits their one-click approval " <>
+      "in the app — once they approve it there, re-send this SAME batch unchanged."
+  end
+
+  @doc """
+  The open-only refusal after the operator DISMISSED the parked import
+  (m03.04 2.8.8) — the decline latches for this exact payload.
+  """
+  @spec open_only_declined_message(open_only_info()) :: String.t()
+  def open_only_declined_message(%{adds: adds}) do
+    "Batch shape refused — nothing was applied. The operator declined this exact " <>
+      "open-only import (all #{adds} tasks arriving open) in the app. Change the " <>
+      "batch — include the source's completed items as adds with `done: true` — or " <>
+      "talk to the operator."
+  end
+
+  @doc "The batch's first initiative-add name, for the park — `(unnamed)` when blank."
+  @spec first_initiative_name([map()]) :: String.t()
+  def first_initiative_name(operations) do
+    case Enum.find(operations, &initiative_add?/1) do
+      nil -> "(unnamed)"
+      op -> initiative_display_name(op)
+    end
+  end
+
+  defp initiative_display_name(op) do
+    case add_field(op, "name") do
+      name when is_binary(name) ->
+        if String.trim(name) == "", do: "(unnamed)", else: name
+
+      _ ->
+        "(unnamed)"
+    end
   end
 
   # The sub-scale checklist refusal (m03.04 2.8.4.2) — the recovery words:

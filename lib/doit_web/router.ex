@@ -61,6 +61,13 @@ defmodule DoItWeb.Router do
     # reversible op set; an ordered batch applied all-or-nothing. Per-op authz +
     # the per-op error contract live in DoItWeb.Api.Operations.
     post "/operations", OperationsController, :create
+
+    # Server-verified open-only import approvals (m03.04 2.8.8): the adapter
+    # PARKS a refused open-only bootstrap and READS the operator's decision
+    # back by hash. Deciding is deliberately absent from this surface — it
+    # happens in the app's UI only (see DoItWeb.Api.ImportApprovalController).
+    post "/import_approvals", ImportApprovalController, :create
+    get "/import_approvals/:payload_hash", ImportApprovalController, :show
   end
 
   scope "/", DoItWeb do

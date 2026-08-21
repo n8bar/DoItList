@@ -17,8 +17,12 @@ defmodule DoIt.Notifications do
     * `unassigned`     — cleared as the primary assignee of a task
     * `co_assigned`    — added as a co-assignee on a task
     * `co_unassigned`  — removed as a co-assignee on a task
+    * `import_approval_requested` — an agent's open-only import awaits your
+      Approve/Dismiss on the account page (m03.04 2.8.8)
 
-  `data` carries the subject ids the flyout links to: `initiative_id` always,
+  `data` carries the subject ids the flyout links to: `initiative_id` always
+  (except `import_approval_requested`, whose Initiative doesn't exist yet —
+  it carries `initiative_name` + `task_count` and links to the account page),
   plus `task_id` for the task-scoped kinds, `role` for `role_changed`, and
   `actor_name` for display.
   """
@@ -29,7 +33,7 @@ defmodule DoIt.Notifications do
   alias DoIt.Accounts.User
   alias DoIt.Notifications.Notification
 
-  @kinds ~w(member_added member_removed role_changed assigned unassigned co_assigned co_unassigned)
+  @kinds ~w(member_added member_removed role_changed assigned unassigned co_assigned co_unassigned import_approval_requested)
 
   @recent_limit 10
 

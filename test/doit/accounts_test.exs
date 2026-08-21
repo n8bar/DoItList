@@ -357,4 +357,45 @@ defmodule DoIt.AccountsTest do
       assert taken.username == "shared"
     end
   end
+
+  describe "import-approval ceremony off-switch (m03.04 2.8.9)" do
+    test "defaults to false — the ceremony is on for every new account" do
+      refute register!().skip_import_approvals
+    end
+
+    test "set_skip_import_approvals/2 persists both ways" do
+      user = register!()
+
+      {:ok, user} = Accounts.set_skip_import_approvals(user, true)
+      assert user.skip_import_approvals
+      assert Accounts.get_user(user.id).skip_import_approvals
+
+      {:ok, user} = Accounts.set_skip_import_approvals(user, false)
+      refute user.skip_import_approvals
+      refute Accounts.get_user(user.id).skip_import_approvals
+    end
+
+    test "no params-cast path reaches the field — mass assignment can't flip it" do
+      # Registration params carrying the field are ignored.
+      user = register!(%{"skip_import_approvals" => "true"})
+      refute user.skip_import_approvals
+
+      # Profile and username updates carrying the field are ignored too.
+      smuggle = %{"skip_import_approvals" => "true"}
+
+      {:ok, updated} =
+        Accounts.update_profile(
+          user,
+          Map.merge(smuggle, %{"name" => "Renamed", "email" => user.email})
+        )
+
+      refute updated.skip_import_approvals
+
+      {:ok, updated} =
+        Accounts.update_username(user, Map.put(smuggle, "username", "smuggler"))
+
+      refute updated.skip_import_approvals
+      refute Accounts.get_user(user.id).skip_import_approvals
+    end
+  end
 end

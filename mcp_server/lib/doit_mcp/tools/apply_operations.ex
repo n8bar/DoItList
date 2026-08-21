@@ -139,11 +139,16 @@ defmodule DoitMcp.Tools.ApplyOperations do
   — later chunks flow without re-asking. A readback recorded under a fresh
   Initiative's lid follows it to the real id the response echoes.
 
-  Shape refusals (file mirror, checklists, boilerplate, open-only bootstrap
-  imports — each message teaches its recovery) are overridable only by the
-  operator's own instruction: confirm with them in chat, then re-call with
+  Shape refusals (file mirror, checklists, boilerplate — each message
+  teaches its recovery) are overridable only by the operator's own
+  instruction: confirm with them in chat, then re-call with
   `operator_confirmed: true` plus `readback`; the record is stamped
-  "Operator-confirmed in chat", so the trail shows the attestation.
+  "Operator-confirmed in chat", so the trail shows the attestation. The
+  open-only bootstrap refusal is the exception (m03.04 2.8.8): its override
+  is the operator's own click — the refusal parks the import for their
+  in-app approval; approved, the SAME batch re-sent flows and its record is
+  stamped "Operator-approved in the app"; dismissed, the same payload keeps
+  refusing.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -184,6 +189,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
       {:refuse, message} ->
         {:reply, shape_refused(message), frame}
 
+      {:refuse, message, extra} ->
+        {:reply, shape_refused(message, extra), frame}
+
       shape ->
         parent_targets = resolve_parent_targets(params.operations)
 
@@ -220,12 +228,17 @@ defmodule DoitMcp.Tools.ApplyOperations do
   # item 36.2): a refusal stands unless the agent attests the operator asked
   # for this exact shape in chat (`operator_confirmed: true`); the override
   # demands a readback, and the record is stamped so the trail shows the
-  # attestation.
+  # attestation. The open-only bootstrap refusal is the exception (2.8.8):
+  # attestation doesn't move it — its override is the operator's own click,
+  # consulted server-side.
   defp shape_check(params) do
     if ImportGate.enabled?() do
       case BatchShape.classify(params.operations) do
         {:refuse, message} ->
           if operator_confirmed?(params), do: :overridden, else: {:refuse, message}
+
+        {:refuse_open_only, info} ->
+          open_only_check(params, info)
 
         :pass ->
           :pass
@@ -235,10 +248,75 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
+  # The open-only override is server-VERIFIED (m03.04 2.8.8): consult the
+  # operator's recorded decision for this exact batch's hash. Approved flows
+  # (the record stamps the approval); dismissed latches the declined refusal
+  # for this payload; anything else — pending, nothing yet, an expired park
+  # — (re-)parks the import for the operator and refuses with both recovery
+  # lanes. The park POST is idempotent server-side, so a retry never
+  # duplicates the card. This consult is the ceremony's one entry point
+  # adapter-side, so the operator's account-level off-switch rides the same
+  # read (2.8.9): a `skipped` answer means the ceremony is dormant for this
+  # account — the batch applies as a plain pass (no park, no stop) while the
+  # open-only facts and guidance still ride, since they key on the batch's
+  # shape, never on the ceremony.
+  defp open_only_check(params, info) do
+    case Client.get("/api/v1/import_approvals/#{payload_hash(params.operations)}") do
+      {:ok, %{"status" => "skipped"}} ->
+        :pass
+
+      {:ok, %{"status" => "approved"}} ->
+        :approved
+
+      {:ok, %{"status" => "dismissed"}} ->
+        {:refuse, BatchShape.open_only_declined_message(info)}
+
+      _pending_or_none ->
+        park_open_only(params, info)
+    end
+  end
+
+  # Park the refused import on the operator's account (their Initiative
+  # doesn't exist yet) and hand the agent the operator-facing approve URL. A
+  # failed park never misstates: the message then says the park didn't land
+  # and a re-send retries it.
+  defp park_open_only(params, info) do
+    body = %{
+      payload_hash: payload_hash(params.operations),
+      task_count: info.adds,
+      initiative_name: info.initiative_name
+    }
+
+    message = BatchShape.open_only_message(info)
+
+    case Client.post("/api/v1/import_approvals", body) do
+      {:ok, %{"url" => url}} ->
+        {:refuse, message, %{approve_url: url}}
+
+      failure ->
+        Logger.warning("open-only import approval park failed: #{inspect(failure)}")
+
+        {:refuse,
+         message <>
+           " (The approval request could not be parked in the app just now — " <>
+           "re-sending will park it again.)"}
+    end
+  end
+
+  # The portable identity binding an approval to the exact batch — sha256
+  # hex over the operations, computed exactly as pinned (the idempotency
+  # precedent): a changed batch parks fresh, an unchanged one resolves.
+  defp payload_hash(operations) do
+    :crypto.hash(:sha256, :erlang.term_to_binary(operations, [:deterministic]))
+    |> Base.encode16(case: :lower)
+  end
+
   defp operator_confirmed?(params), do: Map.get(params, :operator_confirmed) == true
 
-  defp shape_refused(message) do
-    payload = %{ok: false, applied: false, gate: "batch_shape", message: message}
+  defp shape_refused(message, extra \\ %{}) do
+    payload =
+      Map.merge(%{ok: false, applied: false, gate: "batch_shape", message: message}, extra)
+
     response = Response.json(Response.tool(), payload)
     %{response | isError: true}
   end
@@ -250,18 +328,19 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   # Whether this apply must carry the import's record (m03.04 2.8.4.1): an
-  # import-shaped batch (the classifier fired), or an operator-confirmed
-  # shape override. Either way the readback is required — its absence is an
-  # agent-facing refusal teaching the re-call, never a stop for a human. The
-  # record's home is the classifier's target; an override under the
-  # threshold homes on the batch's first target Initiative.
+  # import-shaped batch (the classifier fired), an operator-confirmed shape
+  # override, or an operator-approved open-only bootstrap (2.8.8). Either
+  # way the readback is required — its absence is an agent-facing refusal
+  # teaching the re-call, never a stop for a human. The record's home is the
+  # classifier's target; an override under the threshold homes on the
+  # batch's first target Initiative.
   defp record_demand(gate, shape, params, parent_targets) do
     cond do
       gate == :pass and shape == :pass ->
         :none
 
       is_nil(presence(Map.get(params, :readback))) ->
-        {:missing_readback, readback_required_message(gate)}
+        {:missing_readback, readback_required_message(gate, shape)}
 
       true ->
         target =
@@ -270,11 +349,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
             :pass -> List.first(ImportGate.target_refs(params.operations, parent_targets))
           end
 
-        {:record, %{target: target, message: record_message(params, target)}}
+        {:record, %{target: target, message: record_message(params, target, shape)}}
     end
   end
 
-  defp readback_required_message({:gate, %{task_adds: task_adds, cumulative: cumulative}}) do
+  defp readback_required_message({:gate, %{task_adds: task_adds, cumulative: cumulative}}, _shape) do
     "Import readback required: this batch adds #{task_adds} tasks (#{cumulative} this " <>
       "session, chunks included), so it is import-shaped and its record must exist. " <>
       "Nothing was applied; no operator step is needed. Re-call apply_operations with " <>
@@ -288,7 +367,15 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "#{ImportGate.ramp_threshold()} cumulative — chunk the import that way."
   end
 
-  defp readback_required_message(:pass) do
+  defp readback_required_message(:pass, :approved) do
+    "Import record required: the operator approved this import in the app, and the " <>
+      "approval must land in the import's record. Nothing was applied. Re-call " <>
+      "apply_operations with the SAME operations plus `readback` — your one-paragraph " <>
+      "statement of the import shape — and the record posts as a provenance comment " <>
+      "on the new Initiative's root task, stamped operator-approved."
+  end
+
+  defp readback_required_message(:pass, _shape) do
     "Shape override readback required: `operator_confirmed` attests the operator asked " <>
       "for this shape in chat, and the attestation must land in the import's record. " <>
       "Nothing was applied. Re-call apply_operations with the SAME operations plus " <>
@@ -420,22 +507,31 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   defp record_root(nil, _body), do: nil
 
-  defp record_message(params, target) do
+  defp record_message(params, target, shape) do
     compose_record(
       presence(Map.get(params, :readback)),
       BatchShape.facts_block(params.operations),
       target_style_line(target),
       Map.get(params, :assumptions) || [],
       Map.get(params, :settled) || [],
-      operator_confirmed?(params)
+      record_stamp(shape, params)
     )
+  end
+
+  # The record's provenance stamp: an operator-approved open-only import
+  # (2.8.8) stamps the server-verified click; any other apply with the
+  # attestation param stamps the chat confirm.
+  defp record_stamp(:approved, _params), do: "Operator-approved in the app."
+
+  defp record_stamp(_shape, params) do
+    if operator_confirmed?(params), do: "Operator-confirmed in chat."
   end
 
   # The import's record: the agent's readback first, then the dimensions the
   # operator's ask settled, the agent's assumptions, and the server's shape
-  # facts that check them; the chat attestation stamps last. Nil sections
+  # facts that check them; the operator's override stamps last. Nil sections
   # drop.
-  defp compose_record(readback, shape_facts, target_style, assumptions, settled, confirmed?) do
+  defp compose_record(readback, shape_facts, target_style, assumptions, settled, stamp) do
     assumptions_block =
       case assumptions do
         [] -> "Assumptions: none stated."
@@ -450,8 +546,6 @@ defmodule DoitMcp.Tools.ApplyOperations do
         list ->
           "Settled (operator-instructed):\n" <> Enum.map_join(list, "\n", &("- " <> &1))
       end
-
-    stamp = if confirmed?, do: "Operator-confirmed in chat."
 
     [@record_prefix, readback, settled_block, assumptions_block, shape_facts, target_style, stamp]
     |> Enum.reject(&is_nil/1)
@@ -529,8 +623,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
   # scope recovery words (the PLAN.md drive filtered to unchecked items at
   # read time and imported open-only, unasked — roll-up progress read 0%
   # on a misrepresented tree). A BOOTSTRAP open-only batch now refuses in
-  # BatchShape (2.8.7), so this guidance's remaining lanes are overridden
-  # applies and existing-tree open-only imports.
+  # BatchShape (2.8.7), so this guidance's remaining lanes are approved or
+  # attested applies and existing-tree open-only imports.
   defp note_open_only(response, _operations, false), do: response
 
   defp note_open_only(response, operations, true) do
