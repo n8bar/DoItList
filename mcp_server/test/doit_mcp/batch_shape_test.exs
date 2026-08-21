@@ -13,6 +13,17 @@ defmodule DoitMcp.BatchShapeTest do
     for i <- 1..n, do: add("docs/file#{i}.md", String.duplicate("x", 2_100) <> "#{i}")
   end
 
+  # A bootstrap: an initiative add plus its first tasks, the first `done` of
+  # them arriving done.
+  defp bootstrap(task_count, done \\ 0) do
+    [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Plan"}}] ++
+      for i <- 1..task_count do
+        data = %{"initiative_lid" => "i", "title" => "Item #{i}"}
+        data = if i <= done, do: Map.put(data, "done", true), else: data
+        %{"op" => "add", "type" => "task", "lid" => "t#{i}", "data" => data}
+      end
+  end
+
   describe "classify/1 refusals" do
     test "a file-mirror batch refuses with counts and the override path" do
       assert {:refuse, message} = BatchShape.classify(mirror_batch(12))
@@ -147,6 +158,33 @@ defmodule DoitMcp.BatchShapeTest do
       block = BatchShape.facts_block(ops)
       refute block =~ "task titles"
       assert block =~ ~s(- New Initiative "a/b.md" leaves index_style unset)
+    end
+  end
+
+  describe "open-only bootstrap refusal (m03.04 2.8.7)" do
+    test "a bootstrap with import-scale all-open adds refuses naming both recoveries" do
+      assert {:refuse, message} = BatchShape.classify(bootstrap(10))
+      assert message =~ "All 10 tasks bootstrapping the new Initiative arrive open"
+      assert message =~ "arrive as adds with `done: true`"
+      assert message =~ "genuinely has no completed items"
+      assert message =~ "`operator_confirmed: true` plus `readback`"
+
+      # The fact stays beside the refusal — an override's record still
+      # carries the server's count.
+      assert BatchShape.open_only_adds(bootstrap(10)) == 10
+    end
+
+    test "one done add is the whole-import signal — passes" do
+      assert BatchShape.classify(bootstrap(10, 1)) == :pass
+    end
+
+    test "a sub-floor open bootstrap passes" do
+      assert BatchShape.classify(bootstrap(9)) == :pass
+    end
+
+    test "import-scale open adds WITHOUT an initiative add pass shape" do
+      ops = for i <- 1..10, do: add("Item #{i}")
+      assert BatchShape.classify(ops) == :pass
     end
   end
 

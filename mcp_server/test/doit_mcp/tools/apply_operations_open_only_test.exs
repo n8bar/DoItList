@@ -1,11 +1,13 @@
 defmodule DoitMcp.Tools.ApplyOperationsOpenOnlyTest do
   @moduledoc """
-  The open-only import guidance on successful applies (m03.04 2.8.6): an
-  import-scale batch whose task-adds all arrive open ends with the scope
-  recovery words — completed source items import as `done: true` adds;
-  narrowing to open items only is the operator's call. Guidance, never a
-  gate: batches carrying done adds, sub-scale batches, and edit batches
-  stay clean.
+  The open-only import guidance on successful applies (m03.04 2.8.6, rider
+  predicate 2.8.7): an import-flavored apply whose task-adds all arrive
+  open ends with the scope recovery words — completed source items import
+  as `done: true` adds; narrowing to open items only is the operator's
+  call. A BOOTSTRAP open-only batch refuses in BatchShape instead; this
+  guidance's lanes are overridden applies and existing-tree imports
+  (initiative_id or parent-anchored). Batches carrying done adds,
+  sub-scale batches, and edit batches stay clean.
   """
   use ExUnit.Case, async: false
 
@@ -61,6 +63,25 @@ defmodule DoitMcp.Tools.ApplyOperationsOpenOnlyTest do
     assert guidance =~ "All 12 imported tasks arrived open."
     assert guidance =~ "adds with `done: true`"
     assert guidance =~ "the operator's call, not a default"
+  end
+
+  test "a parent-anchored open-only batch into an existing tree carries the guidance" do
+    stub_apply()
+
+    ops =
+      for i <- 1..12 do
+        %{
+          "op" => "add",
+          "type" => "task",
+          "lid" => "t#{i}",
+          "data" => %{"parent_id" => 42, "title" => "task #{i}"}
+        }
+      end
+
+    assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
+
+    assert [_result, guidance] = text_blocks(response)
+    assert guidance =~ "All 12 imported tasks arrived open."
   end
 
   test "a done add in the batch drops the guidance" do

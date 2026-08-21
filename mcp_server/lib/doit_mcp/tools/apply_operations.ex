@@ -139,9 +139,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
   — later chunks flow without re-asking. A readback recorded under a fresh
   Initiative's lid follows it to the real id the response echoes.
 
-  Shape refusals (file mirror, checklists, boilerplate — each message
-  teaches its recovery) are overridable only by the operator's own
-  instruction: confirm with them in chat, then re-call with
+  Shape refusals (file mirror, checklists, boilerplate, open-only bootstrap
+  imports — each message teaches its recovery) are overridable only by the
+  operator's own instruction: confirm with them in chat, then re-call with
   `operator_confirmed: true` plus `readback`; the record is stamped
   "Operator-confirmed in chat", so the trail shows the attestation.
   """
@@ -198,15 +198,20 @@ defmodule DoitMcp.Tools.ApplyOperations do
             parent_targets: parent_targets
           )
 
+        flavored? = import_flavored?(gate, params.operations, parent_targets)
+
         case record_demand(gate, shape, params, parent_targets) do
           :none ->
-            apply_batch(params, frame, parent_targets)
+            apply_batch(params, frame, parent_targets, import_flavored: flavored?)
 
           {:missing_readback, message} ->
             {:reply, readback_refused(message), frame}
 
           {:record, record} ->
-            apply_batch(params, frame, parent_targets, record: record)
+            apply_batch(params, frame, parent_targets,
+              record: record,
+              import_flavored: flavored?
+            )
         end
     end
   end
@@ -316,7 +321,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  defp apply_batch(params, frame, parent_targets, opts \\ []) do
+  defp apply_batch(params, frame, parent_targets, opts) do
     result =
       Client.operations(params.operations, idempotency_key: Map.get(params, :idempotency_key))
 
@@ -330,13 +335,14 @@ defmodule DoitMcp.Tools.ApplyOperations do
           # carrying: recorded under a fresh Initiative's lid, later chunks
           # reference the real id (carry_records reads the settle below).
           record = opts[:record]
+          flavored? = Keyword.get(opts, :import_flavored, false)
           if record, do: settle_record(record.target)
           created = carry_records(params.operations, body)
 
           response
           |> post_record(record, body)
-          |> note_open_only(params.operations)
-          |> suggest_marker(params.operations, created, parent_targets)
+          |> note_open_only(params.operations, flavored?)
+          |> suggest_marker(params.operations, created, parent_targets, flavored?)
 
         _ ->
           response
@@ -472,12 +478,62 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   defp target_style_line(_target), do: nil
 
-  # An import-scale apply whose task-adds all arrive open ends with the
+  # The success riders' import-flavor predicate (m03.04 2.8.7), independent
+  # of the pressure gate — the second open-only drive proved a sub-gate
+  # import gets no rider at all when everything keys on the gate's 32+
+  # scale. Import-flavored: the gate fired, OR the batch bootstraps an
+  # Initiative at import scale (an initiative add plus
+  # `BatchShape.import_floor/0`+ task-adds), OR that many task-adds land in
+  # EXISTING trees. Record/settle stay gate-driven; the marker suggestion
+  # and open-only guidance ride this.
+  defp import_flavored?({:gate, _info}, _operations, _parent_targets), do: true
+
+  defp import_flavored?(:pass, operations, parent_targets) do
+    floor = BatchShape.import_floor()
+
+    ImportGate.count_task_adds(operations) >= floor and
+      (Enum.any?(operations, &initiative_add?/1) or
+         existing_tree_adds(operations, parent_targets) >= floor)
+  end
+
+  defp initiative_add?(%{"op" => "add", "type" => "initiative"}), do: true
+  defp initiative_add?(_), do: false
+
+  # Task-adds landing in an EXISTING tree: resolved targets (initiative_id
+  # direct, or parent-anchored through the caller's map — in-batch chains
+  # included) plus parent-anchored adds the map couldn't resolve (kill
+  # switch off, failed read) — the FLOOR decides flavor, so no resolution
+  # is required and the riders stay kill-switch-independent.
+  defp existing_tree_adds(operations, parent_targets) do
+    resolved =
+      operations
+      |> ImportGate.count_by_target(parent_targets)
+      |> Enum.reduce(0, fn
+        {{:existing, _id}, n}, acc -> acc + n
+        _, acc -> acc
+      end)
+
+    resolved + Enum.count(operations, &unresolved_parent_add?(&1, parent_targets))
+  end
+
+  defp unresolved_parent_add?(%{"op" => "add", "type" => "task", "data" => data}, parent_targets)
+       when is_map(data) do
+    not is_binary(data["initiative_lid"]) and is_nil(data["initiative_id"]) and
+      not is_binary(data["parent_lid"]) and not is_nil(data["parent_id"]) and
+      not Map.has_key?(parent_targets, data["parent_id"])
+  end
+
+  defp unresolved_parent_add?(_op, _parent_targets), do: false
+
+  # An import-flavored apply whose task-adds all arrive open ends with the
   # scope recovery words (the PLAN.md drive filtered to unchecked items at
   # read time and imported open-only, unasked — roll-up progress read 0%
-  # on a misrepresented tree). BatchShape's count, guidance only — never
-  # a gate: a genuinely fresh plan has zero completed items.
-  defp note_open_only(response, operations) do
+  # on a misrepresented tree). A BOOTSTRAP open-only batch now refuses in
+  # BatchShape (2.8.7), so this guidance's remaining lanes are overridden
+  # applies and existing-tree open-only imports.
+  defp note_open_only(response, _operations, false), do: response
+
+  defp note_open_only(response, operations, true) do
     case BatchShape.open_only_adds(operations) do
       nil ->
         response
@@ -493,14 +549,16 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  # An import-shaped apply — task-adds resolved to their target Initiatives,
-  # the classifier's own resolution reused, never re-derived — ends with the
-  # repo-marker suggestion (m03.04 2.1.4.2): the guidance line plus the
-  # server-composed marker, read from the initiative list's `repo_marker`
-  # field so the wording never forks from the panel. Once per Initiative per
-  # session (Counter); the repo-file check and the offer are the agent's.
-  # Edit batches resolve no target and stay clean.
-  defp suggest_marker(response, operations, created, parent_targets) do
+  # An import-flavored apply — task-adds resolved to their target
+  # Initiatives, the classifier's own resolution reused, never re-derived —
+  # ends with the repo-marker suggestion (m03.04 2.1.4.2): the guidance line
+  # plus the server-composed marker, read from the initiative list's
+  # `repo_marker` field so the wording never forks from the panel. Once per
+  # Initiative per session (Counter); the repo-file check and the offer are
+  # the agent's. Everyday batches carry no import flavor and stay clean.
+  defp suggest_marker(response, _operations, _created, _parent_targets, false), do: response
+
+  defp suggest_marker(response, operations, created, parent_targets, true) do
     ids =
       operations
       |> ImportGate.target_refs(parent_targets)

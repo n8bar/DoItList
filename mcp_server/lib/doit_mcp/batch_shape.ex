@@ -8,12 +8,15 @@ defmodule DoitMcp.BatchShape do
       a file-mirror import (path-like titles + whole-file descriptions),
       embedded checklists at scale (the dropped task layer as description
       markup), boilerplate (one description stamped across dozens of tasks),
-      and sub-scale checklist descriptions (checkboxable lines are what this
-      product turns into tasks — import them as subtasks). Every message
-      teaches at the moment of action and names the override path: a shape
-      the operator explicitly asked for re-calls with `operator_confirmed:
-      true` plus `readback` after the agent confirms with them in chat; the
-      attestation is stamped into the import's provenance record.
+      sub-scale checklist descriptions (checkboxable lines are what this
+      product turns into tasks — import them as subtasks), and open-only
+      bootstrap imports (m03.04 2.8.7: a new Initiative with import-scale
+      task-adds, none arriving done — the dropped completed layer). Every
+      message teaches at the moment of action and names the override path: a
+      shape the operator explicitly asked for re-calls with
+      `operator_confirmed: true` plus `readback` after the agent confirms
+      with them in chat; the attestation is stamped into the import's
+      provenance record.
     * `:pass` — nothing notable.
 
   `facts_block/1` renders the same counts for the import's provenance record
@@ -22,8 +25,10 @@ defmodule DoitMcp.BatchShape do
   initiative ADD is always notable: its `index_style` fact prints per add,
   so a recorded bootstrap always shows how the imported tree will render
   (numbered or not). An import-scale batch whose task-adds all arrive open
-  is notable too (`open_only_adds/1`) — a stated fact, never a gate: a
-  genuinely fresh plan has zero completed items.
+  is notable too (`open_only_adds/1`) — a stated fact on records; only the
+  BOOTSTRAP form of that signature refuses (mid-work bulk adds to an
+  existing initiative never carry an initiative add, so they can't
+  false-positive).
 
   Pure; adapter-side judgment like every guard (the API stays dumb — thin-layer
   guardrail). Thresholds are retunable module attributes. Checkbox detection
@@ -71,11 +76,21 @@ defmodule DoitMcp.BatchShape do
         {:refuse, refuse_message(reasons)}
 
       [] ->
-        if facts.checklist_descriptions > 0,
-          do: {:refuse, checklist_message(facts)},
-          else: :pass
+        cond do
+          open_only_bootstrap?(facts) -> {:refuse, open_only_message(facts)}
+          facts.checklist_descriptions > 0 -> {:refuse, checklist_message(facts)}
+          true -> :pass
+        end
     end
   end
+
+  @doc """
+  The task-add count at which a batch reads import-scale — the mirror and
+  open-only floors here, and `apply_operations`' import-flavor floor for its
+  success riders (one constant, never duplicated).
+  """
+  @spec import_floor() :: pos_integer()
+  def import_floor, do: @mirror_min_adds
 
   @doc """
   The server-computed counts for an import's provenance record — nil when
@@ -118,8 +133,9 @@ defmodule DoitMcp.BatchShape do
   The batch's task-add count when an import-scale batch (the mirror floor)
   creates every task open — nil otherwise (any done add, or sub-scale). A
   done add carries `"done" => true` or `"status" => "done"`, the API's
-  completion vocabulary (`add_done_to_status`). A stated fact, never a
-  gate — `classify/1` verdicts don't move on done-ness.
+  completion vocabulary (`add_done_to_status`). A stated fact for records;
+  only the BOOTSTRAP form of the signature refuses in `classify/1`
+  (m03.04 2.8.7).
   """
   @spec open_only_adds([map()]) :: pos_integer() | nil
   def open_only_adds(operations) do
@@ -165,6 +181,7 @@ defmodule DoitMcp.BatchShape do
 
     %{
       adds: length(adds),
+      initiative_adds: Enum.count(operations, &initiative_add?/1),
       done_adds: Enum.count(adds, &done_add?/1),
       pathlike_titles: Enum.count(adds, &pathlike_title?(add_field(&1, "title"))),
       long_descriptions:
@@ -240,6 +257,23 @@ defmodule DoitMcp.BatchShape do
       "explicitly asked for this exact shape, confirm it with them in chat, then " <>
       "re-call with `operator_confirmed: true` plus `readback` — the attestation is " <>
       "stamped into the import's provenance record."
+  end
+
+  # The open-only bootstrap refusal (m03.04 2.8.7): an initiative add plus
+  # import-scale task-adds none arriving done is the unambiguous open-only
+  # import signature — mid-work bulk adds to an existing initiative never
+  # carry an initiative add, so they can't false-positive.
+  defp open_only_bootstrap?(facts) do
+    facts.initiative_adds > 0 and facts.adds >= @mirror_min_adds and facts.done_adds == 0
+  end
+
+  defp open_only_message(facts) do
+    "Batch shape refused — nothing was applied. All #{facts.adds} tasks bootstrapping " <>
+      "the new Initiative arrive open — the open-only import signature. The source " <>
+      "imports WHOLE: items it marks complete arrive as adds with `done: true`, or " <>
+      "roll-up progress lies. If the operator chose open-only, or the source genuinely " <>
+      "has no completed items, re-call with `operator_confirmed: true` plus `readback` " <>
+      "— the attestation lands in the import's record."
   end
 
   # The sub-scale checklist refusal (m03.04 2.8.4.2) — the recovery words:

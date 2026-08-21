@@ -1,10 +1,11 @@
 defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
   @moduledoc """
-  The repo-marker suggestion on import-shaped applies (m03.04 2.1.4.2): a
-  successful apply whose task-adds resolve to a target Initiative — the
-  import gate's own batch classification, reused — ends with the guidance
-  line plus the API-composed `repo_marker`; edit batches stay clean; one
-  suggestion per Initiative per session (Counter pattern).
+  The repo-marker suggestion on import-flavored applies (m03.04 2.1.4.2,
+  rider predicate 2.8.7): a successful apply carrying import flavor — the
+  gate fired, a bootstrap at the import floor, or floor-scale adds into an
+  existing tree — ends with the guidance line plus the API-composed
+  `repo_marker`; everyday and edit batches stay clean; one suggestion per
+  Initiative per session (Counter pattern).
   """
   use ExUnit.Case, async: false
 
@@ -64,14 +65,13 @@ defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
     end)
   end
 
+  # The first task arrives done, so the open-only guidance (its own test
+  # file) stays out of these assertions.
   defp import_ops(task_count) do
     for i <- 1..task_count do
-      %{
-        "op" => "add",
-        "type" => "task",
-        "lid" => "t#{i}",
-        "data" => %{"initiative_id" => 7, "title" => "task #{i}"}
-      }
+      data = %{"initiative_id" => 7, "title" => "task #{i}"}
+      data = if i == 1, do: Map.put(data, "done", true), else: data
+      %{"op" => "add", "type" => "task", "lid" => "t#{i}", "data" => data}
     end
   end
 
@@ -81,14 +81,24 @@ defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
     for %{"type" => "text", "text" => text} <- protocol["content"], do: text
   end
 
-  test "an import-shaped apply ends with the guidance line plus the composed marker" do
+  test "an import-flavored apply ends with the guidance line plus the composed marker" do
+    stub_apply_and_list(self())
+
+    assert {:reply, response, @frame} =
+             ApplyOperations.execute(%{operations: import_ops(12)}, @frame)
+
+    assert [_result, suggestion] = text_blocks(response)
+    assert suggestion == @guidance <> "\n\n" <> @marker
+  end
+
+  test "a small everyday batch carries no import flavor — no read, no suggestion" do
     stub_apply_and_list(self())
 
     assert {:reply, response, @frame} =
              ApplyOperations.execute(%{operations: import_ops(3)}, @frame)
 
-    assert [_result, suggestion] = text_blocks(response)
-    assert suggestion == @guidance <> "\n\n" <> @marker
+    assert [_result] = text_blocks(response)
+    refute_received :marker_read
   end
 
   test "an edit-shaped batch (no task-adds) never reads or suggests" do
@@ -110,33 +120,33 @@ defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
     stub_apply_and_list(self())
 
     assert {:reply, first, @frame} =
-             ApplyOperations.execute(%{operations: import_ops(3)}, @frame)
+             ApplyOperations.execute(%{operations: import_ops(12)}, @frame)
 
     assert [_result, suggestion] = text_blocks(first)
     assert suggestion =~ @guidance
     assert_received :marker_read
 
     assert {:reply, second, @frame} =
-             ApplyOperations.execute(%{operations: import_ops(2)}, @frame)
+             ApplyOperations.execute(%{operations: import_ops(12)}, @frame)
 
     assert [_result] = text_blocks(second)
     refute_received :marker_read
   end
 
-  test "a bootstrap import resolves the suggestion through the echoed real id" do
+  test "a sub-gate bootstrap import resolves the suggestion through the echoed real id" do
     stub_apply_and_list(self(), [
       %{"index" => 0, "lid" => "i", "status" => "ok", "data" => %{"id" => 7}}
     ])
 
-    ops = [
-      %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Import"}},
-      %{
-        "op" => "add",
-        "type" => "task",
-        "lid" => "t1",
-        "data" => %{"initiative_lid" => "i", "title" => "first task"}
-      }
-    ]
+    ops =
+      [
+        %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Import"}}
+      ] ++
+        for i <- 1..12 do
+          data = %{"initiative_lid" => "i", "title" => "task #{i}"}
+          data = if i == 1, do: Map.put(data, "done", true), else: data
+          %{"op" => "add", "type" => "task", "lid" => "t#{i}", "data" => data}
+        end
 
     assert {:reply, response, @frame} = ApplyOperations.execute(%{operations: ops}, @frame)
 

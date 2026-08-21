@@ -112,16 +112,15 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     )
   end
 
-  # A new Initiative plus its first tasks, referenced by lid.
+  # A new Initiative plus its first tasks, referenced by lid. The first task
+  # arrives done — an all-open bootstrap refuses as an open-only import
+  # (m03.04 2.8.7), which is not what these session tests exercise.
   defp fresh_import_ops(task_count) do
     [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Import"}}] ++
       for i <- 1..task_count do
-        %{
-          "op" => "add",
-          "type" => "task",
-          "lid" => "t#{i}",
-          "data" => %{"initiative_lid" => "i", "title" => "task #{i}"}
-        }
+        data = %{"initiative_lid" => "i", "title" => "task #{i}"}
+        data = if i == 1, do: Map.put(data, "done", true), else: data
+        %{"op" => "add", "type" => "task", "lid" => "t#{i}", "data" => data}
       end
   end
 

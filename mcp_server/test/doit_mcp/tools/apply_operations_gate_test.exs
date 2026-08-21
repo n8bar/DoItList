@@ -43,7 +43,15 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end)
   end
 
+  # A bootstrap whose adds are ALL open now refuses as an open-only import
+  # (m03.04 2.8.7) — its own describe below. These gate tests target the
+  # pressure/record machinery, so the first task arrives done.
   defp new_initiative_batch(task_count) do
+    [initiative, %{"data" => data} = first | rest] = all_open_bootstrap(task_count)
+    [initiative, %{first | "data" => Map.put(data, "done", true)} | rest]
+  end
+
+  defp all_open_bootstrap(task_count) do
     [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Import"}}] ++
       for i <- 1..task_count do
         %{
@@ -449,6 +457,41 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert_received {:operations_post, %{"operations" => [%{"type" => "comment"}]}}
     assert Enum.any?(rest, &(&1["text"] =~ "could NOT be posted"))
     assert Enum.any?(rest, &(&1["text"] =~ "root_task_id"))
+  end
+
+  describe "open-only bootstrap imports (m03.04 2.8.7)" do
+    test "a bootstrap whose adds all arrive open refuses, naming both recoveries" do
+      decoded = execute_refused(%{operations: all_open_bootstrap(20)})
+
+      assert decoded["gate"] == "batch_shape"
+      assert decoded["message"] =~ "All 20 tasks bootstrapping the new Initiative arrive open"
+      assert decoded["message"] =~ "arrive as adds with `done: true`"
+      assert decoded["message"] =~ "genuinely has no completed items"
+      assert decoded["message"] =~ "`operator_confirmed: true` plus `readback`"
+      refute_received {:operations_post, _}
+    end
+
+    test "operator_confirmed proceeds to the readback demand; with it the record lands stamped" do
+      stub_apply()
+
+      # The override without its readback: the demand, still no apply.
+      decoded = execute_refused(%{operations: all_open_bootstrap(20), operator_confirmed: true})
+      assert decoded["gate"] == "import_readback"
+      assert decoded["message"] =~ "stamped operator-confirmed"
+      refute_received {:operations_post, _}
+
+      # With the readback it applies; the record stamps the attestation and
+      # the server's open-only count sits under the agent's words.
+      execute_ok(%{
+        operations: all_open_bootstrap(20),
+        operator_confirmed: true,
+        readback: "Open items only, as the operator chose in chat."
+      })
+
+      body = assert_record_posted(570)
+      assert body =~ "Operator-confirmed in chat."
+      assert body =~ "All 20 new tasks arrive open — none marked done."
+    end
   end
 
   describe "parent-anchored adds (m03.04 2.8.1)" do
