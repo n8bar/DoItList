@@ -14,7 +14,9 @@ defmodule DoIt.Api.Idempotency do
   operations is stored beside the key, and a same-key request whose payload
   hashes differently is a `:payload_conflict` — the controller rejects it
   instead of replaying, so a reused key can never silently mask a changed
-  batch. A revised batch takes a new key.
+  batch. One key per batch (m03.04 2.7.6): a 200 is committed and never
+  re-sent — `prior_commit/3` catches the same payload arriving under a fresh
+  key; a lost response retries with the SAME key.
 
   Pure business logic over `DoIt.Api.IdempotencyKey` — no controller/Plug deps —
   so it is unit-testable in isolation.
@@ -91,6 +93,32 @@ defmodule DoIt.Api.Idempotency do
       _mismatch ->
         :payload_conflict
     end
+  end
+
+  @doc """
+  Find a stored commit of this exact payload under a DIFFERENT key
+  (m03.04 2.7.6).
+
+  Returns `{key, inserted_at}` for the newest row of this user inside the
+  retention window whose stored hash equals `payload_hash` and whose key is not
+  `key`, or `nil`. Only commits are ever stored (the controller persists 200s
+  alone), so any hit means this batch already applied — the controller refuses
+  the re-send naming that key and time instead of duplicating the work. Called
+  on a `fetch/3` miss; nil-hash legacy rows never match.
+  """
+  @spec prior_commit(User.t(), String.t(), binary()) :: {String.t(), DateTime.t()} | nil
+  def prior_commit(%User{} = user, key, payload_hash) when is_binary(key) do
+    cutoff = DateTime.add(DateTime.utc_now(), -@retention_hours, :hour)
+
+    Repo.one(
+      from r in IdempotencyKey,
+        where:
+          r.user_id == ^user.id and r.payload_hash == ^payload_hash and
+            r.idempotency_key != ^key and r.inserted_at >= ^cutoff,
+        order_by: [desc: r.inserted_at],
+        limit: 1,
+        select: {r.idempotency_key, r.inserted_at}
+    )
   end
 
   @doc """

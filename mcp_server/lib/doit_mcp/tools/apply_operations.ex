@@ -98,10 +98,10 @@ defmodule DoitMcp.Tools.ApplyOperations do
   ## Safe retries — `idempotency_key`
 
   Pass an optional `idempotency_key` (any client-chosen string) to make a retry
-  safe: it is forwarded as the `Idempotency-Key` header, so if a first attempt
-  already committed but its response was lost (e.g. a timeout), a retry with the
-  same key replays that stored response instead of re-applying the batch. The
-  key binds to the exact payload — a revised batch takes a new key.
+  safe: it is forwarded as the `Idempotency-Key` header. One key per batch: a
+  200 is committed and never re-sent; a lost response (e.g. a timeout) retries
+  with the SAME key, which replays the stored response instead of re-applying
+  the batch.
 
   ## Import readback — a record, not a stop (m03.04 2.8.4)
 

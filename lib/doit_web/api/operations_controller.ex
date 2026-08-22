@@ -23,19 +23,20 @@ defmodule DoItWeb.Api.OperationsController do
 
   A client may send an `Idempotency-Key` request header (Stripe's convention).
   On the first request for a `(user, key)` the batch runs normally and, when it
-  **commits**, its response is stored beside a hash of the decoded payload; a
-  later request carrying the **same** key **and the same payload** **replays**
-  that stored response verbatim instead of re-applying the batch — so a retry
-  after a client-side timeout can't double-apply. The key binds to its exact
-  payload (m03.04 fix 20): a same-key request whose payload differs gets a `422`
-  naming the key conflict — a revised batch takes a new key. Only a commit is
+  **commits**, its response is stored beside a hash of the decoded payload.
+  One key per batch: a 200 is committed and never re-sent — a lost response
+  retries with the SAME key and payload, which **replays** the stored response
+  verbatim instead of re-applying the batch. A same-key request whose payload
+  differs is a `422` naming the key conflict (m03.04 fix 20); a keyed batch
+  whose payload matches a commit stored under a DIFFERENT key inside the
+  retention window is a `422` naming that key and its time — replay with it, or
+  change the payload if a second copy is meant (m03.04 2.7.6). Only a commit is
   stored: a rolled-back batch and the pre-execution rejections (batch-too-large,
-  malformed body) commit nothing and store nothing, so an honest retry of them
-  re-executes. Same-key requests **in flight together** serialize on a
-  per-`(user, key)` advisory lock (m03.04 2.7.3), so a racing retry waits, then
-  replays — it can never double-apply. With no header, behavior is exactly as
-  above and no lock is taken. The key itself is enforced server-side here; the
-  MCP tool merely forwards it.
+  malformed body) store nothing, so an honest retry of them re-executes.
+  Same-key requests **in flight together** serialize on a per-`(user, key)`
+  advisory lock (m03.04 2.7.3), so a racing retry waits, then replays. With no
+  header, no store, no checks, no lock. The key itself is enforced server-side
+  here; the MCP tool merely forwards it.
   """
   use DoItWeb, :controller
 
@@ -65,9 +66,18 @@ defmodule DoItWeb.Api.OperationsController do
               key_conflict(conn)
 
             nil ->
-              outcome = Operations.apply_batch(user, operations)
-              store_if_committed(user, key, payload_hash, outcome)
-              render_outcome(conn, outcome)
+              # A miss for THIS key — but the same payload may already have
+              # committed under another key (m03.04 2.7.6): refuse the re-send
+              # instead of duplicating the work.
+              case Idempotency.prior_commit(user, key, payload_hash) do
+                {earlier_key, committed_at} ->
+                  duplicate_batch(conn, earlier_key, committed_at)
+
+                nil ->
+                  outcome = Operations.apply_batch(user, operations)
+                  store_if_committed(user, key, payload_hash, outcome)
+                  render_outcome(conn, outcome)
+              end
           end
         end)
     end
@@ -131,7 +141,19 @@ defmodule DoItWeb.Api.OperationsController do
       422,
       :unprocessable_entity,
       "Idempotency-Key conflict: this key was first used with a different payload. " <>
-        "A revised batch takes a new Idempotency-Key."
+        "One key per batch: a 200 is committed and never re-sent; a lost response " <>
+        "retries with the SAME key."
+    )
+  end
+
+  defp duplicate_batch(conn, earlier_key, committed_at) do
+    Errors.send_error(
+      conn,
+      422,
+      :unprocessable_entity,
+      "Duplicate batch: this payload already committed under Idempotency-Key " <>
+        "\"#{earlier_key}\" at #{DateTime.to_iso8601(committed_at)}. Replay with that " <>
+        "key for its response, or change the payload if a second copy is meant."
     )
   end
 end
