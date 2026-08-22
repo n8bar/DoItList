@@ -102,6 +102,10 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
               ]
             })
 
+          {"POST", "/api/v1/import_declarations"} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
+            Req.Test.json(conn, %{"data" => Jason.decode!(body)})
+
           {"GET", "/api/v1/initiatives"} ->
             Req.Test.json(conn, %{"data" => [%{"id" => 57, "root_task_id" => 570}]})
 
@@ -113,8 +117,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
   end
 
   # A new Initiative plus its first tasks, referenced by lid. The first task
-  # arrives done — an all-open bootstrap refuses as an open-only import
-  # (m03.04 2.8.7), which is not what these session tests exercise.
+  # arrives done, so the whole-import declaration below is 1-complete.
   defp fresh_import_ops(task_count) do
     [%{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "Import"}}] ++
       for i <- 1..task_count do
@@ -157,9 +160,9 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     refute type == "comment"
   end
 
-  defp assert_record_posted do
+  defp assert_record_posted(prefix \\ "Import record — readback as applied:") do
     assert_receive {:applied, [%{"type" => "comment", "data" => %{"body" => body}}]}, 2_000
-    assert body =~ "Import record — readback as applied:"
+    assert body =~ prefix
     body
   end
 
@@ -176,25 +179,28 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
 
     ops = fresh_import_ops(@threshold + 1)
 
-    # A's import-shaped batch without a readback meets the agent-facing
-    # refusal — no stop, no operator step.
+    # A's bootstrap is a FIRST import (2.8.10): without a declaration it
+    # meets the agent-facing demand — no stop, no operator step.
     assert {true, decoded, _rest} =
              tool_result(post_frame(tools_call(2, %{"operations" => ops}), a_headers))
 
-    assert decoded["gate"] == "import_readback"
+    assert decoded["gate"] == "import_declaration"
     refute_received {:applied, _ops}
 
-    # With the readback it applies straight through and the record lands on
+    # With the declaration it applies straight through — no prose readback
+    # demanded (the declaration is the record) — and the record lands on
     # the created Initiative's root.
     gated = %{
       "operations" => ops,
-      "readback" => "Importing PLAN.md as #{@threshold + 1} tasks."
+      "declared_total" => @threshold + 1,
+      "declared_completed" => 1,
+      "declared_ordering" => "none"
     }
 
     assert {false, decoded, _rest} = tool_result(post_frame(tools_call(3, gated), a_headers))
     assert decoded["ok"] == true
     assert_batch_applied()
-    assert_record_posted()
+    assert_record_posted("Import record — declaration as accepted:")
 
     # A's record follows the Initiative to its real id: the next over-bound
     # chunk flows with no readback and posts no second record.

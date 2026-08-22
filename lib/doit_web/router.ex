@@ -68,6 +68,11 @@ defmodule DoItWeb.Router do
     # happens in the app's UI only (see DoItWeb.Api.ImportApprovalController).
     post "/import_approvals", ImportApprovalController, :create
     get "/import_approvals/:payload_hash", ImportApprovalController, :show
+
+    # First-import declarations (m03.04 2.8.10): the adapter records the
+    # accepted declaration Initiative-homed; it reads them back on the
+    # task_count consult, so no GET lives here.
+    post "/import_declarations", ImportDeclarationController, :create
   end
 
   scope "/", DoItWeb do

@@ -161,54 +161,30 @@ defmodule DoitMcp.BatchShapeTest do
     end
   end
 
-  describe "open-only bootstrap refusal (m03.04 2.8.7 / 2.8.8)" do
-    test "a bootstrap with import-scale all-open adds refuses with the park info" do
-      assert {:refuse_open_only, info} = BatchShape.classify(bootstrap(10))
-      assert info == %{adds: 10, initiative_name: "Plan"}
+  describe "open-only bootstrap demoted to the interview (m03.04 2.8.7 → 2.8.10)" do
+    test "an all-open import-scale bootstrap passes shape — the declaration arithmetic decides" do
+      assert BatchShape.classify(bootstrap(10)) == :pass
 
-      # The fact stays beside the refusal — an approved apply's record still
+      # The fact stays beside the verdict — an accepted apply's record still
       # carries the server's count.
       assert BatchShape.open_only_adds(bootstrap(10)) == 10
-    end
-
-    test "the parked message carries both recoveries — done adds, or the operator's in-app click" do
-      message = BatchShape.open_only_message(%{adds: 10, initiative_name: "Plan"})
-
-      assert message =~ "All 10 tasks bootstrapping the new Initiative arrive open"
-      assert message =~ "adds with `done: true`"
-      assert message =~ "one-click approval in the app"
-      assert message =~ "re-send this SAME batch unchanged"
-      # Attestation vocabulary is retired for THIS refusal.
-      refute message =~ "operator_confirmed"
-    end
-
-    test "the declined message latches — change the batch or talk to the operator" do
-      message = BatchShape.open_only_declined_message(%{adds: 10, initiative_name: "Plan"})
-
-      assert message =~ "operator declined"
-      assert message =~ "adds with `done: true`"
-      assert message =~ "talk to the operator"
-      refute message =~ "operator_confirmed"
     end
 
     test "the park name falls back to (unnamed) on a blank initiative add" do
       [%{"data" => data} = initiative | rest] = bootstrap(10)
       ops = [%{initiative | "data" => Map.put(data, "name", "  ")} | rest]
 
-      assert {:refuse_open_only, %{initiative_name: "(unnamed)"}} = BatchShape.classify(ops)
+      assert BatchShape.first_initiative_name(ops) == "(unnamed)"
     end
 
-    test "one done add is the whole-import signal — passes" do
-      assert BatchShape.classify(bootstrap(10, 1)) == :pass
-    end
+    test "done-add vocabulary — `done: true` or `status: \"done\"`, nothing else" do
+      done = %{"op" => "add", "type" => "task", "data" => %{"done" => true}}
+      status = %{"op" => "add", "type" => "task", "data" => %{"status" => "done"}}
+      open = %{"op" => "add", "type" => "task", "data" => %{"title" => "t"}}
 
-    test "a sub-floor open bootstrap passes" do
-      assert BatchShape.classify(bootstrap(9)) == :pass
-    end
-
-    test "import-scale open adds WITHOUT an initiative add pass shape" do
-      ops = for i <- 1..10, do: add("Item #{i}")
-      assert BatchShape.classify(ops) == :pass
+      assert BatchShape.done_add?(done)
+      assert BatchShape.done_add?(status)
+      refute BatchShape.done_add?(open)
     end
   end
 

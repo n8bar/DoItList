@@ -52,5 +52,15 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       assert description =~ "skeleton first"
       assert description =~ "provenance comment"
     end
+
+    test "carries the first-import interview — fields, arithmetic, chunk contract (m03.04 2.8.10)",
+         %{description: description} do
+      assert description =~ "`declared_total`"
+      assert description =~ "`declared_completed`"
+      assert description =~ "`declared_exclusions`"
+      assert description =~ "`declared_ordering`"
+      assert description =~ "Every chunk of the first import is checked against the declaration"
+      assert description =~ "Operator-approved in the app"
+    end
   end
 end

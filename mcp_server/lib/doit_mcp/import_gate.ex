@@ -157,6 +157,27 @@ defmodule DoitMcp.ImportGate do
   end
 
   @doc """
+  DONE task-adds (`BatchShape.done_add?/1`'s vocabulary) summed per target
+  Initiative, resolving exactly like `count_by_target/2` — the import
+  interview's done-arrival count (m03.04 2.8.10). Returns a map; an absent
+  target arrived nothing done.
+  """
+  @spec done_by_target([map()], %{optional(term()) => target()}) ::
+          %{optional(target()) => pos_integer()}
+  def done_by_target(operations, parent_targets \\ %{}) do
+    task_adds = Enum.filter(operations, &task_add?/1)
+
+    by_lid =
+      for %{"lid" => lid} = op <- task_adds, is_binary(lid), into: %{}, do: {lid, op}
+
+    task_adds
+    |> Enum.filter(&DoitMcp.BatchShape.done_add?/1)
+    |> Enum.map(&resolve_ref(&1, by_lid, parent_targets, MapSet.new()))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+  end
+
+  @doc """
   lid → real id for the Initiatives an applied batch created, read from the
   apply response's per-op results (each echoes the op's `"lid"` beside the
   created resource's `"data"`). Later chunks can only reference a created

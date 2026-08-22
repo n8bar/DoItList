@@ -1,11 +1,12 @@
 defmodule DoItWeb.ImportApprovalComponents do
   @moduledoc """
-  The in-app import-approval card (m03.04 2.8.8): an open-only bootstrap
-  import the MCP adapter refused, parked for the operator's one-click call —
-  Approve / Dismiss — where the server records the decision, so no agent
-  attestation is load-bearing. Account-homed only (container
-  `#import-approvals` on the account page — a bootstrap batch's Initiative
-  doesn't exist yet). The hosting LiveView owns the two events
+  The in-app import-approval card (m03.04 2.8.8, repointed by 2.8.10): an
+  import whose declaration excludes the source's completed work, parked by
+  the MCP adapter for the operator's one-click call — Approve / Dismiss —
+  where the server records the decision, so no agent attestation is
+  load-bearing. Account-homed only (container `#import-approvals` on the
+  account page — a bootstrap batch's Initiative doesn't exist yet). The
+  hosting LiveView owns the two events
   (`approve_import` / `dismiss_import`); every action is a server-gated
   write, so the buttons carry `data-latch` in-flight labels (§6.7) and the
   card leaves the pending slot on the decided ack — never a faked success.
@@ -35,7 +36,7 @@ defmodule DoItWeb.ImportApprovalComponents do
               An agent wants to import — your call
             </h3>
             <p class="text-xs text-amber-800 dark:text-amber-300">
-              It wants to bootstrap “{approval.initiative_name}” with {approval.task_count} tasks, all arriving open — no completed items. Approve if that's what you
+              It wants to import into “{approval.initiative_name}” — {approval.task_count} tasks, declaredly leaving the source's completed work out of the tree. Approve if that's what you
               asked for; dismiss to make it change the batch or come talk to you.
             </p>
           </div>

@@ -69,17 +69,55 @@ defmodule DoItWeb.Api.TaskCountTest do
       |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/task_count")
 
     # index_style rides along (product default "none") — the adapter's
-    # target-rendering fact for the import confirm.
+    # target-rendering fact for the import confirm. The interview facts
+    # (m03.04 2.8.10) ride too: done/live counts, name, declaration-or-nil.
     assert %{
              "data" => %{
                "count" => 2,
+               "done_count" => 0,
+               "live_count" => 2,
                "initiative_created_at" => created_at,
-               "initiative_index_style" => "none"
+               "initiative_index_style" => "none",
+               "initiative_name" => "Pressure",
+               "import_declaration" => nil
              }
            } = json_response(conn, 200)
 
     # ISO8601 UTC of the Initiative's inserted_at — the adapter's freshness fact.
     assert created_at == DateTime.to_iso8601(ctx.ini.inserted_at)
+  end
+
+  test "done_count follows the scope; a standing declaration rides the read", ctx do
+    task = add_task(ctx.owner, ctx.ini, "Done one")
+    {:ok, _} = Tasks.update_task(task, ctx.owner, %{"status" => "done"})
+    add_task(ctx.owner, ctx.ini, "Open one")
+
+    {:ok, _} =
+      DoIt.ImportDeclarations.record(ctx.ini.id, %{
+        "source_total" => 20,
+        "source_completed" => 5,
+        "excluded_count" => 2,
+        "ordering" => "outline"
+      })
+
+    conn =
+      build_conn()
+      |> bearer(token(ctx.owner))
+      |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/task_count")
+
+    assert %{
+             "data" => %{
+               "count" => 2,
+               "done_count" => 1,
+               "live_count" => 2,
+               "import_declaration" => %{
+                 "source_total" => 20,
+                 "source_completed" => 5,
+                 "excluded_count" => 2,
+                 "ordering" => "outline"
+               }
+             }
+           } = json_response(conn, 200)
   end
 
   test "created_at scopes the count to the window", ctx do
@@ -103,7 +141,8 @@ defmodule DoItWeb.Api.TaskCountTest do
       |> bearer(token(ctx.owner))
       |> get(~p"/api/v1/initiatives/#{ctx.ini.id}/task_count?created_at=#{since}")
 
-    assert %{"data" => %{"count" => 1}} = json_response(conn, 200)
+    # The windowed count narrows; live_count keeps the whole tree.
+    assert %{"data" => %{"count" => 1, "live_count" => 2}} = json_response(conn, 200)
   end
 
   test "a malformed created_at is a 422 naming the format", ctx do

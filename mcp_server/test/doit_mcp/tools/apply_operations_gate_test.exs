@@ -43,9 +43,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     end)
   end
 
-  # A bootstrap whose adds are ALL open now refuses as an open-only import
-  # (m03.04 2.8.7) — its own describe below. These gate tests target the
-  # pressure/record machinery, so the first task arrives done.
+  # A bootstrap with its first task arriving done — the interview's
+  # 1-complete declaration shape (`declared/3` below); the all-open form
+  # drives the first-import describe.
   defp new_initiative_batch(task_count) do
     [initiative, %{"data" => data} = first | rest] = all_open_bootstrap(task_count)
     [initiative, %{first | "data" => Map.put(data, "done", true)} | rest]
@@ -188,6 +188,14 @@ defmodule DoitMcp.ApplyOperationsGateTest do
                   })
               })
 
+            # The declaration record (m03.04 2.8.10) — Initiative-homed,
+            # idempotent server-side.
+            {"POST", "/api/v1/import_declarations"} ->
+              {:ok, body, conn} = Plug.Conn.read_body(conn)
+              decoded = Jason.decode!(body)
+              send(reply_to, {:declaration_post, decoded})
+              Req.Test.json(conn, %{"data" => decoded})
+
             {"GET", "/api/v1/tasks/" <> _} ->
               send(reply_to, {:task_read, conn.request_path})
               parent_id = Keyword.get(opts, :parent_id, 42)
@@ -264,8 +272,10 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   end
 
   # The record comment: the second operations POST, one comment op on the
-  # root. Returns its body text for content assertions.
-  defp assert_record_posted(root_task_id) do
+  # root. Returns its body text for content assertions. A readback-carrying
+  # record keeps the readback prefix; a declaration-led record (no prose)
+  # opens as the accepted declaration.
+  defp assert_record_posted(root_task_id, prefix \\ "Import record — readback as applied:") do
     assert_received {:operations_post, %{"operations" => [_ | _]}}
 
     assert_received {:operations_post,
@@ -279,8 +289,18 @@ defmodule DoitMcp.ApplyOperationsGateTest do
                        ]
                      }}
 
-    assert body =~ "Import record — readback as applied:"
+    assert body =~ prefix
     body
+  end
+
+  # The whole-import declaration matching new_initiative_batch/1 (first task
+  # arriving done) or all_open_bootstrap/1 (`done: 0`).
+  defp declared(params, total, done \\ 1) do
+    Map.merge(params, %{
+      declared_total: total,
+      declared_completed: done,
+      declared_ordering: "none"
+    })
   end
 
   test "an aged Initiative's batch at the threshold applies straight through, no record demanded" do
@@ -330,7 +350,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert body =~ "Assumptions:\n- Assumed whole-plan scope."
     refute body =~ "Operator-confirmed in chat."
 
-    assert Enum.any?(rest, &(&1["text"] =~ "recorded as a provenance comment"))
+    assert Enum.any?(rest, &(&1["text"] =~ "posted as a provenance comment"))
   end
 
   test "one record settles the Initiative for the session — later chunks flow without re-asking" do
@@ -353,13 +373,20 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     start_gate_state()
     stub_apply()
 
+    # A bootstrap is a FIRST import (2.8.10), so the batch carries its
+    # declaration; the volunteered readback rides the same record.
     ops = new_initiative_batch(@threshold + 1)
-    execute_ok(%{operations: ops, readback: "Bootstrapping the import."})
+
+    execute_ok(
+      declared(%{operations: ops, readback: "Bootstrapping the import."}, @threshold + 1)
+    )
 
     # The record posted to the created Initiative's root, echoed in the
-    # apply response — no list read needed for an in-batch target.
+    # apply response — no list read needed for an in-batch target; the
+    # accepted declaration lands Initiative-homed under the created id.
     body = assert_record_posted(570)
     assert body =~ "Bootstrapping the import."
+    assert_received {:declaration_post, %{"initiative_id" => 57, "source_total" => _}}
 
     # Chunk 2 references the real id past every bound: the record followed
     # the Initiative to its real id.
@@ -387,17 +414,18 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:operations_post, _}
   end
 
-  test "a fresh Initiative's big first batch flows — the fresh floor is retired" do
-    # Bootstrap with 20 adds: past the retired floor of 8, under the ramp —
-    # applies with no readback and no record demanded.
+  test "a fresh Initiative's big first batch is interviewed, not floored — declared, it flows" do
+    # Bootstrap with 20 adds: under the ramp, no readback demanded — but a
+    # FIRST import answers the declaration (2.8.10), which posts as its
+    # record.
     stub_apply()
-    execute_ok(new_initiative_batch(20))
-    assert_received {:operations_post, _batch}
-    refute_received {:operations_post, _}
+    execute_ok(declared(%{operations: new_initiative_batch(20)}, 20))
+    assert_record_posted(570, "Import record — declaration as accepted:")
 
     # Iteration 3's exact repro, replayed under item 36: the Initiative was
     # created moments ago (task_count says so) and the scaffold arrives by
-    # real id — it flows like any aged Initiative's.
+    # real id — it flows like any aged Initiative's (this response carries
+    # no live_count, so first-import detection stays fail-open).
     created = DateTime.utc_now() |> DateTime.add(-2, :minute) |> DateTime.to_iso8601()
     stub_apply(pressure: 2, task_count_extra: %{"initiative_created_at" => created})
     execute_ok(existing_initiative_batch(12, 57))
@@ -432,7 +460,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert body =~ "Server-computed shape facts:"
     assert body =~ "12 of 12 new task titles look like file paths/names."
 
-    assert Enum.any?(rest, &(&1["text"] =~ "recorded as a provenance comment"))
+    assert Enum.any?(rest, &(&1["text"] =~ "posted as a provenance comment"))
   end
 
   test "operator_confirmed without a readback is refused asking for the record" do
@@ -491,44 +519,30 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert Enum.any?(rest, &(&1["text"] =~ "root_task_id"))
   end
 
-  describe "open-only bootstrap imports (m03.04 2.8.7 / 2.8.8)" do
-    test "the refusal parks the import for the operator and names both recoveries" do
+  describe "the first-import interview (m03.04 2.8.10)" do
+    # all_open_bootstrap(20): an in-batch target — live tree 0, cumulative
+    # 20 past the floor, no recorded declaration. First-import scope.
+
+    test "a first import without a declaration is refused with the demand — no park, nothing applied" do
       stub_apply()
 
       decoded = execute_refused(%{operations: all_open_bootstrap(20)})
 
-      assert decoded["gate"] == "batch_shape"
-      assert decoded["message"] =~ "All 20 tasks bootstrapping the new Initiative arrive open"
-      assert decoded["message"] =~ "adds with `done: true`"
-      assert decoded["message"] =~ "one-click approval in the app"
-      assert decoded["message"] =~ "re-send this SAME batch unchanged"
-      # Attestation vocabulary is retired for THIS refusal.
-      refute decoded["message"] =~ "operator_confirmed"
-      assert decoded["approve_url"] == "http://app.test/account#import-approvals"
+      assert decoded["gate"] == "import_declaration"
+      assert decoded["message"] =~ "First-import declaration required"
+      assert decoded["message"] =~ "`declared_total`"
+      assert decoded["message"] =~ "`declared_completed`"
+      assert decoded["message"] =~ "`declared_exclusions`"
+      assert decoded["message"] =~ "`declared_ordering`"
+      assert decoded["message"] =~ "no operator step is needed"
 
-      # Consulted, then parked — with the batch's facts, never the payload.
-      assert_received {:approval_get, hash}
-
-      assert_received {:approval_post,
-                       %{
-                         "payload_hash" => ^hash,
-                         "task_count" => 20,
-                         "initiative_name" => "Import"
-                       }}
-
-      refute_received {:operations_post, _}
-
-      # A retry against the standing pending park re-parks idempotently
-      # (the server returns the same row) and refuses the same way.
-      stub_apply(approval_status: "pending")
-      decoded = execute_refused(%{operations: all_open_bootstrap(20)})
-      assert decoded["message"] =~ "one-click approval in the app"
-      assert_received {:approval_get, ^hash}
-      assert_received {:approval_post, %{"payload_hash" => ^hash}}
+      # The demand consulted the off-switch by hash, parked nothing.
+      assert_received {:approval_get, _hash}
+      refute_received {:approval_post, _}
       refute_received {:operations_post, _}
     end
 
-    test "operator_confirmed no longer moves this refusal — it parks and refuses regardless" do
+    test "operator_confirmed doesn't answer the interview — the declaration fields do" do
       stub_apply()
 
       decoded =
@@ -538,53 +552,136 @@ defmodule DoitMcp.ApplyOperationsGateTest do
           readback: "Open items only."
         })
 
-      assert decoded["gate"] == "batch_shape"
-      assert_received {:approval_get, _hash}
-      assert_received {:approval_post, _body}
+      assert decoded["gate"] == "import_declaration"
       refute_received {:operations_post, _}
     end
 
-    test "a changed payload gets no free pass — it parks fresh under its own hash" do
+    test "a consistent fresh plan — declared 0 complete, 0 done adds — flows with NO park" do
       stub_apply()
-      execute_refused(%{operations: all_open_bootstrap(20)})
-      assert_received {:approval_post, %{"payload_hash" => first_hash}}
 
-      execute_refused(%{operations: all_open_bootstrap(21)})
-      assert_received {:approval_post, %{"payload_hash" => second_hash, "task_count" => 21}}
+      rest = execute_ok(declared(%{operations: all_open_bootstrap(20)}, 20, 0))
 
-      refute first_hash == second_hash
+      # No approval ceremony at all; the open-only guidance still rides.
+      refute_received {:approval_get, _}
+      refute_received {:approval_post, _}
+      assert Enum.any?(rest, &(&1["text"] =~ "All 20 imported tasks arrived open."))
+
+      # The declaration IS the record: posted verbatim on the created root,
+      # beside the open-only shape fact, and recorded Initiative-homed.
+      body = assert_record_posted(570, "Import record — declaration as accepted:")
+      assert body =~ "Import declaration (agent-stated, server-checked):"
+      assert body =~ "- Source: 20 items, 0 complete."
+      assert body =~ "- Exclusions: none declared."
+      assert body =~ "- Ordering: none."
+      assert body =~ "All 20 new tasks arrive open — none marked done."
+
+      assert_received {:declaration_post,
+                       %{
+                         "initiative_id" => 57,
+                         "source_total" => 20,
+                         "source_completed" => 0,
+                         "excluded_count" => 0
+                       }}
+    end
+
+    test "each mismatch direction refuses naming the numbers" do
+      stub_apply()
+
+      # Over-delivery: cumulative adds past the declared importable total.
+      decoded = execute_refused(declared(%{operations: all_open_bootstrap(20)}, 15, 0))
+      assert decoded["gate"] == "import_declaration"
+      assert decoded["message"] =~ "cumulative adds reach 20"
+      assert decoded["message"] =~ "importable total of 15"
+
+      # Done overshoot: more `done` arrivals than the source declares complete.
+      decoded = execute_refused(declared(%{operations: new_initiative_batch(20)}, 20, 0))
+      assert decoded["message"] =~ "1 tasks arrive `done` against 0 declared complete"
+
+      # Undeclared narrowing: the import completes open-only against a
+      # declared-complete source with no exclusions to absorb it.
+      decoded = execute_refused(declared(%{operations: all_open_bootstrap(20)}, 20, 5))
+      assert decoded["message"] =~ "0 arrived `done`"
+      assert decoded["message"] =~ "5 missing completed items"
+
+      refute_received {:operations_post, _}
+      refute_received {:approval_post, _}
+    end
+
+    test "a declared exclusion of completed work parks for the operator (2.8.8 reused)" do
+      stub_apply()
+
+      params =
+        declared(%{operations: all_open_bootstrap(15)}, 20, 5)
+        |> Map.put(:declared_exclusions, [
+          %{"count" => 5, "reason" => "completed items — operator asked for open work only"}
+        ])
+
+      decoded = execute_refused(params)
+
+      assert decoded["gate"] == "import_declaration"
+      assert decoded["message"] =~ "Import parked"
+      assert decoded["message"] =~ "the operator's call"
+      assert decoded["message"] =~ "re-send this SAME batch unchanged"
+      refute decoded["message"] =~ "operator_confirmed"
+      assert decoded["approve_url"] == "http://app.test/account#import-approvals"
+
+      # Consulted, then parked — with the batch's facts, never the payload.
+      assert_received {:approval_get, hash}
+
+      assert_received {:approval_post,
+                       %{
+                         "payload_hash" => ^hash,
+                         "task_count" => 15,
+                         "initiative_name" => "Import"
+                       }}
+
+      refute_received {:operations_post, _}
+
+      # A retry against the standing pending park re-parks idempotently
+      # (the server returns the same row) and refuses the same way.
+      stub_apply(approval_status: "pending")
+      decoded = execute_refused(params)
+      assert decoded["message"] =~ "Import parked"
+      assert_received {:approval_get, ^hash}
+      assert_received {:approval_post, %{"payload_hash" => ^hash}}
+      refute_received {:operations_post, _}
     end
 
     test "the operator's approval lets the SAME batch flow; the record stamps the click" do
       stub_apply(approval_status: "approved")
 
-      # Approved but recordless: the readback demand, still no apply, no re-park.
-      decoded = execute_refused(%{operations: all_open_bootstrap(20)})
-      assert decoded["gate"] == "import_readback"
-      assert decoded["message"] =~ "operator approved this import in the app"
-      assert decoded["message"] =~ "stamped operator-approved"
+      params =
+        declared(%{operations: all_open_bootstrap(15)}, 20, 5)
+        |> Map.put(:declared_exclusions, [
+          %{"count" => 5, "reason" => "completed items — operator asked for open work only"}
+        ])
+
+      execute_ok(params)
+
       assert_received {:approval_get, _}
       refute_received {:approval_post, _}
-      refute_received {:operations_post, _}
 
-      # With the readback it applies; the record stamps the server-verified
-      # click and the open-only count sits under the agent's words.
-      execute_ok(%{
-        operations: all_open_bootstrap(20),
-        readback: "Open items only — the operator approved this in the app."
-      })
-
-      body = assert_record_posted(570)
+      body = assert_record_posted(570, "Import record — declaration as accepted:")
       assert body =~ "Operator-approved in the app."
-      assert body =~ "All 20 new tasks arrive open — none marked done."
+
+      assert body =~
+               "- Exclusions (5 items): 5 × completed items — operator asked for open work only."
+
+      assert body =~ "All 15 new tasks arrive open — none marked done."
+
+      assert_received {:declaration_post, %{"initiative_id" => 57, "excluded_count" => 5}}
     end
 
     test "a dismissed park latches: the same payload keeps refusing as declined, no re-park" do
       stub_apply(approval_status: "dismissed")
 
-      decoded = execute_refused(%{operations: all_open_bootstrap(20)})
+      params =
+        declared(%{operations: all_open_bootstrap(15)}, 20, 5)
+        |> Map.put(:declared_exclusions, [%{"count" => 5, "reason" => "completed items"}])
 
-      assert decoded["gate"] == "batch_shape"
+      decoded = execute_refused(params)
+
+      assert decoded["gate"] == "import_declaration"
       assert decoded["message"] =~ "operator declined"
       assert decoded["message"] =~ "talk to the operator"
       assert_received {:approval_get, _}
@@ -592,21 +689,62 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       refute_received {:operations_post, _}
     end
 
-    test "the comply lane — done adds included — flows with no approval interaction" do
-      stub_apply()
+    test "a grown tree keeps today's behavior — no declaration demanded" do
+      stub_apply(task_count_extra: %{"live_count" => 40})
 
-      execute_ok(new_initiative_batch(20))
+      execute_ok(existing_initiative_batch(12, 7))
 
       assert_received {:operations_post, _batch}
       refute_received {:approval_get, _}
-      refute_received {:approval_post, _}
+      refute_received {:operations_post, _}
     end
 
-    test "the account off-switch: a skipped consult applies the batch — no park, guidance still rides" do
-      # The operator's account-level opt-out (m03.04 2.8.9): the same consult
-      # answers `skipped`, the ceremony goes dormant, and the SAME all-open
-      # bootstrap applies as a plain pass. The stop is silenced, never the
-      # telemetry — the open-only guidance still ends the response.
+    test "chunked continuation checks the recorded declaration — consistent flows, irreconcilable refuses" do
+      recorded = %{
+        "source_total" => 20,
+        "source_completed" => 0,
+        "excluded_count" => 0,
+        "ordering" => "none"
+      }
+
+      # 8 adds already in the window; this 12-add chunk lands exactly on the
+      # declared total — consistent, applies with no interview noise.
+      stub_apply(
+        pressure: 8,
+        task_count_extra: %{
+          "live_count" => 8,
+          "done_count" => 0,
+          "import_declaration" => recorded
+        }
+      )
+
+      execute_ok(existing_initiative_batch(12, 7))
+      assert_received {:operations_post, _batch}
+      refute_received {:operations_post, _}
+
+      # The under-floor dribble meets the same arithmetic: 5 more adds push
+      # cumulative to 25 against 20 declared — irreconcilable, refused.
+      stub_apply(
+        pressure: 20,
+        task_count_extra: %{
+          "live_count" => 20,
+          "done_count" => 0,
+          "import_declaration" => recorded
+        }
+      )
+
+      decoded = execute_refused(%{operations: existing_initiative_batch(5, 7)})
+      assert decoded["gate"] == "import_declaration"
+      assert decoded["message"] =~ "cumulative adds reach 25"
+      assert decoded["message"] =~ "importable total of 20"
+      refute_received {:operations_post, _}
+    end
+
+    test "the account off-switch skips the demand — the batch applies, guidance still rides" do
+      # The operator's account-level opt-out (m03.04 2.8.9): the demand's
+      # consult answers `skipped`, the interview goes dormant, and the SAME
+      # undeclared bootstrap applies as a plain pass. The stop is silenced,
+      # never the telemetry — the open-only guidance still ends the response.
       stub_apply(approval_status: "skipped")
 
       rest = execute_ok(%{operations: all_open_bootstrap(20)})
@@ -614,28 +752,30 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       assert_received {:approval_get, _hash}
       refute_received {:approval_post, _}
       assert_received {:operations_post, _batch}
-      # Sub-gate, no readback demanded — no record comment posted.
+      # No declaration accepted, sub-gate — no record comment posted.
       refute_received {:operations_post, _}
 
       assert Enum.any?(rest, &(&1["text"] =~ "All 20 imported tasks arrived open."))
     end
 
-    test "the off-switch silences only the stop — a gate-fired apply's record still carries the open-only fact" do
+    test "the off-switch with a declared exclusion: no park, the declaration still records" do
       stub_apply(approval_status: "skipped")
 
-      rest =
-        execute_ok(%{
-          operations: all_open_bootstrap(@threshold + 1),
-          readback: "Importing the all-open plan, ceremony off."
-        })
+      params =
+        declared(%{operations: all_open_bootstrap(15)}, 20, 5)
+        |> Map.put(:declared_exclusions, [%{"count" => 5, "reason" => "completed items"}])
 
-      body = assert_record_posted(570)
-      assert body =~ "All #{@threshold + 1} new tasks arrive open — none marked done."
-      # No click happened, so no approval stamp — the ceremony was dormant.
-      refute body =~ "Operator-approved in the app."
+      execute_ok(params)
 
+      assert_received {:approval_get, _}
       refute_received {:approval_post, _}
-      assert Enum.any?(rest, &(&1["text"] =~ "imported tasks arrived open"))
+
+      # The ceremony was dormant — no click, so no approval stamp — but the
+      # declaration still lands as the record, facts riding.
+      body = assert_record_posted(570, "Import record — declaration as accepted:")
+      refute body =~ "Operator-approved in the app."
+      assert body =~ "- Exclusions (5 items): 5 × completed items."
+      assert_received {:declaration_post, %{"initiative_id" => 57}}
     end
   end
 

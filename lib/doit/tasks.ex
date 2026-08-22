@@ -1987,19 +1987,30 @@ defmodule DoIt.Tasks do
   restarts and reconnects.
   """
   def count_created(initiative_id, created_at \\ nil) when is_integer(initiative_id) do
+    Repo.aggregate(count_created_query(initiative_id, created_at), :count)
+  end
+
+  @doc """
+  Like `count_created/2`, but only tasks currently done — the import
+  interview's done-arrival fact (m03.04 2.8.10): the MCP adapter checks the
+  window's done count against a first import's declared completed count.
+  """
+  def count_created_done(initiative_id, created_at \\ nil) when is_integer(initiative_id) do
+    query = from t in count_created_query(initiative_id, created_at), where: t.status == "done"
+    Repo.aggregate(query, :count)
+  end
+
+  defp count_created_query(initiative_id, created_at) do
     base =
       from t in Task,
         where:
           t.initiative_id == ^initiative_id and is_nil(t.deleted_at) and
             not is_nil(t.parent_id)
 
-    query =
-      case created_at do
-        nil -> base
-        %DateTime{} = dt -> from t in base, where: t.inserted_at >= ^dt
-      end
-
-    Repo.aggregate(query, :count)
+    case created_at do
+      nil -> base
+      %DateTime{} = dt -> from t in base, where: t.inserted_at >= ^dt
+    end
   end
 
   @doc "Count branch descendants of `task_id` (descendants that themselves have children)."

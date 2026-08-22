@@ -15,15 +15,12 @@ defmodule DoitMcp.BatchShape do
       `operator_confirmed: true` plus `readback` after the agent confirms
       with them in chat; the attestation is stamped into the import's
       provenance record.
-    * `{:refuse_open_only, info}` — the open-only bootstrap import (m03.04
-      2.8.7: a new Initiative with import-scale task-adds, none arriving
-      done — the dropped completed layer). Its override is NOT attestation:
-      the adapter parks the refused import for the operator's one-click
-      in-app approval (m03.04 2.8.8) and picks the message —
-      `open_only_message/1` (parked, both recoveries) or
-      `open_only_declined_message/1` (the operator dismissed the park).
-      `info` carries `adds` and `initiative_name` for the park.
     * `:pass` — nothing notable.
+
+  The open-only bootstrap import (a new Initiative with import-scale
+  task-adds, none arriving done) no longer refuses on shape (m03.04 2.8.7,
+  demoted by 2.8.10): a first import demands a structured declaration and
+  the ARITHMETIC decides — see `DoitMcp.ImportInterview`.
 
   `facts_block/1` renders the same counts for the import's provenance record
   (nil when nothing is notable), so a recorded readback shows the server's
@@ -31,10 +28,8 @@ defmodule DoitMcp.BatchShape do
   initiative ADD is always notable: its `index_style` fact prints per add,
   so a recorded bootstrap always shows how the imported tree will render
   (numbered or not). An import-scale batch whose task-adds all arrive open
-  is notable too (`open_only_adds/1`) — a stated fact on records; only the
-  BOOTSTRAP form of that signature refuses (mid-work bulk adds to an
-  existing initiative never carry an initiative add, so they can't
-  false-positive).
+  is notable too (`open_only_adds/1`) — a stated fact on records, never a
+  verdict.
 
   Pure; adapter-side judgment like every guard (the API stays dumb — thin-layer
   guardrail). Thresholds are retunable module attributes. Checkbox detection
@@ -65,15 +60,13 @@ defmodule DoitMcp.BatchShape do
   @boilerplate_repeats 10
   @boilerplate_min_chars 20
 
-  @type open_only_info :: %{adds: pos_integer(), initiative_name: String.t()}
-  @type verdict :: {:refuse, String.t()} | {:refuse_open_only, open_only_info()} | :pass
+  @type verdict :: {:refuse, String.t()} | :pass
 
   @doc """
   Classify a batch's content shape. Scale-certain refusals compose every
   tripped reason into one teaching message; a sub-scale checklist refuses
   on its own message, whose recovery is subtasks or the operator's chat
-  confirm (m03.04 2.8.4.2); an open-only bootstrap returns its park info —
-  the caller parks and picks the message (m03.04 2.8.8).
+  confirm (m03.04 2.8.4.2).
   """
   @spec classify([map()]) :: verdict()
   def classify(operations) do
@@ -84,16 +77,10 @@ defmodule DoitMcp.BatchShape do
         {:refuse, refuse_message(reasons)}
 
       [] ->
-        cond do
-          open_only_bootstrap?(facts) ->
-            {:refuse_open_only,
-             %{adds: facts.adds, initiative_name: first_initiative_name(operations)}}
-
-          facts.checklist_descriptions > 0 ->
-            {:refuse, checklist_message(facts)}
-
-          true ->
-            :pass
+        if facts.checklist_descriptions > 0 do
+          {:refuse, checklist_message(facts)}
+        else
+          :pass
         end
     end
   end
@@ -187,7 +174,6 @@ defmodule DoitMcp.BatchShape do
 
     %{
       adds: length(adds),
-      initiative_adds: Enum.count(operations, &initiative_add?/1),
       done_adds: Enum.count(adds, &done_add?/1),
       pathlike_titles: Enum.count(adds, &pathlike_title?(add_field(&1, "title"))),
       long_descriptions:
@@ -201,9 +187,13 @@ defmodule DoitMcp.BatchShape do
     }
   end
 
-  # A task-add created complete: `"done" => true`, or the completed status
-  # set directly — the API's `add_done_to_status` vocabulary, exactly.
-  defp done_add?(op) do
+  @doc """
+  A task-add created complete: `"done" => true`, or the completed status set
+  directly — the API's `add_done_to_status` vocabulary, exactly. Public so
+  `ImportGate.done_by_target/2` counts done arrivals with the same words.
+  """
+  @spec done_add?(map()) :: boolean()
+  def done_add?(op) do
     add_field(op, "done") == true or add_field(op, "status") == "done"
   end
 
@@ -263,41 +253,6 @@ defmodule DoitMcp.BatchShape do
       "explicitly asked for this exact shape, confirm it with them in chat, then " <>
       "re-call with `operator_confirmed: true` plus `readback` — the attestation is " <>
       "stamped into the import's provenance record."
-  end
-
-  # The open-only bootstrap refusal (m03.04 2.8.7): an initiative add plus
-  # import-scale task-adds none arriving done is the unambiguous open-only
-  # import signature — mid-work bulk adds to an existing initiative never
-  # carry an initiative add, so they can't false-positive.
-  defp open_only_bootstrap?(facts) do
-    facts.initiative_adds > 0 and facts.adds >= @mirror_min_adds and facts.done_adds == 0
-  end
-
-  @doc """
-  The open-only bootstrap refusal once the import is PARKED for the
-  operator (m03.04 2.8.8) — both recoveries, no attestation: this refusal's
-  only override is the operator's in-app click.
-  """
-  @spec open_only_message(open_only_info()) :: String.t()
-  def open_only_message(%{adds: adds}) do
-    "Batch shape refused — nothing was applied. All #{adds} tasks bootstrapping the " <>
-      "new Initiative arrive open — the open-only import signature. The source " <>
-      "imports WHOLE: include the items it marks complete as adds with `done: true` " <>
-      "and re-send, or roll-up progress lies. If the plan is genuinely all-open, or " <>
-      "the operator chose open-only, this import now awaits their one-click approval " <>
-      "in the app — once they approve it there, re-send this SAME batch unchanged."
-  end
-
-  @doc """
-  The open-only refusal after the operator DISMISSED the parked import
-  (m03.04 2.8.8) — the decline latches for this exact payload.
-  """
-  @spec open_only_declined_message(open_only_info()) :: String.t()
-  def open_only_declined_message(%{adds: adds}) do
-    "Batch shape refused — nothing was applied. The operator declined this exact " <>
-      "open-only import (all #{adds} tasks arriving open) in the app. Change the " <>
-      "batch — include the source's completed items as adds with `done: true` — or " <>
-      "talk to the operator."
   end
 
   @doc "The batch's first initiative-add name, for the park — `(unnamed)` when blank."

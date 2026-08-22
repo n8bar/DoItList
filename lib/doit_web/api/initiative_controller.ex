@@ -17,7 +17,7 @@ defmodule DoItWeb.Api.InitiativeController do
   """
   use DoItWeb, :controller
 
-  alias DoIt.{Initiatives, Tasks}
+  alias DoIt.{ImportDeclarations, Initiatives, Tasks}
   alias DoIt.Tasks.Task
   alias DoItWeb.Api
   alias DoItWeb.Api.{Authz, Errors, Serializer}
@@ -122,18 +122,29 @@ defmodule DoItWeb.Api.InitiativeController do
   # adapter can age-qualify a FRESH Initiative — same stance: the facts live
   # here, the freshness window stays adapter policy — and its `index_style`,
   # so the held-batch confirm can print how the imported tree will render.
+  # The import interview (m03.04 2.8.10) rides the same read: `done_count`
+  # (done tasks in the same scope), `live_count` (the whole live tree,
+  # window-independent), `initiative_name`, and the Initiative's standing
+  # `import_declaration` (or null) — one consult serving pressure, first-
+  # import detection, and the declaration arithmetic.
   def task_count(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
     with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
       case parse_created_at(Map.get(params, "created_at")) do
         {:ok, created_at} ->
+          declaration = ImportDeclarations.for_initiative(initiative.id)
+
           json(
             conn,
             Api.data(%{
               count: Tasks.count_created(initiative.id, created_at),
+              done_count: Tasks.count_created_done(initiative.id, created_at),
+              live_count: Tasks.count_created(initiative.id),
               initiative_created_at: DateTime.to_iso8601(initiative.inserted_at),
-              initiative_index_style: initiative.index_style
+              initiative_index_style: initiative.index_style,
+              initiative_name: initiative.name,
+              import_declaration: declaration && Serializer.import_declaration(declaration)
             })
           )
 

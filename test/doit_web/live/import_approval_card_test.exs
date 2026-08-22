@@ -60,7 +60,7 @@ defmodule DoItWeb.ImportApprovalCardTest do
     card = view |> element("#import-approval-card-#{approval.id}") |> render()
     assert card =~ "TermiWeb"
     assert card =~ "20"
-    assert card =~ "all arriving open"
+    assert card =~ "leaving the source&#39;s completed work out"
     # §6.7: both server-gated actions carry the instant in-flight latch.
     assert card =~ "data-latch"
   end

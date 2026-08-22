@@ -425,6 +425,32 @@ defmodule DoItWeb.Api.Serializer do
     }
   end
 
+  @doc """
+  An Initiative's first-import declaration (m03.04 2.8.10 —
+  `POST /api/v1/import_declarations`, and riding the `task_count` read):
+
+      {
+        "initiative_id": 57,
+        "source_total": 20,
+        "source_completed": 5,
+        "excluded_count": 0,
+        "exclusions": null,
+        "ordering": "outline",
+        "inserted_at": "2026-08-22T05:36:48Z"
+      }
+  """
+  def import_declaration(declaration) do
+    %{
+      initiative_id: declaration.initiative_id,
+      source_total: declaration.source_total,
+      source_completed: declaration.source_completed,
+      excluded_count: declaration.excluded_count,
+      exclusions: declaration.exclusions,
+      ordering: declaration.ordering,
+      inserted_at: iso8601(declaration.inserted_at)
+    }
+  end
+
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do
     %{

@@ -26,19 +26,57 @@ defmodule DoitMcp.ImportPressure do
   (fail-open, the batch gate precedent): the apply surfaces the real error.
   """
   @spec recent(DoitMcp.ImportGate.target()) :: non_neg_integer()
-  def recent({:in_batch, _lid}), do: 0
+  def recent(target), do: snapshot(target).recent
 
-  def recent({:existing, id}) do
+  @typedoc """
+  Everything the one `task_count` read serves per target (m03.04 2.8.10):
+  the windowed creation count (`recent`) and its done subset (`recent_done`),
+  the whole live tree size (`live` — nil when the response doesn't say, so
+  first-import detection stays fail-open), the Initiative's name, and its
+  standing first-import declaration (nil when undeclared).
+  """
+  @type snapshot :: %{
+          recent: non_neg_integer(),
+          recent_done: non_neg_integer(),
+          live: non_neg_integer() | nil,
+          name: String.t() | nil,
+          declaration: map() | nil
+        }
+
+  @doc """
+  The target's full pressure/interview facts in ONE windowed `task_count`
+  read — the same read `recent/1` always made, now carrying the import
+  interview's inputs too. An in-batch Initiative has no history and no tree:
+  zeros, no HTTP. Unreadable shapes fall back field by field (fail-open).
+  """
+  @spec snapshot(DoitMcp.ImportGate.target()) :: snapshot()
+  def snapshot({:in_batch, _lid}) do
+    %{recent: 0, recent_done: 0, live: 0, name: nil, declaration: nil}
+  end
+
+  def snapshot({:existing, id}) do
     since =
       DateTime.utc_now()
       |> DateTime.add(-@window_minutes, :minute)
       |> DateTime.to_iso8601()
 
-    case Client.get(
-           "/api/v1/initiatives/#{id}/task_count?created_at=#{URI.encode_www_form(since)}"
-         ) do
-      {:ok, %{"count" => count}} when is_integer(count) -> count
-      _ -> 0
-    end
+    body =
+      case Client.get(
+             "/api/v1/initiatives/#{id}/task_count?created_at=#{URI.encode_www_form(since)}"
+           ) do
+        {:ok, body} when is_map(body) -> body
+        _ -> %{}
+      end
+
+    %{
+      recent: int_or(body["count"], 0),
+      recent_done: int_or(body["done_count"], 0),
+      live: int_or(body["live_count"], nil),
+      name: if(is_binary(body["initiative_name"]), do: body["initiative_name"]),
+      declaration: if(is_map(body["import_declaration"]), do: body["import_declaration"])
+    }
   end
+
+  defp int_or(value, _default) when is_integer(value) and value >= 0, do: value
+  defp int_or(_value, default), do: default
 end
