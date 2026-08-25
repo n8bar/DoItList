@@ -44,9 +44,7 @@ defmodule DoItWeb.AccountSkipImportApprovalsTest do
     refute view |> element("#skip-import-approvals-toggle") |> render() =~ "checked"
 
     warning = view |> element("#skip-import-approvals-warning") |> render()
-    assert warning =~ "Applies open-only imports without waiting for your approval."
-    assert warning =~ "Do It List companion skill"
-    assert warning =~ "break roll-up progress"
+    assert warning =~ "Imports no longer wait for your approval"
   end
 
   test "flipping it on persists and survives a reload", ctx do

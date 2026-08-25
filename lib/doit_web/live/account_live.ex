@@ -380,37 +380,6 @@ defmodule DoItWeb.AccountLive do
              renders nothing visible. --%>
         <.import_approval_cards id="import-approvals" approvals={@import_approvals} />
 
-        <%!-- The ceremony's off-switch (m03.04 2.8.9), homed with the cards it
-             silences. Checkbox flips client-side at click (§6.2 optimistic
-             ack); the change event persists; a failed save re-renders the
-             stored value back (honest revert). Silences only the stop — the
-             open-only facts and guidance still ride every import. --%>
-        <div
-          id="import-ceremony-setting"
-          class="mb-4 rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 px-4 py-3"
-        >
-          <form phx-change="set_skip_import_approvals">
-            <label class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
-              <input
-                type="checkbox"
-                id="skip-import-approvals-toggle"
-                name="skip_import_approvals"
-                value="true"
-                checked={@current_user.skip_import_approvals}
-                class="checkbox checkbox-sm"
-              /> Skip import approvals
-            </label>
-            <p
-              id="skip-import-approvals-warning"
-              class="mt-1 text-xs text-amber-700 dark:text-amber-400"
-            >
-              Applies open-only imports without waiting for your approval. For accounts whose
-              agents run the Do It List companion skill — without it, agents routinely import
-              plans open-only and break roll-up progress.
-            </p>
-          </form>
-        </div>
-
         <details
           id="account-profile"
           data-keep="open"
@@ -1054,6 +1023,36 @@ defmodule DoItWeb.AccountLive do
                   <% end %>
                 </ul>
               <% end %>
+            </div>
+
+            <%!-- The ceremony's off-switch (m03.04 2.8.9), homed with the API
+                 surface the agents it governs act through. Checkbox flips
+                 client-side at click (§6.2 optimistic ack); the change event
+                 persists; a failed save re-renders the stored value back
+                 (honest revert). Silences only the stop — the open-only facts
+                 and guidance still ride every import. --%>
+            <div
+              id="import-ceremony-setting"
+              class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800"
+            >
+              <form phx-change="set_skip_import_approvals">
+                <label class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
+                  <input
+                    type="checkbox"
+                    id="skip-import-approvals-toggle"
+                    name="skip_import_approvals"
+                    value="true"
+                    checked={@current_user.skip_import_approvals}
+                    class="checkbox checkbox-sm"
+                  /> Skip import approvals
+                </label>
+                <p
+                  id="skip-import-approvals-warning"
+                  class="mt-1 text-xs text-amber-700 dark:text-amber-400"
+                >
+                  Imports no longer wait for your approval.
+                </p>
+              </form>
             </div>
           </div>
         </details>
