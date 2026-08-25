@@ -284,12 +284,12 @@ defmodule DoitMcp.BatchShape do
   defp refuse_message(reasons) do
     "Batch shape refused — nothing was applied. " <>
       Enum.map_join(reasons, "; ", &String.capitalize/1) <>
-      ". Import the work inside the documents — completable items become tasks, nested " <>
-      "as the source nests them — not the documents themselves. A description is empty " <>
-      "unless it adds detail the title lacks; provenance is one comment per branch " <>
-      "naming the source path, never a stamp repeated on every task. If the operator " <>
-      "asked for this exact shape, they approve this import in the app — re-send this " <>
-      "SAME batch unchanged once they have."
+      ". Import the work inside the documents — its work items become tasks, done ones " <>
+      "included, nested as the source nests them — not the documents themselves. A " <>
+      "description is empty unless it adds detail the title lacks; provenance is one " <>
+      "comment per branch naming the source path, never a stamp repeated on every " <>
+      "task. If the operator asked for this exact shape, they approve this import in " <>
+      "the app — re-send this SAME batch unchanged once they have."
   end
 
   @doc "The batch's first initiative-add name, for the park — `(unnamed)` when blank."
