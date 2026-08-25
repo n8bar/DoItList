@@ -36,7 +36,7 @@ defmodule DoItWeb.ImportApprovalComponents do
               An agent wants to import — your call
             </h3>
             <p class="text-xs text-amber-800 dark:text-amber-300">
-              It wants to import into “{approval.initiative_name}” — {approval.task_count} tasks, declaredly leaving the source's completed work out of the tree. Approve if that's what you
+              It wants to import {approval.task_count} tasks into “{approval.initiative_name}”, in a shape we stop by default. Approve if that's what you
               asked for; dismiss to make it change the batch or come talk to you.
             </p>
           </div>

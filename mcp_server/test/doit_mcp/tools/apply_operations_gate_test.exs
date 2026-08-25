@@ -433,69 +433,98 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     refute_received {:operations_post, _}
   end
 
-  test "a mirror batch refuses, teaching the operator_confirmed re-call" do
+  test "a mirror batch refuses and parks for the operator's approval (m03.04 2.8.5.3)" do
+    stub_apply()
     decoded = execute_refused(%{operations: mirror_batch(7)})
 
     assert decoded["gate"] == "batch_shape"
     assert decoded["message"] =~ "file-mirror import"
-    assert decoded["message"] =~ "`operator_confirmed: true` plus `readback`"
+    assert decoded["message"] =~ "they approve this import in the app"
+    # One override mechanism now — the agent can no longer attest.
+    refute decoded["message"] =~ "operator_confirmed"
+    # Parked under this batch's own hash, approve URL handed back.
+    assert_received {:approval_post, %{"payload_hash" => _}}
+    assert decoded["approve_url"] == "http://app.test/account#import-approvals"
     refute_received {:operations_post, _}
   end
 
-  test "operator_confirmed overrides the refusal and stamps the record" do
-    stub_apply()
+  test "the operator's in-app approval overrides the refusal and stamps the record" do
+    stub_apply(approval_status: "approved")
 
     rest =
       execute_ok(%{
         operations: mirror_batch(7),
-        operator_confirmed: true,
         readback: "One task per source file, as the operator asked."
       })
 
     body = assert_record_posted(700)
     assert body =~ "One task per source file, as the operator asked."
-    assert body =~ "Operator-confirmed in chat."
+    assert body =~ "Operator-approved in the app."
     # The server's facts print under the claim — a rosy readback can't hide
     # the shape.
     assert body =~ "Server-computed shape facts:"
     assert body =~ "12 of 12 new task titles look like file paths/names."
 
+    # Approved means approved — nothing re-parks.
+    refute_received {:approval_post, _}
     assert Enum.any?(rest, &(&1["text"] =~ "posted as a provenance comment"))
   end
 
-  test "operator_confirmed without a readback is refused asking for the record" do
-    stub_apply()
-    decoded = execute_refused(%{operations: mirror_batch(7), operator_confirmed: true})
+  test "an approved shape override without a readback is refused asking for the record" do
+    stub_apply(approval_status: "approved")
+    decoded = execute_refused(%{operations: mirror_batch(7)})
 
     assert decoded["gate"] == "import_readback"
-    assert decoded["message"] =~ "attestation"
-    assert decoded["message"] =~ "stamped operator-confirmed"
+    assert decoded["message"] =~ "approved this import in the app"
+    assert decoded["message"] =~ "stamped operator-approved"
     refute_received {:operations_post, _}
   end
 
-  test "a sub-scale checklist batch is refused with the subtasks-or-ask recovery words" do
+  test "a dismissed shape refusal latches for that payload, and never re-parks" do
+    stub_apply(approval_status: "dismissed")
+    decoded = execute_refused(%{operations: mirror_batch(7)})
+
+    assert decoded["gate"] == "batch_shape"
+    assert decoded["message"] =~ "declined this exact import in the app"
+    refute_received {:approval_post, _}
+    refute_received {:operations_post, _}
+  end
+
+  test "the account's dormant ceremony (2.8.9) lets a shape refusal through" do
+    stub_apply(approval_status: "skipped")
+
+    execute_ok(%{
+      operations: mirror_batch(7),
+      readback: "One task per source file — this account runs the skill."
+    })
+
+    assert_received {:operations_post, _batch}
+    refute_received {:approval_post, _}
+  end
+
+  test "a sub-scale checklist batch is refused with the subtasks-or-approve recovery words" do
+    stub_apply()
     decoded = execute_refused(%{operations: checklist_batch(7)})
 
     assert decoded["gate"] == "batch_shape"
     assert decoded["message"] =~ "2 markdown-checkbox lines sit inside 1 new task descriptions"
     assert decoded["message"] =~ "Import them as subtasks instead"
-    assert decoded["message"] =~ "ask the operator in chat"
-    assert decoded["message"] =~ "`operator_confirmed: true`"
+    assert decoded["message"] =~ "they approve this import in the app"
+    refute decoded["message"] =~ "operator_confirmed"
     refute_received {:operations_post, _}
 
-    # The operator's keep-as-prose choice applies via the override, with the
-    # checkbox fact in the record.
-    stub_apply()
+    # The operator's keep-as-prose choice applies through the same approval,
+    # with the checkbox fact in the record.
+    stub_apply(approval_status: "approved")
 
     execute_ok(%{
       operations: checklist_batch(7),
-      operator_confirmed: true,
       readback: "Keeping the setup checklist as description prose, as asked."
     })
 
     body = assert_record_posted(700)
     assert body =~ "2 markdown-checkbox lines sit inside 1 new descriptions."
-    assert body =~ "Operator-confirmed in chat."
+    assert body =~ "Operator-approved in the app."
   end
 
   test "the kill switch disarms the shape pass with the classifier" do

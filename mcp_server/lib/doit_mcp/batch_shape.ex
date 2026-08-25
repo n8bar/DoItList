@@ -10,11 +10,10 @@ defmodule DoitMcp.BatchShape do
       markup), boilerplate (one description stamped across dozens of tasks),
       and sub-scale checklist descriptions (checkboxable lines are what this
       product turns into tasks — import them as subtasks). Every message
-      teaches at the moment of action and names the override path: a shape
-      the operator explicitly asked for re-calls with
-      `operator_confirmed: true` plus `readback` after the agent confirms
-      with them in chat; the attestation is stamped into the import's
-      provenance record.
+      teaches at the moment of action and names the one override path
+      (m03.04 2.8.5.3): a shape the operator actually asked for is approved
+      by them in the app, and the same batch re-sent unchanged then flows —
+      the agent never attests on their behalf.
     * `:pass` — nothing notable.
 
   The open-only bootstrap import (a new Initiative with import-scale
@@ -59,6 +58,9 @@ defmodule DoitMcp.BatchShape do
   # this many tasks.
   @boilerplate_repeats 10
   @boilerplate_min_chars 20
+  # A title short enough to appear inside unrelated prose by chance can't
+  # signal a title-echo; only titles at least this long strip.
+  @title_echo_min_chars 10
 
   @type verdict :: {:refuse, String.t()} | :pass
 
@@ -199,14 +201,49 @@ defmodule DoitMcp.BatchShape do
 
   defp top_repeated_description(adds) do
     adds
-    |> Enum.map(&add_field(&1, "description"))
-    |> Enum.filter(fn desc ->
-      is_binary(desc) and String.length(String.trim(desc)) >= @boilerplate_min_chars
-    end)
+    |> Enum.map(&boilerplate_key/1)
+    |> Enum.reject(&is_nil/1)
     |> Enum.frequencies()
     |> Map.values()
     |> Enum.max(fn -> 0 end)
   end
+
+  # The repeat family a description belongs to. An exact repeat keys on
+  # itself; a description that ECHOES its own title keys on what is left
+  # once the title is stripped, so a per-task title can't disguise one
+  # stamped template (m03.04 2.8.5 — a drive gave 324 tasks descriptions
+  # reading "Imported checklist item from <file>. Full source item: <the
+  # title again>", every string unique, the exact-repeat count zero).
+  defp boilerplate_key(op) do
+    desc = add_field(op, "description")
+
+    if is_binary(desc) and String.length(String.trim(desc)) >= @boilerplate_min_chars do
+      trimmed = String.trim(desc)
+
+      case title_residual(trimmed, add_field(op, "title")) do
+        nil -> trimmed
+        residual -> {:title_echo, residual}
+      end
+    end
+  end
+
+  # What a description says BEYOND its own title — nil when the title isn't
+  # echoed in it at all. Two tasks whose descriptions differ only by their
+  # titles share a residual, so they land in one family.
+  defp title_residual(desc, title) when is_binary(title) do
+    trimmed = String.trim(title)
+
+    if String.length(trimmed) >= @title_echo_min_chars and
+         String.contains?(String.downcase(desc), String.downcase(trimmed)) do
+      desc
+      |> String.downcase()
+      |> String.replace(String.downcase(trimmed), " ")
+      |> String.replace(~r/\s+/, " ")
+      |> String.trim()
+    end
+  end
+
+  defp title_residual(_desc, _title), do: nil
 
   # --- Refusals --------------------------------------------------------------
 
@@ -248,11 +285,11 @@ defmodule DoitMcp.BatchShape do
     "Batch shape refused — nothing was applied. " <>
       Enum.map_join(reasons, "; ", &String.capitalize/1) <>
       ". Import the work inside the documents — completable items become tasks, nested " <>
-      "as the source nests them — not the documents themselves; cite a source file by " <>
-      "path in a provenance comment instead of pasting its contents. If the operator " <>
-      "explicitly asked for this exact shape, confirm it with them in chat, then " <>
-      "re-call with `operator_confirmed: true` plus `readback` — the attestation is " <>
-      "stamped into the import's provenance record."
+      "as the source nests them — not the documents themselves. A description is empty " <>
+      "unless it adds detail the title lacks; provenance is one comment per branch " <>
+      "naming the source path, never a stamp repeated on every task. If the operator " <>
+      "asked for this exact shape, they approve this import in the app — re-send this " <>
+      "SAME batch unchanged once they have."
   end
 
   @doc "The batch's first initiative-add name, for the park — `(unnamed)` when blank."
@@ -280,9 +317,9 @@ defmodule DoitMcp.BatchShape do
     "Batch shape refused — nothing was applied. #{facts.checkbox_lines} " <>
       "markdown-checkbox lines sit inside #{facts.checklist_descriptions} new task " <>
       "descriptions, and checklists are what DoItList turns into tasks. Import them " <>
-      "as subtasks instead — or ask the operator in chat; if they want the checklists " <>
-      "kept as description prose, re-call with `operator_confirmed: true` plus " <>
-      "`readback`."
+      "as subtasks instead. If the operator wants the checklists kept as description " <>
+      "prose, they approve this import in the app — re-send this SAME batch unchanged " <>
+      "once they have."
   end
 
   # --- Op access -------------------------------------------------------------

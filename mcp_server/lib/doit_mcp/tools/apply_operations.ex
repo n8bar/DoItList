@@ -142,10 +142,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
   refusing.
 
   Shape refusals (file mirror, checklists, boilerplate — each message
-  teaches its recovery) are overridable only by the operator's own
-  instruction: confirm with them in chat, then re-call with
-  `operator_confirmed: true` plus `readback`; the record is stamped
-  "Operator-confirmed in chat", so the trail shows the attestation.
+  teaches its recovery) ride the SAME park-and-approve (m03.04 2.8.5.3):
+  the refusal parks the import on the operator's account and the agent is
+  handed the approve URL; approved, the SAME batch re-sent flows with its
+  record stamped "Operator-approved in the app"; dismissed, that payload
+  keeps refusing. There is one override mechanism, and the agent never
+  attests on the operator's behalf.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -177,7 +179,6 @@ defmodule DoitMcp.Tools.ApplyOperations do
     field(:readback, :string, required: false)
     field(:assumptions, {:list, :string}, required: false)
     field(:settled, {:list, :string}, required: false)
-    field(:operator_confirmed, :boolean, required: false)
     field(:declared_total, :integer, required: false)
     field(:declared_completed, :integer, required: false)
     field(:declared_exclusions, {:list, :map}, required: false)
@@ -188,9 +189,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
     # Content-shape pass first (m03.04 3.1 iteration 1): a refusal costs no
     # API reads. Rides the classifier's kill switch — one switch disarms all
     # import guardrails.
-    case shape_check(params) do
+    case shape_check(params) |> shape_approval(params) do
       {:refuse, message} ->
         {:reply, shape_refused(message), frame}
+
+      {:refuse, message, extra} ->
+        {:reply, shape_refused(message, extra), frame}
 
       shape ->
         parent_targets = resolve_parent_targets(params.operations)
@@ -239,23 +243,63 @@ defmodule DoitMcp.Tools.ApplyOperations do
     end
   end
 
-  # BatchShape verdict folded with the operator-confirmed override (m03.04
-  # item 36.2): a refusal stands unless the agent attests the operator asked
-  # for this exact shape in chat (`operator_confirmed: true`); the override
-  # demands a readback, and the record is stamped so the trail shows the
-  # attestation.
+  # BatchShape's verdict, unfolded (m03.04 2.8.5.3 retired the agent-asserted
+  # `operator_confirmed` override): a refusal stands on its own here and the
+  # operator's own click decides it in `shape_approval/2`.
   defp shape_check(params) do
     if ImportGate.enabled?() do
-      case BatchShape.classify(params.operations) do
-        {:refuse, message} ->
-          if operator_confirmed?(params), do: :overridden, else: {:refuse, message}
-
-        :pass ->
-          :pass
-      end
+      BatchShape.classify(params.operations)
     else
       :pass
     end
+  end
+
+  # The shape refusal's override, riding 2.8.8's park-and-approve exactly as
+  # the declared-exclusion gate does (m03.04 2.8.5.3): the operator's
+  # recorded decision for this exact payload hash settles it. `skipped` means
+  # the account's ceremony is dormant (2.8.9, the family this gate was built
+  # to inherit) so the batch flows; approved flows stamped; dismissed latches
+  # the declined refusal; anything else (re-)parks. Costs API reads only on
+  # the refusal path — a passing batch still reaches the wire untouched.
+  defp shape_approval(:pass, _params), do: :pass
+
+  defp shape_approval({:refuse, message}, params) do
+    case Client.get("/api/v1/import_approvals/#{payload_hash(params.operations)}") do
+      {:ok, %{"status" => "skipped"}} -> :pass
+      {:ok, %{"status" => "approved"}} -> :approved
+      {:ok, %{"status" => "dismissed"}} -> {:refuse, shape_declined_message()}
+      _pending_or_none -> park_shape(params, message)
+    end
+  end
+
+  defp park_shape(params, message) do
+    body = %{
+      payload_hash: payload_hash(params.operations),
+      task_count: Enum.count(params.operations, &task_add_op?/1),
+      initiative_name: BatchShape.first_initiative_name(params.operations)
+    }
+
+    case Client.post("/api/v1/import_approvals", body) do
+      {:ok, %{"url" => url}} ->
+        {:refuse, message, %{approve_url: url}}
+
+      failure ->
+        Logger.warning("shape refusal park failed: #{inspect(failure)}")
+
+        {:refuse,
+         message <>
+           " (The approval request could not be parked in the app just now — " <>
+           "re-sending will park it again.)"}
+    end
+  end
+
+  defp task_add_op?(%{"op" => "add", "type" => "task"}), do: true
+  defp task_add_op?(_), do: false
+
+  defp shape_declined_message do
+    "Batch shape refused — nothing was applied. The operator declined this exact " <>
+      "import in the app. Change the batch — import the work inside the documents as " <>
+      "tasks, nested as the source nests them — or talk to the operator."
   end
 
   # --- The first-import interview (m03.04 2.8.10) ----------------------------
@@ -425,8 +469,6 @@ defmodule DoitMcp.Tools.ApplyOperations do
     |> Base.encode16(case: :lower)
   end
 
-  defp operator_confirmed?(params), do: Map.get(params, :operator_confirmed) == true
-
   defp shape_refused(message, extra \\ %{}) do
     payload =
       Map.merge(%{ok: false, applied: false, gate: "batch_shape", message: message}, extra)
@@ -466,7 +508,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
         {:record,
          %{
            target: interview.target,
-           message: record_message(params, interview.target, interview)
+           message: record_message(params, interview.target, interview, shape)
          }}
 
       is_nil(presence(Map.get(params, :readback))) ->
@@ -483,7 +525,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
                 List.first(ImportGate.target_refs(params.operations, parent_targets))
           end
 
-        {:record, %{target: target, message: record_message(params, target, interview)}}
+        {:record, %{target: target, message: record_message(params, target, interview, shape)}}
     end
   end
 
@@ -507,11 +549,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
   end
 
   defp readback_required_message(:pass, _shape) do
-    "Shape override readback required: `operator_confirmed` attests the operator asked " <>
-      "for this shape in chat, and the attestation must land in the import's record. " <>
-      "Nothing was applied. Re-call apply_operations with the SAME operations plus " <>
-      "`readback` — the record posts as a provenance comment on the target " <>
-      "Initiative's root task, stamped operator-confirmed."
+    "Shape override readback required: the operator approved this import in the app, " <>
+      "and what they approved must land in the import's record. Nothing was applied. " <>
+      "Re-call apply_operations with the SAME operations plus `readback` — the record " <>
+      "posts as a provenance comment on the target Initiative's root task, stamped " <>
+      "operator-approved."
   end
 
   # Resolve the batch's parent-anchored task-adds (`parent_id` = an existing
@@ -659,26 +701,24 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   defp record_root(nil, _body), do: nil
 
-  defp record_message(params, target, interview) do
+  defp record_message(params, target, interview, shape) do
     compose_record(
       presence(Map.get(params, :readback)),
       BatchShape.facts_block(params.operations),
       target_style_line(target),
       Map.get(params, :assumptions) || [],
       Map.get(params, :settled) || [],
-      record_stamp(params, interview),
+      record_stamp(interview, shape),
       interview && ImportInterview.declaration_block(interview.declaration)
     )
   end
 
-  # The record's provenance stamp: an operator-approved parked import
-  # (2.8.8/2.8.10) stamps the server-verified click; any other apply with
-  # the attestation param stamps the chat confirm.
-  defp record_stamp(params, interview) do
-    cond do
-      interview && interview.approved? -> "Operator-approved in the app."
-      operator_confirmed?(params) -> "Operator-confirmed in chat."
-      true -> nil
+  # The record's provenance stamp — one sentence, one mechanism (m03.04
+  # 2.8.5.3): every override is the operator's own server-verified click,
+  # whether it cleared a declared exclusion (2.8.10) or a shape refusal.
+  defp record_stamp(interview, shape) do
+    if (interview && interview.approved?) || shape == :approved do
+      "Operator-approved in the app."
     end
   end
 

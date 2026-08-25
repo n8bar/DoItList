@@ -30,7 +30,8 @@ defmodule DoitMcp.BatchShapeTest do
       assert message =~ "12 of 12 new task titles look like file paths/names"
       assert message =~ "whole-file sized"
       assert message =~ "file-mirror import"
-      assert message =~ "`operator_confirmed: true` plus `readback`"
+      assert message =~ "they approve this import in the app"
+      refute message =~ "operator_confirmed"
     end
 
     test "mirror needs both signals — path titles alone pass" do
@@ -63,6 +64,45 @@ defmodule DoitMcp.BatchShapeTest do
       ops = for i <- 1..12, do: add("Item #{i}", "TBD")
       assert BatchShape.classify(ops) == :pass
     end
+
+    test "title-echo descriptions are one boilerplate family (m03.04 2.8.5)" do
+      # Every string unique, so the exact-repeat count is zero — the drive
+      # that produced this shape sailed past the old detector.
+      ops =
+        for i <- 1..10 do
+          title = "Configure the ingest pipeline step #{i}"
+          add(title, "Imported checklist item from PLAN.md. Full source item: #{title}")
+        end
+
+      assert {:refuse, message} = BatchShape.classify(ops)
+      assert message =~ "stamped on 10 tasks"
+      assert message =~ "boilerplate"
+      assert message =~ "adds detail the title lacks"
+    end
+
+    test "a description echoing its title but adding real detail is its own family" do
+      ops =
+        for i <- 1..12 do
+          title = "Configure the ingest pipeline step #{i}"
+          add(title, "#{title} waits on fixture #{i} and a retry budget of #{i * 30}s.")
+        end
+
+      assert BatchShape.classify(ops) == :pass
+    end
+
+    test "empty descriptions plus one provenance comment pass (m03.04 2.8.5.4)" do
+      ops =
+        (for i <- 1..12, do: add("Milestone #{i}")) ++
+          [
+            %{
+              "op" => "add",
+              "type" => "comment",
+              "data" => %{"task_lid" => "Milestone 1", "body" => "Imported from docs/PLAN.md"}
+            }
+          ]
+
+      assert BatchShape.classify(ops) == :pass
+    end
   end
 
   describe "classify/1 sub-scale checklist refusal (m03.04 2.8.4.2)" do
@@ -72,8 +112,8 @@ defmodule DoitMcp.BatchShapeTest do
       assert {:refuse, message} = BatchShape.classify(ops)
       assert message =~ "2 markdown-checkbox lines"
       assert message =~ "Import them as subtasks instead"
-      assert message =~ "ask the operator in chat"
-      assert message =~ "`operator_confirmed: true`"
+      assert message =~ "they approve this import in the app"
+      refute message =~ "operator_confirmed"
     end
 
     test "a single stray checkbox line is noise — passes" do

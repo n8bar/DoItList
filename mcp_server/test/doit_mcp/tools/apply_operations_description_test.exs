@@ -36,8 +36,10 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
     } do
       assert description =~ "never stops an import"
       assert description =~ "provenance comment on the target Initiative's root task"
-      assert description =~ "`operator_confirmed: true`"
-      assert description =~ "Operator-confirmed in chat"
+      assert description =~ "Operator-approved in the app"
+      # 2.8.5.3 retired the agent-asserted override — one mechanism only.
+      refute description =~ "operator_confirmed"
+      refute description =~ "Operator-confirmed in chat"
       refute description =~ "fresh floor"
       refute description =~ "confirm_url"
       refute description =~ "confirmation_pending"
