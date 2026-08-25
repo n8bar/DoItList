@@ -97,16 +97,21 @@ defmodule DoIt.ImportApprovals do
   `status == "pending"`, so a second decision returns `{:error, :not_pending}`
   instead of overwriting. Broadcasts `{:import_approval_decided, approval}`.
   """
-  def decide(%User{id: user_id}, approval_id, status) when status in @decisions do
+  def decide(%User{id: user_id}, approval_id, status, reason \\ nil)
+      when status in @decisions do
     query =
       from a in ImportApproval,
         where: a.id == ^approval_id and a.user_id == ^user_id and a.status == "pending",
         select: a
 
     now = DateTime.utc_now() |> DateTime.truncate(:second)
+    reason = trimmed(reason)
 
-    case Repo.update_all(query, set: [status: status, updated_at: now]) do
+    case Repo.update_all(query,
+           set: [status: status, decision_reason: reason, updated_at: now]
+         ) do
       {1, [approval]} ->
+        approval = %{approval | decision_reason: reason}
         DoIt.Broadcast.broadcast(user_topic(user_id), {:import_approval_decided, approval})
         {:ok, approval}
 
@@ -114,6 +119,18 @@ defmodule DoIt.ImportApprovals do
         {:error, :not_pending}
     end
   end
+
+  # The operator's rejection words — blank collapses to nil so the agent is
+  # told there were none rather than shown an empty quote. Capped so an
+  # accident can't push a wall of text into an agent's context (2.11.2).
+  defp trimmed(reason) when is_binary(reason) do
+    case reason |> String.trim() |> String.slice(0, 500) do
+      "" -> nil
+      text -> text
+    end
+  end
+
+  defp trimmed(_), do: nil
 
   @doc """
   The newest row for `user` + `payload_hash` (any status), or nil — the

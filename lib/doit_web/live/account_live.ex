@@ -254,8 +254,10 @@ defmodule DoItWeb.AccountLive do
   def handle_event("approve_import", %{"id" => id}, socket),
     do: decide_import(socket, id, "approved")
 
-  def handle_event("dismiss_import", %{"id" => id}, socket),
-    do: decide_import(socket, id, "dismissed")
+  # Reject carries the operator's optional words to the agent (m03.04
+  # 2.11.2) — a form submit, so the text rides the same event.
+  def handle_event("dismiss_import", %{"approval_id" => id} = params, socket),
+    do: decide_import(socket, id, "dismissed", params["reason"])
 
   # The ceremony's account-level off-switch (m03.04 2.8.9). The checkbox
   # flips client-side at click (§6.2 optimistic ack — the client completes
@@ -275,13 +277,13 @@ defmodule DoItWeb.AccountLive do
     end
   end
 
-  defp decide_import(socket, id, status) do
+  defp decide_import(socket, id, status, reason \\ nil) do
     user = socket.assigns.current_user
 
     socket =
       case Integer.parse(to_string(id)) do
         {approval_id, ""} ->
-          case ImportApprovals.decide(user, approval_id, status) do
+          case ImportApprovals.decide(user, approval_id, status, reason) do
             {:ok, _approval} ->
               socket
 

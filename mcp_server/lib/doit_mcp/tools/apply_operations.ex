@@ -267,7 +267,9 @@ defmodule DoitMcp.Tools.ApplyOperations do
     case Client.get("/api/v1/import_approvals/#{payload_hash(params.operations)}") do
       {:ok, %{"status" => "skipped"}} -> :pass
       {:ok, %{"status" => "approved"}} -> :approved
-      {:ok, %{"status" => "dismissed"}} -> {:refuse, shape_declined_message()}
+      {:ok, %{"status" => "dismissed"} = row} ->
+        {:refuse, shape_declined_message(row["decision_reason"])}
+
       _pending_or_none -> park_shape(params, message)
     end
   end
@@ -276,7 +278,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
     body = %{
       payload_hash: payload_hash(params.operations),
       task_count: Enum.count(params.operations, &task_add_op?/1),
-      initiative_name: BatchShape.first_initiative_name(params.operations)
+      initiative_name: BatchShape.first_initiative_name(params.operations),
+      sample: BatchShape.deep_sample(params.operations)
     }
 
     case Client.post("/api/v1/import_approvals", body) do
@@ -296,10 +299,19 @@ defmodule DoitMcp.Tools.ApplyOperations do
   defp task_add_op?(%{"op" => "add", "type" => "task"}), do: true
   defp task_add_op?(_), do: false
 
-  defp shape_declined_message do
-    "Batch shape refused — nothing was applied. The operator declined this exact " <>
-      "import in the app. Change the batch — import the work inside the documents as " <>
-      "tasks, nested as the source nests them — or talk to the operator."
+  # The operator's own words, quoted and attributed — guidance from them, not
+  # instructions from the server (m03.04 2.11.2). No words, no quote.
+  defp shape_declined_message(reason) when is_binary(reason) do
+    "Batch shape refused — nothing was applied. The operator rejected this exact " <>
+      "import in the app, saying: \"#{reason}\" Change the batch accordingly and " <>
+      "re-send, or talk to them."
+  end
+
+  defp shape_declined_message(_reason) do
+    "Batch shape refused — nothing was applied. The operator rejected this exact " <>
+      "import in the app without saying why. Change the batch — import the work " <>
+      "inside the documents as tasks, nested as the source nests them — or talk to " <>
+      "the operator."
   end
 
   # --- The first-import interview (m03.04 2.8.10) ----------------------------
@@ -419,8 +431,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
       {:ok, %{"status" => "approved"}} ->
         {:ok, %{accepted | approved?: true}}
 
-      {:ok, %{"status" => "dismissed"}} ->
-        {:refuse, ImportInterview.declined_message()}
+      {:ok, %{"status" => "dismissed"} = row} ->
+        {:refuse, ImportInterview.declined_message(row["decision_reason"])}
 
       _pending_or_none ->
         park_exclusion(params, target, snap, decl, adds, done)
@@ -434,7 +446,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
     body = %{
       payload_hash: payload_hash(params.operations),
       task_count: adds,
-      initiative_name: park_name(target, snap, params.operations)
+      initiative_name: park_name(target, snap, params.operations),
+      sample: BatchShape.deep_sample(params.operations)
     }
 
     message = ImportInterview.parked_message(decl, done)

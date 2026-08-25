@@ -152,7 +152,7 @@ defmodule DoitMcp.ImportInterviewTest do
     test "the declined message latches — change the batch or talk to the operator" do
       message = ImportInterview.declined_message()
 
-      assert message =~ "operator declined"
+      assert message =~ "operator rejected"
       assert message =~ "`done: true` adds"
       assert message =~ "talk to the operator"
       refute message =~ "operator_confirmed"

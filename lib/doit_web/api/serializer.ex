@@ -420,6 +420,7 @@ defmodule DoItWeb.Api.Serializer do
       status: approval.status,
       task_count: approval.task_count,
       initiative_name: approval.initiative_name,
+      decision_reason: approval.decision_reason,
       url: url(~p"/account") <> "#import-approvals",
       inserted_at: iso8601(approval.inserted_at)
     }

@@ -252,12 +252,20 @@ defmodule DoitMcp.ImportInterview do
   end
 
   @doc "The refusal after the operator DISMISSED the parked import — latched per payload."
-  @spec declined_message() :: String.t()
-  def declined_message do
-    "Import refused — nothing was applied. The operator declined this exact import " <>
-      "(its declaration excludes completed work) in the app. Change the batch — " <>
-      "include the source's completed items as `done: true` adds — or talk to the " <>
-      "operator."
+  @spec declined_message(String.t() | nil) :: String.t()
+  def declined_message(reason \\ nil)
+
+  def declined_message(reason) when is_binary(reason) do
+    "Import refused — nothing was applied. The operator rejected this exact import " <>
+      "in the app, saying: \"#{reason}\" Change the batch accordingly and re-send, " <>
+      "or talk to them."
+  end
+
+  def declined_message(_reason) do
+    "Import refused — nothing was applied. The operator rejected this exact import " <>
+      "(its declaration excludes completed work) in the app without saying why. " <>
+      "Change the batch — include the source's completed items as `done: true` " <>
+      "adds — or talk to the operator."
   end
 
   @doc """

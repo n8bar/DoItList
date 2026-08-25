@@ -169,7 +169,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
                 status ->
                   Req.Test.json(conn, %{
-                    "data" => %{"payload_hash" => hash, "status" => status}
+                    "data" =>
+                      %{"payload_hash" => hash, "status" => status}
+                      |> Map.put("decision_reason", Keyword.get(opts, :approval_reason))
                   })
               end
 
@@ -485,8 +487,33 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     decoded = execute_refused(%{operations: mirror_batch(7)})
 
     assert decoded["gate"] == "batch_shape"
-    assert decoded["message"] =~ "declined this exact import in the app"
+    assert decoded["message"] =~ "rejected this exact import in the app"
     refute_received {:approval_post, _}
+    refute_received {:operations_post, _}
+  end
+
+  test "the park carries the batch's deepest-branch snapshot (m03.04 2.11.2)" do
+    stub_apply()
+    execute_refused(%{operations: mirror_batch(7)})
+
+    assert_received {:approval_post, posted}
+    assert %{"nodes" => [_ | _] = nodes} = posted["sample"]
+    assert Enum.all?(nodes, &Map.has_key?(&1, "depth"))
+    assert Enum.all?(nodes, &Map.has_key?(&1, "title"))
+  end
+
+  test "a rejection's words reach the agent, quoted and attributed (m03.04 2.11.2)" do
+    stub_apply(
+      approval_status: "dismissed",
+      approval_reason: "These are my milestones, not files. Import the checklists under them."
+    )
+
+    decoded = execute_refused(%{operations: mirror_batch(7)})
+
+    assert decoded["gate"] == "batch_shape"
+    assert decoded["message"] =~ "The operator rejected this exact import"
+    assert decoded["message"] =~ "Import the checklists under them."
+    refute decoded["message"] =~ "without saying why"
     refute_received {:operations_post, _}
   end
 
@@ -711,7 +738,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
       decoded = execute_refused(params)
 
       assert decoded["gate"] == "import_declaration"
-      assert decoded["message"] =~ "operator declined"
+      assert decoded["message"] =~ "operator rejected"
       assert decoded["message"] =~ "talk to the operator"
       assert_received {:approval_get, _}
       refute_received {:approval_post, _}

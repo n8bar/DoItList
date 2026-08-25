@@ -19,6 +19,12 @@ defmodule DoIt.ImportApprovals.ImportApproval do
     field :task_count, :integer
     field :initiative_name, :string
     field :status, :string, default: "pending"
+    # The batch's deepest-branch snapshot, %{"nodes" => [%{title, description,
+    # depth}]} — the card shows content instead of our classification
+    # (m03.04 2.11.2). A map, not a bare list, so later fields need no migration.
+    field :sample, :map
+    # The operator's words on a rejection, handed to the agent (2.11.2).
+    field :decision_reason, :string
 
     belongs_to :user, DoIt.Accounts.User
 
@@ -34,10 +40,31 @@ defmodule DoIt.ImportApprovals.ImportApproval do
   """
   def changeset(approval, attrs) do
     approval
-    |> cast(attrs, [:payload_hash, :task_count, :initiative_name])
+    |> cast(attrs, [:payload_hash, :task_count, :initiative_name, :sample])
     |> validate_required([:payload_hash, :task_count, :initiative_name])
     |> validate_length(:payload_hash, max: 128)
     |> validate_length(:initiative_name, max: 255)
     |> validate_number(:task_count, greater_than: 0)
   end
+
+  @doc """
+  The decision changeset — `status` plus the operator's optional words. The
+  reason is theirs, typed in the app; blank collapses to nil so the agent is
+  told the operator gave none rather than shown an empty quote.
+  """
+  def decision_changeset(approval, status, reason) do
+    approval
+    |> change(status: status)
+    |> put_change(:decision_reason, presence(reason))
+    |> validate_length(:decision_reason, max: 500)
+  end
+
+  defp presence(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp presence(_), do: nil
 end

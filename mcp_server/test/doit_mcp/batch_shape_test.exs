@@ -134,6 +134,49 @@ defmodule DoitMcp.BatchShapeTest do
     end
   end
 
+  describe "deep_sample/1 (m03.04 2.11.2)" do
+    defp nested(lid, title, parent_lid, desc \\ nil) do
+      data = %{"title" => title, "parent_lid" => parent_lid}
+      data = if desc, do: Map.put(data, "description", desc), else: data
+      %{"op" => "add", "type" => "task", "lid" => lid, "data" => data}
+    end
+
+    test "samples the deepest branch, root-first, with depths" do
+      ops = [
+        add("Milestone 1"),
+        nested("w1", "Worklist A", "Milestone 1"),
+        nested("i1", "Item one", "w1", "Real detail the title lacks."),
+        nested("i2", "Item two", "w1"),
+        add("Milestone 2")
+      ]
+
+      assert %{"nodes" => nodes} = BatchShape.deep_sample(ops)
+      titles = Enum.map(nodes, & &1["title"])
+      assert ["Milestone 1", "Worklist A", "Item one" | _] = titles
+      assert Enum.map(nodes, & &1["depth"]) |> Enum.max() == 3
+      # A sibling at the deepest level rides along.
+      assert "Item two" in titles
+      assert Enum.find(nodes, &(&1["title"] == "Item one"))["description"] =~ "Real detail"
+    end
+
+    test "a flattened import has no depth to show — that IS the signal" do
+      ops = for i <- 1..12, do: add("Milestone #{i}")
+
+      assert %{"nodes" => nodes} = BatchShape.deep_sample(ops)
+      assert Enum.all?(nodes, &(&1["depth"] == 1))
+    end
+
+    test "long descriptions truncate and a batch with no task-adds samples nothing" do
+      ops = [add("A task with a long note", String.duplicate("x", 400))]
+      assert %{"nodes" => [node]} = BatchShape.deep_sample(ops)
+      assert String.length(node["title"]) > 0
+      assert String.ends_with?(node["description"], "…")
+      assert String.length(node["description"]) <= 101
+
+      assert BatchShape.deep_sample([]) == nil
+    end
+  end
+
   describe "facts_block/1" do
     test "nil for an unremarkable batch" do
       assert BatchShape.facts_block([add("Build the parser"), add("Ship v1.2")]) == nil

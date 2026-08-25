@@ -292,6 +292,120 @@ defmodule DoitMcp.BatchShape do
       "the app — re-send this SAME batch unchanged once they have."
   end
 
+  # The snapshot the approval card shows (m03.04 2.11.2). Sampled from the
+  # batch's DEEPEST branch on purpose: the failures that slip past the
+  # arithmetic are structural — a flattened import has no depth to show, so
+  # the card renders a flat list and the operator sees it at a glance.
+  @sample_max_nodes 8
+  @sample_max_siblings 2
+  @sample_description_chars 100
+
+  @doc """
+  A depth-ordered snapshot of the batch's deepest branch — the ancestor
+  chain down to the first deepest task-add, plus a couple of its siblings.
+  `nil` when there are no task-adds. Shape: `%{"nodes" => [%{"title",
+  "description", "depth"}]}`, ordered root-first, for the parked card.
+  """
+  @spec deep_sample([map()]) :: %{String.t() => list()} | nil
+  def deep_sample(operations) do
+    nodes = sample_nodes(operations)
+
+    case nodes do
+      [] -> nil
+      nodes -> %{"nodes" => nodes}
+    end
+  end
+
+  defp sample_nodes(operations) do
+    adds = Enum.filter(operations, &task_add?/1)
+
+    by_lid =
+      for op <- adds, lid = Map.get(op, "lid"), is_binary(lid), into: %{}, do: {lid, op}
+
+    depths = Enum.map(adds, &{&1, depth_of(&1, by_lid, 0)})
+
+    case depths do
+      [] ->
+        []
+
+      depths ->
+        {deepest, max_depth} = Enum.max_by(depths, fn {_op, d} -> d end)
+
+        chain = ancestors(deepest, by_lid, [])
+
+        siblings =
+          depths
+          |> Enum.filter(fn {op, d} ->
+            d == max_depth and op != deepest and parent_lid(op) == parent_lid(deepest)
+          end)
+          |> Enum.take(@sample_max_siblings)
+          |> Enum.map(fn {op, d} -> {op, d} end)
+
+        (chain ++ siblings)
+        |> Enum.take(@sample_max_nodes)
+        |> Enum.map(fn {op, d} -> render_node(op, d) end)
+    end
+  end
+
+  # Depth by parent_lid chain — an add anchored on a real `parent_id` or on
+  # an Initiative is depth 1 here; the batch can't see above itself.
+  defp depth_of(op, by_lid, seen) when seen < @sample_max_nodes do
+    case parent_lid(op) do
+      nil ->
+        1
+
+      lid ->
+        case Map.get(by_lid, lid) do
+          nil -> 1
+          parent -> 1 + depth_of(parent, by_lid, seen + 1)
+        end
+    end
+  end
+
+  defp depth_of(_op, _by_lid, _seen), do: 1
+
+  defp ancestors(op, by_lid, acc) do
+    acc = [{op, depth_of(op, by_lid, 0)} | acc]
+
+    case parent_lid(op) do
+      nil ->
+        acc
+
+      lid ->
+        case Map.get(by_lid, lid) do
+          nil -> acc
+          parent -> ancestors(parent, by_lid, acc)
+        end
+    end
+  end
+
+  defp parent_lid(op) do
+    case add_field(op, "parent_lid") do
+      lid when is_binary(lid) -> lid
+      _ -> nil
+    end
+  end
+
+  defp render_node(op, depth) do
+    %{
+      "title" => to_string(add_field(op, "title") || "(untitled)"),
+      "description" => truncated_description(add_field(op, "description")),
+      "depth" => depth
+    }
+  end
+
+  defp truncated_description(desc) when is_binary(desc) do
+    trimmed = String.trim(desc)
+
+    cond do
+      trimmed == "" -> nil
+      String.length(trimmed) <= @sample_description_chars -> trimmed
+      true -> String.slice(trimmed, 0, @sample_description_chars) <> "…"
+    end
+  end
+
+  defp truncated_description(_), do: nil
+
   @doc "The batch's first initiative-add name, for the park — `(unnamed)` when blank."
   @spec first_initiative_name([map()]) :: String.t()
   def first_initiative_name(operations) do
