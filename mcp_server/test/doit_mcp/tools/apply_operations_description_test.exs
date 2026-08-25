@@ -18,10 +18,17 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       %{description: description}
     end
 
-    test "names the ramp from the classifier's exposed bounds", %{description: description} do
-      assert description =~ "up to #{ImportGate.threshold()} task-adds"
-      assert description =~ "stretches to #{ImportGate.ramp_threshold()} while"
-      assert description =~ "at most #{ImportGate.threshold()} adds"
+    test "the cap is the batch target; the ramp is never advertised (m03.04 2.5.5)", %{
+      description: description
+    } do
+      assert description =~ "Fill each batch toward the 150 cap"
+      assert description =~ "keep a parent and its subtree in ONE batch by lid"
+      # Chunking still can't dodge the classifier — that fact stays.
+      assert description =~ "chunking doesn't reset it"
+      # The ramp is the classifier's business; naming it made agents aim for it.
+      refute description =~ "up to #{ImportGate.threshold()} task-adds"
+      refute description =~ "stretches to #{ImportGate.ramp_threshold()} while"
+      refute description =~ "at most #{ImportGate.threshold()} adds"
     end
 
     test "carries the no-stop model, not the confirm contract (m03.04 2.8.4.3)", %{
@@ -49,8 +56,13 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
     } do
       assert description =~ "the source WHOLE — completed items arrive `done: true`"
       assert description =~ "roll-up progress lies"
-      assert description =~ "skeleton first"
       assert description =~ "provenance comment"
+
+      # Scope leads shape: the WHOLE-source rule precedes the batching rule.
+      # (2.5.5 retired "skeleton first" — that was the ramp's chunking pattern.)
+      {scope_at, _} = :binary.match(description, "the source WHOLE")
+      {shape_at, _} = :binary.match(description, "Fill each batch toward")
+      assert scope_at < shape_at
     end
 
     test "carries the first-import interview — fields, arithmetic, chunk contract (m03.04 2.8.10)",

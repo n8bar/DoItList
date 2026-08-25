@@ -13,29 +13,26 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   Batch the WHOLE pass — bulk completions, comments, and edits belong in
   batches too, not looped single-op calls to the per-op tools (that is the
-  failure mode). Past the cap, split into chunks filled toward it; sub-cap
-  chunking is fine — but lids resolve within one batch only, so reference
-  across chunks by real id.
+  failure mode). Past the cap, split into chunks filled toward it — but lids
+  resolve within one batch only, so reference across chunks by real id.
 
   ## Import limits — the numbers, upfront
 
   The import classifier (contract below) counts CUMULATIVE task-adds per
-  target Initiative over a trailing time window — chunking doesn't reset it:
+  target Initiative over a trailing time window — chunking doesn't reset it,
+  so a small-batch drip buys nothing but round-trips:
 
-    * **The ramp — 32 / 128:** up to 32 task-adds flow on shape alone; the
-      leash stretches to 128 while every batch delivers ONE coherent list —
-      every add under a single parent, at most 32 adds. Bulk, mixed-parent,
-      or oversized batches keep the tight bound and carry the readback
-      record.
     * **Description cap — 8000 characters** per task description, enforced
       by the API (a 422): trim the prose and cite the source doc's path in
       a provenance comment — never split the overflow into continuation
       tasks.
     * **Ideal import shape:** the source WHOLE — completed items arrive
-      `done: true`, or roll-up progress lies — skeleton first (Initiative +
-      top-level parents), then ~32-add chunks of one parent's children, cut
-      from the source, each with a provenance comment naming its section;
-      rides the ramp, at most the one readback record.
+      `done: true`, or roll-up progress lies. Fill each batch toward the 150
+      cap, and keep a parent and its subtree in ONE batch by lid so no branch
+      lands half-built; one provenance comment per branch names its source
+      section. Batch size is the classifier's business, not a target of
+      yours — the first import-shaped batch's readback settles the session
+      and later chunks flow.
 
   ## Wire format
 
@@ -505,10 +502,8 @@ defmodule DoitMcp.Tools.ApplyOperations do
       "import shape you're building — and optionally `assumptions` (assumption-tagged " <>
       "decisions, one string each) and `settled` (dimensions the operator's own ask " <>
       "already settled, one string each). The batch then applies immediately and the " <>
-      "readback lands as a provenance comment on the target Initiative's root task. " <>
-      "Alternatively: batches that deliver one list at a time (every add under one " <>
-      "parent, at most #{ImportGate.threshold()} adds) flow without a readback up to " <>
-      "#{ImportGate.ramp_threshold()} cumulative — chunk the import that way."
+      "readback lands as a provenance comment on the target Initiative's root task, " <>
+      "settling the session — later chunks flow without re-asking."
   end
 
   defp readback_required_message(:pass, _shape) do

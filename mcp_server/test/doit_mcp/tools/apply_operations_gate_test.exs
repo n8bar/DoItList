@@ -323,9 +323,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["message"] =~ "#{@threshold + 1} tasks"
     assert decoded["message"] =~ "no operator step is needed"
     assert decoded["message"] =~ "provenance comment on the target Initiative's root task"
-    # The over-ramp recovery words: chunk (m03.04 2.8.4.2).
-    assert decoded["message"] =~ "at most #{ImportGate.threshold()} adds"
-    assert decoded["message"] =~ "#{ImportGate.ramp_threshold()} cumulative"
+    # The recovery is the readback, not a smaller batch (m03.04 2.5.5).
+    assert decoded["message"] =~ "settling the session"
+    refute decoded["message"] =~ "#{ImportGate.ramp_threshold()} cumulative"
 
     # Refused unapplied — nothing was posted.
     refute_received {:operations_post, _}
