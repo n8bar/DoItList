@@ -192,6 +192,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
     # the created Initiative's root.
     gated = %{
       "operations" => ops,
+      "declared_sources" => [%{"path" => "PLAN.md", "checkbox_lines" => @threshold + 1}],
       "declared_total" => @threshold + 1,
       "declared_completed" => 1,
       "declared_ordering" => "none"

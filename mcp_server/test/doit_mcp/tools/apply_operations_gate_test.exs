@@ -299,6 +299,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   # arriving done) or all_open_bootstrap/1 (`done: 0`).
   defp declared(params, total, done \\ 1) do
     Map.merge(params, %{
+      declared_sources: [%{"path" => "docs/PLAN.md", "checkbox_lines" => total}],
       declared_total: total,
       declared_completed: done,
       declared_ordering: "none"
@@ -490,6 +491,35 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["message"] =~ "rejected this exact import in the app"
     refute_received {:approval_post, _}
     refute_received {:operations_post, _}
+  end
+
+  test "a flattened first import is refused end to end (m03.04 2.8.11)" do
+    stub_apply()
+
+    decoded =
+      execute_refused(
+        %{operations: new_initiative_batch(12)}
+        |> Map.merge(%{
+          declared_sources: [%{"path" => "docs/PLAN.md", "checkbox_lines" => 340}],
+          declared_total: 12,
+          declared_completed: 9,
+          declared_ordering: "outline"
+        })
+      )
+
+    assert decoded["message"] =~ "340 checkbox lines"
+    assert decoded["message"] =~ "only 12 items"
+    refute_received {:operations_post, _}
+    refute_received {:declaration_post, _}
+  end
+
+  test "the accepted declaration records the documents it was read from (2.8.11)" do
+    stub_apply()
+
+    execute_ok(declared(%{operations: new_initiative_batch(12)}, 12))
+
+    body = assert_record_posted(570, "Import record — declaration as accepted:")
+    assert body =~ "Documents read: docs/PLAN.md (12 checkbox lines)"
   end
 
   test "the park carries the batch's deepest-branch snapshot (m03.04 2.11.2)" do

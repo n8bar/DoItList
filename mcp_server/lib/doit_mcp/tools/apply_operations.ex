@@ -128,8 +128,12 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   An Initiative's FIRST import is interviewed instead of trusted: while its
   live tree is under 10 tasks with no declaration on record, import-scale
-  adds (10+, batch or window) demand `declared_total` (every item the
-  source holds), `declared_completed` (how many it marks complete),
+  adds (10+, batch or window) demand the declaration, and it asks about the
+  SOURCE before it asks about your plan: `declared_sources` (every document
+  you read, `{path, checkbox_lines}` — lines in THAT file matching a
+  markdown checkbox, counted off the file, not derived from what you intend
+  to create), `declared_total` (every item the source holds),
+  `declared_completed` (how many it marks complete),
   `declared_exclusions` (`{count, reason}` objects — omit for a whole
   import), `declared_ordering` (the source's ordering scheme). Every chunk
   of the first import is checked against the declaration's arithmetic:
@@ -179,6 +183,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     field(:readback, :string, required: false)
     field(:assumptions, {:list, :string}, required: false)
     field(:settled, {:list, :string}, required: false)
+    field(:declared_sources, {:list, :map}, required: false)
     field(:declared_total, :integer, required: false)
     field(:declared_completed, :integer, required: false)
     field(:declared_exclusions, {:list, :map}, required: false)

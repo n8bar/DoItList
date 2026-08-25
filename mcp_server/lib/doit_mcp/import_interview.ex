@@ -37,8 +37,15 @@ defmodule DoitMcp.ImportInterview do
           completed: non_neg_integer(),
           excluded: non_neg_integer(),
           exclusions: [%{count: pos_integer(), reason: String.t()}] | nil,
-          ordering: String.t() | nil
+          ordering: String.t() | nil,
+          sources: [%{path: String.t(), checkbox_lines: non_neg_integer()}] | nil
         }
+
+  # The declared item total may fall below the sources' mechanical checkbox
+  # count — headings, prose bullets, and nested restatements are real — but
+  # not by an order of magnitude. Below this fraction the two statements
+  # describe different documents (m03.04 2.8.11).
+  @coverage_floor 0.5
 
   @doc """
   Whether a target is in first-import scope: its live tree (nil = unknowable,
@@ -62,30 +69,86 @@ defmodule DoitMcp.ImportInterview do
     completed = Map.get(params, :declared_completed)
     exclusions = Map.get(params, :declared_exclusions)
     ordering = Map.get(params, :declared_ordering)
+    sources = Map.get(params, :declared_sources)
 
-    if is_nil(total) and is_nil(completed) and is_nil(exclusions) and is_nil(ordering) do
+    if is_nil(total) and is_nil(completed) and is_nil(exclusions) and is_nil(ordering) and
+         is_nil(sources) do
       :none
     else
-      validate(total, completed, exclusions || [], ordering)
+      validate(total, completed, exclusions || [], ordering, sources)
     end
   end
 
-  defp validate(total, completed, exclusions, ordering) do
+  defp validate(total, completed, exclusions, ordering, sources) do
     with :ok <- validate_total(total),
          :ok <- validate_completed(completed, total),
          {:ok, entries} <- validate_exclusions(exclusions, total),
-         :ok <- validate_ordering(ordering) do
+         :ok <- validate_ordering(ordering),
+         {:ok, source_entries} <- validate_sources(sources),
+         :ok <- validate_coverage(total, source_entries) do
       {:ok,
        %{
          total: total,
          completed: completed,
          excluded: Enum.sum_by(entries, & &1.count),
          exclusions: entries,
-         ordering: String.trim(ordering)
+         ordering: String.trim(ordering),
+         sources: source_entries
        }}
     else
       {:invalid, detail} ->
         {:invalid, "Import declaration invalid — nothing was applied. " <> detail}
+    end
+  end
+
+  # The evidence half of the declaration (m03.04 2.8.11). Every other field
+  # restates the agent's PLAN, so a misread source produces numbers that
+  # agree with the batch it was always going to send. This one is about the
+  # FILE: how many lines match a markdown checkbox. An agent that decided a
+  # milestone is one task still counted the same lines underneath it.
+  defp validate_sources(sources) when is_list(sources) and sources != [] do
+    entries =
+      Enum.map(sources, fn
+        %{"path" => path, "checkbox_lines" => lines}
+        when is_binary(path) and is_integer(lines) and lines >= 0 ->
+          if String.trim(path) == "",
+            do: :invalid,
+            else: %{path: String.trim(path), checkbox_lines: lines}
+
+        _entry ->
+          :invalid
+      end)
+
+    if Enum.any?(entries, &(&1 == :invalid)) do
+      {:invalid,
+       "each `declared_sources` entry needs a non-empty string `path` and a " <>
+         "non-negative integer `checkbox_lines` — the count of lines in THAT file " <>
+         "matching a markdown checkbox, read from the file, not from your import plan."}
+    else
+      {:ok, entries}
+    end
+  end
+
+  defp validate_sources(_sources) do
+    {:invalid,
+     "`declared_sources` must list every source document you read as " <>
+       "`{path, checkbox_lines}` objects."}
+  end
+
+  # The one check the plan can't satisfy by agreeing with itself.
+  defp validate_coverage(total, sources) do
+    lines = Enum.sum_by(sources, & &1.checkbox_lines)
+
+    if lines > 0 and total < lines * @coverage_floor do
+      {:invalid,
+       "the declared numbers describe different documents: `declared_sources` counts " <>
+         "#{lines} checkbox lines across #{length(sources)} file(s), but " <>
+         "`declared_total` claims the source holds only #{total} items. Those checkbox " <>
+         "lines ARE the work items — import them as tasks, nested as the source nests " <>
+         "them. If some genuinely are not items, raise `declared_total` to cover them " <>
+         "and declare the difference in `declared_exclusions` with a reason."}
+    else
+      :ok
     end
   end
 
@@ -163,7 +226,8 @@ defmodule DoitMcp.ImportInterview do
       completed: completed,
       excluded: if(is_integer(excluded) and excluded >= 0, do: excluded, else: 0),
       exclusions: nil,
-      ordering: if(is_binary(map["ordering"]), do: map["ordering"])
+      ordering: if(is_binary(map["ordering"]), do: map["ordering"]),
+      sources: nil
     }
   end
 
@@ -226,12 +290,15 @@ defmodule DoitMcp.ImportInterview do
       "#{cumulative_adds} task-adds while its live tree is still under " <>
       "#{BatchShape.import_floor()} tasks and no declaration is on record. Nothing was " <>
       "applied; no operator step is needed. Re-call apply_operations with the SAME " <>
-      "operations plus the declaration: `declared_total` (every item the source holds), " <>
-      "`declared_completed` (how many it marks complete), `declared_exclusions` " <>
-      "(what you are NOT importing — `{count, reason}` objects; omit for a whole " <>
-      "import), `declared_ordering` (the source's ordering scheme). The server checks " <>
-      "the arithmetic — completed items arrive as `done: true` adds — and every later " <>
-      "chunk of this import is checked against the same declaration." <>
+      "operations plus the declaration, answering about the SOURCE before your plan: " <>
+      "`declared_sources` (every document you read, as `{path, checkbox_lines}` — the " <>
+      "count of lines in that file matching a markdown checkbox, read off the file), " <>
+      "`declared_total` (every item the source holds), `declared_completed` (how many " <>
+      "it marks complete), `declared_exclusions` (what you are NOT importing — " <>
+      "`{count, reason}` objects; omit for a whole import), `declared_ordering` (the " <>
+      "source's ordering scheme). The server checks the arithmetic — completed items " <>
+      "arrive as `done: true` adds — and every later chunk of this import is checked " <>
+      "against the same declaration." <>
       if(needs_readback?,
         do: " This batch is also import-shaped: carry `readback` too.",
         else: ""
@@ -284,6 +351,7 @@ defmodule DoitMcp.ImportInterview do
     Enum.join(
       [
         "Import declaration (agent-stated, server-checked):",
+        sources_line(decl),
         "- Source: #{total} items, #{completed} complete.",
         exclusions,
         "- Ordering: #{decl.ordering || "(unstated)"}."
@@ -307,6 +375,15 @@ defmodule DoitMcp.ImportInterview do
       ordering: decl.ordering
     }
   end
+
+  defp sources_line(%{sources: [_ | _] = sources}) do
+    "- Documents read: " <>
+      Enum.map_join(sources, "; ", fn %{path: path, checkbox_lines: lines} ->
+        "#{path} (#{lines} checkbox lines)"
+      end) <> "."
+  end
+
+  defp sources_line(_decl), do: "- Documents read: (not recorded)."
 
   defp exclusions_text(%{exclusions: [_ | _] = entries}) do
     Enum.map_join(entries, "; ", fn %{count: count, reason: reason} ->

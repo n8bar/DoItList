@@ -32,7 +32,12 @@ defmodule DoitMcp.ImportInterviewTest do
     end
 
     test "a whole-import declaration parses with zero exclusions" do
-      params = %{declared_total: 20, declared_completed: 5, declared_ordering: "outline"}
+      params = %{
+        declared_sources: [%{"path" => "PLAN.md", "checkbox_lines" => 20}],
+        declared_total: 20,
+        declared_completed: 5,
+        declared_ordering: "outline"
+      }
 
       assert {:ok, decl} = ImportInterview.from_params(params)
       assert decl.total == 20
@@ -42,8 +47,68 @@ defmodule DoitMcp.ImportInterviewTest do
       assert decl.ordering == "outline"
     end
 
+    test "the flattening case: 340 checkbox lines declared, 12 items claimed (m03.04 2.8.11)" do
+      # Initiative 72, 2026-08-25: the agent declared 12 items and created 12
+      # tasks. Self-consistent, so 2.8.10's arithmetic passed. The source's
+      # checkbox lines are the statement the plan can't quietly agree with.
+      params = %{
+        declared_sources: [
+          %{"path" => "docs/PLAN.md", "checkbox_lines" => 40},
+          %{"path" => "docs/milestones/M1.md", "checkbox_lines" => 300}
+        ],
+        declared_total: 12,
+        declared_completed: 9,
+        declared_ordering: "outline"
+      }
+
+      assert {:invalid, message} = ImportInterview.from_params(params)
+      assert message =~ "340 checkbox lines across 2 file(s)"
+      assert message =~ "only 12 items"
+      assert message =~ "nested as the source nests them"
+      # The cheap way out is declared, not re-derived.
+      assert message =~ "`declared_exclusions`"
+    end
+
+    test "a source with no checkboxes can't accuse anyone" do
+      params = %{
+        declared_sources: [%{"path" => "notes.md", "checkbox_lines" => 0}],
+        declared_total: 12,
+        declared_completed: 0,
+        declared_ordering: "none"
+      }
+
+      assert {:ok, decl} = ImportInterview.from_params(params)
+      assert decl.total == 12
+    end
+
+    test "a total within the floor of the checkbox count flows — headings are real" do
+      params = %{
+        declared_sources: [%{"path" => "PLAN.md", "checkbox_lines" => 100}],
+        declared_total: 60,
+        declared_completed: 0,
+        declared_ordering: "numerical"
+      }
+
+      assert {:ok, _decl} = ImportInterview.from_params(params)
+    end
+
+    test "declared_sources must be read off files, and says so when malformed" do
+      base = %{declared_total: 10, declared_completed: 0, declared_ordering: "none"}
+
+      assert {:invalid, missing} = ImportInterview.from_params(base)
+      assert missing =~ "`declared_sources` must list every source document"
+
+      assert {:invalid, bad} =
+               ImportInterview.from_params(
+                 Map.put(base, :declared_sources, [%{"path" => "PLAN.md"}])
+               )
+
+      assert bad =~ "not from your import plan"
+    end
+
     test "exclusions sum and keep their verbatim reasons" do
       params = %{
+        declared_sources: [%{"path" => "PLAN.md", "checkbox_lines" => 20}],
         declared_total: 20,
         declared_completed: 5,
         declared_exclusions: [
@@ -59,7 +124,12 @@ defmodule DoitMcp.ImportInterviewTest do
     end
 
     test "each invalid shape refuses naming the field" do
-      base = %{declared_total: 10, declared_completed: 0, declared_ordering: "none"}
+      base = %{
+        declared_sources: [%{"path" => "PLAN.md", "checkbox_lines" => 10}],
+        declared_total: 10,
+        declared_completed: 0,
+        declared_ordering: "none"
+      }
 
       cases = [
         {%{base | declared_total: 0}, "`declared_total`"},
@@ -161,6 +231,7 @@ defmodule DoitMcp.ImportInterviewTest do
     test "the declaration block renders the stated numbers and verbatim reasons" do
       {:ok, parsed} =
         ImportInterview.from_params(%{
+          declared_sources: [%{"path" => "PLAN.md", "checkbox_lines" => 20}],
           declared_total: 20,
           declared_completed: 5,
           declared_exclusions: [%{"count" => 2, "reason" => "appendix notes"}],
@@ -179,6 +250,7 @@ defmodule DoitMcp.ImportInterviewTest do
     test "record_attrs carries the wire body for the Initiative-homed record" do
       {:ok, parsed} =
         ImportInterview.from_params(%{
+          declared_sources: [%{"path" => "PLAN.md", "checkbox_lines" => 20}],
           declared_total: 20,
           declared_completed: 5,
           declared_exclusions: [%{"count" => 2, "reason" => "appendix notes"}],
