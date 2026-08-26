@@ -1,5 +1,5 @@
 defmodule DoitMcp.Resources.Me do
-  @moduledoc "The acting user — mirrors `GET /api/v1/me`."
+  @moduledoc "Read the acting user's identity and account details."
 
   use Anubis.Server.Component, type: :resource, uri: "doitlist://me"
 

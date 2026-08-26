@@ -21,10 +21,10 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
     test "the cap is the batch target; the ramp is never advertised (m03.04 2.5.5)", %{
       description: description
     } do
-      assert description =~ "Fill each batch toward the 150 cap"
-      assert description =~ "keep a parent and its subtree in ONE batch by lid"
+      assert description =~ "split it into batches filled toward the cap"
+      assert description =~ "keep a parent and its subtree in one batch by `lid`"
       # Chunking still can't dodge the classifier — that fact stays.
-      assert description =~ "chunking doesn't reset it"
+      assert description =~ "chunking never resets the count"
       # The ramp is the classifier's business; naming it made agents aim for it.
       refute description =~ "up to #{ImportGate.threshold()} task-adds"
       refute description =~ "stretches to #{ImportGate.ramp_threshold()} while"
@@ -36,7 +36,8 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
     } do
       assert description =~ "never stops an import"
       assert description =~ "provenance comment on the target Initiative's root task"
-      assert description =~ "Operator-approved in the app"
+      assert description =~ "Only the operator may approve"
+      assert description =~ "Never attest on the operator's behalf"
       # 2.8.5.3 retired the agent-asserted override — one mechanism only.
       refute description =~ "operator_confirmed"
       refute description =~ "Operator-confirmed in chat"
@@ -53,17 +54,17 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       assert description =~ "continuation tasks"
     end
 
-    test "states the ideal import shape — scope before shape (m03.04 2.8.6)", %{
+    test "states whole-source scope before batch structure (m03.04 2.8.6)", %{
       description: description
     } do
-      assert description =~ "the source WHOLE — completed items arrive `done: true`"
+      assert description =~ "source whole, including completed items as `done: true`"
       assert description =~ "roll-up progress lies"
       assert description =~ "provenance comment"
 
-      # Scope leads shape: the WHOLE-source rule precedes the batching rule.
+      # Scope leads structure: the WHOLE-source rule precedes the batching rule.
       # (2.5.5 retired "skeleton first" — that was the ramp's chunking pattern.)
-      {scope_at, _} = :binary.match(description, "the source WHOLE")
-      {shape_at, _} = :binary.match(description, "Fill each batch toward")
+      {scope_at, _} = :binary.match(description, "source whole")
+      {shape_at, _} = :binary.match(description, "keep a parent and its subtree")
       assert scope_at < shape_at
     end
 
@@ -73,8 +74,9 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       assert description =~ "`declared_completed`"
       assert description =~ "`declared_exclusions`"
       assert description =~ "`declared_ordering`"
-      assert description =~ "Every chunk of the first import is checked against the declaration"
-      assert description =~ "Operator-approved in the app"
+      assert description =~ "Every chunk is checked against the declaration"
+      assert description =~ "Only the operator may approve"
+      refute description =~ ~r/\bshape\b/i
     end
   end
 end

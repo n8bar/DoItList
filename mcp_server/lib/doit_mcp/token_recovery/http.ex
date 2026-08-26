@@ -43,7 +43,7 @@ defmodule DoitMcp.TokenRecovery.Http do
       "token" => %{
         "type" => "string",
         "description" =>
-          "A fresh DoItList API token — replaces the rejected one for this session only"
+          "Fresh DoItList API token. It replaces the rejected token in memory for this session only and is never persisted"
       }
     },
     "required" => ["token"]
@@ -52,8 +52,7 @@ defmodule DoitMcp.TokenRecovery.Http do
   # The fact every 401 outcome states, and the lasting fix — an unmatched
   # token is most often the launching shell's env var, not a revocation.
   @no_match "No minted DoItList API token matches what this session presents."
-  @source_fix "check DOITLIST_API_TOKEN in the shell that launched the client " <>
-                "(or the Authorization header in the MCP client config), then reconnect."
+  @source_fix "replace the rejected token at its client source — `DOITLIST_API_TOKEN` in the launching shell or the Authorization header in the MCP client config — then reconnect."
 
   @doc """
   This request's API credential: the session's override if a paste installed
@@ -96,8 +95,8 @@ defmodule DoitMcp.TokenRecovery.Http do
         cond do
           Sessions.failed?(session) ->
             {:error,
-             "A replacement token was already declined or rejected this session — " <>
-               "not asking again. " <> manual_fix_message()}
+             "A replacement token was already declined or rejected in this session, so no new form will open. " <>
+               manual_fix_message()}
 
           not Elicitation.client_supports_elicitation?() ->
             {:error, manual_fix_message()}
@@ -122,8 +121,8 @@ defmodule DoitMcp.TokenRecovery.Http do
   def refreshed_token_rejected do
     if session = RequestSession.pid(), do: Sessions.mark_failed(session)
 
-    "The freshly pasted token was rejected too (401) — not asking again this " <>
-      "session. " <> manual_fix_message()
+    "The freshly pasted token also returned 401, so no new form will open in this session. " <>
+      manual_fix_message()
   end
 
   @doc """
@@ -147,8 +146,8 @@ defmodule DoitMcp.TokenRecovery.Http do
   end
 
   defp no_stream_message do
-    "The operator can't be asked for a replacement — this session has no open " <>
-      "server-to-client stream to carry the form. " <> manual_fix_message()
+    "This session has no open server-to-client stream, so it cannot show the replacement-token form. " <>
+      manual_fix_message()
   end
 
   # The form goes out on the session's stream; the call returns at once
@@ -158,12 +157,12 @@ defmodule DoitMcp.TokenRecovery.Http do
       :ok ->
         {:error,
          @no_match <>
-           " A fresh-token form is open on the client — answer it, then re-call. Or " <>
+           " A replacement-token form is open in the MCP client. Wait for the operator to submit it, then re-call the original tool. Alternatively, " <>
            @source_fix}
 
       {:error, :already_waiting} ->
         {:error,
-         "The fresh-token form is still open on the client — answer it, then re-call. Or " <>
+         "The replacement-token form is still open in the MCP client. Wait for the operator to submit it, then re-call the original tool. Alternatively, " <>
            @source_fix}
 
       {:error, :no_sse_handler} ->
@@ -192,11 +191,7 @@ defmodule DoitMcp.TokenRecovery.Http do
   defp land(session, _declined_or_cancelled), do: Sessions.mark_failed(session)
 
   defp form_message do
-    @no_match <>
-      " Paste a fresh token: the next call uses it, held for this session only — " <>
-      "nothing is stored. Lasting fix: DOITLIST_API_TOKEN in the shell that launched " <>
-      "the client (or the Authorization header in the MCP client config). Or decline " <>
-      "and fix it there."
+    @no_match <> " Paste a fresh token for this session, or decline and " <> @source_fix
   end
 
   defp timeout do

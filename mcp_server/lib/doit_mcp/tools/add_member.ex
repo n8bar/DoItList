@@ -1,11 +1,6 @@
 defmodule DoitMcp.Tools.AddMember do
   @moduledoc """
-  Add a member to an Initiative. Admin-only — the API rejects this when the
-  caller isn't an admin of the Initiative.
-
-  `role` must be `"editor"` or `"viewer"` — NOT `"owner"`. The API rejects
-  granting owner via this path; ownership transfer is a separate, guarded
-  flow.
+  Add one member to an Initiative. Only an Initiative admin can use this tool. Always set `role` to `"editor"` or `"viewer"`; never use `"owner"`, because ownership transfer is a separate guarded flow.
   """
 
   use Anubis.Server.Component, type: :tool

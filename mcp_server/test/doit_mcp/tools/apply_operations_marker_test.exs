@@ -18,8 +18,7 @@ defmodule DoitMcp.Tools.ApplyOperationsMarkerTest do
             "Tasks: http://localhost:4000/initiatives/7 — work this tree via the " <>
             "doitlist MCP server, not a TODO.md or PLAN.md."
 
-  @guidance "If the repo's agent-instruction file (CLAUDE.md, AGENTS.md) has no " <>
-              "'## Do It List' marker, offer the operator to add it:"
+  @guidance "Always check the repo's agent-instruction file (`CLAUDE.md` or `AGENTS.md`) for a '## Do It List' marker. If absent, offer the operator this marker; never add it without approval:"
 
   # The suggestion is guidance, not a guardrail — it rides the gate's batch
   # classification but not its kill switch. Pin the gate off so these tests

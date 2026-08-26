@@ -1,13 +1,8 @@
 defmodule DoitMcp.Tools.MoveTask do
   @moduledoc """
-  Reparent and/or reorder a task among siblings. Omit `parent_id` to keep
-  the current parent. `reorder: true` marks an explicit sibling reorder,
-  pinning the destination to manual sort; omit it for a plain reparent
-  that just appends. At least one of `parent_id`, `position`, `reorder`
-  must be given — the underlying API rejects an update with zero fields.
+  Move one task to a new parent and/or sibling position. Always provide at least one of `parent_id`, `position`, or `reorder`; an empty move is rejected. Omit `parent_id` to keep the current parent. Set `reorder: true` only for an explicit sibling reorder, which switches the destination to manual sorting; omit it when reparenting should append the task.
 
-  Moving or restructuring more than a couple of tasks in one pass → use
-  `apply_operations` as one batch instead of looping this tool.
+  When a pass moves multiple tasks, always use one `apply_operations` batch; never loop `move_task`.
   """
 
   use Anubis.Server.Component, type: :tool

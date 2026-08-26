@@ -1,15 +1,6 @@
 defmodule DoitMcp.Tools.GetInitiativeActivity do
   @moduledoc """
-  Read one Initiative's paginated activity rollup, optionally scoped to a
-  task's subtree — mirrors `GET /api/v1/initiatives/:id/activity`.
-
-  The equivalent resource (`DoitMcp.Resources.InitiativeActivity`) can only
-  ever return the unfiltered first page: MCP resources carry no structured
-  arguments, only a bare URI, and this server's URI-template support (RFC 6570
-  Levels 1-2 only) can't carry an optional query tail. A tool gets a real
-  input schema, so this is the only way a client can actually drive
-  `task_id`/`limit`/`offset`. Read-only; it's a tool rather than a mutation
-  only because that's the sole way this filtered read is reachable.
+  Read one Initiative's paginated activity, optionally scoped to a task's subtree. Use `task_id` to scope the subtree and `limit` with `offset` to paginate. Always use this tool when filtering or pagination is required; the equivalent resource returns only the unfiltered first page.
   """
 
   use Anubis.Server.Component, type: :tool

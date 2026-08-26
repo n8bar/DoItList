@@ -177,7 +177,7 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
   defp assert_form_words(message) do
     assert message =~ "No minted DoItList API token matches"
     assert message =~ "Paste a fresh token"
-    assert message =~ "this session only"
+    assert message =~ "for this session"
     assert message =~ "DOITLIST_API_TOKEN"
     assert message =~ "Authorization header"
     refute message =~ "revoked"
@@ -290,7 +290,7 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
     # The latch holds: the next 401 goes straight to the error, no new form.
     assert {true, text} = tool_result(post_frame(get_me_call(3), headers))
     assert text =~ "declined"
-    assert text =~ "not asking again"
+    assert text =~ "no new form will open"
     assert text =~ "DOITLIST_API_TOKEN"
     assert text =~ "Authorization header"
     refute text =~ "revoked"
@@ -327,8 +327,8 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
     assert_receive {:DOWN, ^waiter, :process, _pid, :normal}, 5_000
 
     assert {true, text} = tool_result(post_frame(get_me_call(3), r_headers))
-    assert text =~ "rejected too"
-    assert text =~ "not asking again"
+    assert text =~ "also returned 401"
+    assert text =~ "no new form will open"
     assert_received {:api_call, "Bearer still-dead"}
     refute_received {:api_call, _header}
     refute_received {:sse, ^session_r, %{"method" => "elicitation/create"}}
@@ -361,7 +361,7 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
     assert_receive {:DOWN, ^waiter, :process, _pid, :normal}, 5_000
 
     assert {true, text} = tool_result(post_frame(get_me_call(3), u_headers))
-    assert text =~ "not asking again"
+    assert text =~ "no new form will open"
     assert_received {:api_call, "Bearer dead-token"}
     refute_received {:api_call, _header}
     refute_received {:sse, ^session_u, %{"method" => "elicitation/create"}}
@@ -389,7 +389,7 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
 
     assert {true, text} = tool_result(post_frame(get_me_call(3), headers))
     assert text =~ "form is open"
-    refute text =~ "not asking again"
+    refute text =~ "no new form will open"
     {_elicitation_id, %{"message" => message}} = receive_form(session)
     assert_form_words(message)
   end

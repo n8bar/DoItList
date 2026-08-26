@@ -282,14 +282,7 @@ defmodule DoitMcp.BatchShape do
   end
 
   defp refuse_message(reasons) do
-    "Batch shape refused — nothing was applied. " <>
-      Enum.map_join(reasons, "; ", &String.capitalize/1) <>
-      ". Import the work inside the documents — its work items become tasks, done ones " <>
-      "included, nested as the source nests them — not the documents themselves. A " <>
-      "description is empty unless it adds detail the title lacks; provenance is one " <>
-      "comment per branch naming the source path, never a stamp repeated on every " <>
-      "task. If the operator asked for this exact shape, they approve this import in " <>
-      "the app — re-send this SAME batch unchanged once they have."
+    "Import content refused — nothing was applied. #{Enum.map_join(reasons, "; ", &String.capitalize/1)}. Always import the work inside each document as tasks, including completed items as `done: true` and preserving the source nesting; never create tasks for the documents themselves. Add a description only when it supplies detail absent from the title. Add one provenance comment per branch naming its source path; never repeat it on every task. If the operator explicitly requested the rejected content, wait for their approval in the app and then re-send the same batch unchanged."
   end
 
   # The snapshot the approval card shows (m03.04 3.1.9.2). Sampled from the
@@ -428,12 +421,7 @@ defmodule DoitMcp.BatchShape do
   # The sub-scale checklist refusal (m03.04 2.8.4.2) — the recovery words:
   # subtasks, or the operator's chat confirm.
   defp checklist_message(facts) do
-    "Batch shape refused — nothing was applied. #{facts.checkbox_lines} " <>
-      "markdown-checkbox lines sit inside #{facts.checklist_descriptions} new task " <>
-      "descriptions, and checklists are what DoItList turns into tasks. Import them " <>
-      "as subtasks instead. If the operator wants the checklists kept as description " <>
-      "prose, they approve this import in the app — re-send this SAME batch unchanged " <>
-      "once they have."
+    "Import content refused — nothing was applied. #{facts.checkbox_lines} markdown-checkbox lines appear inside #{facts.checklist_descriptions} new task descriptions. Always import each checkbox as a subtask, preserving checked items as `done: true`. If the operator explicitly wants the checklists kept as description prose, wait for their approval in the app and then re-send the same batch unchanged."
   end
 
   # --- Op access -------------------------------------------------------------

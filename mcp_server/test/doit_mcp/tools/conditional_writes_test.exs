@@ -111,17 +111,19 @@ defmodule DoitMcp.Tools.ConditionalWritesTest do
       end
     end
 
-    test "the three descriptions state read-then-conditionally-write" do
+    test "the three descriptions state conditional-write recovery" do
       for tool <- [DoitMcp.Tools.UpdateTask, DoitMcp.Tools.UpdateInitiative] do
         description = tool.__description__() |> String.replace(~r/\s+/, " ")
 
         assert description =~ "expected_version"
-        assert description =~ "re-read"
+        assert description =~ "reconcile"
+        assert description =~ "before retrying"
       end
 
       batch = DoitMcp.Tools.ApplyOperations.__description__() |> String.replace(~r/\s+/, " ")
       assert batch =~ "expected_version"
-      assert batch =~ "conditionally write"
+      assert batch =~ "latest read's `version`"
+      assert batch =~ "reconcile"
     end
   end
 end

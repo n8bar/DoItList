@@ -1,13 +1,8 @@
 defmodule DoitMcp.Tools.GetInitiativeTree do
   @moduledoc """
-  Read one Initiative's current full task tree, with live index labels —
-  mirrors `GET /api/v1/initiatives/:id`. Call this before restructuring: the
-  Initiative is collaborative, so the tree (and its labels) may have changed
-  since your last read. Tool twin of `DoitMcp.Resources.InitiativeTree`, for
-  agents that only look for reads in `tools/list`.
+  Read one Initiative's current full task tree with live index labels. Always call this immediately before restructuring because collaborative changes may have invalidated an earlier read.
 
-  The payload's `url` is the operator-facing handle: when telling the operator
-  about an Initiative, hand them the URL or the name, never a raw id.
+  When referring the operator to the Initiative, always provide its `url` or name; never provide only its raw ID.
   """
 
   use Anubis.Server.Component, type: :tool

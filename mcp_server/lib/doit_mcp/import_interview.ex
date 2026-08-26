@@ -121,9 +121,7 @@ defmodule DoitMcp.ImportInterview do
 
     if Enum.any?(entries, &(&1 == :invalid)) do
       {:invalid,
-       "each `declared_sources` entry needs a non-empty string `path` and a " <>
-         "non-negative integer `checkbox_lines` — the count of lines in THAT file " <>
-         "matching a markdown checkbox, read from the file, not from your import plan."}
+       "Each `declared_sources` entry must contain a non-empty string `path` and a non-negative integer `checkbox_lines`. Always count markdown-checkbox lines from that file; never infer the count from the batch you constructed."}
     else
       {:ok, entries}
     end
@@ -131,8 +129,7 @@ defmodule DoitMcp.ImportInterview do
 
   defp validate_sources(_sources) do
     {:invalid,
-     "`declared_sources` must list every source document you read as " <>
-       "`{path, checkbox_lines}` objects."}
+     "`declared_sources` must be a non-empty list containing every source document read as a `{path, checkbox_lines}` object."}
   end
 
   # The one check the plan can't satisfy by agreeing with itself.
@@ -141,12 +138,7 @@ defmodule DoitMcp.ImportInterview do
 
     if lines > 0 and total < lines * @coverage_floor do
       {:invalid,
-       "the declared numbers describe different documents: `declared_sources` counts " <>
-         "#{lines} checkbox lines across #{length(sources)} file(s), but " <>
-         "`declared_total` claims the source holds only #{total} items. Those checkbox " <>
-         "lines ARE the work items — import them as tasks, nested as the source nests " <>
-         "them. If some genuinely are not items, raise `declared_total` to cover them " <>
-         "and declare the difference in `declared_exclusions` with a reason."}
+       "`declared_sources` counts #{lines} markdown-checkbox lines across #{length(sources)} file(s), but `declared_total` contains only #{total} items. Always count each checkbox line as a source item and import it as a task with the source nesting. If a line is genuinely not work, still include it in `declared_total` and add a reasoned `declared_exclusions` entry."}
     else
       :ok
     end
@@ -155,7 +147,7 @@ defmodule DoitMcp.ImportInterview do
   defp validate_total(total) when is_integer(total) and total > 0, do: :ok
 
   defp validate_total(_total),
-    do: {:invalid, "`declared_total` must be the source's positive item count."}
+    do: {:invalid, "`declared_total` must be a positive integer counting every source item."}
 
   defp validate_completed(completed, total)
        when is_integer(completed) and completed >= 0 and completed <= total,
@@ -163,8 +155,7 @@ defmodule DoitMcp.ImportInterview do
 
   defp validate_completed(completed, total) do
     {:invalid,
-     "`declared_completed` (#{inspect(completed)}) must sit between 0 and " <>
-       "`declared_total` (#{total})."}
+     "`declared_completed` (#{inspect(completed)}) must be an integer from 0 through `declared_total` (#{total})."}
   end
 
   defp validate_exclusions(exclusions, total) when is_list(exclusions) do
@@ -183,11 +174,11 @@ defmodule DoitMcp.ImportInterview do
     cond do
       Enum.any?(entries, &(&1 == :invalid)) ->
         {:invalid,
-         "each `declared_exclusions` entry needs a positive integer `count` " <>
-           "and a non-empty `reason`."}
+         "Each `declared_exclusions` entry must contain a positive integer `count` and a non-empty string `reason`."}
 
       excluded > total ->
-        {:invalid, "declared exclusions (#{excluded}) cannot exceed `declared_total` (#{total})."}
+        {:invalid,
+         "The total `declared_exclusions` count (#{excluded}) must not exceed `declared_total` (#{total})."}
 
       true ->
         {:ok, entries}
@@ -195,7 +186,8 @@ defmodule DoitMcp.ImportInterview do
   end
 
   defp validate_exclusions(_exclusions, _total) do
-    {:invalid, "`declared_exclusions` must be a list of `{count, reason}` objects."}
+    {:invalid,
+     "`declared_exclusions` must be a list of `{count, reason}` objects; omit the field when nothing is excluded."}
   end
 
   defp validate_ordering(ordering) when is_binary(ordering) do
@@ -209,7 +201,7 @@ defmodule DoitMcp.ImportInterview do
   defp validate_ordering(_ordering), do: {:invalid, ordering_detail()}
 
   defp ordering_detail do
-    "`declared_ordering` must name the source's ordering scheme (`none` for an unordered list)."
+    "`declared_ordering` must name the source's ordering scheme; use `none` only when the source is unordered."
   end
 
   @doc """
@@ -273,10 +265,7 @@ defmodule DoitMcp.ImportInterview do
   end
 
   defp mismatch(detail) do
-    "Import declaration mismatch — nothing was applied. This Initiative's declaration " <>
-      "and the batch cannot reconcile: #{detail}. Completed source items import as " <>
-      "`done: true` adds. Fix the batch — or, if the declaration mis-states the source, " <>
-      "tell the operator."
+    "Import declaration mismatch — nothing was applied: #{detail}. Reconcile the batch with the declaration, always importing completed source items as `done: true`. If the declaration misstates the source, tell the operator instead of altering the batch to fit it."
   end
 
   @doc """
@@ -286,21 +275,9 @@ defmodule DoitMcp.ImportInterview do
   """
   @spec demand_message(non_neg_integer(), boolean()) :: String.t()
   def demand_message(cumulative_adds, needs_readback?) do
-    "First-import declaration required: this batch brings the Initiative's import to " <>
-      "#{cumulative_adds} task-adds while its live tree is still under " <>
-      "#{BatchShape.import_floor()} tasks and no declaration is on record. Nothing was " <>
-      "applied; no operator step is needed. Re-call apply_operations with the SAME " <>
-      "operations plus the declaration, answering about the SOURCE before your plan: " <>
-      "`declared_sources` (every document you read, as `{path, checkbox_lines}` — the " <>
-      "count of lines in that file matching a markdown checkbox, read off the file), " <>
-      "`declared_total` (every item the source holds), `declared_completed` (how many " <>
-      "it marks complete), `declared_exclusions` (what you are NOT importing — " <>
-      "`{count, reason}` objects; omit for a whole import), `declared_ordering` (the " <>
-      "source's ordering scheme). The server checks the arithmetic — completed items " <>
-      "arrive as `done: true` adds — and every later chunk of this import is checked " <>
-      "against the same declaration." <>
+    "First-import declaration required — nothing was applied; no operator step is needed. This batch raises the Initiative's import to #{cumulative_adds} task adds while its live tree has fewer than #{BatchShape.import_floor()} tasks and no declaration is recorded. Re-call `apply_operations` with the same operations plus a declaration derived from the source, never from the batch you constructed: `declared_sources` for every document read as `{path, checkbox_lines}` counted from that file, `declared_total` for every source item, `declared_completed` for every completed source item, `declared_exclusions` as `{count, reason}` objects or omitted for a whole import, and `declared_ordering` for the source scheme. Completed items must arrive as `done: true`; every later chunk is checked against this declaration." <>
       if(needs_readback?,
-        do: " This batch is also import-shaped: carry `readback` too.",
+        do: " This batch also requires `readback`; include it in the same call.",
         else: ""
       )
   end
@@ -311,11 +288,7 @@ defmodule DoitMcp.ImportInterview do
   """
   @spec parked_message(declaration(), non_neg_integer()) :: String.t()
   def parked_message(%{completed: completed}, done) do
-    "Import parked — nothing was applied. The declaration leaves completed work out: " <>
-      "#{completed} declared complete, #{done} arriving `done`, the rest sitting in " <>
-      "your declared exclusions — narrowing an import's scope is the operator's call. " <>
-      "Import the completed items as `done: true` adds instead, or once the operator " <>
-      "approves this import in the app, re-send this SAME batch unchanged."
+    "Import parked — nothing was applied. The declaration contains #{completed} completed items, but only #{done} arrive as `done: true`; the rest are in the exclusions. Always add the omitted completed items as `done: true`, or wait for the operator to approve the narrower scope in the app and then re-send the same batch unchanged."
   end
 
   @doc "The refusal after the operator DISMISSED the parked import — latched per payload."
@@ -323,16 +296,11 @@ defmodule DoitMcp.ImportInterview do
   def declined_message(reason \\ nil)
 
   def declined_message(reason) when is_binary(reason) do
-    "Import refused — nothing was applied. The operator rejected this exact import " <>
-      "in the app, saying: \"#{reason}\" Change the batch accordingly and re-send, " <>
-      "or talk to them."
+    "Import refused — nothing was applied. The operator rejected this exact import in the app: \"#{reason}\" Never re-send it unchanged. Revise the batch to follow their reason, or ask them to resolve any ambiguity."
   end
 
   def declined_message(_reason) do
-    "Import refused — nothing was applied. The operator rejected this exact import " <>
-      "(its declaration excludes completed work) in the app without saying why. " <>
-      "Change the batch — include the source's completed items as `done: true` " <>
-      "adds — or talk to the operator."
+    "Import refused — nothing was applied. The operator rejected this exact import, which excludes completed work, without giving a reason. Never re-send it unchanged. Include every completed source item as `done: true`, or ask the operator how to proceed."
   end
 
   @doc """

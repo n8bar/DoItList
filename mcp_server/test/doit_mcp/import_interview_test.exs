@@ -62,9 +62,9 @@ defmodule DoitMcp.ImportInterviewTest do
       }
 
       assert {:invalid, message} = ImportInterview.from_params(params)
-      assert message =~ "340 checkbox lines across 2 file(s)"
+      assert message =~ "340 markdown-checkbox lines across 2 file(s)"
       assert message =~ "only 12 items"
-      assert message =~ "nested as the source nests them"
+      assert message =~ "with the source nesting"
       # The cheap way out is declared, not re-derived.
       assert message =~ "`declared_exclusions`"
     end
@@ -96,14 +96,16 @@ defmodule DoitMcp.ImportInterviewTest do
       base = %{declared_total: 10, declared_completed: 0, declared_ordering: "none"}
 
       assert {:invalid, missing} = ImportInterview.from_params(base)
-      assert missing =~ "`declared_sources` must list every source document"
+
+      assert missing =~
+               "`declared_sources` must be a non-empty list containing every source document"
 
       assert {:invalid, bad} =
                ImportInterview.from_params(
                  Map.put(base, :declared_sources, [%{"path" => "PLAN.md"}])
                )
 
-      assert bad =~ "not from your import plan"
+      assert bad =~ "never infer the count from the batch you constructed"
     end
 
     test "exclusions sum and keep their verbatim reasons" do
@@ -137,7 +139,7 @@ defmodule DoitMcp.ImportInterviewTest do
         {Map.put(base, :declared_exclusions, [%{"count" => 2, "reason" => "  "}]),
          "`declared_exclusions`"},
         {Map.put(base, :declared_exclusions, [%{"count" => 11, "reason" => "too many"}]),
-         "declared exclusions (11) cannot exceed `declared_total` (10)"},
+         "total `declared_exclusions` count (11) must not exceed `declared_total` (10)"},
         {%{base | declared_ordering: " "}, "`declared_ordering`"},
         {Map.delete(base, :declared_ordering), "`declared_ordering`"}
       ]
@@ -166,7 +168,7 @@ defmodule DoitMcp.ImportInterviewTest do
 
     test "cumulative adds past the importable total refuse naming both numbers" do
       assert {:refuse, message} = ImportInterview.check(decl(20, 0, 5), 16, 0)
-      assert message =~ "Import declaration mismatch — nothing was applied."
+      assert message =~ "Import declaration mismatch — nothing was applied:"
       assert message =~ "cumulative adds reach 16"
       assert message =~ "importable total of 15"
       assert message =~ "20 declared minus 5 excluded"
@@ -196,26 +198,26 @@ defmodule DoitMcp.ImportInterviewTest do
       message = ImportInterview.demand_message(12, false)
 
       assert message =~ "First-import declaration required"
-      assert message =~ "12 task-adds"
-      assert message =~ "Nothing was applied; no operator step is needed."
+      assert message =~ "12 task adds"
+      assert message =~ "nothing was applied; no operator step is needed."
       assert message =~ "`declared_total`"
       assert message =~ "`declared_completed`"
       assert message =~ "`declared_exclusions`"
       assert message =~ "`declared_ordering`"
-      assert message =~ "every later chunk of this import is checked against the same declaration"
+      assert message =~ "every later chunk is checked against this declaration"
       refute message =~ "readback"
 
-      assert ImportInterview.demand_message(40, true) =~ "carry `readback` too"
+      assert ImportInterview.demand_message(40, true) =~ "also requires `readback`"
     end
 
     test "the parked message names both recoveries with no attestation vocabulary" do
       message = ImportInterview.parked_message(decl(20, 5, 5), 0)
 
       assert message =~ "Import parked — nothing was applied."
-      assert message =~ "5 declared complete, 0 arriving `done`"
-      assert message =~ "the operator's call"
-      assert message =~ "`done: true` adds"
-      assert message =~ "re-send this SAME batch unchanged"
+      assert message =~ "contains 5 completed items, but only 0 arrive as `done: true`"
+      assert message =~ "operator to approve the narrower scope"
+      assert message =~ "add the omitted completed items as `done: true`"
+      assert message =~ "re-send the same batch unchanged"
       refute message =~ "operator_confirmed"
     end
 
@@ -223,8 +225,8 @@ defmodule DoitMcp.ImportInterviewTest do
       message = ImportInterview.declined_message()
 
       assert message =~ "operator rejected"
-      assert message =~ "`done: true` adds"
-      assert message =~ "talk to the operator"
+      assert message =~ "every completed source item as `done: true`"
+      assert message =~ "ask the operator how to proceed"
       refute message =~ "operator_confirmed"
     end
 

@@ -327,7 +327,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert decoded["message"] =~ "no operator step is needed"
     assert decoded["message"] =~ "provenance comment on the target Initiative's root task"
     # The recovery is the readback, not a smaller batch (m03.04 2.5.5).
-    assert decoded["message"] =~ "settling the session"
+    assert decoded["message"] =~ "settles later chunks for this session"
     refute decoded["message"] =~ "#{ImportGate.ramp_threshold()} cumulative"
 
     # Refused unapplied — nothing was posted.
@@ -413,7 +413,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     decoded = execute_refused(%{operations: existing_initiative_batch(15, 7)})
     assert decoded["gate"] == "import_readback"
     assert decoded["message"] =~ "15 tasks"
-    assert decoded["message"] =~ "135 this session"
+    assert decoded["message"] =~ "135 cumulative in the trailing window"
     refute_received {:operations_post, _}
   end
 
@@ -442,7 +442,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert decoded["gate"] == "batch_shape"
     assert decoded["message"] =~ "file-mirror import"
-    assert decoded["message"] =~ "they approve this import in the app"
+    assert decoded["message"] =~ "wait for their approval in the app"
     # One override mechanism now — the agent can no longer attest.
     refute decoded["message"] =~ "operator_confirmed"
     # Parked under this batch's own hash, approve URL handed back.
@@ -478,7 +478,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     decoded = execute_refused(%{operations: mirror_batch(7)})
 
     assert decoded["gate"] == "import_readback"
-    assert decoded["message"] =~ "approved this import in the app"
+    assert decoded["message"] =~ "approved this exact batch"
     assert decoded["message"] =~ "stamped operator-approved"
     refute_received {:operations_post, _}
   end
@@ -507,7 +507,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
         })
       )
 
-    assert decoded["message"] =~ "340 checkbox lines"
+    assert decoded["message"] =~ "340 markdown-checkbox lines"
     assert decoded["message"] =~ "only 12 items"
     refute_received {:operations_post, _}
     refute_received {:declaration_post, _}
@@ -564,9 +564,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     decoded = execute_refused(%{operations: checklist_batch(7)})
 
     assert decoded["gate"] == "batch_shape"
-    assert decoded["message"] =~ "2 markdown-checkbox lines sit inside 1 new task descriptions"
-    assert decoded["message"] =~ "Import them as subtasks instead"
-    assert decoded["message"] =~ "they approve this import in the app"
+    assert decoded["message"] =~ "2 markdown-checkbox lines appear inside 1 new task descriptions"
+    assert decoded["message"] =~ "import each checkbox as a subtask"
+    assert decoded["message"] =~ "wait for their approval in the app"
     refute decoded["message"] =~ "operator_confirmed"
     refute_received {:operations_post, _}
 
@@ -601,8 +601,9 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
     assert_received {:operations_post, _batch}
     assert_received {:operations_post, %{"operations" => [%{"type" => "comment"}]}}
-    assert Enum.any?(rest, &(&1["text"] =~ "could NOT be posted"))
+    assert Enum.any?(rest, &(&1["text"] =~ "import record was not posted"))
     assert Enum.any?(rest, &(&1["text"] =~ "root_task_id"))
+    assert Enum.any?(rest, &(&1["text"] =~ "Import record — readback as applied:"))
   end
 
   describe "the first-import interview (m03.04 2.8.10)" do
@@ -706,8 +707,8 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
       assert decoded["gate"] == "import_declaration"
       assert decoded["message"] =~ "Import parked"
-      assert decoded["message"] =~ "the operator's call"
-      assert decoded["message"] =~ "re-send this SAME batch unchanged"
+      assert decoded["message"] =~ "operator to approve the narrower scope"
+      assert decoded["message"] =~ "re-send the same batch unchanged"
       refute decoded["message"] =~ "operator_confirmed"
       assert decoded["approve_url"] == "http://app.test/account#import-approvals"
 
@@ -769,7 +770,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
 
       assert decoded["gate"] == "import_declaration"
       assert decoded["message"] =~ "operator rejected"
-      assert decoded["message"] =~ "talk to the operator"
+      assert decoded["message"] =~ "ask the operator how to proceed"
       assert_received {:approval_get, _}
       refute_received {:approval_post, _}
       refute_received {:operations_post, _}

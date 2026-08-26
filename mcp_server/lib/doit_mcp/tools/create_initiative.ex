@@ -1,10 +1,6 @@
 defmodule DoitMcp.Tools.CreateInitiative do
   @moduledoc """
-  Create an Initiative — the top-level container that owns a task tree.
-
-  Creation always lands `leaf_average` (the product's default progress
-  calculation); changing the calc happens only via `update_initiative`, where
-  a non-default choice is held for the operator's confirm.
+  Create one Initiative, the top-level container that owns a task tree. Creation always uses `leaf_average`; only when the operator explicitly requested another progress calculation, create the Initiative first and then use `update_initiative`.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -19,10 +15,7 @@ defmodule DoitMcp.Tools.CreateInitiative do
     field(:index_style, :string,
       required: false,
       description:
-        "Task-numbering scheme: none (default), outline, numerical, roman, alphabetical. " <>
-          "An imported/hierarchical source matches the source's scheme when it has a usable " <>
-          "one (outline, numerical, roman, alphabetical); a hierarchy with no usable scheme " <>
-          "takes numerical; a plain non-referenced list stays none"
+        "Task numbering: none (default), outline, numerical, roman, or alphabetical. Always preserve a source's outline, numerical, roman, or alphabetical scheme. If it has none, use numerical for a hierarchy and none for a plain, non-referenced list"
     )
 
     field(:auto_promote_co_assignees, :boolean, required: false)

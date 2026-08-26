@@ -1,8 +1,6 @@
 defmodule DoitMcp.Tools.SetInitiativeState do
   @moduledoc """
-  Change an Initiative's lifecycle state. `state` must be one of:
-  `archived`, `unarchived`, `hidden`, `unhidden`, `trashed`, `restored` —
-  the API rejects any other value.
+  Change one Initiative's lifecycle state. Always set `state` to exactly one of `archived`, `unarchived`, `hidden`, `unhidden`, `trashed`, or `restored`; every other value is rejected.
   """
 
   use Anubis.Server.Component, type: :tool

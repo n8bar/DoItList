@@ -61,8 +61,13 @@ defmodule DoitMcp.Tools.ApplyOperationsOpenOnlyTest do
 
     assert [_result, guidance] = text_blocks(response)
     assert guidance =~ "All 12 imported tasks arrived open."
-    assert guidance =~ "adds with `done: true`"
-    assert guidance =~ "the operator's call, not a default"
+    assert guidance =~ "add omitted completed items with `done: true`"
+
+    assert guidance =~
+             "Never treat your own plan, promise, assumption, or readback as authorization"
+
+    assert guidance =~ "Unless the operator explicitly requested open-only scope"
+    assert guidance =~ "inform the operator of the change"
   end
 
   test "a parent-anchored open-only batch into an existing tree carries the guidance" do

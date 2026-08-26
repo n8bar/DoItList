@@ -1,11 +1,8 @@
 defmodule DoitMcp.Tools.RemoveMember do
   @moduledoc """
-  Remove a member from an Initiative. Admin-only — the API rejects this when
-  the caller isn't an admin of the Initiative.
+  Remove one member from an Initiative. Only an Initiative admin can use this tool.
 
-  `member` ops carry their target (`initiative_id` + `user_id`) inside
-  `data`, not as a top-level `id`/`lid` — members don't have a single-column
-  id the wire protocol addresses directly.
+  In `apply_operations`, always put the target `initiative_id` and `user_id` inside `data`; never use a top-level `id` or `lid`, because a member has a composite key.
   """
 
   use Anubis.Server.Component, type: :tool

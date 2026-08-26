@@ -45,7 +45,7 @@ defmodule DoitMcp.ToolResult do
         message
 
       _ ->
-        "(409) The record changed since your read — re-read and retry."
+        "(409) The record changed since the latest read. Re-read it, reconcile the current state, and retry."
     end
   end
 

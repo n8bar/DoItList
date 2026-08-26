@@ -1,19 +1,10 @@
 defmodule DoitMcp.Tools.UpdateTask do
   @moduledoc """
-  Edit a task's plain fields (title, description, priority, assignee,
-  manual progress); `title` and `description` accept `%<task_id>`
-  cross-reference tokens. This tool only edits plain fields — completion
-  (`complete_task`), moves (`move_task`), and co-assignees
-  (`set_task_co_assignees`) are separate tools, matching the API's
-  "one concern per update" rule.
+  Update a task's title, description, priority, assignee, or manual progress. `title` and `description` accept `%<task_id>` cross-reference tokens. Always use `complete_task` for completion, `move_task` for parent or position changes, and `set_task_co_assignees` for co-assignees.
 
-  Read, then conditionally write: pass the task's `version` from your latest
-  read as `expected_version` — a stale token applies nothing and returns the
-  current record; re-read from it and reconcile before retrying. Omitted =
-  unconditional write.
+  Always pass the latest task `version` as `expected_version` unless overwriting any intervening change is acceptable. A stale version applies nothing and returns the current task; reconcile that record before retrying. Omitting `expected_version` writes unconditionally.
 
-  Editing more than a couple of tasks in one pass → use `apply_operations`
-  as one batch instead of looping this tool.
+  When a pass updates multiple tasks, always use one `apply_operations` batch; never loop `update_task`.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -31,9 +22,7 @@ defmodule DoitMcp.Tools.UpdateTask do
     field(:expected_version, :integer,
       required: false,
       description:
-        "The task's `version` from your latest read; the update is refused with the " <>
-          "current record if the task changed since (re-read, reconcile, retry). " <>
-          "Omit to write unconditionally"
+        "Latest task `version`. Always provide it unless overwriting any intervening change is acceptable. A mismatch applies nothing and returns the current task; reconcile it before retrying. Omit only for an unconditional write"
     )
   end
 

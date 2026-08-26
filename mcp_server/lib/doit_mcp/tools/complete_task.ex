@@ -1,11 +1,8 @@
 defmodule DoitMcp.Tools.CompleteTask do
   @moduledoc """
-  Mark a task done or not done. Completion cascades server-side to
-  descendants (marked done/undone alongside it) and rolls up to ancestors'
-  progress — this tool just sends the flag, the API owns the cascade.
+  Mark one task done or not done. The server applies the same state to every descendant and updates ancestor roll-up progress; never send separate completion updates for descendants that should match this task.
 
-  Completing more than a couple of tasks in one pass → use `apply_operations`
-  as one batch instead of looping this tool.
+  When a pass changes completion on multiple independent tasks, always use one `apply_operations` batch; never loop `complete_task`.
   """
 
   use Anubis.Server.Component, type: :tool

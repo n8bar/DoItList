@@ -85,14 +85,14 @@ defmodule DoitMcp.CreateTaskGateTest do
     {protocol, decoded} = decode(response)
     assert protocol["isError"] == true
     assert decoded["gate"] == "single_create_pause"
-    assert decoded["message"] =~ "#{@threshold} tasks have landed"
+    assert decoded["message"] =~ "#{@threshold} task creations"
     assert decoded["message"] =~ "minutes"
     assert decoded["message"] =~ "apply_operations"
-    assert decoded["message"] =~ "one list at a time"
+    assert decoded["message"] =~ "one list per batch"
     # The no-stop recovery words (m03.04 2.8.4): the readback record, not
     # an operator confirm.
     assert decoded["message"] =~ "`readback`"
-    assert decoded["message"] =~ "without a stop"
+    assert decoded["message"] =~ "without asking the operator"
     assert_received :pressure_read
     refute_received :pressure_read
     refute_received :created

@@ -1,21 +1,10 @@
 defmodule DoitMcp.Tools.CreateTask do
   @moduledoc """
-  Create a task. Give `parent_id` to nest under an existing task, or
-  `initiative_id` alone to create it top-level (parented to that Initiative's
-  root task) — mirrors `add task` in the Arc 1 op table. `title` and
-  `description` accept `%<task_id>` cross-reference tokens.
+  Create one task. Use `parent_id` to nest it under an existing task, or use `initiative_id` without `parent_id` to create it at the Initiative's top level. `title` and `description` accept `%<task_id>` cross-reference tokens.
 
-  ## Single-create pause (m03.04 3.1 iteration 2)
+  ## Repeated creation
 
-  The import guardrail belongs to the DESTINATION, not the tool: pressure is
-  the DATABASE's recent-creation window (`DoitMcp.ImportPressure`), shared
-  with the batch classifier — a human-rhythm drip of creates decays out, a
-  loop accumulates. Past the threshold, one-at-a-time creation pauses with
-  an agent-facing redirect — never a stop for the operator (m03.04 2.8.4):
-  the batch path carries the import's one readback record, and coherent
-  one-list batches ride the ramp without any. An initiative whose readback
-  was recorded this session flows freely, singles included. The pause rides
-  `DOITLIST_IMPORT_GATE=off`.
+  When a plan requires multiple task creations, always use `apply_operations`; never loop `create_task`. After too many recent creations in one Initiative, this tool refuses without creating a task and redirects you to `apply_operations`. Follow that redirect without stopping the operator; the batch path handles any required import readback. Once the readback is recorded for the Initiative this session, single creates resume.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -107,13 +96,6 @@ defmodule DoitMcp.Tools.CreateTask do
   # back: coherent one-list batches ride the ramp; one recorded readback at
   # the batch path reopens everything, singles included.
   defp batch_path_message(pressure) do
-    "One-at-a-time pause: #{pressure} tasks have landed in this initiative in the " <>
-      "last #{ImportPressure.window_minutes()} minutes. Batch further work through " <>
-      "apply_operations — one list at a time (every add under one parent, at most " <>
-      "#{ImportGate.threshold()} per batch) flows without questions up to " <>
-      "#{ImportGate.ramp_threshold()} recent; past that, an import-shaped batch " <>
-      "carries a `readback` (recorded as the import's provenance comment) and " <>
-      "applies without a stop — one recorded readback opens this initiative fully, " <>
-      "singles included. Nothing was created."
+    "Nothing was created. This Initiative has #{pressure} task creations in the last #{ImportPressure.window_minutes()} minutes. Continue through `apply_operations`, one list per batch: put every task add under one parent and include no more than #{ImportGate.threshold()} task adds. Continue without asking the operator. A recent cumulative total above #{ImportGate.ramp_threshold()} requires the batch's `readback`; `apply_operations` records it as the import provenance comment. After one readback is recorded for this Initiative in the current session, single creates resume."
   end
 end

@@ -1,15 +1,8 @@
 defmodule DoitMcp.Tools.UpdateMemberRole do
   @moduledoc """
-  Change an existing Initiative member's role. Admin-only — the API rejects
-  this when the caller isn't an admin of the Initiative.
+  Change one Initiative member's role. Only an Initiative admin can use this tool. Always set `role` to `"editor"` or `"viewer"`; never use `"owner"`, because ownership transfer is a separate guarded flow.
 
-  `role` must be `"editor"` or `"viewer"` — NOT `"owner"`. The API rejects
-  granting owner via this path; ownership transfer is a separate, guarded
-  flow.
-
-  `member` ops carry their target (`initiative_id` + `user_id`) inside
-  `data`, not as a top-level `id`/`lid` — members don't have a single-column
-  id the wire protocol addresses directly.
+  In `apply_operations`, always put the target `initiative_id` and `user_id` inside `data`; never use a top-level `id` or `lid`, because a member has a composite key.
   """
 
   use Anubis.Server.Component, type: :tool

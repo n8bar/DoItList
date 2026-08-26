@@ -1,10 +1,6 @@
 defmodule DoitMcp.Resources.InitiativeMembers do
   @moduledoc """
-  One Initiative's members and roles — mirrors
-  `GET /api/v1/initiatives/:id/members`.
-
-  Parameterized the same way as `DoitMcp.Resources.InitiativeTree` — see that
-  module's moduledoc for the `uri_template` mechanism this relies on.
+  Read one Initiative's members and roles.
   """
 
   use Anubis.Server.Component,

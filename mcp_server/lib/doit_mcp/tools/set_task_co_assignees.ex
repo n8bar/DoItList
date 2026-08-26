@@ -1,8 +1,6 @@
 defmodule DoitMcp.Tools.SetTaskCoAssignees do
   @moduledoc """
-  Replace a task's full co-assignee list in one call. Add/remove/reorder
-  are all derived server-side from the diff against the task's current
-  co-assignees — this tool always sends the complete target list.
+  Replace one task's complete co-assignee list. Always provide the full desired ordered list; never provide only the IDs that changed. The server derives additions, removals, and reordering.
   """
 
   use Anubis.Server.Component, type: :tool

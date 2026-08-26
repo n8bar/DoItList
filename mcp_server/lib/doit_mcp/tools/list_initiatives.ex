@@ -1,14 +1,8 @@
 defmodule DoitMcp.Tools.ListInitiatives do
   @moduledoc """
-  List the caller's Initiatives — mirrors `GET /api/v1/initiatives`. Tool
-  twin of `DoitMcp.Resources.Initiatives`, for agents that only look for
-  reads in `tools/list`.
+  List the acting user's Initiatives. Each item includes `root_task_id`, the system root task whose comments form the Initiative's thread.
 
-  Each item carries `root_task_id` — the Initiative's system root task, whose
-  comments are the Initiative's own thread.
-
-  Each item's `url` is the operator-facing handle: when telling the operator
-  about an Initiative, hand them the URL or the name, never a raw id.
+  When referring the operator to an Initiative, always provide its `url` or name; never provide only its raw ID.
   """
 
   use Anubis.Server.Component, type: :tool

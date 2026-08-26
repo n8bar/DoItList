@@ -30,7 +30,7 @@ defmodule DoitMcp.BatchShapeTest do
       assert message =~ "12 of 12 new task titles look like file paths/names"
       assert message =~ "whole-file sized"
       assert message =~ "file-mirror import"
-      assert message =~ "they approve this import in the app"
+      assert message =~ "wait for their approval in the app"
       refute message =~ "operator_confirmed"
     end
 
@@ -77,7 +77,7 @@ defmodule DoitMcp.BatchShapeTest do
       assert {:refuse, message} = BatchShape.classify(ops)
       assert message =~ "stamped on 10 tasks"
       assert message =~ "boilerplate"
-      assert message =~ "adds detail the title lacks"
+      assert message =~ "supplies detail absent from the title"
     end
 
     test "a description echoing its title but adding real detail is its own family" do
@@ -92,7 +92,7 @@ defmodule DoitMcp.BatchShapeTest do
 
     test "empty descriptions plus one provenance comment pass (m03.04 2.8.5.4)" do
       ops =
-        (for i <- 1..12, do: add("Milestone #{i}")) ++
+        for(i <- 1..12, do: add("Milestone #{i}")) ++
           [
             %{
               "op" => "add",
@@ -111,8 +111,8 @@ defmodule DoitMcp.BatchShapeTest do
 
       assert {:refuse, message} = BatchShape.classify(ops)
       assert message =~ "2 markdown-checkbox lines"
-      assert message =~ "Import them as subtasks instead"
-      assert message =~ "they approve this import in the app"
+      assert message =~ "import each checkbox as a subtask"
+      assert message =~ "wait for their approval in the app"
       refute message =~ "operator_confirmed"
     end
 
@@ -125,7 +125,7 @@ defmodule DoitMcp.BatchShapeTest do
 
       assert {:refuse, message} = BatchShape.classify([add("Worklist", desc)])
       assert message =~ "2 markdown-checkbox lines"
-      assert message =~ "subtasks"
+      assert message =~ "subtask"
     end
 
     test "a numbered list without checkbox boxes passes" do

@@ -1,22 +1,8 @@
 defmodule DoitMcp.Tools.IngestReport do
   @moduledoc """
-  Mechanical lint facts about one Initiative's task tree — counts, ids, and
-  matched substrings only, never verdicts. Run this after a bulk ingest or a
-  bulk edit pass: it is the post-build audit's fact source (you judge each
-  fact; the report only measures).
+  Run after every bulk ingest or edit pass. This tool reports mechanical lint facts about one Initiative's task tree, never verdicts. Always determine whether each fact is an issue from the source intent and current tree before changing anything.
 
-  Facts: shape (task count, depth histogram, leaf/branch counts, top-level
-  index range); description coverage (with/without + ids lacking one);
-  top-rank (depth 0) tasks with zero comments; un-anchored reference
-  candidates (`M<n>`, dotted index paths, `task <n>` outside `%<id>` tokens)
-  in titles and descriptions; path-like strings in descriptions; journal
-  markers in descriptions (`Decision:`, `Verified:`, `Locked decisions:`,
-  `Verification:` — journaling belongs in comments); long comments (comment
-  id + task id past 300 characters, no exclusions). The text scans are
-  heuristic — expect false positives. Long lists
-  carry the first 20 entries plus an `"and N more"` tail. Composes the same
-  tree read as `get_initiative_tree` plus the commented tasks' comment
-  threads; the report is computed adapter-side (`DoitMcp.IngestReport`).
+  Reports task count, depth histogram, leaf and branch counts, top-level index range, description coverage and missing-description IDs, uncommented top-level tasks, path-like description strings, and heuristic text matches. Matches include unanchored references (`M<n>`, dotted indexes, or `task <n>` outside `%<id>` tokens), description journal markers (`Decision:`, `Verified:`, `Locked decisions:`, or `Verification:`), and every comment over 300 characters. Match lists include the first 20 entries plus an `"and N more"` count.
   """
 
   use Anubis.Server.Component, type: :tool

@@ -1,15 +1,6 @@
 defmodule DoitMcp.Resources.TaskComments do
   @moduledoc """
-  Comments on one task, including soft-delete tombstones — mirrors
-  `GET /api/v1/initiatives/:id/tasks/:task_id/comments`. The Initiative's own
-  thread is its root task's comments: read it with `task_id` = the Initiative
-  payload's `root_task_id`.
-
-  Two path variables (`id`, `task_id`) via one `uri_template` — RFC 6570
-  Level 1 simple expansion supports multiple `{var}` segments separated by
-  literal path components; each var's match is anchored to a single segment
-  (excludes `/`, `?`, `#`), so `{id}` and `{task_id}` resolve unambiguously.
-  See `DoitMcp.Resources.InitiativeTree` moduledoc for the general mechanism.
+  Read one task's comments, including soft-delete tombstones. To read the Initiative's own thread, always use its `root_task_id` as `task_id`.
   """
 
   use Anubis.Server.Component,

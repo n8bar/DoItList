@@ -254,7 +254,7 @@ defmodule DoitMcp.HttpImportGateSessionsTest do
              tool_result(post_frame(tools_call(2, %{"operations" => chunk_ops(1, 57)}), headers))
 
     assert decoded["gate"] == "import_readback"
-    assert decoded["message"] =~ "201 this session"
+    assert decoded["message"] =~ "201 cumulative in the trailing window"
     refute_received {:applied, _ops}
   end
 end

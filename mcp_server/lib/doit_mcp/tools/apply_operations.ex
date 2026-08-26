@@ -1,157 +1,79 @@
 defmodule DoitMcp.Tools.ApplyOperations do
   @moduledoc """
-  Apply a raw, ordered batch of operations atomically (all-or-nothing) —
-  a direct mirror of `POST /api/v1/operations`.
+  Atomically apply up to 150 ordered operations. Always use this tool for multi-operation passes and `lid` references; every other tool submits one operation against a real id.
 
-  This is the ONLY tool that supports `lid` (client-assigned local ids for
-  forward references within the same batch — e.g. bootstrapping a new
-  Initiative and its first task in one call) and multi-op batches; every
-  other tool in this MCP server builds exactly one op against a real id.
+  Always batch the whole pass, including bulk completions, comments, and edits. Never loop per-operation tools. If the pass exceeds 150 operations, split it into batches filled toward the cap. A `lid` resolves only within its batch; always use returned real ids across batches.
 
-  A batch is capped at **150 operations**; a larger batch is rejected up front
-  with a `422` (naming the count and the limit) before any of it is applied.
+  ## Import rules
 
-  Batch the WHOLE pass — bulk completions, comments, and edits belong in
-  batches too, not looped single-op calls to the per-op tools (that is the
-  failure mode). Past the cap, split into chunks filled toward it — but lids
-  resolve within one batch only, so reference across chunks by real id.
+  Import classification counts cumulative task-adds per target Initiative over a trailing time window; chunking never resets the count.
 
-  ## Import limits — the numbers, upfront
-
-  The import classifier (contract below) counts CUMULATIVE task-adds per
-  target Initiative over a trailing time window — chunking doesn't reset it,
-  so a small-batch drip buys nothing but round-trips:
-
-    * **Description cap — 8000 characters** per task description, enforced
-      by the API (a 422): trim the prose and cite the source doc's path in
-      a provenance comment — never split the overflow into continuation
-      tasks.
-    * **Ideal import shape:** the source WHOLE — completed items arrive
-      `done: true`, or roll-up progress lies. Fill each batch toward the 150
-      cap, and keep a parent and its subtree in ONE batch by lid so no branch
-      lands half-built; one provenance comment per branch names its source
-      section. Batch size is the classifier's business, not a target of
-      yours — the first import-shaped batch's readback settles the session
-      and later chunks flow.
+    * Task descriptions are limited to 8000 characters. If source prose exceeds the limit, trim it and cite the source document in the branch's provenance comment. Never create continuation tasks for overflow.
+    * Always import the source whole, including completed items as `done: true`; otherwise roll-up progress lies.
+    * Always keep a parent and its subtree in one batch by `lid` when the subtree fits within the 150-operation cap. Split only when the subtree alone exceeds the cap.
+    * Add exactly one provenance comment per branch naming its source section.
 
   ## Wire format
 
-  Each element of `operations` must be a JSON object matching the wire
-  format:
+  Each operation is a JSON object with these fields:
 
-      %{
-        "op" => "add" | "update" | "remove",
-        "type" => "task" | "initiative" | "comment" | "member" | "notification" | "link",
-        "id" => <int, for update/remove targeting a real resource>,
-        "lid" => <string, for add — a batch-local reference other later ops
-                  in the SAME call can point back to>,
-        "data" => <op-specific fields, matching whichever domain tool
-                   documents for that op/type>
+      {
+        "op": "add" | "update" | "remove",
+        "type": "task" | "initiative" | "comment" | "member" | "notification" | "link",
+        "id": <real id for updating or removing an existing resource>,
+        "lid": <batch-local id assigned by an add or used by a later same-batch update/remove to target that add>,
+        "data": <fields documented by the corresponding domain tool>
       }
 
-  ## Referencing a `lid` from a later op — the forward-reference mechanism
+  ## Batch-local references
 
-  Registering a `lid` on an `add` (above) is only half of it — here's how a
-  LATER op in the same batch points back to it:
+  Assign a unique `lid` to an add when later operations in the same batch must reference it.
 
-    * To target the created resource itself (an `update`/`remove` on it):
-      put the same string in that op's own top-level `"lid"` field instead
-      of `"id"` — e.g. `%{"op" => "update", "type" => "task", "lid" => "t1",
-      "data" => %{"manual_progress" => 50}}`.
-    * To reference it as a RELATIONSHIP inside another op's `data`: use a
-      `<field>_lid` key instead of `<field>_id` — e.g. `"parent_lid" =>
-      "t1"` instead of `"parent_id"` (a task's parent), `"initiative_lid" =>
-      "i"` (a task's Initiative), `"source_lid"`/`"target_lid"` (a link's
-      endpoints), `"task_lid"` (a comment's task).
+    * To update or remove an earlier add, put its `lid` in the later operation's top-level `"lid"` instead of `"id"`.
+    * To use an earlier add in a relationship, replace `<field>_id` with `<field>_lid`, such as `parent_lid`, `initiative_lid`, `task_lid`, `source_lid`, or `target_lid`.
+    * For references between tasks added in the same batch, always add both tasks before their link operations, then use `source_lid` and `target_lid`. For mutual references, add one link per direction.
 
-  A lid only resolves to an EARLIER op's `add` of the matching `type` —
-  never a later or wrong-type one. Worked example — bootstrap an Initiative
-  and its first task, created done (`done` completes on add and update
-  alike — one op, never an add plus a flip), in one call:
+  A `lid` always resolves to an earlier add of the required type. Never reference a later add, reuse a `lid`, or carry one across batches. Across batches, always use real ids.
 
-      [
-        %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "New project"}},
-        %{"op" => "add", "type" => "task", "lid" => "t1", "data" => %{"initiative_lid" => "i", "title" => "First task", "done" => true}}
-      ]
+  A `lid` never replaces the numeric id inside a `%<task_id>` text reference. When new task text must reference another new task, add the tasks first and update the text after their real ids return.
 
-  When the bootstrapped Initiative imports a hierarchical source, set
-  `index_style` in its `data` to match the source's numbering scheme when it
-  has a usable one (`outline`, `numerical`, `roman`, `alphabetical`); a
-  hierarchy with no usable scheme takes `numerical`; a plain non-referenced
-  list stays `none` (the default).
+  Always set `done` in the task's add or update that performs the completion. Never add a task and complete it with a second operation.
+
+  When an Initiative added in this batch imports a hierarchical source, always set `index_style` to the source's usable scheme: `outline`, `numerical`, `roman`, or `alphabetical`. Use `numerical` for hierarchy without a usable scheme and `none` for a plain, non-referenced list.
 
   ## Conditional updates — `expected_version`
 
-  Task and Initiative reads carry an integer `version`. An update op's `data`
-  may include `"expected_version" => <that version>` — read, then
-  conditionally write: on a stale token the whole batch rolls back (409, per-op
-  code `conflict`) and the error carries the current record under `current`;
-  re-read from it and reconcile before retrying. Omitted = unconditional.
+  For every task or Initiative update, always pass the latest read's `version` as `expected_version` unless overwriting any intervening change is acceptable. A stale version rolls back the entire batch and returns the current record under `current`; always reconcile that record before retrying.
 
   ## Safe retries — `idempotency_key`
 
-  Pass an optional `idempotency_key` (any client-chosen string) to make a retry
-  safe: it is forwarded as the `Idempotency-Key` header. One key per batch: a
-  200 is committed and never re-sent; a lost response (e.g. a timeout) retries
-  with the SAME key, which replays the stored response instead of re-applying
-  the batch.
+  When a batch may be retried after a timeout or lost response, always give it a unique `idempotency_key`. Retry only the unchanged batch with the same key; the server replays a committed response instead of applying it again. Never reuse the key for a different batch.
 
-  ## Import readback — a record, not a stop (m03.04 2.8.4)
+  ## Import readback
 
-  Operator consent for imports rides the standing agent-access grant the
-  operator flipped on the Initiative, so the server never stops an import to
-  fetch a human. What an import-shaped batch must carry is a `readback` —
-  your one-paragraph statement of the import shape you are building — which
-  the apply records as a provenance comment on the target Initiative's root
-  task.
+  When the cumulative classifier flags an import batch, always include `readback` unless an accepted first-import declaration replaces it. State the source scope, task hierarchy and grain, and treatment of completed or excluded items in one paragraph. An operator-approved content exception still requires `readback`.
 
-  Import-shaped means the classifier's cumulative trigger fired — armed by
-  default (`DOITLIST_IMPORT_GATE=off` opts out), per target Initiative over
-  a trailing time window: recent task creations are read from the DATABASE,
-  so chunking can't slip past it and reconnecting can't reset it. The recent
-  count plus the current batch crosses the batch's bound (the ramp's
-  32 / 128 above). Adds anchored on an EXISTING task's `parent_id` count
-  too — each unique parent resolves to its Initiative before the classifier
-  runs, so growing an existing tree can't dodge the threshold.
+  Classification counts recent database task-adds per target Initiative, including adds beneath an existing task. Chunking and reconnecting never reset the count.
 
-  An import-shaped batch WITHOUT a `readback` is refused unapplied — an
-  agent-facing refusal, no operator step: re-call with `readback`, plus
-  optional `assumptions` (your assumption-tagged decisions, one string
-  each) and `settled` (dimensions the operator's own ask already settled —
-  an explicit depth, a "summarize" instruction — one string each). WITH a
-  readback the batch applies immediately; the composed record (readback,
-  settled, assumptions, the server's shape facts) posts as the root
-  provenance comment, and one record settles the Initiative for the session
-  — later chunks flow without re-asking.
+  Without the required `readback`, the server refuses the batch unapplied. Re-call with the same operations and `readback`. Use `assumptions` only for agent-made decisions and `settled` only for explicit operator instructions, with one decision per string.
 
-  ## First import — a declaration, not prose (m03.04 2.8.10)
+  The readback requirement never stops an import for operator approval. The server applies the batch immediately, posts the record as a provenance comment on the target Initiative's root task, and settles later chunks for the session. First-import exclusions and content refusals are separate approval exceptions.
 
-  An Initiative's FIRST import is interviewed instead of trusted: while its
-  live tree is under 10 tasks with no declaration on record, import-scale
-  adds (10+, batch or window) demand the declaration, and it asks about the
-  SOURCE before it asks about your plan: `declared_sources` (every document
-  you read, `{path, checkbox_lines}` — lines in THAT file matching a
-  markdown checkbox, counted off the file, not derived from what you intend
-  to create), `declared_total` (every item the source holds),
-  `declared_completed` (how many it marks complete),
-  `declared_exclusions` (`{count, reason}` objects — omit for a whole
-  import), `declared_ordering` (the source's ordering scheme). Every chunk
-  of the first import is checked against the declaration's arithmetic:
-  consistent flows with no ceremony and no prose `readback` — the accepted
-  declaration is the record, landing verbatim in the root provenance
-  comment; irreconcilable numbers refuse naming both sides; a declaration
-  excluding completed work parks for the operator's in-app approval —
-  approved, the SAME batch re-sent flows, its record stamped
-  "Operator-approved in the app"; dismissed, the same payload keeps
-  refusing.
+  ## First-import declaration and approval exceptions
 
-  Shape refusals (file mirror, checklists, boilerplate — each message
-  teaches its recovery) ride the SAME park-and-approve (m03.04 2.8.5.3):
-  the refusal parks the import on the operator's account and the agent is
-  handed the approve URL; approved, the SAME batch re-sent flows with its
-  record stamped "Operator-approved in the app"; dismissed, that payload
-  keeps refusing. There is one override mechanism, and the agent never
-  attests on the operator's behalf.
+  When an Initiative has fewer than 10 live tasks, no declaration on record, and its first import reaches 10 cumulative task-adds, always provide:
+
+    * `declared_sources`: every source document read, each as `{path, checkbox_lines}` with checkbox lines counted from that file, never from the planned import.
+    * `declared_total`: every item the source contains.
+    * `declared_completed`: every item the source marks complete.
+    * `declared_exclusions`: omitted items as `{count, reason}` objects; omit this field for a whole import.
+    * `declared_ordering`: the source's ordering scheme, or `none` for an unordered source.
+
+  Every chunk is checked against the declaration. Cumulative task-adds must not exceed `declared_total` minus declared exclusions, and every imported completed item must arrive as `done: true`. If the numbers cannot reconcile, fix the batch; if the declaration misstates the source, tell the operator.
+
+  An accepted declaration becomes the root provenance record and replaces prose `readback` unless an operator-approved content exception also applies. When a completed import leaves declared-complete work in its exclusions, the server parks it and returns an approval URL. Include the completed items as `done: true`, or wait for the operator to approve in the app and then re-send the same batch unchanged. A dismissed payload remains refused.
+
+  File-mirror, embedded-checklist, and boilerplate imports are also refused and parked. Always follow the refusal's recovery unless the operator explicitly requires the exact rejected content. Only the operator may approve that exception in the app; after approval, re-send the same batch unchanged. Never attest on the operator's behalf.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -166,16 +88,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   @declaration_prefix "Import record — declaration as accepted:"
 
-  @record_note "Import record posted as a provenance comment on the target " <>
-                 "Initiative's root task."
+  @record_note "Import record posted as a provenance comment on the target Initiative's root task."
 
-  @record_fallback "The batch applied, but the record comment could NOT be posted " <>
-                     "automatically. Post it yourself: add_comment on the target " <>
-                     "Initiative's `root_task_id` with the record text, prefixed " <>
-                     "\"Import record\"."
+  @record_fallback "The batch applied, but its import record was not posted. Always call `add_comment` on the target Initiative's `root_task_id` with this record text:"
 
-  @marker_guidance "If the repo's agent-instruction file (CLAUDE.md, AGENTS.md) has no " <>
-                     "'## Do It List' marker, offer the operator to add it:"
+  @marker_guidance "Always check the repo's agent-instruction file (`CLAUDE.md` or `AGENTS.md`) for a '## Do It List' marker. If absent, offer the operator this marker; never add it without approval:"
 
   schema do
     field(:operations, {:list, :map}, required: true)
@@ -270,12 +187,17 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
   defp shape_approval({:refuse, message}, params) do
     case Client.get("/api/v1/import_approvals/#{payload_hash(params.operations)}") do
-      {:ok, %{"status" => "skipped"}} -> :pass
-      {:ok, %{"status" => "approved"}} -> :approved
+      {:ok, %{"status" => "skipped"}} ->
+        :pass
+
+      {:ok, %{"status" => "approved"}} ->
+        :approved
+
       {:ok, %{"status" => "dismissed"} = row} ->
         {:refuse, shape_declined_message(row["decision_reason"])}
 
-      _pending_or_none -> park_shape(params, message)
+      _pending_or_none ->
+        park_shape(params, message)
     end
   end
 
@@ -293,13 +215,15 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
       failure ->
         Logger.warning("shape refusal park failed: #{inspect(failure)}")
-
-        {:refuse,
-         message <>
-           " (The approval request could not be parked in the app just now — " <>
-           "re-sending will park it again.)"}
+        park_failed(message)
     end
   end
+
+  defp park_failed(message),
+    do:
+      {:refuse,
+       message <>
+         " The approval request was not created. Re-send the same batch unchanged to retry."}
 
   defp task_add_op?(%{"op" => "add", "type" => "task"}), do: true
   defp task_add_op?(_), do: false
@@ -307,16 +231,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
   # The operator's own words, quoted and attributed — guidance from them, not
   # instructions from the server (m03.04 3.1.9.2). No words, no quote.
   defp shape_declined_message(reason) when is_binary(reason) do
-    "Batch shape refused — nothing was applied. The operator rejected this exact " <>
-      "import in the app, saying: \"#{reason}\" Change the batch accordingly and " <>
-      "re-send, or talk to them."
+    "Import content refused — nothing was applied. The operator rejected this exact import in the app: \"#{reason}\" Never re-send it unchanged. Revise it to follow their reason, or ask them to resolve any ambiguity."
   end
 
   defp shape_declined_message(_reason) do
-    "Batch shape refused — nothing was applied. The operator rejected this exact " <>
-      "import in the app without saying why. Change the batch — import the work " <>
-      "inside the documents as tasks, nested as the source nests them — or talk to " <>
-      "the operator."
+    "Import content refused — nothing was applied. The operator rejected this exact import in the app without a reason. Never re-send it unchanged. Import the work inside the documents as tasks, preserving the source nesting, or ask the operator how to proceed."
   end
 
   # --- The first-import interview (m03.04 2.8.10) ----------------------------
@@ -463,11 +382,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
       failure ->
         Logger.warning("import declaration park failed: #{inspect(failure)}")
-
-        {:refuse,
-         message <>
-           " (The approval request could not be parked in the app just now — " <>
-           "re-sending will park it again.)"}
+        park_failed(message)
     end
   end
 
@@ -555,23 +470,11 @@ defmodule DoitMcp.Tools.ApplyOperations do
     do: target == interview.target
 
   defp readback_required_message({:gate, %{task_adds: task_adds, cumulative: cumulative}}, _shape) do
-    "Import readback required: this batch adds #{task_adds} tasks (#{cumulative} this " <>
-      "session, chunks included), so it is import-shaped and its record must exist. " <>
-      "Nothing was applied; no operator step is needed. Re-call apply_operations with " <>
-      "the SAME operations plus `readback` — your one-paragraph statement of the " <>
-      "import shape you're building — and optionally `assumptions` (assumption-tagged " <>
-      "decisions, one string each) and `settled` (dimensions the operator's own ask " <>
-      "already settled, one string each). The batch then applies immediately and the " <>
-      "readback lands as a provenance comment on the target Initiative's root task, " <>
-      "settling the session — later chunks flow without re-asking."
+    "Import readback required — nothing was applied; no operator step is needed. This batch adds #{task_adds} tasks (#{cumulative} cumulative in the trailing window). Re-call `apply_operations` with the same operations plus `readback`: one paragraph stating the source scope, task hierarchy and grain, and treatment of completed or excluded items. Use `assumptions` only for agent-made decisions and `settled` only for explicit operator instructions, with one decision per string. The batch then applies, posts the record as a provenance comment on the target Initiative's root task, and settles later chunks for this session."
   end
 
   defp readback_required_message(:pass, _shape) do
-    "Shape override readback required: the operator approved this import in the app, " <>
-      "and what they approved must land in the import's record. Nothing was applied. " <>
-      "Re-call apply_operations with the SAME operations plus `readback` — the record " <>
-      "posts as a provenance comment on the target Initiative's root task, stamped " <>
-      "operator-approved."
+    "Approved-content readback required — nothing was applied. The operator approved this exact batch, but its import record is missing. Re-call `apply_operations` with the same operations unchanged plus `readback` describing the approved content. The server posts the record as a provenance comment on the target Initiative's root task, stamped operator-approved."
   end
 
   # Resolve the batch's parent-anchored task-adds (`parent_id` = an existing
@@ -683,7 +586,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
     else
       failure ->
         Logger.warning("import readback record post failed: #{inspect(failure)}")
-        Response.text(response, @record_fallback)
+        Response.text(response, @record_fallback <> "\n\n" <> record.message)
     end
   end
 
@@ -852,10 +755,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
       adds ->
         Response.text(
           response,
-          "All #{adds} imported tasks arrived open. If the source marks items " <>
-            "complete, they import as adds with `done: true` (or `update` ops now) — " <>
-            "roll-up progress is wrong without them. Narrowing an import to open " <>
-            "items only is the operator's call, not a default."
+          "All #{adds} imported tasks arrived open. Never treat your own plan, promise, assumption, or readback as authorization to override the whole-source default. Unless the operator explicitly requested open-only scope, add omitted completed items with `done: true` and mark imported completed items done now; otherwise roll-up progress is wrong. If this corrects a plan you already stated, inform the operator of the change."
         )
     end
   end

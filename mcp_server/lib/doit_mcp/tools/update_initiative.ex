@@ -1,20 +1,8 @@
 defmodule DoitMcp.Tools.UpdateInitiative do
   @moduledoc """
-  Content-only edit of an Initiative's fields (name, description, subtitle,
-  progress calc, index style, auto-promote co-assignees, viewer+).
-  `description` and `subtitle` accept `%<task_id>` cross-reference tokens.
-  This tool does NOT touch state (archived/hidden/trashed — see
-  `set_initiative_state`) or ownership — those are rejected here or
-  handled elsewhere. Updates apply ungated.
+  Update one Initiative's name, description, subtitle, progress calculation, task numbering, co-assignee auto-promotion, or viewer+ access. `description` and `subtitle` accept `%<task_id>` cross-reference tokens. Always use `set_initiative_state` for archived, hidden, or trashed state; never use this tool for state or ownership. Updates apply immediately without operator confirmation.
 
-  Read, then conditionally write: pass the Initiative's `version` from your
-  latest read as `expected_version` — a stale token applies nothing and
-  returns the current record; re-read from it and reconcile before retrying.
-  Omitted = unconditional write.
-
-  (The progress-calc confirm gate is parked — `CALC-GATE-PARKED`, see the
-  m03.04 arc doc. The first-ai_knobs-write gate is parked with AI Knobs —
-  `AI-KNOBS-PARKED`, see the m03.04 arc doc.)
+  Always pass the latest Initiative `version` as `expected_version` unless overwriting any intervening change is acceptable. A stale version applies nothing and returns the current Initiative; reconcile that record before retrying. Omitting `expected_version` writes unconditionally.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -69,10 +57,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     field(:progress_calc, :string,
       required: false,
       description:
-        "leaf_average (default) weighs progress by decomposition and prevails unless the " <>
-          "OPERATOR asked otherwise; single_level's one trigger is completed work riding as " <>
-          "single done leaves that leaf_average would hide — never pick it to \"equalize\" " <>
-          "differently-sized siblings (decomposition IS the weighting)"
+        "leaf_average (default) weights progress through decomposition. Always retain it unless the operator explicitly requests single_level. Recommend single_level only when completed work represented as single done leaves would otherwise be hidden; never recommend it merely to equalize differently sized siblings"
     )
 
     field(:index_style, :string, required: false)
@@ -95,9 +80,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     field(:expected_version, :integer,
       required: false,
       description:
-        "The Initiative's `version` from your latest read; the update is refused with " <>
-          "the current record if it changed since (re-read, reconcile, retry). " <>
-          "Omit to write unconditionally"
+        "Latest Initiative `version`. Always provide it unless overwriting any intervening change is acceptable. A mismatch applies nothing and returns the current Initiative; reconcile it before retrying. Omit only for an unconditional write"
     )
   end
 

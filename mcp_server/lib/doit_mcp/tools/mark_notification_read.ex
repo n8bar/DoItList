@@ -1,10 +1,6 @@
 defmodule DoitMcp.Tools.MarkNotificationRead do
   @moduledoc """
-  Mark a notification read, or mark all of the caller's notifications read
-  at once.
-
-  Supply exactly one of `notification_id` (to target one notification) or
-  `all: true` (to mark every notification read).
+  Mark one notification or all of the caller's notifications read. Always provide exactly one of `notification_id` for one notification or `all: true` for every notification.
   """
 
   use Anubis.Server.Component, type: :tool
