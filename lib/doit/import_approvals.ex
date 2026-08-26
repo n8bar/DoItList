@@ -122,7 +122,7 @@ defmodule DoIt.ImportApprovals do
 
   # The operator's rejection words — blank collapses to nil so the agent is
   # told there were none rather than shown an empty quote. Capped so an
-  # accident can't push a wall of text into an agent's context (2.11.2).
+  # accident can't push a wall of text into an agent's context (3.1.9.2).
   defp trimmed(reason) when is_binary(reason) do
     case reason |> String.trim() |> String.slice(0, 500) do
       "" -> nil

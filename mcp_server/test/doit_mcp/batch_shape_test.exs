@@ -134,7 +134,7 @@ defmodule DoitMcp.BatchShapeTest do
     end
   end
 
-  describe "deep_sample/1 (m03.04 2.11.2)" do
+  describe "deep_sample/1 (m03.04 3.1.9.2)" do
     defp nested(lid, title, parent_lid, desc \\ nil) do
       data = %{"title" => title, "parent_lid" => parent_lid}
       data = if desc, do: Map.put(data, "description", desc), else: data

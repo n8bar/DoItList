@@ -21,9 +21,9 @@ defmodule DoIt.ImportApprovals.ImportApproval do
     field :status, :string, default: "pending"
     # The batch's deepest-branch snapshot, %{"nodes" => [%{title, description,
     # depth}]} — the card shows content instead of our classification
-    # (m03.04 2.11.2). A map, not a bare list, so later fields need no migration.
+    # (m03.04 3.1.9.2). A map, not a bare list, so later fields need no migration.
     field :sample, :map
-    # The operator's words on a rejection, handed to the agent (2.11.2).
+    # The operator's words on a rejection, handed to the agent (3.1.9.2).
     field :decision_reason, :string
 
     belongs_to :user, DoIt.Accounts.User

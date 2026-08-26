@@ -305,7 +305,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   defp task_add_op?(_), do: false
 
   # The operator's own words, quoted and attributed — guidance from them, not
-  # instructions from the server (m03.04 2.11.2). No words, no quote.
+  # instructions from the server (m03.04 3.1.9.2). No words, no quote.
   defp shape_declined_message(reason) when is_binary(reason) do
     "Batch shape refused — nothing was applied. The operator rejected this exact " <>
       "import in the app, saying: \"#{reason}\" Change the batch accordingly and " <>

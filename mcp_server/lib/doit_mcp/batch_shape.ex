@@ -292,7 +292,7 @@ defmodule DoitMcp.BatchShape do
       "the app — re-send this SAME batch unchanged once they have."
   end
 
-  # The snapshot the approval card shows (m03.04 2.11.2). Sampled from the
+  # The snapshot the approval card shows (m03.04 3.1.9.2). Sampled from the
   # batch's DEEPEST branch on purpose: the failures that slip past the
   # arithmetic are structural — a flattened import has no depth to show, so
   # the card renders a flat list and the operator sees it at a glance.

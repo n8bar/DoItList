@@ -5,7 +5,7 @@ defmodule DoItWeb.ImportApprovalComponents do
   Approve / Reject — where the server records the decision, so no agent
   attestation is load-bearing. One card serves every parked family, so it
   shows WHAT is being imported (a sample drawn from the batch's deepest
-  branch, 2.11.2) rather than naming one family's reason: a flattened
+  branch, 3.1.9.2) rather than naming one family's reason: a flattened
   import reads as a flat list at a glance, and the operator judges content
   they recognise instead of our classification. Rejecting takes optional
   words that reach the agent verbatim. Account-homed only (container `#import-approvals` on the

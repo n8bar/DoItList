@@ -522,7 +522,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert body =~ "Documents read: docs/PLAN.md (12 checkbox lines)"
   end
 
-  test "the park carries the batch's deepest-branch snapshot (m03.04 2.11.2)" do
+  test "the park carries the batch's deepest-branch snapshot (m03.04 3.1.9.2)" do
     stub_apply()
     execute_refused(%{operations: mirror_batch(7)})
 
@@ -532,7 +532,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     assert Enum.all?(nodes, &Map.has_key?(&1, "title"))
   end
 
-  test "a rejection's words reach the agent, quoted and attributed (m03.04 2.11.2)" do
+  test "a rejection's words reach the agent, quoted and attributed (m03.04 3.1.9.2)" do
     stub_apply(
       approval_status: "dismissed",
       approval_reason: "These are my milestones, not files. Import the checklists under them."

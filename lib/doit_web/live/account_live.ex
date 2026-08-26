@@ -255,7 +255,7 @@ defmodule DoItWeb.AccountLive do
     do: decide_import(socket, id, "approved")
 
   # Reject carries the operator's optional words to the agent (m03.04
-  # 2.11.2) — a form submit, so the text rides the same event.
+  # 3.1.9.2) — a form submit, so the text rides the same event.
   def handle_event("dismiss_import", %{"approval_id" => id} = params, socket),
     do: decide_import(socket, id, "dismissed", params["reason"])
 

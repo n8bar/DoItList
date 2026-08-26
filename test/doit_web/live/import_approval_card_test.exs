@@ -130,7 +130,7 @@ defmodule DoItWeb.ImportApprovalCardTest do
     assert ImportApprovals.latest_by_hash(ctx.me, @hash).status == "approved"
   end
 
-  describe "the snapshot and the rejection reason (m03.04 2.11.2)" do
+  describe "the snapshot and the rejection reason (m03.04 3.1.9.2)" do
     test "the card shows the parked batch's sample, deepest branch and all" do
       user = user("sampler")
       approval = park(user, %{"sample" => @sample})
