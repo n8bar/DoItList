@@ -112,8 +112,12 @@ defmodule DoItWeb.AccountLive do
   def handle_event("save_password", %{"user" => params}, socket) do
     case Accounts.update_password(socket.assigns.current_user, params) do
       {:ok, user} ->
+        # A successful change cures the condition the forced-change redirect's
+        # sticky error flash describes — clear it so it can't outlive (and
+        # contradict) the 4s success toast.
         {:noreply,
          socket
+         |> clear_flash()
          |> assign(:current_user, user)
          |> assign(:password_form, to_form(Accounts.change_password(user)))
          |> put_flash(:info, "Password updated.")}

@@ -56,7 +56,12 @@ defmodule DoItWeb.PasswordChangeRequiredTest do
     {:ok, me} = Accounts.require_password_change(me)
     conn = log_in(conn, me)
 
-    {:ok, view, _html} = live(conn, ~p"/account")
+    # Arrive the way a flagged user actually does — via the forced redirect,
+    # whose sticky error flash rides along into /account.
+    assert {:error, {:redirect, %{to: "/account"}}} = result = live(conn, ~p"/assigned")
+    {:ok, conn} = follow_redirect(result, conn)
+    {:ok, view, html} = live(conn)
+    assert html =~ "must change your password"
 
     view
     |> element("#password-form")
@@ -70,5 +75,10 @@ defmodule DoItWeb.PasswordChangeRequiredTest do
 
     refute Accounts.get_user(me.id).password_change_required
     assert {:ok, _view, _html} = live(conn, ~p"/assigned")
+
+    # The success ack must not be contradicted by the now-cured error flash.
+    html = render(view)
+    assert html =~ "Password updated."
+    refute html =~ "must change your password"
   end
 end
