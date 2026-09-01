@@ -84,29 +84,40 @@ defmodule DoItWeb.UserAuth do
     user_id = session["user_id"]
     user = user_id && Accounts.get_user(user_id)
 
-    if user do
-      # Mark the user online app-wide (m02.05 item 8) so the Collaborators pane
-      # lights up whenever they're connected anywhere, not just in one
-      # Initiative. Tracked per LiveView process; drops when the last one dies.
-      if Phoenix.LiveView.connected?(socket) do
-        DoItWeb.Presence.track_global(self(), user.id)
-        # Per-user notifications topic (m02.08 worklist 2): a new notification
-        # pushes the nav dot/flyout live on every authenticated LiveView.
-        Phoenix.PubSub.subscribe(DoIt.PubSub, Notifications.user_topic(user.id))
-      end
+    cond do
+      user && user.password_change_required && socket.view != DoItWeb.AccountLive ->
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(
+           :error,
+           "You must change your password before continuing."
+         )
+         |> Phoenix.LiveView.redirect(to: ~p"/account")}
 
-      socket =
-        socket
-        |> Phoenix.Component.assign(:current_user, user)
-        |> attach_theme_hook()
-        |> attach_notifications_hook()
+      user ->
+        # Mark the user online app-wide (m02.05 item 8) so the Collaborators pane
+        # lights up whenever they're connected anywhere, not just in one
+        # Initiative. Tracked per LiveView process; drops when the last one dies.
+        if Phoenix.LiveView.connected?(socket) do
+          DoItWeb.Presence.track_global(self(), user.id)
+          # Per-user notifications topic (m02.08 worklist 2): a new notification
+          # pushes the nav dot/flyout live on every authenticated LiveView.
+          Phoenix.PubSub.subscribe(DoIt.PubSub, Notifications.user_topic(user.id))
+        end
 
-      {:cont, socket}
-    else
-      {:halt,
-       socket
-       |> Phoenix.LiveView.put_flash(:error, "You must be logged in.")
-       |> Phoenix.LiveView.redirect(to: ~p"/users/log_in")}
+        socket =
+          socket
+          |> Phoenix.Component.assign(:current_user, user)
+          |> attach_theme_hook()
+          |> attach_notifications_hook()
+
+        {:cont, socket}
+
+      true ->
+        {:halt,
+         socket
+         |> Phoenix.LiveView.put_flash(:error, "You must be logged in.")
+         |> Phoenix.LiveView.redirect(to: ~p"/users/log_in")}
     end
   end
 

@@ -50,13 +50,16 @@ defmodule DoIt.Accounts do
 
   @doc """
   Change the password after verifying the current one. A wrong (or blank)
-  current password fails with an error on `:current_password`.
+  current password fails with an error on `:current_password`. A successful
+  change always clears `password_change_required`.
   """
   def update_password(%User{} = user, attrs) do
     changeset = User.password_changeset(user, attrs)
 
     if User.valid_password?(user, attrs["current_password"] || "") do
-      Repo.update(changeset)
+      changeset
+      |> Ecto.Changeset.put_change(:password_change_required, false)
+      |> Repo.update()
     else
       {:error,
        changeset
@@ -94,6 +97,16 @@ defmodule DoIt.Accounts do
   def set_skip_import_approvals(%User{} = user, on) when is_boolean(on) do
     user
     |> Ecto.Changeset.change(skip_import_approvals: on)
+    |> Repo.update()
+  end
+
+  @doc """
+  Flags the user to be forced through the change-password flow on their next
+  authenticated request. Cleared by a successful `update_password/2`.
+  """
+  def require_password_change(%User{} = user) do
+    user
+    |> Ecto.Changeset.change(password_change_required: true)
     |> Repo.update()
   end
 

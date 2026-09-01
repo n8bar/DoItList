@@ -70,6 +70,7 @@ defmodule DoIt.AccountsTest do
   describe "change password (§1.7)" do
     test "requires the correct current password" do
       user = register!(%{"password" => "old-password"})
+      {:ok, user} = Accounts.require_password_change(user)
 
       assert {:error, changeset} =
                Accounts.update_password(user, %{
@@ -80,6 +81,7 @@ defmodule DoIt.AccountsTest do
 
       assert "is not your current password" in errors_on(changeset).current_password
       assert {:ok, _} = Accounts.authenticate(user.email, "old-password")
+      assert Accounts.get_user(user.id).password_change_required
     end
 
     test "requires the confirmation to match" do
@@ -95,10 +97,11 @@ defmodule DoIt.AccountsTest do
       assert "does not match new password" in errors_on(changeset).password_confirmation
     end
 
-    test "changes the password" do
+    test "changes the password and clears a pending password-change requirement" do
       user = register!(%{"password" => "old-password"})
+      {:ok, user} = Accounts.require_password_change(user)
 
-      assert {:ok, _user} =
+      assert {:ok, updated} =
                Accounts.update_password(user, %{
                  "current_password" => "old-password",
                  "password" => "new-password-9",
@@ -107,6 +110,19 @@ defmodule DoIt.AccountsTest do
 
       assert {:ok, _} = Accounts.authenticate(user.email, "new-password-9")
       assert {:error, :invalid_credentials} = Accounts.authenticate(user.email, "old-password")
+      refute updated.password_change_required
+      refute Accounts.get_user(user.id).password_change_required
+    end
+  end
+
+  describe "require_password_change/1" do
+    test "flags the user to change their password on next login" do
+      user = register!(%{})
+      refute user.password_change_required
+
+      assert {:ok, updated} = Accounts.require_password_change(user)
+      assert updated.password_change_required
+      assert Accounts.get_user(user.id).password_change_required
     end
   end
 

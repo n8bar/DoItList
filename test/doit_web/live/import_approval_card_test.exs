@@ -180,5 +180,4 @@ defmodule DoItWeb.ImportApprovalCardTest do
       assert ImportApprovals.latest_by_hash(other, @hash).decision_reason == nil
     end
   end
-
 end
