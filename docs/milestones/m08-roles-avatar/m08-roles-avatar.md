@@ -1,7 +1,7 @@
-# M07-Roles-Avatar
-_Status: stub · Planned start: after M06 (Appify) · Target: TBD_
+# M08-Roles-Avatar
+_Status: stub · Planned start: after M07 (Appify) · Target: TBD_
 
-> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M07 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
+> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M08 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
 ## Goal
 
@@ -20,11 +20,11 @@ Stub — to be expanded. Not yet scoped into arcs.
 ## Preconditions
 
 - M02 (UX Buildout) lands — membership, roster, and account surfaces this work extends are stable.
-- M04 (Final Features) lands — the invite system Admin role pairs with is there.
+- M05 (Final Features) lands — the invite system Admin role pairs with is there.
 
 ## Open Questions
 
-- Whether avatar storage uses local disk vs object storage (interacts with M05 hosting).
+- Whether avatar storage uses local disk vs object storage (interacts with M06 hosting).
 
 ## Non-Goals
 
@@ -36,4 +36,4 @@ _(TBD once scoped.)_
 
 ## Branch
 
-`M07-roles-avatar` (created at scoping time).
+`M08-roles-avatar` (created at scoping time).

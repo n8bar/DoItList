@@ -1,11 +1,11 @@
-# M06-Appify
-_Status: stub · Planned start: after M05 (Prep and Launch) · Target: TBD_
+# M07-Appify
+_Status: stub · Planned start: after M06 (Prep and Launch) · Target: TBD_
 
-> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M06 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
+> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M07 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
 ## Goal
 
-"Appify" the existing web frontend — ship Do It List as installable **Android and iOS apps** by wrapping the current Phoenix/LiveView UI in a store-shippable mobile shell, rather than building a separate native client. Post-launch: a wrapped app needs the public, hosted instance from M05 to point at.
+"Appify" the existing web frontend — ship Do It List as installable **Android and iOS apps** by wrapping the current Phoenix/LiveView UI in a store-shippable mobile shell, rather than building a separate native client. Post-launch: a wrapped app needs the public, hosted instance from M06 to point at.
 
 ## Status
 
@@ -22,7 +22,7 @@ Stub — to be expanded. Not yet scoped into arcs.
 
 ## Preconditions
 
-- M05 (Prep and Launch) lands — a public, hosted, TLS instance for the apps to point at; a wrapped app has no local server to talk to.
+- M06 (Prep and Launch) lands — a public, hosted, TLS instance for the apps to point at; a wrapped app has no local server to talk to.
 - M02 (UX Buildout) responsive/touch baseline holds on phone-sized viewports.
 
 ## Open Questions
@@ -42,4 +42,4 @@ _(TBD once scoped.)_
 
 ## Branch
 
-`M06-appify` (created at scoping time).
+`M07-appify` (created at scoping time).
