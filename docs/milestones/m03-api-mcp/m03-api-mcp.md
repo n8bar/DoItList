@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 in progress · Arc 5 draft stub · Target: TBD_
+_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 archived · Arc 5 draft · Arc 6 draft stub · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
@@ -14,6 +14,10 @@ The API is designed **MCP-first**: the MCP server is the API's first concrete co
 An AI agent — **Claude Code first** — manages an Initiative as its working worklist, the way work is tracked today in the `docs/milestones/**` markdown hierarchy (Milestones → Arcs → Worklists → Items → Subitems). The bar: driving a task tree through the MCP/API is **at least as efficient as editing those `.md` files**. The tree mechanics (nesting, order, progress, reparent/reorder) are a natural — arguably better — fit; the doc-only affordances (inline prose, cross-references, git-diff review) map onto the carriers below.
 
 A sharper form of the same case: an agent's own in-flight todo list, normally ephemeral and passively rendered in its coding tool, becomes an interactive Initiative instead — live and two-way. The agent pushes updates as it works (add a task, mark one done, discover and add a subtask); the human can edit or reprioritize from the DoItList UI while the agent is still running, and the agent's next write reflects the current state rather than a stale plan.
+
+### Two lanes
+
+The MCP and the scripted client split by where the source lives. Text that arrives in a chat window — a pasted chores list, an uploaded short plan, a task named in conversation — goes through the MCP: conversational task work, plus landing a pasted list as one batch. Anything on disk goes through a script run by a coding agent, which has a shell: a deterministic client does the mechanics and the agent keeps the judgment. The north-star efficiency claim is measured on the script lane; the MCP's bar is that a chat window can drive an Initiative without ceremony.
 
 ## Carrier Mapping
 
@@ -30,19 +34,20 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 
 ## Arcs
 
-**Five arcs.** Arc 1 (HTTP API) delivers the surface. Arc 2 (Roll-up progress & completion) is a data-layer/UX fix, not an MCP feature — Arc 3 depends on it landing first, since it's what makes the north-star claim provably true. Arc 3 (the MCP server — a thin consumer of the public API, never a shortcut into the contexts) delivers the agent-facing surface. Arc 4 (Companion skill & MCP refinement) hardens the skill and the server through successive test drives — the delta-driven loop that carries the north-star verification. Arc 5 (Documentation & maintenance) publishes the reference and keeps it synced, running last and then continuously. Each arc carries its own tests; testing isn't a separate arc. Per-arc detail lives in the arc files linked below.
+**Six arcs.** Arc 1 (HTTP API) delivers the surface. Arc 2 (Roll-up progress & completion) is a data-layer/UX fix, not an MCP feature — Arc 3 depends on it landing first, since it's what makes the north-star claim provably true. Arc 3 (the MCP server — a thin consumer of the public API, never a shortcut into the contexts) delivers the agent-facing surface. Arc 4 (Companion skill & MCP refinement) hardened the skill and the server through test drives and is archived as the record. Arc 5 (Chat lane & scripted client) splits the surface into the two lanes, retires the import ceremony, and ships the scripted client with a script-first skill. Arc 6 (Documentation & maintenance) publishes the reference and keeps it synced, running last and then continuously. Each arc carries its own tests; testing isn't a separate arc. Per-arc detail lives in the arc files linked below.
 
 | Arc | Doc | Worklists | Status |
 |---|---|---|---|
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
 | 2 — Roll-up progress & completion | [`m03.02-rollup-progress.md`](m03.02-rollup-progress.md) | Backend lazy computation · Live collaborator updates · Client-side prediction · Testing | complete |
 | 3 — MCP server | [`m03.03-mcp-server.md`](m03.03-mcp-server.md) | MCP server · Batch reliability · Task cross-reference UI · Omissions & Corrections · Testing and Verification | complete |
-| 4 — Companion skill & MCP refinement | [`m03.04-companion-skill+mcp-refinement.md`](m03.04-companion-skill+mcp-refinement.md) | Companion skill (v1 history) · MCP server fixes & features · Baseline-first skill rewrite · Testing and Verification | in progress |
-| 5 — Documentation & maintenance | [`m03.05-documentation+maintenance.md`](m03.05-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
+| 4 — Companion skill & MCP refinement | [`m03.04-companion-skill+mcp-refinement.md`](m03.04-companion-skill+mcp-refinement.md) | Companion skill (v1 history) · MCP server fixes & features · Baseline-first skill rewrite · Testing and Verification | archived |
+| 5 — Chat lane & scripted client | [`m03.05-chat-lane+scripted-client.md`](m03.05-chat-lane+scripted-client.md) | Chat lane · Scripted client · Skill rewrite · Omissions & Corrections · Testing and Verification | draft |
+| 6 — Documentation & maintenance | [`m03.06-documentation+maintenance.md`](m03.06-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is complete — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashed under a realistic batch and caused lock contention between concurrent collaborators; the fix moved to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is complete — runtime (on `anubis_mcp`, the maintained fork of `hermes_mcp`), tools/resources, batch reliability, and the `%`-reference UI all landed and eye-passed; the transport it shipped on (a stdio process per connection) was retired in Arc 4 for a resident HTTP service. Arc 4 (Companion skill & MCP refinement) is in progress — the skill is authored and hardened across four refinement drives with server-side enforcement growing alongside (import gate, calc gate, `ingest_report`); drive 5 and the north-star efficiency verdict remain. Arc 5 (Documentation & maintenance) remains a draft stub, unscoped.
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is complete — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashed under a realistic batch and caused lock contention between concurrent collaborators; the fix moved to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is complete — runtime (on `anubis_mcp`, the maintained fork of `hermes_mcp`), tools/resources, batch reliability, and the `%`-reference UI all landed and eye-passed; the transport it shipped on (a stdio process per connection) was retired in Arc 4 for a resident HTTP service. Arc 4 (Companion skill & MCP refinement) is archived — four skill drives and six skill-less iterations built the resident transport, the connect panel, conditional writes, and an import ceremony that could catch contradiction but never fidelity; the direction changed to two lanes and the arc froze as the record. Arc 5 (Chat lane & scripted client) is drafted, pending approval. Arc 6 (Documentation & maintenance) remains a draft stub, unscoped.
 
 ## Preconditions
 
