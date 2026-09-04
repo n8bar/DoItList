@@ -1,5 +1,5 @@
 # PLAN
-_Last updated: 2026-09-01_
+_Last updated: 2026-09-04_
 
 Human-facing execution dashboard for Do It List. Open this doc first when resuming work.
 
@@ -22,7 +22,6 @@ No public release yet. The app won't open to the public before **M06 (Prep and L
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M02 | UX Buildout | Bring M01 to UX_GUARDRAILS + targeted design refinements so the app feels presentable. Arc scope and status live in the linked milestone doc's Arcs table. | 2026-05-29 | [`milestones/m02-ux-buildout/m02-ux-buildout.md`](milestones/m02-ux-buildout/m02-ux-buildout.md) |
 | [ ] | M03 | API & MCP | Programmatic API for Initiatives / Tasks / membership, designed MCP-first, plus an MCP server over it so agents can drive task trees. Arc scope and status live in the linked milestone doc's Arcs table. | TBD | [`milestones/m03-api-mcp/m03-api-mcp.md`](milestones/m03-api-mcp/m03-api-mcp.md) |
 | [ ] | M04 | Resilient Client | The tree workspace goes client-owned — local model, optimistic ops, sync over the operations endpoint; reconnect gets a budget and a degraded mode. The client survives server disturbance. Stub. | TBD | [`milestones/m04-resilient-client/m04-resilient-client.md`](milestones/m04-resilient-client/m04-resilient-client.md) |
 | [ ] | M05 | Final Features | Last product features before public — email infra & invites, recovery codes, TOTP, donation. Stub. | TBD | [`milestones/m05-final-features/m05-final-features.md`](milestones/m05-final-features/m05-final-features.md) |
@@ -35,3 +34,4 @@ No public release yet. The app won't open to the public before **M06 (Prep and L
 | Status | ID | Milestone | Short intent | Completed | Doc |
 |---|---|---|---|---|---|
 | [x] | M01 | BaseApp | First working slice: accounts, Initiatives, nested task tree, roll-up progress, Initiative membership, basic activity log, Dockerized. | 2026-05-05 | [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) |
+| [x] | M02 | UX Buildout | Bring M01 to UX_GUARDRAILS + targeted design refinements so the app feels presentable. | 2026-06-29 | [`milestones/m02-ux-buildout/m02-ux-buildout.md`](milestones/m02-ux-buildout/m02-ux-buildout.md) |

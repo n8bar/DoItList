@@ -1,5 +1,5 @@
 # M02-UX-Buildout
-_Status: Arcs 1–6 shipped · Arc 7 complete · Arc 8 approved · Target: 2026-05-29_
+_Status: Complete 2026-06-29 · all nine arcs complete · Target: 2026-05-29_
 
 > Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). This milestone doc owns M02 scope and acceptance criteria; per-arc detail lives in the arc files linked below.
 
@@ -25,7 +25,7 @@ This is the milestone that earns the first public release.
 | 6 — Undo & Trash | [`m02.06-undo-redo.md`](m02.06-undo-redo.md) | 16 | complete |
 | 7 — Initiative Layout & Task Tree, Revisited | [`m02.07-layout+task-tree-revisited.md`](m02.07-layout+task-tree-revisited.md) | 3 | complete |
 | 8 — Personal Workspace | [`m02.08-personal-workspace.md`](m02.08-personal-workspace.md) | 5 worklists | complete |
-| 9 — Client-Interaction Foundation | [`m02.09-client-interaction-foundation.md`](m02.09-client-interaction-foundation.md) | 7 worklists | approved |
+| 9 — Client-Interaction Foundation | [`m02.09-client-interaction-foundation.md`](m02.09-client-interaction-foundation.md) | 7 worklists | complete |
 
 ## Non-Goals
 
