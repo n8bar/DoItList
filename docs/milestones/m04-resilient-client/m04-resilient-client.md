@@ -20,6 +20,13 @@ Stub — to be expanded. Not yet scoped into arcs.
 
 Low-frequency surfaces (account, auth, import approvals, chrome) stay server-rendered — the inversion is scoped to the tree workspace.
 
+## Carried over from M03
+
+Two tree-workspace bugs handed here from m03.04 so the fix is written once, on the client-owned tree:
+
+- **Move-confirm false positive: emptying a branch reads as completing it.** Promoting the only child of a branch raised "will mark previously incomplete task(s) as complete" naming the parent, in an Initiative with zero complete tasks: the client flip predictor's source rule is vacuously true when a move removes ALL of an ancestor's leaves, while the authoritative math makes an emptied branch its own leaf (open, manual 0 → 0, no flip). The server preview classifies correctly. Expected: no confirm, the move lands, the emptied parent reads 0% and stays open.
+- **Tail drop-zone loses its bottom seat.** Dropping a task on a branch's tail drop-zone lands the row visually below the strip, so the strip stops being the branch's bottom edge. Expected: the strip stays the branch's last element through the drop and the server echo.
+
 ## Preconditions
 
 - M03 (API & MCP) lands — the operations endpoint is the sync backbone and must be stable.
