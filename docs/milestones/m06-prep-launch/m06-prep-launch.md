@@ -26,7 +26,7 @@ Stub — to be expanded. Not yet scoped into arcs.
 - **Observability.** Error tracking, uptime monitoring, basic metrics/logging.
 - **Backups.** Automated DB backups + a tested restore path.
 - **Perf / scale pass.** The data-layer optimization deferred in [`PLAN.md`](../../PLAN.md) (index strategy, `load_tree` scaling, pagination / bulk reads) — now that real client load patterns (the API/MCP and a public audience) exist to key it to.
-- **MCP goes public.** The adapter serves Streamable HTTP with per-session Bearer auth (M03 Arc 4 item 23), so the transport work is done — what remains is exposure: reaching a hosted instance from outside the LAN, and the deployment shape (packaging the resident service for the production host rather than a compose service beside the dev stack). OAuth and any official third-party-connector-UI integration (e.g. a vendor's own "Bring Your Own MCP" button) are a separate, still-open question, not required for this.
+- **MCP goes public.** The adapter already serves Streamable HTTP with per-session Bearer authentication. M06 exposes and packages it for production and adds standards-compliant OAuth for hosted clients, so production chat connections never require pasted API tokens. Official third-party connector UI integration remains a separate question.
 
 ## Preconditions
 

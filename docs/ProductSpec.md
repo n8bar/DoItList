@@ -1,9 +1,13 @@
 # Product Spec
-_Last updated: 2026-06-11_
+_Last updated: 2026-09-04_
 
 The canonical specification of Do It List — what the product is, the vocabulary used to describe it, the principles it must hold to, and the headline behaviors that define it.
 
 This is the master spec. Milestone docs and subsystem specs narrow or extend it but do not contradict it. [`PLAN.md`](PLAN.md) tracks how we get there; this doc tracks what "there" means.
+
+## Requirement Language
+
+Specifications normally state behavior directly. Where obligation needs emphasis, **shall** marks a mandatory requirement, **should** marks the expected default, and **may** marks permitted behavior. Exceptions to a **should** are allowed and should document their reasons. This convention applies here and in subordinate specifications.
 
 ## Core Idea
 **Task trees with real progress.** Break work into nested tasks; update progress on leaves; parent progress rolls up automatically. Importance is expressed by decomposition: break the work that matters more into more detail, and it counts for more — there is no weight attribute to tune.
@@ -142,3 +146,7 @@ A visual placeholder appears in the destination position during drag so the user
 - Changes save immediately and propagate to other active users promptly — and the propagation work scales with the size of the change, not the size of the tree or the team, so "near-instant" holds as both grow.
 - Last writer wins. No check-in/check-out, no file locking, no conflict resolution UI.
 - Each task records who last updated it and when, accessible in the UI.
+
+## Agent Integration
+
+The canonical behavior for AI-agent clients lives in the subordinate [Agent Integration specification](specs/agent_integration.md).

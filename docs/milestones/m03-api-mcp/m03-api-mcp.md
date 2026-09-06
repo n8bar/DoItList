@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 redo drafted · Arc 5 draft stub · Target: TBD_
+_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 scope approved · Arc 5 draft stub · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
@@ -41,12 +41,12 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 | 1 — HTTP API | [`m03.01-http-api.md`](m03.01-http-api.md) | API foundation · Read surface · Atomic mutation surface · Cross-references · Testing | complete |
 | 2 — Roll-up progress & completion | [`m03.02-rollup-progress.md`](m03.02-rollup-progress.md) | Backend lazy computation · Live collaborator updates · Client-side prediction · Testing | complete |
 | 3 — MCP server | [`m03.03-mcp-server.md`](m03.03-mcp-server.md) | MCP server · Batch reliability · Task cross-reference UI · Omissions & Corrections · Testing and Verification | complete |
-| 4 — MCP, scripted client & companion skill | [`m03.04-mcp+scripted-client+skill.md`](m03.04-mcp+scripted-client+skill.md) · first pass: [archived record](archive/m03.04-companion-skill+mcp-refinement.md) | Chat lane · Scripted client · Skill rewrite · Omissions & Corrections · Testing and Verification | draft |
+| 4 — MCP, scripted client & companion skill | [`m03.04-mcp+scripted-client+skill.md`](m03.04-mcp+scripted-client+skill.md) · first pass: [archived record](archive/m03.04-companion-skill+mcp-refinement.md) | Chat lane · Scripted client · Skill rewrite · Omissions & Corrections · Testing and Verification | scope approved; implementation pending |
 | 5 — Documentation & maintenance | [`m03.05-documentation+maintenance.md`](m03.05-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
 
 ## Status
 
-Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is complete — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashed under a realistic batch and caused lock contention between concurrent collaborators; the fix moved to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is complete — runtime (on `anubis_mcp`, the maintained fork of `hermes_mcp`), tools/resources, batch reliability, and the `%`-reference UI all landed and eye-passed; the transport it shipped on (a stdio process per connection) was retired in Arc 4 for a resident HTTP service. Arc 4 (MCP, scripted client & companion skill) is a redo, drafted and pending approval — its first pass, four skill drives and six skill-less iterations, built the resident transport, the connect panel, conditional writes, and an import ceremony that could catch contradiction but never fidelity; the direction changed to two lanes and that pass is archived as the record. Arc 5 (Documentation & maintenance) remains a draft stub, unscoped.
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is complete — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashed under a realistic batch and caused lock contention between concurrent collaborators; the fix moved to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is complete — runtime (on `anubis_mcp`, the maintained fork of `hermes_mcp`), tools/resources, batch reliability, and the `%`-reference UI all landed and eye-passed; the transport it shipped on (a stdio process per connection) was retired in Arc 4 for a resident HTTP service. Arc 4 (MCP, scripted client & companion skill) is a redo with approved scope and implementation pending — its first pass, four skill drives and six skill-less iterations, built the resident transport, the connect panel, conditional writes, and an import ceremony that could catch contradiction but never fidelity; the direction changed to two lanes and that pass is archived as the record. Arc 5 (Documentation & maintenance) remains a draft stub, unscoped.
 
 ## Preconditions
 
@@ -55,7 +55,7 @@ Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.
 ## Non-Goals
 
 - Rich-text / document-style task descriptions — the details field stays plain prose.
-- OAuth and hosted third-party MCP access — deferred to hosting (M06).
+- Standards-compliant OAuth and hosted third-party MCP access — deferred to M06.
 - GraphQL.
 - Push / real-time API — M03 is pull-only; no webhooks or push stream (the LiveView's internal PubSub stays internal). Deferred until a consumer needs it.
 - Cross-Initiative bulk operations (mirrors the ProductSpec cross-Initiative reorganization deferral).

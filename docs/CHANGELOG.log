@@ -512,3 +512,23 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-04  Doc: m03.04's open O&C items (4.1-4.5) moved out of the archived doc into m03.05 item 4 -- an archived doc is not canon, so nothing open stays in it; 4.6 keeps its number so the changelog reference holds.
 2026-09-04  Arc 4 redone in place instead of a new Arc 5: m03.04-mcp+scripted-client+skill.md is the canon Arc 4 (MCP, scripted client & companion skill) -- the goal never changed, only the approach; the first pass moves to archive/ as a non-canon record and Documentation & maintenance returns to m03.05.
 2026-09-04  m03.04 O&C 5.4 (move-confirm false positive) and 5.5 (tail drop-zone) handed to M04 -- both live in the client tree code M04 rewrites as client-owned, so fixing them now would be fixing them twice.
+2026-09-04  Added docs/specs/agent_integration.md as the canonical home for durable agent-client behavior; ProductSpec and m03.04 now reference it instead of duplicating requirements.
+2026-09-04  Arc 4 requirements dropped the duplicate archive sweep and the M04-from-imported-plan scenario; one is worklist mechanics, the other a use case rather than a standard.
+2026-09-04  ProductSpec adopted shall/should/may language: shall is mandatory, should allows documented exceptions, and may grants permission; subordinate specs inherit it.
+2026-09-04  Softened ProductSpec's should convention: should marks the expected default; exceptions are allowed and should document their reasons.
+2026-09-04  Corrected the doc hierarchy: Worklists are numbered checkable parents whose nested checklists are Items; only Milestone and Arc titles are non-checkable.
+2026-09-05  Removed the unsurfaced companion-skill PROMPTS.md and its m03.04 rewrite item; visible onboarding owns any useful starter prompts, while skill behavior owns the defaults.
+2026-09-05  Severed m03.04's design dependency on its discarded first pass: the archive no longer supplies context, rules, fixtures, or verification inputs; removed the unsurfaced first-pass AUTHORING.md, and retained old-system references only where needed to delete that code.
+2026-09-05  Assigned standards-compliant OAuth to M06 for hosted MCP access and barred production chat connections from requiring pasted API tokens; manual token pasting remains acceptable only in testing.
+2026-09-05  Barred open-only filtering in agent tree views so completed work remains visible alongside Progress; Arc 4 references the Agent Integration standard.
+2026-09-06  Added explicit Task completion mirroring and next-Task output to Agent Integration and Arc 4, with concurrent-edit protection and recovery from partial success.
+2026-09-06  Drafted maintained-mirror reading in Agent Integration and Arc 4 to avoid redundant live fetches during discussion while retaining live authority for writes and known conflicts.
+2026-09-06  Drafted scoped CLI tree reads and compact results in Arc 4, preserving completed Tasks, API Progress, requested content, and operation errors while allowing full responses to be saved.
+2026-09-06  Drafted CLI connection handling and write recovery in Arc 4 so configuration, credential protection, validation, and retry identity are handled by the client.
+2026-09-06  Clarified that completion mirroring reuses shared CLI write handling and that API-owned parsing means import parsing, avoiding duplicate mechanics and conflicting skill guidance.
+2026-09-06  Made scope clarification mandatory in Arc 4 skill guidance when available context leaves the intended source, destination, or extent ambiguous.
+2026-09-06  Updated Arc 4 verification for completion mirrors and scoped Progress, and added a measured completion-cost comparison with the supplied active tick script.
+2026-09-06  Preserved branch/leaf identity in depth-limited agent views, named the mirror command explicitly, and split completion-cost verification into agent measurements and human review.
+2026-09-06  Expanded completion-cost review into guided measurement and interpretation, an agent-prepared comparison, and a documented human assessment.
+2026-09-06  Simplified completion-cost review to an agent explanation and guided assessment, reusing the preceding measurements.
+2026-09-06  Closed the operator's Agent Integration and Arc 4 scope review; marked the specification approved and synchronized milestone status with implementation still pending.
