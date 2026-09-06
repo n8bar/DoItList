@@ -62,6 +62,11 @@ defmodule DoItWeb.Router do
     # the per-op error contract live in DoItWeb.Api.Operations.
     post "/operations", OperationsController, :create
 
+    # Text import (m03.04 2.3): a source document in, a Task tree out. Parsed
+    # by DoIt.Imports.Parser, applied through the operations engine above in
+    # cap-sized batches. Preview mode writes nothing.
+    post "/imports", ImportController, :create
+
     # Server-verified open-only import approvals (m03.04 2.8.8): the adapter
     # PARKS a refused open-only bootstrap and READS the operator's decision
     # back by hash. Deciding is deliberately absent from this surface — it

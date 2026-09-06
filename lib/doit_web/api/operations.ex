@@ -299,6 +299,16 @@ defmodule DoItWeb.Api.Operations do
 
   def apply_batch(_user, _operations), do: {:error, :invalid_request}
 
+  @doc """
+  The hard cap on operations per batch — the size a caller must chunk to.
+
+  Public because `DoItWeb.Api.Imports` (m03.04 2.3.4) splits a parsed document
+  into cap-sized batches, one transaction each; the cap and its rationale stay
+  owned here.
+  """
+  @spec max_batch_size() :: pos_integer()
+  def max_batch_size, do: @max_batch_size
+
   defp apply_within_cap(%User{} = user, operations, count) do
     # Drop any broadcast residue a PRIOR raised request left queued on THIS
     # process. DoIt.Broadcast queues in the process dictionary, and Bandit

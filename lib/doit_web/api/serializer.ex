@@ -357,9 +357,11 @@ defmodule DoItWeb.Api.Serializer do
     end)
   end
 
-  # The Initiative's web URL — the operator-facing handle (m03.04 2.1.3) —
-  # composed from the endpoint's public URL config via verified routes.
-  defp initiative_url(id), do: url(~p"/initiatives/#{id}")
+  @doc """
+  The Initiative's web URL — the operator-facing handle (m03.04 2.1.3) —
+  composed from the endpoint's public URL config via verified routes.
+  """
+  def initiative_url(id), do: url(~p"/initiatives/#{id}")
 
   # `[{source_id, target_id}]` -> `%{task_id => [other_id, ...]}` keyed by the
   # source (outgoing) or target (incoming) side.
