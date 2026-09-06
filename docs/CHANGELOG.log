@@ -532,3 +532,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-06  Expanded completion-cost review into guided measurement and interpretation, an agent-prepared comparison, and a documented human assessment.
 2026-09-06  Simplified completion-cost review to an agent explanation and guided assessment, reusing the preceding measurements.
 2026-09-06  Closed the operator's Agent Integration and Arc 4 scope review; marked the specification approved and synchronized milestone status with implementation still pending.
+2026-09-06  Arc 4 reordered: turning the import-ceremony gate off moves ahead of the parser as Worklist 1 because it unblocks chat imports immediately; the ceremony's deletion stays under the MCP worklist, after the parser lands.
