@@ -6,9 +6,11 @@ defmodule DoitMcp.ImportGate do
   `agent_access` grant — but it must carry a `readback`, which the apply
   records as a provenance comment on the target Initiative's root task.
 
-  The classifier ships ARMED: `enabled?/0` — `DOITLIST_IMPORT_GATE=off` opts
-  out; any other value, including unset, arms it — is `evaluate/2`'s very
-  first, cheapest check, before anything is counted or fetched.
+  The classifier ships OFF (m03.04 1.1): `enabled?/0` — only
+  `DOITLIST_IMPORT_GATE=on` arms it; unset, or any other value, leaves it
+  off — is `evaluate/2`'s very first, cheapest check, before anything is
+  counted or fetched. The whole ceremony is slated for deletion (m03.04
+  3.1); the switch keeps it reachable until then.
 
   The trigger is CUMULATIVE over a trailing time window (m03.04 items 3.11.2
   and 3.1 iteration 2): sub-cap chunking is sanctioned, so no single batch
@@ -63,16 +65,17 @@ defmodule DoitMcp.ImportGate do
   def ramp_threshold, do: @ramp_threshold
 
   @doc """
-  Whether the classifier is armed: on by default; `DOITLIST_IMPORT_GATE=off`
-  in the adapter's environment opts out (or the `:import_gate_enabled`
-  app-env override in tests).
+  Whether the classifier is armed: off by default;
+  `DOITLIST_IMPORT_GATE=on` in the adapter's environment arms it (or the
+  `:import_gate_enabled` app-env override in tests). The same variable arms
+  the app's side of the ceremony (`DoIt.ImportApprovals.gate_enabled?/0`).
   """
   @spec enabled?() :: boolean()
   def enabled? do
     Application.get_env(
       :doit_mcp,
       :import_gate_enabled,
-      System.get_env("DOITLIST_IMPORT_GATE") != "off"
+      System.get_env("DOITLIST_IMPORT_GATE") == "on"
     )
   end
 

@@ -16,7 +16,7 @@ defmodule DoitMcp.ApplyOperationsGateTest do
   @threshold ImportGate.threshold()
   @frame %{test: true}
 
-  # The classifier ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on
+  # The classifier ships OFF (DOITLIST_IMPORT_GATE=on arms it); pin it on
   # here so these behavior tests stay deterministic against the container's
   # ambient environment.
   setup do
@@ -591,6 +591,26 @@ defmodule DoitMcp.ApplyOperationsGateTest do
     execute_ok(mirror_batch(7))
     assert_received {:operations_post, _batch}
     refute_received {:operations_post, _}
+  end
+
+  # m03.04 1.3: the ceremony's default. An over-threshold first import with
+  # no declaration and no readback is exactly the batch the armed classifier
+  # holds — with the gate off it reaches the wire untouched, and no readback
+  # record, park, or pressure read happens on the way.
+  test "the kill switch applies an unannounced large batch — no declaration, no readback" do
+    Application.put_env(:doit_mcp, :import_gate_enabled, false)
+    stub_apply()
+
+    rest = execute_ok(all_open_bootstrap(@threshold + 1))
+
+    assert_received {:operations_post, %{"operations" => ops}}
+    assert Enum.count(ops, &(&1["type"] == "task")) == @threshold + 1
+    # No record comment, no park, no pressure/parent reads.
+    refute_received {:operations_post, _}
+    refute_received {:approval_get, _}
+    refute_received {:approval_post, _}
+    refute_received {:declaration_post, _}
+    refute Enum.any?(rest, &(&1["text"] =~ "Import record"))
   end
 
   test "a failed record post leaves the batch applied and hands the agent the fallback" do

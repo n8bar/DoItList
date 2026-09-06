@@ -6,8 +6,13 @@ defmodule DoItWeb.AccountSkipImportApprovalsTest do
   event persists the flag; a fresh mount shows the stored value. The account
   page is the flag's only write path — the API-surface pin lives in
   `DoItWeb.Api.ImportApprovalApiTest`.
+
+  The ceremony ships off (m03.04 1.1), so the toggle is only reachable with
+  the gate armed — these tests pin it on. The last test holds the default:
+  gate off, nothing rendered.
   """
-  use DoItWeb.ConnCase, async: true
+  # Not async: the gate pin is global app env.
+  use DoItWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
 
@@ -32,6 +37,9 @@ defmodule DoItWeb.AccountSkipImportApprovalsTest do
   end
 
   setup %{conn: conn} do
+    Application.put_env(:doit, :import_gate_enabled, true)
+    on_exit(fn -> Application.delete_env(:doit, :import_gate_enabled) end)
+
     me = user("me")
     %{conn: log_in(conn, me), me: me}
   end
@@ -76,5 +84,14 @@ defmodule DoItWeb.AccountSkipImportApprovalsTest do
 
     {:ok, reloaded, _html} = live(ctx.conn, ~p"/account")
     refute reloaded |> element("#skip-import-approvals-toggle") |> render() =~ "checked"
+  end
+
+  test "at the default the ceremony is off — no toggle, no approval cards", ctx do
+    Application.delete_env(:doit, :import_gate_enabled)
+    {:ok, view, _html} = live(ctx.conn, ~p"/account")
+
+    refute has_element?(view, "#import-ceremony-setting")
+    refute has_element?(view, "#skip-import-approvals-toggle")
+    refute has_element?(view, "#import-approvals")
   end
 end

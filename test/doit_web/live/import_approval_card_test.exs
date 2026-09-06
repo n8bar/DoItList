@@ -5,8 +5,12 @@ defmodule DoItWeb.ImportApprovalCardTest do
   park, and Approve / Dismiss record once and clear the pending slot. §6:
   the buttons carry `data-latch` in-flight labels (the instant, client-side
   acknowledgement for a server-gated write) and the card leaves on the ack.
+
+  The ceremony ships off (m03.04 1.1) and the account page hides the cards
+  while it is — these tests pin the gate on.
   """
-  use DoItWeb.ConnCase, async: true
+  # Not async: the gate pin is global app env.
+  use DoItWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
 
@@ -58,6 +62,9 @@ defmodule DoItWeb.ImportApprovalCardTest do
   }
 
   setup %{conn: conn} do
+    Application.put_env(:doit, :import_gate_enabled, true)
+    on_exit(fn -> Application.delete_env(:doit, :import_gate_enabled) end)
+
     me = user("me")
     %{conn: log_in(conn, me), me: me}
   end

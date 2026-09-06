@@ -19,12 +19,20 @@ defmodule DoItWeb.AccountLive do
 
     # Account-homed import approvals (m03.04 2.8.8): the pending cards, kept
     # live by the per-user topic — a park lands on the open page instantly.
-    if connected?(socket), do: ImportApprovals.subscribe(user.id)
+    # The ceremony ships off (m03.04 1.1), so neither the cards nor the
+    # off-switch render, and nothing subscribes or reads, until it is armed.
+    gate_enabled? = ImportApprovals.gate_enabled?()
+
+    if gate_enabled? and connected?(socket), do: ImportApprovals.subscribe(user.id)
 
     {:ok,
      socket
      |> assign(:page_title, "Account")
-     |> assign(:import_approvals, ImportApprovals.list_pending_for_account(user))
+     |> assign(:import_gate_enabled, gate_enabled?)
+     |> assign(
+       :import_approvals,
+       if(gate_enabled?, do: ImportApprovals.list_pending_for_account(user), else: [])
+     )
      |> assign(:profile_form, to_form(Accounts.change_profile(user)))
      |> assign(:username_form, to_form(Accounts.change_username(user)))
      |> assign(:password_form, to_form(Accounts.change_password(user)))
@@ -383,8 +391,11 @@ defmodule DoItWeb.AccountLive do
         <%!-- Account-homed import approvals (m03.04 2.8.8): a refused open-only
              bootstrap has no Initiative page yet, so its card lands here. The
              container is the approve URL's #import-approvals anchor; empty
-             renders nothing visible. --%>
-        <.import_approval_cards id="import-approvals" approvals={@import_approvals} />
+             renders nothing visible. Gone entirely while the ceremony is off
+             (m03.04 1.2) — nothing can park, so nothing can land. --%>
+        <%= if @import_gate_enabled do %>
+          <.import_approval_cards id="import-approvals" approvals={@import_approvals} />
+        <% end %>
 
         <details
           id="account-profile"
@@ -1036,30 +1047,33 @@ defmodule DoItWeb.AccountLive do
                  client-side at click (§6.2 optimistic ack); the change event
                  persists; a failed save re-renders the stored value back
                  (honest revert). Silences only the stop — the open-only facts
-                 and guidance still ride every import. --%>
-            <div
-              id="import-ceremony-setting"
-              class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800"
-            >
-              <form phx-change="set_skip_import_approvals">
-                <label class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
-                  <input
-                    type="checkbox"
-                    id="skip-import-approvals-toggle"
-                    name="skip_import_approvals"
-                    value="true"
-                    checked={@current_user.skip_import_approvals}
-                    class="checkbox checkbox-sm"
-                  /> Skip import approvals
-                </label>
-                <p
-                  id="skip-import-approvals-warning"
-                  class="mt-1 text-xs text-amber-700 dark:text-amber-400"
-                >
-                  Imports no longer wait for your approval.
-                </p>
-              </form>
-            </div>
+                 and guidance still ride every import. Nothing to silence while
+                 the ceremony itself is off (m03.04 1.2), so it doesn't render. --%>
+            <%= if @import_gate_enabled do %>
+              <div
+                id="import-ceremony-setting"
+                class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800"
+              >
+                <form phx-change="set_skip_import_approvals">
+                  <label class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
+                    <input
+                      type="checkbox"
+                      id="skip-import-approvals-toggle"
+                      name="skip_import_approvals"
+                      value="true"
+                      checked={@current_user.skip_import_approvals}
+                      class="checkbox checkbox-sm"
+                    /> Skip import approvals
+                  </label>
+                  <p
+                    id="skip-import-approvals-warning"
+                    class="mt-1 text-xs text-amber-700 dark:text-amber-400"
+                  >
+                    Imports no longer wait for your approval.
+                  </p>
+                </form>
+              </div>
+            <% end %>
           </div>
         </details>
 

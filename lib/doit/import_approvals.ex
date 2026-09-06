@@ -41,6 +41,22 @@ defmodule DoIt.ImportApprovals do
   # re-notifies) on the agent's next attempt.
   @ttl_hours 24
 
+  @doc """
+  Whether the import ceremony is armed. Off by default (m03.04 1.1);
+  `DOITLIST_IMPORT_GATE=on` arms it, the same variable that arms the MCP
+  adapter's classifier (`DoitMcp.ImportGate.enabled?/0`) — one switch, both
+  apps. The `:import_gate_enabled` app-env override is for tests. While it
+  is off the account page hides the approval cards and the off-switch; the
+  whole ceremony is slated for deletion (m03.04 3.1).
+  """
+  def gate_enabled? do
+    Application.get_env(
+      :doit,
+      :import_gate_enabled,
+      System.get_env("DOITLIST_IMPORT_GATE") == "on"
+    )
+  end
+
   @doc "How long a pending park stands before it expires, in hours."
   def ttl_hours, do: @ttl_hours
 

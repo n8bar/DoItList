@@ -67,10 +67,6 @@ access, so an agent sees exactly the Initiatives you do — and only those whose
 owner has turned on **AI access**, which is off until someone deliberately
 enables it.
 
-Large imports are gated: when an agent tries to create many tasks at once, the
-server holds the batch and asks you to confirm what it understood before
-anything is written.
-
 ## Run the tests
 
 The test suite (notably the progress roll-up unit tests) runs inside the

@@ -6,8 +6,8 @@ defmodule DoitMcp.ImportGateTest do
 
   @threshold ImportGate.threshold()
 
-  # The gate ships armed (DOITLIST_IMPORT_GATE=off opts out); pin it on here
-  # so the decision tests stay deterministic against the container's ambient
+  # The gate ships OFF (DOITLIST_IMPORT_GATE=on arms it); pin it on here so
+  # the decision tests stay deterministic against the container's ambient
   # environment. The "kill switch" describe drops this override to test the
   # env-var semantics themselves.
   setup do
@@ -38,30 +38,32 @@ defmodule DoitMcp.ImportGateTest do
   end
 
   describe "evaluate/2 kill switch (condition 0)" do
-    test "unset (the default) arms the gate" do
+    test "unset (the default) leaves the gate off, counting nothing" do
       Application.delete_env(:doit_mcp, :import_gate_enabled)
       System.delete_env("DOITLIST_IMPORT_GATE")
-
-      assert ImportGate.enabled?()
-
-      assert {:gate, %{target: {:in_batch, "i"}}} =
-               ImportGate.evaluate(new_initiative_batch(@threshold + 1))
-    end
-
-    test "DOITLIST_IMPORT_GATE=off opts out, counting nothing; any other value stays armed" do
-      Application.delete_env(:doit_mcp, :import_gate_enabled)
-      System.put_env("DOITLIST_IMPORT_GATE", "off")
-      on_exit(fn -> System.delete_env("DOITLIST_IMPORT_GATE") end)
 
       refute ImportGate.enabled?()
 
       assert ImportGate.evaluate(new_initiative_batch(@threshold + 1)) == :pass
+    end
 
+    test "DOITLIST_IMPORT_GATE=on arms it; off and any other value stay off" do
+      Application.delete_env(:doit_mcp, :import_gate_enabled)
       System.put_env("DOITLIST_IMPORT_GATE", "on")
+      on_exit(fn -> System.delete_env("DOITLIST_IMPORT_GATE") end)
+
       assert ImportGate.enabled?()
 
       assert {:gate, %{target: {:in_batch, "i"}}} =
                ImportGate.evaluate(new_initiative_batch(@threshold + 1))
+
+      System.put_env("DOITLIST_IMPORT_GATE", "off")
+      refute ImportGate.enabled?()
+      assert ImportGate.evaluate(new_initiative_batch(@threshold + 1)) == :pass
+
+      System.put_env("DOITLIST_IMPORT_GATE", "armed")
+      refute ImportGate.enabled?()
+      assert ImportGate.evaluate(new_initiative_batch(@threshold + 1)) == :pass
     end
   end
 
