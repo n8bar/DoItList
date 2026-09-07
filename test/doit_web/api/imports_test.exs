@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.ImportsTest do
   @moduledoc """
-  Text import — `POST /api/v1/imports` (m03.04 2.3 and 2.4).
+  Text import — `POST /api/v1/imports` (m03.04 2.3, 2.4 and 2.5).
 
   Covers: preview writing nothing while returning the labeled outline, counts,
   style and title; apply into a new Initiative (nesting, done flags,
@@ -11,8 +11,11 @@ defmodule DoItWeb.Api.ImportsTest do
   idempotency record replaying a repeat apply while a different document into
   the same target imports fresh; the single source comment naming the filename
   (or "pasted text"); the preamble landing as the new Initiative's description
-  or in the comment for an existing target; and the rejection paths — empty
-  text, malformed target, stranger, viewer, foreign parent Task.
+  or in the comment for an existing target; the preview diff against an
+  existing target (clean when the tree still matches the document; missing,
+  extra, completion and order findings once it doesn't; scoped to a
+  `parent_task_id`'s children; absent for a new Initiative); and the rejection
+  paths — empty text, malformed target, stranger, viewer, foreign parent Task.
 
   Persistence is checked through the domain contexts (not extra API reads) so
   the per-token rate limit (5/window in `config/test.exs`) never bites — each
@@ -160,6 +163,163 @@ defmodule DoItWeb.Api.ImportsTest do
 
       assert length(Tasks.list_initiative_tasks(ini.id)) == tasks_before
       assert Repo.aggregate(Import, :count) == 0
+    end
+  end
+
+  describe "preview diffing (2.5)" do
+    test "the document that built the tree previews clean, and still writes nothing", %{
+      owner: owner
+    } do
+      {200, applied} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_name" => "Q3 Plan"}
+        })
+
+      id = applied["initiative"]["id"]
+      tasks_before = length(Tasks.list_initiative_tasks(id))
+      imports_before = Repo.aggregate(Import, :count)
+
+      {200, body} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_id" => id},
+          "preview" => true
+        })
+
+      assert body["diff"]["clean"] == true
+
+      assert body["diff"]["summary"] == %{
+               "matched" => 4,
+               "missing" => 0,
+               "extra" => 0,
+               "completion" => 0,
+               "order" => 0
+             }
+
+      # A diff is a read: no new Tasks, no new import record.
+      assert length(Tasks.list_initiative_tasks(id)) == tasks_before
+      assert Repo.aggregate(Import, :count) == imports_before
+    end
+
+    test "a drifted tree reports missing, extra, completion and order", %{owner: owner} do
+      {200, applied} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_name" => "Q3 Plan"}
+        })
+
+      id = applied["initiative"]["id"]
+      initiative = Initiatives.get_initiative(id)
+      tasks = titles(id)
+
+      # One of each kind of drift: a completed leaf, an extra live Task, a
+      # deleted one, and a reordered sibling.
+      {:ok, _} = Tasks.toggle_complete(tasks["Tell everyone"], owner)
+      {:ok, _} = Tasks.delete_task(tasks["Book the room"], owner)
+
+      {:ok, surprise} =
+        Tasks.create_task(owner, %{
+          "initiative_id" => id,
+          "parent_id" => initiative.root_task_id,
+          "title" => "Surprise chore"
+        })
+
+      {:ok, _} =
+        Tasks.move_task(tasks["Tell everyone"], owner, %{"position" => 0, "reorder" => true})
+
+      tasks_before = length(Tasks.list_initiative_tasks(id))
+
+      {200, body} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_id" => id},
+          "preview" => true
+        })
+
+      diff = body["diff"]
+      assert diff["clean"] == false
+
+      assert diff["summary"] == %{
+               "matched" => 3,
+               "missing" => 1,
+               "extra" => 1,
+               "completion" => 1,
+               "order" => 1
+             }
+
+      assert diff["missing"] == [
+               %{"path" => "Ship the thing > Book the room", "title" => "Book the room"}
+             ]
+
+      assert diff["extra"] == [
+               %{"path" => "Surprise chore", "title" => "Surprise chore", "id" => surprise.id}
+             ]
+
+      assert diff["completion"] == [
+               %{
+                 "path" => "Tell everyone",
+                 "source_done" => false,
+                 "live_done" => true,
+                 "id" => tasks["Tell everyone"].id
+               }
+             ]
+
+      assert diff["order"] == [
+               %{
+                 "parent" => "(root)",
+                 "source" => ["Ship the thing", "Tell everyone"],
+                 "live" => ["Tell everyone", "Ship the thing"]
+               }
+             ]
+
+      assert length(Tasks.list_initiative_tasks(id)) == tasks_before
+    end
+
+    test "a parent Task target diffs that subtree only", %{owner: owner} do
+      {200, applied} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_name" => "Q3 Plan"}
+        })
+
+      id = applied["initiative"]["id"]
+      ship = titles(id)["Ship the thing"]
+      branch = "- Draft the spec\n- [x] Book the room\n"
+
+      {200, scoped} =
+        post_import(owner, %{
+          "text" => branch,
+          "target" => %{"initiative_id" => id, "parent_task_id" => ship.id},
+          "preview" => true
+        })
+
+      assert scoped["diff"]["clean"] == true
+      assert scoped["diff"]["summary"]["matched"] == 2
+
+      # The same document against the whole Initiative sees the top level
+      # instead, and disagrees with it — the scope really is the parent Task.
+      {200, whole} =
+        post_import(owner, %{
+          "text" => branch,
+          "target" => %{"initiative_id" => id},
+          "preview" => true
+        })
+
+      assert whole["diff"]["clean"] == false
+      assert whole["diff"]["summary"]["missing"] == 2
+      assert whole["diff"]["summary"]["extra"] == 2
+    end
+
+    test "a new-Initiative preview carries no diff", %{owner: owner} do
+      {200, body} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_name" => "Q3 Plan"},
+          "preview" => true
+        })
+
+      refute Map.has_key?(body, "diff")
     end
   end
 

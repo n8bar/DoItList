@@ -46,6 +46,16 @@ defmodule DoItWeb.Api.Imports do
   `preview: true` returns `{"preview": true, ...summary}` and writes **nothing**
   — no Tasks, no comment, no import record.
 
+  Against an **existing** target the preview also carries a `"diff"` (2.5): the
+  document read against the live tree already there — Tasks the document has
+  and the tree doesn't (`missing`), the tree has and the document doesn't
+  (`extra`), pairs whose completion disagrees, and levels whose order
+  disagrees, with a `"clean"` flag when they agree completely. The comparison
+  is scoped to the target: an Initiative target diffs its top-level Tasks, a
+  `parent_task_id` target diffs that Task's children. The math is
+  `DoIt.Imports.Diff`, pure; the preview is still read-only. A new-Initiative
+  preview has nothing to diff against and carries no `"diff"` key.
+
   An apply builds the operations with `DoIt.Imports.Parser.operations/2`, splits
   them into batches of at most `DoItWeb.Api.Operations.max_batch_size/0`, and
   applies them in order — **one transaction per batch**, not one for the
@@ -71,13 +81,12 @@ defmodule DoItWeb.Api.Imports do
 
   ## Not here yet
 
-  Preview diffing against a live tree (2.5) and import size limits / title
-  overflow (2.6) are separate items; nothing here caps the document's total
-  operation count beyond the per-batch cap.
+  Import size limits / title overflow (2.6) are a separate item; nothing here
+  caps the document's total operation count beyond the per-batch cap.
   """
 
   alias DoIt.{Initiatives, Tasks}
-  alias DoIt.Imports.{Import, Parser}
+  alias DoIt.Imports.{Diff, Import, Parser}
   alias DoIt.Initiatives.Initiative
   alias DoIt.Tasks.{Index, Task}
   alias DoItWeb.Api
@@ -106,7 +115,7 @@ defmodule DoItWeb.Api.Imports do
       summary = summary(manifest, target, initiative)
 
       if preview? do
-        {:ok, 200, Map.put(summary, "preview", true)}
+        {:ok, 200, summary |> Map.put("preview", true) |> put_diff(manifest, target, initiative)}
       else
         apply_import(user, text, filename, manifest, target, initiative, summary)
       end
@@ -308,6 +317,34 @@ defmodule DoItWeb.Api.Imports do
 
   defp labeled("", title), do: title
   defp labeled(label, title), do: label <> " " <> title
+
+  # --- Preview diff (2.5) -----------------------------------------------------
+
+  # A new Initiative has no live tree to disagree with, so there is nothing to
+  # diff and no key. An existing target reads the tree it would import into —
+  # read-only, exactly like the rest of a preview.
+  defp put_diff(body, _manifest, {:new_initiative, _name}, _initiative), do: body
+
+  defp put_diff(body, manifest, target, initiative),
+    do: Map.put(body, "diff", Diff.compare(manifest.items, live_items(target, initiative)))
+
+  defp live_items({:initiative, id}, _initiative),
+    do: id |> Tasks.initiative_task_tree() |> Diff.from_tasks()
+
+  # A parent Task target compares against that Task's children only — the rest
+  # of the Initiative is out of scope for this import.
+  defp live_items({:task, task_id}, %Initiative{id: id}) do
+    case id |> Tasks.initiative_task_tree() |> Diff.from_tasks() |> find_node(task_id) do
+      %{children: children} -> children
+      nil -> []
+    end
+  end
+
+  defp find_node(items, task_id) do
+    Enum.find_value(items, fn item ->
+      if item.id == task_id, do: item, else: find_node(item.children, task_id)
+    end)
+  end
 
   # --- Apply ------------------------------------------------------------------
 
