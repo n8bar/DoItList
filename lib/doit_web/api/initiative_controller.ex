@@ -17,7 +17,7 @@ defmodule DoItWeb.Api.InitiativeController do
   """
   use DoItWeb, :controller
 
-  alias DoIt.{ImportDeclarations, Initiatives, Tasks}
+  alias DoIt.{Initiatives, Tasks}
   alias DoIt.Tasks.Task
   alias DoItWeb.Api
   alias DoItWeb.Api.{Authz, Errors, Serializer}
@@ -114,27 +114,16 @@ defmodule DoItWeb.Api.InitiativeController do
     end
   end
 
-  # Live task count (root excluded), optionally scoped to tasks created at or
-  # after `?created_at=<ISO8601>` — a dumb fact (m03.04 3.1 iteration 2): the
-  # MCP import gate reads its recent-pressure window from it, so the window
-  # length stays adapter policy and pressure survives reconnects. Also carries
-  # the Initiative's own creation instant (m03.04 3.1 iteration 3) so the
-  # adapter can age-qualify a FRESH Initiative — same stance: the facts live
-  # here, the freshness window stays adapter policy — and its `index_style`,
-  # so the held-batch confirm can print how the imported tree will render.
-  # The import interview (m03.04 2.8.10) rides the same read: `done_count`
-  # (done tasks in the same scope), `live_count` (the whole live tree,
-  # window-independent), `initiative_name`, and the Initiative's standing
-  # `import_declaration` (or null) — one consult serving pressure, first-
-  # import detection, and the declaration arithmetic.
+  # Live task counts (root excluded), optionally scoped to tasks created at or
+  # after `?created_at=<ISO8601>` — dumb facts for a caller sizing up a tree:
+  # `count` and `done_count` in that scope, `live_count` for the whole live
+  # tree, plus the Initiative's creation instant, name, and `index_style`.
   def task_count(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 
     with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
       case parse_created_at(Map.get(params, "created_at")) do
         {:ok, created_at} ->
-          declaration = ImportDeclarations.for_initiative(initiative.id)
-
           json(
             conn,
             Api.data(%{
@@ -143,8 +132,7 @@ defmodule DoItWeb.Api.InitiativeController do
               live_count: Tasks.count_created(initiative.id),
               initiative_created_at: DateTime.to_iso8601(initiative.inserted_at),
               initiative_index_style: initiative.index_style,
-              initiative_name: initiative.name,
-              import_declaration: declaration && Serializer.import_declaration(declaration)
+              initiative_name: initiative.name
             })
           )
 

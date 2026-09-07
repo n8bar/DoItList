@@ -1,13 +1,10 @@
 defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
   use ExUnit.Case, async: true
 
-  alias DoitMcp.ImportGate
-
-  # m03.04 2.5.2 (reswept by item 36.3): the tool words state the import
-  # classifier's numbers upfront and carry the no-stop model — readback as
-  # record, never a confirm. Each bound is asserted through ImportGate's own
-  # exposed functions, so a retune that forgets the tool words fails here
-  # instead of drifting.
+  # m03.04 3.3.2: the tool words are the batch mechanics and nothing else —
+  # wire format, `lid` rules, `done` on add, `%<id>` references, the
+  # 150-operation cap, `idempotency_key`, and `expected_version`. The import
+  # ceremony (3.1) left the tool, and its vocabulary must not creep back.
   describe "published tool description" do
     setup do
       # Collapsed whitespace so assertions survive the moduledoc's line wraps.
@@ -18,65 +15,57 @@ defmodule DoitMcp.Tools.ApplyOperationsDescriptionTest do
       %{description: description}
     end
 
-    test "the cap is the batch target; the ramp is never advertised (m03.04 2.5.5)", %{
-      description: description
-    } do
+    test "states the cap and how to split past it", %{description: description} do
+      assert description =~ "up to 150 ordered operations"
+      assert description =~ "exceeds 150 operations"
       assert description =~ "split it into batches filled toward the cap"
-      assert description =~ "keep a parent and its subtree in one batch by `lid`"
-      # Chunking still can't dodge the classifier — that fact stays.
-      assert description =~ "chunking never resets the count"
-      # The ramp is the classifier's business; naming it made agents aim for it.
-      refute description =~ "up to #{ImportGate.threshold()} task-adds"
-      refute description =~ "stretches to #{ImportGate.ramp_threshold()} while"
-      refute description =~ "at most #{ImportGate.threshold()} adds"
+      assert description =~ "Never loop per-operation tools"
     end
 
-    test "carries the no-stop model, not the confirm contract (m03.04 2.8.4.3)", %{
-      description: description
-    } do
-      assert description =~ "never stops an import"
-      assert description =~ "provenance comment on the target Initiative's root task"
-      assert description =~ "Only the operator may approve"
-      assert description =~ "Never attest on the operator's behalf"
-      # 2.8.5.3 retired the agent-asserted override — one mechanism only.
-      refute description =~ "operator_confirmed"
-      refute description =~ "Operator-confirmed in chat"
-      refute description =~ "fresh floor"
-      refute description =~ "confirm_url"
-      refute description =~ "confirmation_pending"
+    test "states the wire format's fields", %{description: description} do
+      assert description =~ ~s("op": "add" | "update" | "remove")
+      assert description =~ ~s("type": "task" | "initiative")
+      assert description =~ ~s("id": <real id)
+      assert description =~ ~s("lid": <batch-local id)
+      assert description =~ ~s("data": <fields documented by the corresponding domain tool>)
     end
 
-    test "names the description cap and its overflow doctrine", %{description: description} do
-      # The cap is the app's (lib/doit/tasks/task.ex — validate_length
-      # :description, max: 8000, both changesets), out of this suite's
-      # reach, so the literal is pinned here beside its keep-in-sync note.
-      assert description =~ "8000 characters"
-      assert description =~ "continuation tasks"
+    test "states the batch-local reference rules", %{description: description} do
+      assert description =~ "Assign a unique `lid` to an add"
+      assert description =~ "`parent_lid`, `initiative_lid`, `task_lid`, `source_lid`"
+      assert description =~ "A `lid` always resolves to an earlier add of the required type"
+      assert description =~ "Never reference a later add, reuse a `lid`, or carry one across"
+      assert description =~ "always use the returned real ids"
     end
 
-    test "states whole-source scope before batch structure (m03.04 2.8.6)", %{
-      description: description
-    } do
-      assert description =~ "source whole, including completed items as `done: true`"
-      assert description =~ "roll-up progress lies"
-      assert description =~ "provenance comment"
-
-      # Scope leads structure: the WHOLE-source rule precedes the batching rule.
-      # (2.5.5 retired "skeleton first" — that was the ramp's chunking pattern.)
-      {scope_at, _} = :binary.match(description, "source whole")
-      {shape_at, _} = :binary.match(description, "keep a parent and its subtree")
-      assert scope_at < shape_at
+    test "keeps a lid out of `%<id>` text references", %{description: description} do
+      assert description =~ "A `lid` never replaces the numeric id inside a `%<task_id>`"
+      assert description =~ "add the tasks first and update the text after their real ids return"
     end
 
-    test "carries the first-import interview — fields, arithmetic, chunk contract (m03.04 2.8.10)",
-         %{description: description} do
-      assert description =~ "`declared_total`"
-      assert description =~ "`declared_completed`"
-      assert description =~ "`declared_exclusions`"
-      assert description =~ "`declared_ordering`"
-      assert description =~ "Every chunk is checked against the declaration"
-      assert description =~ "Only the operator may approve"
-      refute description =~ ~r/\bshape\b/i
+    test "puts `done` in the add that completes", %{description: description} do
+      assert description =~ "Always set `done` in the task's add or update"
+      assert description =~ "Never add a task and complete it with a second operation"
+    end
+
+    test "states the idempotency and conditional-write contracts", %{description: description} do
+      assert description =~ "unique `idempotency_key`"
+      assert description =~ "replays a committed response instead of applying it again"
+      assert description =~ "Never reuse the key for a different batch"
+
+      assert description =~ "latest read's `version` as `expected_version`"
+      assert description =~ "rolls back the entire batch and returns the current record"
+      assert description =~ "reconcile that record before retrying"
+    end
+
+    test "carries no import-ceremony vocabulary", %{description: description} do
+      refute description =~ ~r/readback/i
+      refute description =~ ~r/threshold/i
+      refute description =~ ~r/approval/i
+      refute description =~ ~r/declaration/i
+      refute description =~ ~r/declared_/
+      refute description =~ ~r/provenance/i
+      refute description =~ ~r/operator/i
     end
   end
 end

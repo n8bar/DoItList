@@ -106,8 +106,9 @@ defmodule DoitMcp.HttpTokenRecoveryTest do
     session_id
   end
 
-  # Stand-in for the session's standalone GET stream — see
-  # DoitMcp.HttpImportGateE2eTest for the rationale.
+  # Stand-in for the session's standalone GET stream: the transport pushes
+  # server-initiated requests down the SSE stream a real client holds open,
+  # so a test must register an SSE handler to receive them.
   defp open_stream(session_id) do
     test = self()
     transport = Anubis.Server.Registry.transport_name(DoitMcp.Server, :streamable_http)

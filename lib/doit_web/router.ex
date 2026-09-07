@@ -66,18 +66,6 @@ defmodule DoItWeb.Router do
     # by DoIt.Imports.Parser, applied through the operations engine above in
     # cap-sized batches. Preview mode writes nothing.
     post "/imports", ImportController, :create
-
-    # Server-verified open-only import approvals (m03.04 2.8.8): the adapter
-    # PARKS a refused open-only bootstrap and READS the operator's decision
-    # back by hash. Deciding is deliberately absent from this surface — it
-    # happens in the app's UI only (see DoItWeb.Api.ImportApprovalController).
-    post "/import_approvals", ImportApprovalController, :create
-    get "/import_approvals/:payload_hash", ImportApprovalController, :show
-
-    # First-import declarations (m03.04 2.8.10): the adapter records the
-    # accepted declaration Initiative-homed; it reads them back on the
-    # task_count consult, so no GET lives here.
-    post "/import_declarations", ImportDeclarationController, :create
   end
 
   scope "/", DoItWeb do

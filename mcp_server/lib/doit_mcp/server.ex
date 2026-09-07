@@ -52,10 +52,6 @@ defmodule DoitMcp.Server do
   component(DoitMcp.Tools.GetInitiativeMembers)
   component(DoitMcp.Tools.GetTaskComments)
 
-  # Lint read (m03.04 item 3.5) — mechanical facts over the tree read for the
-  # post-build audit; facts in the tool, judgment in the driving agent
-  component(DoitMcp.Tools.IngestReport)
-
   # Resources — mirror the read surface 1:1
   component(DoitMcp.Resources.Me)
   component(DoitMcp.Resources.Initiatives)

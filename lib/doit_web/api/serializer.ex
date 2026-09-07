@@ -398,62 +398,6 @@ defmodule DoItWeb.Api.Serializer do
     %{id: task.id, initiative_id: task.initiative_id, version: task.version}
   end
 
-  @doc """
-  An import approval (m03.04 2.8.8 — `POST /api/v1/import_approvals` and
-  `GET /api/v1/import_approvals/:payload_hash`):
-
-      {
-        "payload_hash": "9f2c…",
-        "status": "pending",
-        "task_count": 20,
-        "initiative_name": "TermiWeb",
-        "url": "https://doitlist.app/account#import-approvals",
-        "inserted_at": "2026-08-20T21:16:46Z"
-      }
-
-  `url` is the operator-facing handle (the `url` / `repo_marker` precedent):
-  the account page the approval card renders on, anchored to the cards'
-  container. Composed server-side, so the adapter hands the operator a
-  working address, never a raw id.
-  """
-  def import_approval(approval) do
-    %{
-      payload_hash: approval.payload_hash,
-      status: approval.status,
-      task_count: approval.task_count,
-      initiative_name: approval.initiative_name,
-      decision_reason: approval.decision_reason,
-      url: url(~p"/account") <> "#import-approvals",
-      inserted_at: iso8601(approval.inserted_at)
-    }
-  end
-
-  @doc """
-  An Initiative's first-import declaration (m03.04 2.8.10 —
-  `POST /api/v1/import_declarations`, and riding the `task_count` read):
-
-      {
-        "initiative_id": 57,
-        "source_total": 20,
-        "source_completed": 5,
-        "excluded_count": 0,
-        "exclusions": null,
-        "ordering": "outline",
-        "inserted_at": "2026-08-22T05:36:48Z"
-      }
-  """
-  def import_declaration(declaration) do
-    %{
-      initiative_id: declaration.initiative_id,
-      source_total: declaration.source_total,
-      source_completed: declaration.source_completed,
-      excluded_count: declaration.excluded_count,
-      exclusions: declaration.exclusions,
-      ordering: declaration.ordering,
-      inserted_at: iso8601(declaration.inserted_at)
-    }
-  end
-
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do
     %{

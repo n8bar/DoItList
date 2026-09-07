@@ -7,27 +7,14 @@ defmodule DoitMcp.Tools.GranularOpsTest do
   works — it does not re-test `Client` or `ToolResult` themselves (see
   `client_test.exs`).
 
-  One sanctioned exception to "the first request is the POST": an
-  `update_initiative` call carrying `ai_knobs` first GETs the initiative —
-  the fix 23 first-write gate checks whether its knobs are still empty. The
-  stub serves that read with already-set knobs so the write stays ungated
-  here; the gate's own behavior lives in `update_initiative_gate_test.exs`.
+  Every tool's first and only request is the POST — no tool reads before it
+  writes.
 
   `apply_operations`, `mark_notification_read`, and `get_initiative_activity`
   are covered by their own test files and are intentionally excluded here.
   """
 
   use ExUnit.Case, async: false
-
-  # This table is about op-building, not the import guardrails: pin the gate
-  # off so create_task's singles pause (which now holds for every client,
-  # m03.04 2.8.3.4) doesn't spend a pressure read here. The pause's own
-  # behavior lives in create_task_gate_test.exs.
-  setup do
-    Application.put_env(:doit_mcp, :import_gate_enabled, false)
-    on_exit(fn -> Application.delete_env(:doit_mcp, :import_gate_enabled) end)
-    :ok
-  end
 
   @cases [
     {DoitMcp.Tools.AddComment, %{task_id: 42, body: "Looks good"},
@@ -74,6 +61,17 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"co_assignee_ids" => [1, 2, 3]}}},
     {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, name: "New name"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"name" => "New name"}}},
+    # CALC-GATE-PARKED (m03.04): the parked-state contract — a non-default
+    # progress_calc change applies ungated, with no read and no elicitation
+    # (the apply-only stub below fails loudly on a read). Retire when the
+    # gate revives.
+    {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, progress_calc: "single_level"},
+     %{
+       "op" => "update",
+       "type" => "initiative",
+       "id" => 3,
+       "data" => %{"progress_calc" => "single_level"}
+     }},
     # AI-KNOBS-PARKED (m03.04): ai_knobs off the tool; revive this case with the schema field.
     # {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, ai_knobs: "deploy_day: friday"},
     #  %{
@@ -106,24 +104,15 @@ defmodule DoitMcp.Tools.GranularOpsTest do
 
     refute Map.has_key?(schema["properties"], "progress_calc")
 
-    # The setting moves only via update_initiative, where the gate lives.
+    # The setting moves only via update_initiative.
     update_schema = DoitMcp.Tools.UpdateInitiative.input_schema()
     assert %{"type" => "string"} = update_schema["properties"]["progress_calc"]
   end
 
   test "each granular tool builds its expected single op and relays the reply/frame through" do
     for {module, params, expected_op} <- @cases do
-      # Only the ai_knobs-carrying update may read before posting (fix 23
-      # gate); every other tool's first and only request stays the POST.
-      knobs_read_allowed? = Map.has_key?(params, :ai_knobs)
-
       Req.Test.stub(DoitMcp.Client, fn conn ->
         case {conn.method, conn.request_path} do
-          {"GET", "/api/v1/initiatives/" <> _} when knobs_read_allowed? ->
-            # Already-set knobs — the write is ungated, keeping this table
-            # about op-building, not the gate.
-            Req.Test.json(conn, %{"data" => %{"id" => 3, "ai_knobs" => "deploy_day: thursday"}})
-
           {"POST", "/api/v1/operations"} ->
             {:ok, body, conn} = Plug.Conn.read_body(conn)
 

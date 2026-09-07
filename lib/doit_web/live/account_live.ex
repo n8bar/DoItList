@@ -1,10 +1,7 @@
 defmodule DoItWeb.AccountLive do
   use DoItWeb, :live_view
 
-  import DoItWeb.ImportApprovalComponents
-
   alias DoIt.Accounts
-  alias DoIt.ImportApprovals
   alias DoIt.Initiatives
   alias DoItWeb.AgentConnect
 
@@ -17,22 +14,9 @@ defmodule DoItWeb.AccountLive do
     # assign-only.
     marker_initiatives = Initiatives.list_agent_accessible_initiatives(user)
 
-    # Account-homed import approvals (m03.04 2.8.8): the pending cards, kept
-    # live by the per-user topic — a park lands on the open page instantly.
-    # The ceremony ships off (m03.04 1.1), so neither the cards nor the
-    # off-switch render, and nothing subscribes or reads, until it is armed.
-    gate_enabled? = ImportApprovals.gate_enabled?()
-
-    if gate_enabled? and connected?(socket), do: ImportApprovals.subscribe(user.id)
-
     {:ok,
      socket
      |> assign(:page_title, "Account")
-     |> assign(:import_gate_enabled, gate_enabled?)
-     |> assign(
-       :import_approvals,
-       if(gate_enabled?, do: ImportApprovals.list_pending_for_account(user), else: [])
-     )
      |> assign(:profile_form, to_form(Accounts.change_profile(user)))
      |> assign(:username_form, to_form(Accounts.change_username(user)))
      |> assign(:password_form, to_form(Accounts.change_password(user)))
@@ -256,69 +240,6 @@ defmodule DoItWeb.AccountLive do
      |> assign(:marker_initiative_id, id)}
   end
 
-  # --- Import approvals (m03.04 2.8.8) ---------------------------------------
-  # Server-gated decisions on the account-homed cards: the click latches in
-  # flight instantly (§6.7, data-latch — client-side, before any round trip)
-  # and the card leaves the pending slot on the ack — never a faked success.
-  # The context guards record-once, so a stale second click flashes instead
-  # of overwriting.
-
-  def handle_event("approve_import", %{"id" => id}, socket),
-    do: decide_import(socket, id, "approved")
-
-  # Reject carries the operator's optional words to the agent (m03.04
-  # 3.1.9.2) — a form submit, so the text rides the same event.
-  def handle_event("dismiss_import", %{"approval_id" => id} = params, socket),
-    do: decide_import(socket, id, "dismissed", params["reason"])
-
-  # The ceremony's account-level off-switch (m03.04 2.8.9). The checkbox
-  # flips client-side at click (§6.2 optimistic ack — the client completes
-  # the visual change instantly); this event persists the flag. The account
-  # page is the flag's ONLY write path — Accounts.set_skip_import_approvals/2
-  # takes an explicit boolean and no API surface casts the field. A failed
-  # save re-renders the stored value back (honest revert) with a flash.
-  def handle_event("set_skip_import_approvals", params, socket) do
-    on = params["skip_import_approvals"] in ["true", "on"]
-
-    case Accounts.set_skip_import_approvals(socket.assigns.current_user, on) do
-      {:ok, user} ->
-        {:noreply, assign(socket, :current_user, user)}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Couldn't save the import-approval setting.")}
-    end
-  end
-
-  defp decide_import(socket, id, status, reason \\ nil) do
-    user = socket.assigns.current_user
-
-    socket =
-      case Integer.parse(to_string(id)) do
-        {approval_id, ""} ->
-          case ImportApprovals.decide(user, approval_id, status, reason) do
-            {:ok, _approval} ->
-              socket
-
-            {:error, :not_pending} ->
-              put_flash(socket, :error, "That import request was already decided.")
-          end
-
-        _ ->
-          socket
-      end
-
-    {:noreply, assign(socket, :import_approvals, ImportApprovals.list_pending_for_account(user))}
-  end
-
-  # A park/decision on this user's approvals (per-user topic): refresh the
-  # pending slot so the card appears/clears live on every open tab.
-  @impl true
-  def handle_info({event, _approval}, socket)
-      when event in [:import_approval_parked, :import_approval_decided] do
-    user = socket.assigns.current_user
-    {:noreply, assign(socket, :import_approvals, ImportApprovals.list_pending_for_account(user))}
-  end
-
   @impl true
   def render(assigns) do
     ~H"""
@@ -387,15 +308,6 @@ defmodule DoItWeb.AccountLive do
             </p>
           </div>
         </div>
-
-        <%!-- Account-homed import approvals (m03.04 2.8.8): a refused open-only
-             bootstrap has no Initiative page yet, so its card lands here. The
-             container is the approve URL's #import-approvals anchor; empty
-             renders nothing visible. Gone entirely while the ceremony is off
-             (m03.04 1.2) — nothing can park, so nothing can land. --%>
-        <%= if @import_gate_enabled do %>
-          <.import_approval_cards id="import-approvals" approvals={@import_approvals} />
-        <% end %>
 
         <details
           id="account-profile"
@@ -1041,39 +953,6 @@ defmodule DoItWeb.AccountLive do
                 </ul>
               <% end %>
             </div>
-
-            <%!-- The ceremony's off-switch (m03.04 2.8.9), homed with the API
-                 surface the agents it governs act through. Checkbox flips
-                 client-side at click (§6.2 optimistic ack); the change event
-                 persists; a failed save re-renders the stored value back
-                 (honest revert). Silences only the stop — the open-only facts
-                 and guidance still ride every import. Nothing to silence while
-                 the ceremony itself is off (m03.04 1.2), so it doesn't render. --%>
-            <%= if @import_gate_enabled do %>
-              <div
-                id="import-ceremony-setting"
-                class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800"
-              >
-                <form phx-change="set_skip_import_approvals">
-                  <label class="flex items-center gap-2 text-sm text-zinc-700 dark:text-zinc-200 select-none">
-                    <input
-                      type="checkbox"
-                      id="skip-import-approvals-toggle"
-                      name="skip_import_approvals"
-                      value="true"
-                      checked={@current_user.skip_import_approvals}
-                      class="checkbox checkbox-sm"
-                    /> Skip import approvals
-                  </label>
-                  <p
-                    id="skip-import-approvals-warning"
-                    class="mt-1 text-xs text-amber-700 dark:text-amber-400"
-                  >
-                    Imports no longer wait for your approval.
-                  </p>
-                </form>
-              </div>
-            <% end %>
           </div>
         </details>
 

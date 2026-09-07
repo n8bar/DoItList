@@ -9,18 +9,17 @@ defmodule DoitMcp.Tools.UpdateInitiative do
 
   alias DoitMcp.{Client, ToolResult}
 
-  # CALC-GATE-PARKED / AI-KNOBS-PARKED (m03.04): gate-only deps. Revive with
-  # the gated execute + gate functions below.
+  # CALC-GATE-PARKED (m03.04): gate-only deps. Revive with the gated execute +
+  # gate functions below.
   # alias Anubis.Server.Response
-  # alias DoitMcp.{Elicitation, ImportGate}
-  # alias DoitMcp.ImportGate.Counter
+  # alias DoitMcp.Elicitation
 
   # CALC-GATE-PARKED (m03.04): fix 17's confirm on a non-default progress_calc
   # change is parked — see the m03.04 arc doc. Revive these attributes with the
-  # calc_gate below (@confirm_timeout also serves the knobs gate).
+  # calc_gate below.
   # @default_calc "leaf_average"
   #
-  # # A human is reading one question — same generous window as the import gate.
+  # # A human is reading one question — a generous window.
   # @confirm_timeout to_timeout(minute: 5)
   #
   # @confirm_schema %{
@@ -29,18 +28,6 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   #     "approve" => %{
   #       "type" => "boolean",
   #       "description" => "true switches the progress calculation; false leaves it unchanged"
-  #     }
-  #   },
-  #   "required" => ["approve"]
-  # }
-
-  # AI-KNOBS-PARKED (m03.04): revive with the knobs_gate below.
-  # @knobs_confirm_schema %{
-  #   "type" => "object",
-  #   "properties" => %{
-  #     "approve" => %{
-  #       "type" => "boolean",
-  #       "description" => "true records the proposed ai_knobs text; false records nothing"
   #     }
   #   },
   #   "required" => ["approve"]
@@ -62,18 +49,6 @@ defmodule DoitMcp.Tools.UpdateInitiative do
 
     field(:index_style, :string, required: false)
 
-    # AI-KNOBS-PARKED (m03.04): the ai_knobs param is off the tool pending the
-    # skill rebuild, so agents can't write knobs; the API rejects the field too.
-    # Revive this field + the :ai_knobs entry in do_update's Map.take + the
-    # knobs_gate + the knobs_gate tests.
-    # field(:ai_knobs, :string,
-    #   required: false,
-    #   description:
-    #     "Per-project agent settings store: structure/scope/style knobs only, holding what has " <>
-    #       "no first-class field (never duplicate progress_calc or index_style — the column is " <>
-    #       "the record). The first write into empty knobs is held for the operator's confirm"
-    # )
-
     field(:auto_promote_co_assignees, :boolean, required: false)
     field(:viewer_plus, :boolean, required: false)
 
@@ -84,14 +59,12 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     )
   end
 
-  # CALC-GATE-PARKED / AI-KNOBS-PARKED (m03.04): both write gates are parked —
-  # updates apply ungated. Revive this gated execute with the gate functions
-  # and the aliases above.
+  # CALC-GATE-PARKED (m03.04): fix 17's write gate is parked — updates apply
+  # ungated. Revive this gated execute with the gate functions and the aliases
+  # above.
   # def execute(params, frame) do
-  #   with :pass <- calc_gate(params),
-  #        :pass <- knobs_gate(params) do
-  #     do_update(params, frame)
-  #   else
+  #   case calc_gate(params) do
+  #     :pass -> do_update(params, frame)
   #     {:refuse, message} -> {:reply, Response.error(Response.tool(), message), frame}
   #   end
   # end
@@ -107,8 +80,6 @@ defmodule DoitMcp.Tools.UpdateInitiative do
         :subtitle,
         :progress_calc,
         :index_style,
-        # AI-KNOBS-PARKED (m03.04): revive with the schema field above.
-        # :ai_knobs,
         :auto_promote_co_assignees,
         :viewer_plus,
         :expected_version
@@ -149,10 +120,10 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   # end
   #
   # defp confirm_change(initiative_id, current, requested) do
+  #   # Revival needs its own per-session memory of a granted confirm, so a
+  #   # retry never re-asks the operator; the counter process this used was
+  #   # deleted with the import ceremony (m03.04 3.1).
   #   cond do
-  #     Counter.confirmed?({:progress_calc, initiative_id, requested}) ->
-  #       :pass
-  #
   #     not Elicitation.client_supports_elicitation?() ->
   #       {:refuse,
   #        "Changing progress_calc to \"#{requested}\" needs the operator's confirmation, and " <>
@@ -174,9 +145,8 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   #
   #   case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
   #     {:ok, %{"action" => "accept", "content" => %{"approve" => true}}} ->
-  #       # Remembered for the session so a retry after a granted confirm (e.g.
-  #       # the update itself failed) never re-asks the operator.
-  #       Counter.mark_confirmed({:progress_calc, initiative_id, requested})
+  #       # Record the granted confirm for the session here (see
+  #       # confirm_change/3) so a retry never re-asks the operator.
   #       :pass
   #
   #     _decline_disapprove_timeout_or_no_session ->
@@ -186,81 +156,8 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   #   end
   # end
 
-  # AI-KNOBS-PARKED (m03.04): fix 23's first-knobs-write confirm — held the
-  # first ai_knobs write into empty knobs for the operator's yes/no. Dormant
-  # since the ai_knobs param left the schema; parked in full with AI Knobs.
-  # Revive with the schema field and the gated execute above.
-  #
-  # # The knobs gate only ever engages on a FIRST write — an ai_knobs param
-  # # against an Initiative whose stored knobs are still empty (fix 23:
-  # # self-written knobs must not settle the import gate unseen). No ai_knobs
-  # # param takes zero extra round trips.
-  # defp knobs_gate(params) do
-  #   case Map.get(params, :ai_knobs) do
-  #     nil -> :pass
-  #     proposed -> gate_first_knobs_write(params.initiative_id, proposed)
-  #   end
-  # end
-  #
-  # defp gate_first_knobs_write(initiative_id, proposed) do
-  #   case Client.get("/api/v1/initiatives/#{initiative_id}") do
-  #     {:ok, initiative} when is_map(initiative) ->
-  #       if ImportGate.knobs_empty?(Map.get(initiative, "ai_knobs")) do
-  #         confirm_first_knobs_write(initiative_id, proposed)
-  #       else
-  #         :pass
-  #       end
-  #
-  #     # A fetch error / shape we can't read — the update itself will surface
-  #     # the real error.
-  #     _ ->
-  #       :pass
-  #   end
-  # end
-  #
-  # defp confirm_first_knobs_write(initiative_id, proposed) do
-  #   cond do
-  #     Counter.confirmed?({:ai_knobs, initiative_id, proposed}) ->
-  #       :pass
-  #
-  #     not Elicitation.client_supports_elicitation?() ->
-  #       {:refuse,
-  #        "This Initiative's ai_knobs is empty, and its first write needs the operator's " <>
-  #          "confirmation — this client cannot ask them (no elicitation support). Not " <>
-  #          "applied. The operator can set it themselves in the app: Initiative details " <>
-  #          "pane → settings, the AI knobs control. Do not retry without the operator's " <>
-  #          "request."}
-  #
-  #     true ->
-  #       elicit_knobs_approval(initiative_id, proposed)
-  #   end
-  # end
-  #
-  # defp elicit_knobs_approval(initiative_id, proposed) do
-  #   message =
-  #     "The agent asks to write this Initiative's first ai_knobs — its per-project agent " <>
-  #       "settings. Recording them settles this Initiative's import conventions, so the " <>
-  #       "import gate stops asking. Proposed knobs, verbatim:\n\n" <>
-  #       proposed <>
-  #       "\n\nApprove only if this matches what you want on record — decline records nothing."
-  #
-  #   case Elicitation.request(message, @knobs_confirm_schema, confirm_timeout()) do
-  #     {:ok, %{"action" => "accept", "content" => %{"approve" => true}}} ->
-  #       # Remembered for the session so a retry after a granted confirm (e.g.
-  #       # the update itself failed) never re-asks the operator.
-  #       Counter.mark_confirmed({:ai_knobs, initiative_id, proposed})
-  #       :pass
-  #
-  #     _decline_disapprove_timeout_or_no_session ->
-  #       {:refuse,
-  #        "The operator did not approve the first ai_knobs write — nothing was recorded, " <>
-  #          "the Initiative's knobs stay empty, and the import gate stays armed. Do not " <>
-  #          "retry without the operator's request."}
-  #   end
-  # end
-
-  # CALC-GATE-PARKED (m03.04): served both gates' elicitations. Revive with
-  # the gates.
+  # CALC-GATE-PARKED (m03.04): served the gate's elicitation. Revive with the
+  # gate.
   # defp confirm_timeout do
   #   Application.get_env(:doit_mcp, :calc_gate_confirm_timeout, @confirm_timeout)
   # end

@@ -25,14 +25,11 @@ defmodule DoitMcp.Application do
 
   def children(_env) do
     [
-      # The import classifier's record memory, keyed per session (m03.04
-      # item 23.6) — before the transport tree so a tool call can never
-      # race its start.
-      DoitMcp.ImportGate.Counter,
       # Session-keyed elicitation waiters and per-session 401-recovery state
-      # (m03.04 2.2.1.3) — same never-race-a-tool-call ordering. The task
-      # supervisor hosts the out-of-band waiters (m03.04 2.3.3): a form
-      # outlives the transport-bounded call that raised it.
+      # (m03.04 2.2.1.3) — before the transport tree so a tool call can never
+      # race their start. The task supervisor hosts the out-of-band waiters
+      # (m03.04 2.3.3): a form outlives the transport-bounded call that
+      # raised it.
       {Registry, keys: :unique, name: DoitMcp.Elicitation.Registry},
       {Task.Supervisor, name: DoitMcp.TaskSupervisor},
       DoitMcp.TokenRecovery.Sessions,

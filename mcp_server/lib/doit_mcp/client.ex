@@ -33,10 +33,7 @@ defmodule DoitMcp.Client do
     request(:get, path, params: params)
   end
 
-  @doc """
-  POST a JSON `body` to a path under `/api/v1` — e.g. the import-approval
-  park (m03.04 2.8.8).
-  """
+  @doc "POST a JSON `body` to a path under `/api/v1`."
   @spec post(String.t(), map()) :: {:ok, term()} | {:error, map()}
   def post(path, body) when is_map(body) do
     request(:post, path, json: body)

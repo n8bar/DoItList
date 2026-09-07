@@ -11,13 +11,6 @@ defmodule DoIt.Accounts.User do
     field :current_password, :string, virtual: true, redact: true
     field :theme, :string
 
-    # The import-approval ceremony's off-switch (m03.04 2.8.9): true = the
-    # open-only park-and-approve stop is dormant for this account (facts and
-    # guidance still ride). Deliberately in NO cast list — the only write path
-    # is Accounts.set_skip_import_approvals/2 from the app's session-authed UI,
-    # so no API/MCP surface (which holds the operator's token) can flip it.
-    field :skip_import_approvals, :boolean, default: false
-
     # Set true to force a change-password redirect after login (e.g. an
     # admin-issued temp password). Programmatic only — no changeset ever
     # casts it from user params.
