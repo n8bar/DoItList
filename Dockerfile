@@ -18,7 +18,8 @@ RUN apk add --no-cache \
       openssl \
       ncurses-libs \
       bash \
-      postgresql-client
+      postgresql-client \
+      python3
 
 WORKDIR /app
 

@@ -54,3 +54,7 @@ bruno/environments/Local.bru
 # scoped to its subdirectory since the patterns above are root-anchored.
 /mcp_server/_build/
 /mcp_server/deps/
+
+# The scripted client's suite is Python (m03.04 item 4.6); a direct run leaves
+# bytecode caches in the working tree. `mix test` sets PYTHONDONTWRITEBYTECODE.
+__pycache__/
