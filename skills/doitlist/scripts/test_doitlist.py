@@ -14,9 +14,12 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import threading
 import unittest
+import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -29,11 +32,30 @@ def _json(value):
 
 
 TOKEN = "tok_SECRET_do_not_leak"
-ENV = {"DOITLIST_API_URL": "http://localhost:4000", "DOITLIST_API_TOKEN": TOKEN}
+
+#: No test may touch the real ~/.doitlist: every run parks pending writes in a
+#: throwaway directory, and the write tests take a fresh one each (4.3.4).
+_STATE_ROOT = tempfile.mkdtemp(prefix="doitlist-state-")
+
+ENV = {
+    "DOITLIST_API_URL": "http://localhost:4000",
+    "DOITLIST_API_TOKEN": TOKEN,
+    "DOITLIST_STATE_DIR": _STATE_ROOT,
+}
+
+
+def tearDownModule():
+    shutil.rmtree(_STATE_ROOT, ignore_errors=True)
 
 
 class FakeTransport(object):
-    """Canned responses keyed by `METHOD path?query`, plus a request log."""
+    """Canned responses keyed by `METHOD path?query`, plus a request log.
+
+    A route value is a `(status, body)` or `(status, body, headers)` tuple, an
+    `Exception` to raise instead of answering (a lost response), or a list of
+    those to answer successive calls with — the last entry repeats, which is
+    what a retry test needs.
+    """
 
     def __init__(self, routes):
         self.routes = routes
@@ -45,7 +67,12 @@ class FakeTransport(object):
         key = "{0} /{1}".format(method, path)
         if key not in self.routes:
             raise AssertionError("unexpected request {0}; know {1}".format(key, sorted(self.routes)))
-        return self.routes[key]
+        reply = self.routes[key]
+        if isinstance(reply, list):
+            reply = reply.pop(0) if len(reply) > 1 else reply[0]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
 
 def node(id, title, index="", progress=0, done=False, leaf=True, children=None):
@@ -114,11 +141,18 @@ TREE = {
 }
 
 
-def run(argv, routes, env=None):
-    """Run main() with a fake transport; returns (code, stdout, stderr)."""
+def run(argv, routes, env=None, sleeper=None):
+    """Run main() with a fake transport; returns (code, stdout, stderr, transport)."""
     transport = FakeTransport(routes)
     out, err = io.StringIO(), io.StringIO()
-    code = doitlist.main(argv, env=ENV if env is None else env, transport=transport, out=out, err=err)
+    code = doitlist.main(
+        argv,
+        env=ENV if env is None else env,
+        transport=transport,
+        out=out,
+        err=err,
+        sleeper=sleeper,
+    )
     return code, out.getvalue(), err.getvalue(), transport
 
 
@@ -294,9 +328,24 @@ class ReferenceTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         self.assertEqual(doitlist.main([], env=ENV, out=out, err=err), 2)
         self.assertIn("verb is required", err.getvalue())
+        for verb in ("add", "done", "progress", "move", "comment", "retitle", "describe", "retry"):
+            self.assertIn(verb, err.getvalue())
 
     def test_every_verb_has_help(self):
-        for verb in ("list", "tree", "comments", "activity"):
+        for verb in (
+            "list",
+            "tree",
+            "comments",
+            "activity",
+            "add",
+            "done",
+            "progress",
+            "move",
+            "comment",
+            "retitle",
+            "describe",
+            "retry",
+        ):
             with contextlib.redirect_stdout(io.StringIO()) as help_text:
                 with self.assertRaises(SystemExit) as caught:
                     doitlist.build_parser().parse_args([verb, "--help"])
@@ -433,7 +482,7 @@ class TreeTest(unittest.TestCase):
                 "Scope: under %102 Ship the SDK",
                 "Depth: 1",
                 "2 Ship the SDK  %102  25%  [ ]  branch",
-                "  2.1 Package it  %121  25%  [ ]  branch (1 children not shown)",
+                "  2.1 Package it  %121  25%  [ ]  branch (1 child not shown)",
             ],
         )
 
@@ -444,7 +493,7 @@ class TreeTest(unittest.TestCase):
             out.splitlines()[3:],
             [
                 "1 Build the API  %101  50%  [ ]  branch (2 children not shown)",
-                "2 Ship the SDK  %102  25%  [ ]  branch (1 children not shown)",
+                "2 Ship the SDK  %102  25%  [ ]  branch (1 child not shown)",
             ],
         )
 
@@ -602,6 +651,675 @@ class FormattingTest(unittest.TestCase):
     def test_unparseable_timestamps_pass_through(self):
         self.assertEqual(doitlist.fmt_time("whenever"), "whenever")
         self.assertEqual(doitlist.fmt_time(None), "")
+
+
+# --------------------------------------------------------------------------
+# 4.3 / 4.8 — write verbs, retry state, and compact results
+# --------------------------------------------------------------------------
+
+
+def task_data(id=101, title="Write the controller", progress=100, done=True, parent_id=100, version=8):
+    """A `task_result` record in the shape the operations endpoint returns."""
+    return {
+        "id": id,
+        "type": "task",
+        "title": title,
+        "parent_id": parent_id,
+        "status": "done" if done else "open",
+        "done": done,
+        "progress": progress,
+        "manual_progress": progress,
+        "priority": "normal",
+        "assignee_id": None,
+        "version": version,
+    }
+
+
+def read_task(id=101, title="Write the controller", version=7, parent_id=100):
+    return (
+        200,
+        _json(
+            {
+                "data": {
+                    "id": id,
+                    "title": title,
+                    "initiative_id": 12,
+                    "parent_id": parent_id,
+                    "version": version,
+                    "status": "open",
+                    "done": False,
+                    "progress": 0,
+                }
+            }
+        ),
+    )
+
+
+def ops_ok(data, lid=None):
+    result = {"index": 0, "status": "ok", "data": data}
+    if lid:
+        result["lid"] = lid
+    return (200, _json({"results": [result]}))
+
+
+def ops_error(status, code, message, pointer=None, current=None):
+    error = {"code": code, "message": message}
+    if pointer:
+        error["pointer"] = pointer
+    if current:
+        error["current"] = current
+    return (
+        status,
+        _json(
+            {
+                "error": {"status": status, "code": code, "message": message},
+                "results": [{"index": 0, "status": "error", "error": error}],
+            }
+        ),
+    )
+
+
+class WriteCase(unittest.TestCase):
+    """Every write test parks its pending requests in its own temp directory."""
+
+    def setUp(self):
+        self.state = tempfile.mkdtemp(prefix="doitlist-write-")
+        self.addCleanup(shutil.rmtree, self.state, True)
+        self.env = dict(ENV, DOITLIST_STATE_DIR=self.state)
+
+    def cli(self, argv, routes, sleeper=None):
+        return run(argv, routes, env=self.env, sleeper=sleeper)
+
+    def pending_paths(self):
+        directory = os.path.join(self.state, "pending")
+        if not os.path.isdir(directory):
+            return []
+        return sorted(
+            os.path.join(directory, name)
+            for name in os.listdir(directory)
+            if name.endswith(".json")
+        )
+
+    def pending_records(self):
+        records = []
+        for path in self.pending_paths():
+            with open(path, encoding="utf-8") as handle:
+                records.append(json.load(handle))
+        return records
+
+    def posted(self, transport):
+        """The decoded body and headers of every POST the run made."""
+        return [
+            (json.loads(call["body"].decode("utf-8")), call["headers"])
+            for call in transport.calls
+            if call["method"] == "POST"
+        ]
+
+
+class WriteRequestShapeTest(WriteCase):
+    """4.3.1 / 4.3.2 — one op per command, versioned by the preceding read."""
+
+    def test_add_under_a_task_sends_parent_id(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(
+                task_data(id=140, title="New title", parent_id=101, progress=0, done=False), lid="t1"
+            ),
+        }
+        code, out, err, transport = self.cli(["add", "%101", "New title"], routes)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET", "POST"])
+        body, headers = self.posted(transport)[0]
+        self.assertEqual(
+            body,
+            {
+                "operations": [
+                    {
+                        "op": "add",
+                        "type": "task",
+                        "lid": "t1",
+                        "data": {"parent_id": 101, "title": "New title"},
+                    }
+                ]
+            },
+        )
+        self.assertEqual(out, "added  %140  New title  under %101\n")
+        uuid.UUID(headers["Idempotency-Key"])  # raises if it is not a UUID
+
+    def test_add_at_the_top_level_sends_initiative_id(self):
+        routes = {
+            "GET /api/v1/initiatives/12": (200, _json(TREE)),
+            "POST /api/v1/operations": ops_ok(
+                task_data(id=141, title="New title", parent_id=100, progress=0, done=False)
+            ),
+        }
+        code, out, err, transport = self.cli(
+            ["add", "https://doitlist.app/initiatives/12", "New title"], routes
+        )
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"], {"initiative_id": 12, "title": "New title"}
+        )
+        self.assertEqual(out, "added  %141  New title  top level of Q3 Launch\n")
+
+    def test_done_carries_the_expected_version_from_the_read(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(version=7),
+            "POST /api/v1/operations": ops_ok(task_data(version=8)),
+        }
+        code, out, err, transport = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0],
+            {
+                "op": "update",
+                "type": "task",
+                "id": 101,
+                "data": {"done": True, "expected_version": 7},
+            },
+        )
+        self.assertEqual(out, "done  %101  Write the controller  100%  [x]\n")
+
+    def test_reopen_sends_done_false(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(progress=40, done=False)),
+        }
+        code, out, err, transport = self.cli(["done", "101", "--reopen"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(body["operations"][0]["data"], {"done": False, "expected_version": 7})
+        self.assertEqual(out, "reopened  %101  Write the controller  40%  [ ]\n")
+
+    def test_progress_sends_manual_progress(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(progress=40, done=False)),
+        }
+        code, out, err, transport = self.cli(["progress", "%101", "40"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"], {"manual_progress": 40, "expected_version": 7}
+        )
+        self.assertEqual(out, "progress  %101  Write the controller  40%\n")
+
+    def test_move_under_a_task_sends_parent_and_position(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(
+                task_data(parent_id=105, progress=0, done=False)
+            ),
+        }
+        code, out, err, transport = self.cli(["move", "%101", "%105", "2"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"],
+            {"parent_id": 105, "position": 2, "expected_version": 7},
+        )
+        self.assertEqual(out, "moved  %101  Write the controller  under %105 at 2\n")
+
+    def test_move_to_the_top_level_uses_the_initiative_root_task(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "GET /api/v1/initiatives/12": (200, _json(TREE)),
+            "POST /api/v1/operations": ops_ok(task_data(parent_id=100, progress=0, done=False)),
+        }
+        code, out, err, transport = self.cli(["move", "%101", "12"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"], {"parent_id": 100, "expected_version": 7}
+        )
+        self.assertEqual(out, "moved  %101  Write the controller  top level of Q3 Launch\n")
+
+    def test_comment_adds_a_comment_op_without_a_version(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(
+                {
+                    "id": 33,
+                    "type": "comment",
+                    "task_id": 101,
+                    "body": "decided to ship it",
+                    "author_id": 7,
+                    "deleted": False,
+                },
+                lid="c1",
+            ),
+        }
+        code, out, err, transport = self.cli(["comment", "%101", "decided to ship it"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0],
+            {
+                "op": "add",
+                "type": "comment",
+                "lid": "c1",
+                "data": {"task_id": 101, "body": "decided to ship it"},
+            },
+        )
+        self.assertEqual(out, "commented  %101  Write the controller\n")
+
+    def test_retitle_and_describe_each_send_one_concern(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(title="Write the HTTP controller")),
+        }
+        code, out, err, transport = self.cli(["retitle", "%101", "Write the HTTP controller"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"],
+            {"title": "Write the HTTP controller", "expected_version": 7},
+        )
+        self.assertEqual(out, "retitled  %101  Write the HTTP controller\n")
+
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(progress=0, done=False)),
+        }
+        code, out, err, transport = self.cli(["describe", "%101", "run mix precommit first"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"],
+            {"description": "run mix precommit first", "expected_version": 7},
+        )
+        self.assertEqual(out, "described  %101  Write the controller\n")
+
+    def test_a_committed_write_leaves_nothing_pending(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data()),
+        }
+        code, _, _, _ = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 0)
+        self.assertEqual(self.pending_paths(), [])
+
+
+class WriteValidationTest(WriteCase):
+    """4.3.3 — every rule fails before a single request, and rewrites nothing."""
+
+    def assert_refused(self, argv, needle):
+        code, out, err, transport = self.cli(argv, {})
+        self.assertEqual(code, 2, out + err)
+        self.assertEqual(transport.calls, [], "a rejected command must not reach the API")
+        self.assertEqual(self.pending_paths(), [])
+        self.assertIn(needle, err)
+
+    def test_empty_content_is_refused(self):
+        self.assert_refused(["add", "%101", "   "], "title cannot be empty")
+        self.assert_refused(["comment", "%101", ""], "comment body cannot be empty")
+        self.assert_refused(["describe", "%101", " \n "], "description cannot be empty")
+
+    def test_oversized_content_is_named_never_truncated(self):
+        code, out, err, transport = self.cli(["retitle", "%101", "x" * 201], {})
+        self.assertEqual(code, 2)
+        self.assertEqual(transport.calls, [])
+        self.assertIn("201 characters", err)
+        self.assertIn("200", err)
+        self.assertIn("never truncates", err)
+        self.assert_refused(["comment", "%101", "y" * 4001], "4001 characters")
+        self.assert_refused(["describe", "%101", "z" * 8001], "8001 characters")
+
+    def test_progress_must_be_a_whole_number_in_range(self):
+        self.assert_refused(["progress", "%101", "half"], "whole number")
+        self.assert_refused(["progress", "%101", "40.5"], "whole number")
+        self.assert_refused(["progress", "%101", "101"], "between 0 and 100")
+        self.assert_refused(["progress", "%101", "-1"], "between 0 and 100")
+
+    def test_position_must_not_be_negative(self):
+        self.assert_refused(["move", "%101", "%105", "-1"], "position must be 0 or more")
+
+    def test_bad_references_are_refused(self):
+        self.assert_refused(["done", "%1.2"], "is not a Task")
+        self.assert_refused(["add", "Q3 Launch", "New title"], "is not a parent")
+        self.assert_refused(["move", "%101", "somewhere"], "is not a parent")
+
+
+class VersionConflictTest(WriteCase):
+    """4.3.5 — hand back the current record; never resubmit with its version."""
+
+    def _routes(self):
+        current = task_data(id=101, title="Renamed in the browser", progress=50, done=False, version=9)
+        return {
+            "GET /api/v1/tasks/101": read_task(version=7),
+            "POST /api/v1/operations": ops_error(
+                409,
+                "conflict",
+                "Task 101 has version 9, not 7.",
+                current=current,
+            ),
+        }
+
+    def test_conflict_prints_the_current_record_and_stops(self):
+        code, out, err, transport = self.cli(["done", "%101"], self._routes())
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "conflict: done %101 Write the controller",
+                "  %101  Renamed in the browser  50%  [ ]  version 9",
+                "  nothing was applied — re-read, then decide.",
+            ],
+        )
+        self.assertEqual(len(self.posted(transport)), 1, "a conflict must not be resubmitted")
+
+    def test_conflict_is_a_settled_outcome_so_nothing_stays_pending(self):
+        code, _, _, _ = self.cli(["done", "%101"], self._routes())
+        self.assertEqual(code, 1)
+        self.assertEqual(self.pending_paths(), [])
+
+
+class LostResponseTest(WriteCase):
+    """4.3.4 — an unknown outcome parks the request and claims nothing."""
+
+    def _routes(self, post):
+        return {"GET /api/v1/tasks/101": read_task(), "POST /api/v1/operations": post}
+
+    def test_a_lost_response_parks_the_key_and_body_without_the_token(self):
+        routes = self._routes(doitlist.TransportError("could not reach the host: timed out"))
+        code, out, err, _ = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("outcome unknown: done %101 Write the controller", out)
+        self.assertNotIn("done  %101", out)  # never a success line
+
+        records = self.pending_records()
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        uuid.UUID(record["key"])
+        self.assertIn("doitlist.py retry {0}".format(record["key"]), out)
+        self.assertEqual(
+            record["body"],
+            {
+                "operations": [
+                    {
+                        "op": "update",
+                        "type": "task",
+                        "id": 101,
+                        "data": {"done": True, "expected_version": 7},
+                    }
+                ]
+            },
+        )
+        with open(self.pending_paths()[0], encoding="utf-8") as handle:
+            raw = handle.read()
+        self.assertNotIn(TOKEN, raw)
+        self.assertNotIn("Authorization", raw)
+        self.assertNotIn("localhost", raw)
+
+    def test_a_server_error_is_also_an_unknown_outcome(self):
+        routes = self._routes((500, '{"error":{"status":500,"code":"server_error","message":"boom"}}'))
+        code, out, _, _ = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("outcome unknown", out)
+        self.assertEqual(len(self.pending_records()), 1)
+
+    def test_a_non_json_body_is_an_unknown_outcome(self):
+        routes = self._routes((200, "<html>gateway</html>"))
+        code, out, _, _ = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("outcome unknown", out)
+        self.assertEqual(len(self.pending_records()), 1)
+
+
+class RetryIdentityTest(WriteCase):
+    """4.3.4 — a retry is the same key and the same body, or it is not a retry."""
+
+    def _lose_one(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": doitlist.TransportError("could not reach the host"),
+        }
+        code, _, _, transport = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 1)
+        record = self.pending_records()[0]
+        first = self.posted(transport)[0]
+        return record, first
+
+    def test_retry_resends_the_identical_key_and_body_then_clears_it(self):
+        record, (first_body, first_headers) = self._lose_one()
+        routes = {"POST /api/v1/operations": ops_ok(task_data())}
+        code, out, err, transport = self.cli(["retry"], routes)
+        self.assertEqual(code, 0, out + err)
+
+        again_body, again_headers = self.posted(transport)[0]
+        self.assertEqual(again_body, first_body)
+        self.assertEqual(again_headers["Idempotency-Key"], first_headers["Idempotency-Key"])
+        self.assertEqual(again_headers["Idempotency-Key"], record["key"])
+        self.assertEqual(self.pending_paths(), [])
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "retrying: done %101 Write the controller",
+                "done  %101  Write the controller  100%  [x]",
+            ],
+        )
+
+    def test_retry_reads_nothing_and_never_rebuilds_the_request(self):
+        self._lose_one()
+        # No GET route: a retry that re-read the Task would fail here.
+        code, out, err, transport = self.cli(["retry"], {"POST /api/v1/operations": ops_ok(task_data())})
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([call["method"] for call in transport.calls], ["POST"])
+
+    def test_retry_by_key_targets_one_parked_request(self):
+        record, _ = self._lose_one()
+        code, out, err, _ = self.cli(["retry", record["key"]], {"POST /api/v1/operations": ops_ok(task_data())})
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.pending_paths(), [])
+
+    def test_retry_with_an_unknown_key_is_a_usage_error(self):
+        code, _, err, transport = self.cli(["retry", "not-a-parked-key"], {})
+        self.assertEqual(code, 2)
+        self.assertEqual(transport.calls, [])
+        self.assertIn("no pending request with key", err)
+
+    def test_retry_with_nothing_parked_says_so(self):
+        code, out, err, transport = self.cli(["retry"], {})
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "no pending requests\n")
+        self.assertEqual(transport.calls, [])
+
+    def test_a_still_unknown_retry_stays_parked(self):
+        record, _ = self._lose_one()
+        routes = {"POST /api/v1/operations": doitlist.TransportError("still unreachable")}
+        code, out, _, _ = self.cli(["retry"], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("outcome unknown", out)
+        self.assertEqual([r["key"] for r in self.pending_records()], [record["key"]])
+
+
+class RateLimitTest(WriteCase):
+    """4.3.4 — honor `Retry-After`; a long wait is reported, never slept off."""
+
+    def test_a_short_retry_after_sleeps_and_resends_under_the_same_key(self):
+        slept = []
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": [
+                (429, '{"error":{"status":429,"code":"rate_limited","message":"Retry in 2s."}}', {"Retry-After": "2"}),
+                ops_ok(task_data()),
+            ],
+        }
+        code, out, err, transport = self.cli(["done", "%101"], routes, sleeper=slept.append)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(slept, [2])
+        posts = self.posted(transport)
+        self.assertEqual(len(posts), 2)
+        self.assertEqual(posts[0][1]["Idempotency-Key"], posts[1][1]["Idempotency-Key"])
+        self.assertEqual(posts[0][0], posts[1][0])
+        self.assertEqual(out, "done  %101  Write the controller  100%  [x]\n")
+        self.assertEqual(self.pending_paths(), [])
+
+    def test_a_long_retry_after_reports_the_wait_and_stays_pending(self):
+        slept = []
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": (
+                429,
+                '{"error":{"status":429,"code":"rate_limited","message":"Retry in 600s."}}',
+                {"Retry-After": "600"},
+            ),
+        }
+        code, out, err, transport = self.cli(["done", "%101"], routes, sleeper=slept.append)
+        self.assertEqual(code, 1)
+        self.assertEqual(slept, [])
+        self.assertEqual(len(self.posted(transport)), 1)
+        self.assertIn("rate limited: done %101 Write the controller", out)
+        self.assertIn("wait 600s", out)
+        records = self.pending_records()
+        self.assertEqual(len(records), 1)
+        self.assertIn("doitlist.py retry {0}".format(records[0]["key"]), out)
+
+
+class CompactResultTest(WriteCase):
+    """4.8 — outcomes and Task references, actionable errors, saved responses."""
+
+    def test_a_failure_names_the_offending_operation_not_just_the_batch(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_error(
+                422,
+                "unprocessable_entity",
+                "manual_progress is invalid",
+                pointer="manual_progress",
+            ),
+        }
+        code, out, err, _ = self.cli(["progress", "%101", "40"], routes)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "failed (422 unprocessable_entity): manual_progress is invalid",
+                "  op 0 unprocessable_entity manual_progress: manual_progress is invalid",
+            ],
+        )
+
+    def test_a_failure_without_a_pointer_still_names_the_operation(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_error(403, "forbidden", "You cannot edit this Task."),
+        }
+        code, out, _, _ = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("failed (403 forbidden): You cannot edit this Task.", out)
+        self.assertIn("op 0 forbidden -: You cannot edit this Task.", out)
+
+    def test_no_raw_json_reaches_the_terminal(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data()),
+        }
+        code, out, err, _ = self.cli(["done", "%101"], routes)
+        self.assertEqual(code, 0)
+        for envelope in ("results", "manual_progress", "expected_version", "{"):
+            self.assertNotIn(envelope, out + err)
+
+    def test_out_saves_the_full_response_and_prints_the_path(self):
+        target = os.path.join(self.state, "responses", "done.json")
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data()),
+        }
+        code, out, err, _ = self.cli(["done", "%101", "--out", target], routes)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "done  %101  Write the controller  100%  [x]",
+                "saved: {0}".format(target),
+            ],
+        )
+        with open(target, encoding="utf-8") as handle:
+            raw = handle.read()
+        saved = json.loads(raw)
+        self.assertEqual(saved["results"][0]["data"]["id"], 101)
+        self.assertEqual(saved["results"][0]["data"]["version"], 8)
+        self.assertNotIn(TOKEN, raw)
+
+    def test_out_saves_a_failure_response_and_keeps_the_error_visible(self):
+        target = os.path.join(self.state, "failure.json")
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_error(
+                422, "unprocessable_entity", "title can't be blank", pointer="title"
+            ),
+        }
+        code, out, err, _ = self.cli(["retitle", "%101", "New name", "--out", target], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("failed (422 unprocessable_entity): title can't be blank", out)
+        self.assertIn("op 0 unprocessable_entity title: title can't be blank", out)
+        self.assertIn("saved: {0}".format(target), out)
+        with open(target, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(saved["error"]["code"], "unprocessable_entity")
+        self.assertEqual(saved["results"][0]["error"]["pointer"], "title")
+
+    def test_an_unknown_outcome_saves_nothing_because_there_is_nothing_to_save(self):
+        target = os.path.join(self.state, "missing.json")
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": doitlist.TransportError("could not reach the host"),
+        }
+        code, out, _, _ = self.cli(["done", "%101", "--out", target], routes)
+        self.assertEqual(code, 1)
+        self.assertNotIn("saved:", out)
+        self.assertFalse(os.path.exists(target))
+
+    def test_retry_out_saves_one_entry_per_resent_key(self):
+        target = os.path.join(self.state, "retried.json")
+        lost = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": doitlist.TransportError("could not reach the host"),
+        }
+        self.assertEqual(self.cli(["done", "%101"], lost)[0], 1)
+        key = self.pending_records()[0]["key"]
+
+        code, out, err, _ = self.cli(
+            ["retry", "--out", target], {"POST /api/v1/operations": ops_ok(task_data())}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("saved: {0}".format(target), out)
+        with open(target, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual([entry["key"] for entry in saved], [key])
+        self.assertEqual(saved[0]["response"]["results"][0]["data"]["id"], 101)
+
+    def test_an_unwritable_out_path_is_reported_without_undoing_the_write(self):
+        target = os.path.join(self.state, "done.json", "nested.json")  # a file, not a directory
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data()),
+        }
+        with open(os.path.join(self.state, "done.json"), "w", encoding="utf-8") as handle:
+            handle.write("in the way")
+        code, out, err, _ = self.cli(["done", "%101", "--out", target], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("done  %101  Write the controller  100%  [x]", out)
+        self.assertIn("could not save the response", out)
+        self.assertEqual(self.pending_paths(), [], "the write itself still settled")
+
+    def test_supplied_content_reaches_the_api_and_the_saved_file_verbatim(self):
+        text = '  Ship it — "as is", 100% <done>\t  '
+        target = os.path.join(self.state, "comment.json")
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(
+                {"id": 33, "type": "comment", "task_id": 101, "body": text, "author_id": 7, "deleted": False}
+            ),
+        }
+        code, out, err, transport = self.cli(["comment", "%101", text, "--out", target], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(body["operations"][0]["data"]["body"], text)
+        with open(target, encoding="utf-8") as handle:
+            self.assertEqual(json.load(handle)["results"][0]["data"]["body"], text)
 
 
 if __name__ == "__main__":
