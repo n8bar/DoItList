@@ -129,7 +129,7 @@ defmodule DoItWeb.AccountApiTokensTest do
     assert has_element?(view, "#connect-pastes-powershell")
 
     # The PowerShell pane has its own per-client pastes and copy buttons.
-    for slug <- ["claude-code", "codex", "hermes"] do
+    for slug <- ["claude-code", "codex", "hermes", "cli"] do
       assert has_element?(view, "#connect-cmd-#{slug}-ps")
       assert has_element?(view, "#connect-copy-#{slug}-ps")
     end
@@ -140,6 +140,11 @@ defmodule DoItWeb.AccountApiTokensTest do
     assert codex_ps =~ "setx DOITLIST_API_TOKEN"
     refute codex_ps =~ "export"
     assert view |> element("#connect-cmd-hermes-ps") |> render() =~ "-Encoding utf8"
+
+    # m03.04 4.5: the scripted client's paste rides both panes and carries the
+    # API URL the standalone script reads, not just the token.
+    assert view |> element("#connect-client-cli") |> render() =~ "DOITLIST_API_URL"
+    assert view |> element("#connect-client-cli-ps") |> render() =~ "DOITLIST_API_URL"
   end
 
   test "the plaintext is not re-shown on a fresh mount", %{conn: conn, user: user} do

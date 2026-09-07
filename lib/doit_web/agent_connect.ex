@@ -41,7 +41,8 @@ defmodule DoItWeb.AgentConnect do
     [
       {"claude-code", "Claude Code", claude_code_paste(token, shell)},
       {"codex", "Codex", codex_paste(token, shell)},
-      {"hermes", "Hermes Agent", hermes_paste(token, shell)}
+      {"hermes", "Hermes Agent", hermes_paste(token, shell)},
+      {"cli", "Scripted client (doitlist.py)", cli_paste(token, shell)}
     ]
   end
 
@@ -125,6 +126,59 @@ defmodule DoItWeb.AgentConnect do
       "\n"
     )
   end
+
+  @doc """
+  The scripted client is not an MCP client: `doitlist.py` is a standalone
+  Python 3 program that reads `DOITLIST_API_URL` and `DOITLIST_API_TOKEN` from
+  the environment and talks to the HTTP API directly (m03.04 4.5). So the paste
+  sets both variables, persists both, and ends on the interpreter check — the
+  line that says whether the script will run at all.
+
+  POSIX (4.5.1) runs it with `python3`. PowerShell (4.5.2) runs the same script
+  with `py -3` (or `python`) and uses the Codex paste's persistence idiom:
+  `setx` for the registry, plus the `$PROFILE` append that shells spawned by an
+  already-running host actually pick up. Persistence comes before the check in
+  both, so a reader who stops at the line that reads as success is already
+  configured (2.1.5).
+  """
+  def cli_paste(token, shell \\ :posix)
+
+  def cli_paste(token, :posix) when is_binary(token) do
+    url = api_url()
+
+    Enum.join(
+      [
+        "export DOITLIST_API_URL='#{url}'",
+        "export DOITLIST_API_TOKEN='#{token}'",
+        ~s(echo "export DOITLIST_API_URL='#{url}'" >> ~/.bashrc   # or your shell's profile),
+        ~s(echo "export DOITLIST_API_TOKEN='#{token}'" >> ~/.bashrc   # or your shell's profile),
+        "python3 --version   # 3.8 or newer"
+      ],
+      "\n"
+    )
+  end
+
+  def cli_paste(token, :powershell) when is_binary(token) do
+    url = api_url()
+
+    Enum.join(
+      [
+        "$env:DOITLIST_API_URL = '#{url}'",
+        "$env:DOITLIST_API_TOKEN = '#{token}'",
+        "setx DOITLIST_API_URL '#{url}'",
+        "setx DOITLIST_API_TOKEN '#{token}'",
+        "New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null; " <>
+          "Add-Content -Path $PROFILE -Value '$env:DOITLIST_API_URL = ''#{url}''' -Encoding utf8",
+        "Add-Content -Path $PROFILE -Value '$env:DOITLIST_API_TOKEN = ''#{token}''' -Encoding utf8",
+        "py -3 --version   # or: python --version"
+      ],
+      "\n"
+    )
+  end
+
+  # The API base the scripted client talks to: the web endpoint's own public
+  # URL — the same base the API serializer builds Initiative handles from.
+  defp api_url, do: DoItWeb.Endpoint.url()
 
   @doc """
   Repo-marker snippet (m03.04 2.1.1.4), the second paste: two markdown

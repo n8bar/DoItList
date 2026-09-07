@@ -328,7 +328,18 @@ class ReferenceTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         self.assertEqual(doitlist.main([], env=ENV, out=out, err=err), 2)
         self.assertIn("verb is required", err.getvalue())
-        for verb in ("add", "done", "progress", "move", "comment", "retitle", "describe", "retry"):
+        for verb in (
+            "add",
+            "done",
+            "progress",
+            "move",
+            "comment",
+            "retitle",
+            "describe",
+            "import",
+            "diff",
+            "retry",
+        ):
             self.assertIn(verb, err.getvalue())
 
     def test_every_verb_has_help(self):
@@ -344,6 +355,8 @@ class ReferenceTest(unittest.TestCase):
             "comment",
             "retitle",
             "describe",
+            "import",
+            "diff",
             "retry",
         ):
             with contextlib.redirect_stdout(io.StringIO()) as help_text:
@@ -1320,6 +1333,423 @@ class CompactResultTest(WriteCase):
         self.assertEqual(body["operations"][0]["data"]["body"], text)
         with open(target, encoding="utf-8") as handle:
             self.assertEqual(json.load(handle)["results"][0]["data"]["body"], text)
+
+
+# --------------------------------------------------------------------------
+# 4.4 — import and diff
+# --------------------------------------------------------------------------
+
+#: A small source document: a `# ` heading, a tab-indented child, one `[x]`.
+DOC = "# Q3 Plan\n\n- Ship the thing\n\t- Draft [x]\n- Tell everyone\n"
+
+#: The read of the document every 200 carries, in both modes.
+SUMMARY = {
+    "title": "Q3 Plan",
+    "style": "numerical",
+    "counts": {"items": 3, "done": 1, "depth": 2, "title_overflow": 0},
+    "outline": "1 Ship the thing\n  1.1 Draft [x]\n2 Tell everyone",
+    "target": {"kind": "new_initiative", "name": "Q3 Plan"},
+}
+
+INITIATIVE = {"id": 12, "url": "https://doitlist.app/initiatives/12"}
+
+
+def preview_body(**overrides):
+    body = dict(SUMMARY)
+    body["preview"] = True
+    body["limits"] = {"max_items": 2000, "max_source_bytes": 1048576}
+    body.update(overrides)
+    return (200, _json(body))
+
+
+def applied_body(**overrides):
+    body = dict(SUMMARY)
+    body["preview"] = False
+    body["batches"] = 1
+    body["initiative"] = INITIATIVE
+    body.update(overrides)
+    return (200, _json(body))
+
+
+def batch_failure_body():
+    """The endpoint's partial-apply shape: some batches committed, one didn't."""
+    return (
+        422,
+        _json(
+            {
+                "error": {
+                    "status": 422,
+                    "code": "unprocessable_entity",
+                    "message": (
+                        "title can't be blank 1 of 3 batches had already committed, "
+                        "so the target holds a partial import."
+                    ),
+                },
+                "applied_batches": 1,
+                "failed_batch": 2,
+                "results": [
+                    {
+                        "index": 4,
+                        "status": "error",
+                        "error": {
+                            "code": "unprocessable_entity",
+                            "pointer": "title",
+                            "message": "title can't be blank",
+                        },
+                    }
+                ],
+                "initiative": INITIATIVE,
+            }
+        ),
+    )
+
+
+CLEAN_DIFF = {
+    "clean": True,
+    "summary": {"matched": 3, "missing": 0, "extra": 0, "completion": 0, "order": 0},
+    "missing": [],
+    "extra": [],
+    "completion": [],
+    "order": [],
+}
+
+DIRTY_DIFF = {
+    "clean": False,
+    "summary": {"matched": 4, "missing": 1, "extra": 1, "completion": 1, "order": 1},
+    "missing": [{"path": "Ship the SDK > Package it", "title": "Package it"}],
+    "extra": [{"path": "Build the API > Old step", "title": "Old step", "id": 119}],
+    "completion": [
+        {
+            "path": "Build the API > Write the tests",
+            "source_done": True,
+            "live_done": False,
+            "id": 112,
+        }
+    ],
+    "order": [
+        {
+            "parent": "(root)",
+            "source": ["Build the API", "Ship the SDK"],
+            "live": ["Ship the SDK", "Build the API"],
+        }
+    ],
+}
+
+
+def diff_body(report):
+    return preview_body(
+        diff=report, target={"kind": "initiative", "id": 12, "parent_task_id": None}
+    )
+
+
+class ImportCase(unittest.TestCase):
+    """Every import test writes its document into its own temp directory."""
+
+    def setUp(self):
+        self.state = tempfile.mkdtemp(prefix="doitlist-import-")
+        self.addCleanup(shutil.rmtree, self.state, True)
+        self.env = dict(ENV, DOITLIST_STATE_DIR=self.state)
+
+    def document(self, text=DOC, name="plan.md"):
+        path = os.path.join(self.state, name)
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(text)
+        return path
+
+    def cli(self, argv, routes):
+        return run(argv, routes, env=self.env)
+
+    def posted(self, transport):
+        return [
+            json.loads(call["body"].decode("utf-8"))
+            for call in transport.calls
+            if call["method"] == "POST"
+        ]
+
+
+class ImportRequestShapeTest(ImportCase):
+    """The document goes up unread; only the target is decided here."""
+
+    def test_as_names_the_new_initiative(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path, "--as", "  Renamed plan  "], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        body = self.posted(transport)[0]
+        self.assertEqual(body["target"], {"initiative_name": "Renamed plan"})
+        self.assertEqual(body["filename"], "plan.md")
+        self.assertIs(body["preview"], False)
+
+    def test_the_first_heading_names_the_new_initiative(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.posted(transport)[0]["target"], {"initiative_name": "Q3 Plan"})
+
+    def test_a_headingless_document_falls_back_to_the_file_stem(self):
+        path = self.document(text="- Sweep up\n- Take out the bins\n", name="chores.md")
+        code, out, err, transport = self.cli(
+            ["import", path], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.posted(transport)[0]["target"], {"initiative_name": "chores"})
+
+    def test_into_sends_the_existing_initiative_id(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path, "--into", "https://doitlist.app/initiatives/12"],
+            {"POST /api/v1/imports": applied_body()},
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.posted(transport)[0]["target"], {"initiative_id": 12})
+
+    def test_into_with_under_sends_the_parent_task(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path, "--into", "12", "--under", "%101"],
+            {"POST /api/v1/imports": applied_body()},
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.posted(transport)[0]["target"], {"initiative_id": 12, "parent_task_id": 101}
+        )
+
+    def test_preview_asks_for_a_preview(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path, "--preview"], {"POST /api/v1/imports": preview_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIs(self.posted(transport)[0]["preview"], True)
+
+    def test_under_without_into_is_refused_before_any_request(self):
+        path = self.document()
+        code, out, err, transport = self.cli(["import", path, "--under", "%101"], {})
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("--into", err)
+        self.assertEqual(transport.calls, [])
+
+    def test_a_missing_file_is_refused_before_any_request(self):
+        missing = os.path.join(self.state, "nope.md")
+        code, out, err, transport = self.cli(["import", missing, "--into", "12"], {})
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("nope.md", err)
+        self.assertEqual(transport.calls, [])
+
+    def test_the_document_travels_byte_for_byte(self):
+        # CRLF, a tab, trailing spaces, a non-ASCII character, trailing newline:
+        # none of it is trimmed, normalized, or reflowed on the way out.
+        text = "# Plan\r\n\r\n- Tabs\tand trailing space   \n\t- Nested — em dash\n"
+        path = self.document(text=text)
+        code, out, err, transport = self.cli(
+            ["import", path, "--into", "12"], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        raw = transport.calls[0]["body"]
+        self.assertEqual(json.loads(raw.decode("utf-8"))["text"], text)
+        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))  # no BOM on the wire
+
+    def test_an_apply_carries_no_idempotency_key_and_parks_nothing(self):
+        # The endpoint is idempotent by source hash per target, so there is
+        # nothing to park and nothing to retry.
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Idempotency-Key", transport.calls[0]["headers"])
+        self.assertFalse(os.path.isdir(os.path.join(self.state, "pending")))
+
+
+class ImportOutputTest(ImportCase):
+    def test_an_apply_reports_the_tree_the_url_and_the_batches(self):
+        path = self.document()
+        code, out, err, _ = self.cli(["import", path], {"POST /api/v1/imports": applied_body()})
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "imported  Q3 Plan  https://doitlist.app/initiatives/12",
+                "3 items, 1 done, depth 2, style numerical, 1 batch",
+            ],
+        )
+
+    def test_a_replay_says_nothing_new_was_created(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path], {"POST /api/v1/imports": applied_body(batches=3, replayed=True)}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "imported  Q3 Plan  https://doitlist.app/initiatives/12",
+                "3 items, 1 done, depth 2, style numerical, 3 batches",
+                "replayed (nothing new was created)",
+            ],
+        )
+
+    def test_a_preview_prints_the_counts_and_the_outline_verbatim(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path, "--preview"], {"POST /api/v1/imports": preview_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "3 items, 1 done, depth 2, style numerical",
+                "1 Ship the thing",
+                "  1.1 Draft [x]",
+                "2 Tell everyone",
+            ],
+        )
+
+    def test_a_batch_failure_says_what_landed_and_names_every_refused_op(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path, "--into", "12"], {"POST /api/v1/imports": batch_failure_body()}
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "failed (422 unprocessable_entity): title can't be blank 1 of 3 batches "
+                "had already committed, so the target holds a partial import.",
+                "applied 1 batch — the target holds a partial import; diff it to see what landed",
+                "  https://doitlist.app/initiatives/12",
+                "  op 4 unprocessable_entity title: title can't be blank",
+            ],
+        )
+
+    def test_a_validation_refusal_claims_no_partial_import(self):
+        path = self.document()
+        refusal = (
+            422,
+            _json(
+                {
+                    "error": {
+                        "status": 422,
+                        "code": "unprocessable_entity",
+                        "message": "No tasks found in the source text.",
+                    }
+                }
+            ),
+        )
+        code, out, err, _ = self.cli(
+            ["import", path, "--into", "12"], {"POST /api/v1/imports": refusal}
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            out.splitlines(),
+            ["failed (422 unprocessable_entity): No tasks found in the source text."],
+        )
+        self.assertNotIn("partial", out)
+
+    def test_a_lost_response_says_the_command_is_safe_to_re_run(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path],
+            {"POST /api/v1/imports": doitlist.TransportError("could not reach the host")},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("outcome unknown: import {0}".format(path), out)
+        self.assertIn("re-run the same command", out)
+        self.assertNotIn("retry with", out)  # nothing is parked, so nothing to retry
+
+    def test_out_saves_the_full_import_response(self):
+        path = self.document()
+        target = os.path.join(self.state, "responses", "import.json")
+        code, out, err, _ = self.cli(
+            ["import", path, "--out", target], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("saved: {0}".format(target), out)
+        with open(target, encoding="utf-8") as handle:
+            raw = handle.read()
+        self.assertEqual(json.loads(raw)["initiative"]["id"], 12)
+        self.assertNotIn(TOKEN, raw)
+
+
+class DiffTest(ImportCase):
+    """`diff` is the preview against an existing target: read-only, exit-coded."""
+
+    def routes(self, report):
+        return {
+            "GET /api/v1/initiatives/12": (200, _json(TREE)),
+            "POST /api/v1/imports": diff_body(report),
+        }
+
+    def test_a_clean_diff_names_the_initiative_and_exits_zero(self):
+        path = self.document()
+        code, out, err, transport = self.cli(["diff", path, "12"], self.routes(CLEAN_DIFF))
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            ["clean: {0} matches Q3 Launch  https://doitlist.app/initiatives/12".format(path)],
+        )
+        # Read-only on both sides: the preview flag is set, so nothing is written.
+        self.assertIs(self.posted(transport)[0]["preview"], True)
+
+    def test_differences_render_every_section_and_exit_one(self):
+        path = self.document()
+        code, out, err, _ = self.cli(["diff", path, "12"], self.routes(DIRTY_DIFF))
+        self.assertEqual(code, 1, err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "missing (1):",
+                "  Ship the SDK > Package it",
+                "extra (1):",
+                "  Build the API > Old step  %119",
+                "completion (1):",
+                "  Build the API > Write the tests  source [x]  live [ ]  %112",
+                "order (1):",
+                "  under (root): source Build the API > Ship the SDK / "
+                "live Ship the SDK > Build the API",
+                "matched 4",
+            ],
+        )
+
+    def test_under_scopes_the_comparison_and_names_the_task(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["diff", path, "12", "--under", "%101"], self.routes(CLEAN_DIFF)
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.posted(transport)[0]["target"], {"initiative_id": 12, "parent_task_id": 101}
+        )
+        self.assertIn("%101 in Q3 Launch", out)
+
+    def test_out_saves_the_full_preview_and_keeps_the_verdict(self):
+        path = self.document()
+        target = os.path.join(self.state, "diff.json")
+        code, out, err, _ = self.cli(
+            ["diff", path, "12", "--out", target], self.routes(DIRTY_DIFF)
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("missing (1):", out)
+        self.assertIn("saved: {0}".format(target), out)
+        with open(target, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(saved["diff"]["summary"]["missing"], 1)
+
+    def test_a_preview_without_a_diff_is_reported_not_called_clean(self):
+        path = self.document()
+        routes = {
+            "GET /api/v1/initiatives/12": (200, _json(TREE)),
+            "POST /api/v1/imports": preview_body(),
+        }
+        code, out, err, _ = self.cli(["diff", path, "12"], routes)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("without a diff", err)
 
 
 if __name__ == "__main__":

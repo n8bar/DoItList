@@ -103,11 +103,38 @@ defmodule DoItWeb.AgentConnectTest do
       refute env_line =~ "Bearer "
     end
 
-    test "client_pastes/1 lists exactly the three clients, in panel order" do
+    test "cli_paste/1 exports and persists both variables, then checks python3" do
+      url = DoItWeb.Endpoint.url()
+      paste = AgentConnect.cli_paste(@paste_token)
+
+      assert paste ==
+               "export DOITLIST_API_URL='#{url}'\n" <>
+                 "export DOITLIST_API_TOKEN='#{@paste_token}'\n" <>
+                 ~s(echo "export DOITLIST_API_URL='#{url}'" >> ~/.bashrc) <>
+                 "   # or your shell's profile\n" <>
+                 ~s(echo "export DOITLIST_API_TOKEN='#{@paste_token}'" >> ~/.bashrc) <>
+                 "   # or your shell's profile\n" <>
+                 "python3 --version   # 3.8 or newer"
+
+      # 4.5.1's bar: BOTH variables the scripted client reads, persisted
+      # before the interpreter check — the line that reads as success.
+      [url_line, token_line, url_append, token_append, version_line] = String.split(paste, "\n")
+      assert url_line =~ "export DOITLIST_API_URL="
+      assert token_line =~ "export DOITLIST_API_TOKEN="
+      assert url_append =~ ">> ~/.bashrc"
+      assert token_append =~ ">> ~/.bashrc"
+      assert version_line == "python3 --version   # 3.8 or newer"
+
+      # The scripted client talks to the HTTP API, not the MCP adapter.
+      refute paste =~ AgentConnect.mcp_url()
+    end
+
+    test "client_pastes/1 lists exactly the four clients, in panel order" do
       assert [
                {"claude-code", "Claude Code", _},
                {"codex", "Codex", _},
-               {"hermes", "Hermes Agent", _}
+               {"hermes", "Hermes Agent", _},
+               {"cli", "Scripted client (doitlist.py)", _}
              ] = AgentConnect.client_pastes(@paste_token)
     end
   end
@@ -166,6 +193,31 @@ defmodule DoItWeb.AgentConnectTest do
       refute paste =~ ">>"
     end
 
+    test "cli_paste/2 :powershell sets, persists via setx and $PROFILE, then checks py -3" do
+      url = DoItWeb.Endpoint.url()
+      paste = AgentConnect.cli_paste(@paste_token, :powershell)
+
+      assert paste ==
+               "$env:DOITLIST_API_URL = '#{url}'\n" <>
+                 "$env:DOITLIST_API_TOKEN = '#{@paste_token}'\n" <>
+                 "setx DOITLIST_API_URL '#{url}'\n" <>
+                 "setx DOITLIST_API_TOKEN '#{@paste_token}'\n" <>
+                 "New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null; " <>
+                 "Add-Content -Path $PROFILE " <>
+                 "-Value '$env:DOITLIST_API_URL = ''#{url}''' -Encoding utf8\n" <>
+                 "Add-Content -Path $PROFILE " <>
+                 "-Value '$env:DOITLIST_API_TOKEN = ''#{@paste_token}''' -Encoding utf8\n" <>
+                 "py -3 --version   # or: python --version"
+
+      # 4.5.2's bar: the same script under py -3, no bash-isms, and the Codex
+      # persistence idiom for both variables — registry AND profile.
+      assert paste =~ "py -3 --version"
+      refute paste =~ "export"
+      refute paste =~ "python3 --version"
+      # 25.3: `>>` writes UTF-16 on Windows PowerShell 5.1.
+      refute paste =~ ">>"
+    end
+
     test "client_pastes/2 keeps panel order; /1 defaults to :posix" do
       assert AgentConnect.client_pastes(@paste_token) ==
                AgentConnect.client_pastes(@paste_token, :posix)
@@ -173,7 +225,8 @@ defmodule DoItWeb.AgentConnectTest do
       assert [
                {"claude-code", "Claude Code", _},
                {"codex", "Codex", _},
-               {"hermes", "Hermes Agent", _}
+               {"hermes", "Hermes Agent", _},
+               {"cli", "Scripted client (doitlist.py)", _}
              ] = AgentConnect.client_pastes(@paste_token, :powershell)
     end
   end

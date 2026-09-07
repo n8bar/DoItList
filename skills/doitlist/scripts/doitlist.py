@@ -25,6 +25,11 @@ before the request leaves (4.3.4). A lost response therefore never becomes a
 lost or duplicated write: `retry` resends the parked request with the same key
 and the same body, and the server replays its stored response.
 
+`import` is the one write that parks nothing (m03.04 4.4): the imports endpoint
+is idempotent by source hash per target, so re-running the same command replays
+the first apply instead of duplicating it. `diff` is that endpoint's preview
+against an existing target, and writes nothing at all.
+
 Streams: a write's outcome block — success, failure, conflict, unknown
 outcome, and any `saved:` path — goes to stdout as one compact unit
 (m03.04 4.8) so an agent reads it in one place; the exit code carries the
@@ -67,8 +72,15 @@ EXIT_OK = 0
 EXIT_API = 1
 EXIT_USAGE = 2
 
+#: `diff` exits nonzero when the document and the live tree disagree, so a
+#: script can branch on it. Same value as EXIT_API: nonzero is "not clean".
+EXIT_DIFFERENT = EXIT_API
+
 #: The one write endpoint: every verb submits a single-operation batch.
 OPERATIONS_PATH = "/api/v1/operations"
+
+#: Documents go here instead (m03.04 4.4). Parsing stays on the server.
+IMPORTS_PATH = "/api/v1/imports"
 
 #: Server-side content limits, checked here so a rejection costs no round trip
 #: and names the rule instead of arriving as a validation error (m03.04 4.3.3).
@@ -762,6 +774,33 @@ def first_conflict(results):
     return None
 
 
+def write_failure(config, payload, status, out):
+    """The one-line verdict a refused write or import opens with."""
+    top = (payload or {}).get("error") or {}
+    out.write(
+        "failed ({0} {1}): {2}\n".format(
+            top.get("status", status),
+            top.get("code", "error"),
+            config.redact(top.get("message") or "request failed"),
+        )
+    )
+
+
+def write_op_errors(config, results, out):
+    """One line per refused operation — actionable, not just the batch verdict."""
+    for item in results or []:
+        if item.get("status") == "error":
+            error = item.get("error") or {}
+            out.write(
+                "  op {0} {1} {2}: {3}\n".format(
+                    item.get("index", 0),
+                    error.get("code") or "error",
+                    error.get("pointer") or "-",
+                    config.redact(error.get("message") or ""),
+                )
+            )
+
+
 def write_response_file(config, path, payload, out):
     """Save the full response for inspection instead of printing JSON (4.8.2).
 
@@ -857,24 +896,8 @@ def deliver(client, record, out, sleeper):
         return EXIT_API, payload
 
     if top or response.status >= 400:
-        out.write(
-            "failed ({0} {1}): {2}\n".format(
-                top.get("status", response.status),
-                top.get("code", "error"),
-                config.redact(top.get("message") or "request failed"),
-            )
-        )
-        for item in results:
-            if item.get("status") == "error":
-                error = item.get("error") or {}
-                out.write(
-                    "  op {0} {1} {2}: {3}\n".format(
-                        item.get("index", 0),
-                        error.get("code") or "error",
-                        error.get("pointer") or "-",
-                        config.redact(error.get("message") or ""),
-                    )
-                )
+        write_failure(config, payload, response.status, out)
+        write_op_errors(config, results, out)
         return EXIT_API, payload
 
     display = record.get("display") or {"label": record.get("verb") or "ok"}
@@ -896,6 +919,19 @@ def unresolved(config, record, out, reason):
     return EXIT_API
 
 
+def save_response(client, args, payload, out, code):
+    """`--out`: park the full response instead of printing JSON (4.8.2).
+
+    A save failure never rewrites what already happened on the server, so it
+    only downgrades an otherwise-clean exit.
+    """
+    if payload is None or not getattr(args, "out", None):
+        return code
+    if not write_response_file(client.config, args.out, payload, out) and code == EXIT_OK:
+        return EXIT_API
+    return code
+
+
 def run_write(client, args, out, verb, operation, summary, display):
     """Park the request, send it, print the compact outcome, save it if asked."""
     record = {
@@ -910,10 +946,7 @@ def run_write(client, args, out, verb, operation, summary, display):
     }
     save_pending(client.config, record)
     code, payload = deliver(client, record, out, args.sleeper)
-    if payload is not None and getattr(args, "out", None):
-        if not write_response_file(client.config, args.out, payload, out) and code == EXIT_OK:
-            code = EXIT_API
-    return code
+    return save_response(client, args, payload, out, code)
 
 
 def cmd_add(client, args, out, err):
@@ -1113,6 +1146,248 @@ def cmd_retry(client, args, out, err):
 
 
 # --------------------------------------------------------------------------
+# Import and diff (m03.04 4.4)
+# --------------------------------------------------------------------------
+# The document's own bytes go over the wire and the API decides the tree
+# (4.1.2): nothing here parses, reflows, or renumbers a source file. An apply
+# carries NO `Idempotency-Key` and parks nothing, because the imports endpoint
+# is already idempotent by source hash per target — re-running the same command
+# replays the first apply instead of duplicating it. `diff` is the same
+# endpoint's preview against an existing target: read-only on both sides.
+
+
+def read_source(path):
+    """The source document, verbatim.
+
+    `newline=""` keeps the file's own line endings, so a CRLF document reaches
+    the API exactly as written; nothing here trims, normalizes, or reflows it.
+    """
+    try:
+        with open(path, encoding="utf-8", newline="") as handle:
+            return handle.read()
+    except UnicodeDecodeError:
+        raise UsageError("{0} is not UTF-8 text — re-save it as UTF-8 and retry.".format(path))
+    except OSError as exc:
+        raise UsageError("could not read {0}: {1}".format(path, exc.strerror or exc))
+
+
+def initiative_name(text, path, given):
+    """Name a NEW Initiative: `--as`, else the document's first `# ` heading,
+    else the file's stem.
+
+    Picking a name is not parsing — the API still decides every Task, the
+    nesting, and the numbering (4.1.2).
+    """
+    if given is not None:
+        name = given.strip()
+        if not name:
+            raise UsageError("--as cannot be empty.")
+        return name
+    for line in text.splitlines():
+        if line.startswith("# "):
+            heading = line[2:].strip()
+            if heading:
+                return heading
+            break
+    stem = os.path.splitext(os.path.basename(path))[0].strip()
+    if not stem:
+        raise UsageError("could not name an Initiative from {0} — pass --as NAME.".format(path))
+    return stem
+
+
+def import_target(args, text):
+    """Where the document lands: an existing Initiative, or a new one."""
+    if args.into:
+        target = {"initiative_id": parse_initiative_ref(args.into)}
+        if args.under:
+            target["parent_task_id"] = parse_task_ref(args.under)
+        return target
+    return {"initiative_name": initiative_name(text, args.file, args.name)}
+
+
+def counts_line(payload, batches=None):
+    """The document's measurements, one line — the same line in both modes."""
+    counts = payload.get("counts") or {}
+    cells = [
+        "{0} items".format(counts.get("items", 0)),
+        "{0} done".format(counts.get("done", 0)),
+        "depth {0}".format(counts.get("depth", 0)),
+        "style {0}".format(payload.get("style") or "none"),
+    ]
+    if batches is not None:
+        cells.append("{0} batch{1}".format(batches, "" if batches == 1 else "es"))
+    return ", ".join(cells)
+
+
+def import_label(payload, path):
+    """The document's title, else the Initiative it named, else the file."""
+    target = payload.get("target") or {}
+    return payload.get("title") or target.get("name") or os.path.basename(path)
+
+
+def write_imported(payload, path, out):
+    initiative = payload.get("initiative") or {}
+    out.write(
+        "imported  {0}  {1}\n".format(import_label(payload, path), initiative.get("url") or "")
+    )
+    out.write(counts_line(payload, payload.get("batches")) + "\n")
+    if payload.get("replayed"):
+        out.write("replayed (nothing new was created)\n")
+
+
+def write_import_failure(config, payload, status, out):
+    """A refused import, and — when batches had already committed — what landed.
+
+    Only `applied_batches` is a number the response carries; the total is in
+    the server's own message, so this line counts what committed and does not
+    invent a denominator to contradict it.
+    """
+    write_failure(config, payload, status, out)
+    applied = payload.get("applied_batches") or 0
+    if applied:
+        out.write(
+            "applied {0} batch{1} — the target holds a partial import; "
+            "diff it to see what landed\n".format(applied, "" if applied == 1 else "es")
+        )
+        url = (payload.get("initiative") or {}).get("url")
+        if url:
+            out.write("  {0}\n".format(url))
+    write_op_errors(config, payload.get("results"), out)
+    return EXIT_API
+
+
+def import_unknown(config, path, out, reason):
+    """Neither applied nor refused — and safe to simply run again."""
+    out.write("outcome unknown: import {0} ({1})\n".format(path, config.redact(reason)))
+    out.write("  re-run the same command — a repeat apply replays instead of duplicating\n")
+    return EXIT_API
+
+
+def cmd_import(client, args, out, err):
+    if args.under and not args.into:
+        raise UsageError(
+            "--under names a Task inside --into; pass --into <initiative> as well."
+        )
+
+    text = read_source(args.file)
+    body = {
+        "text": text,
+        "filename": os.path.basename(args.file),
+        "target": import_target(args, text),
+        "preview": bool(args.preview),
+    }
+
+    if args.preview:
+        payload = client.request("POST", IMPORTS_PATH, body=body)
+        out.write(counts_line(payload) + "\n")
+        outline = payload.get("outline") or ""
+        if outline:
+            out.write(outline + "\n")
+        return save_response(client, args, payload, out, EXIT_OK)
+
+    try:
+        response = client.send("POST", IMPORTS_PATH, body=body)
+    except TransportError as exc:
+        return import_unknown(client.config, args.file, out, str(exc))
+
+    if response.status == 408 or response.status >= 500 or response.payload is None:
+        return import_unknown(client.config, args.file, out, "HTTP {0}".format(response.status))
+
+    payload = response.payload if isinstance(response.payload, dict) else {}
+    if payload.get("error") or response.status >= 400:
+        code = write_import_failure(client.config, payload, response.status, out)
+    else:
+        write_imported(payload, args.file, out)
+        code = EXIT_OK
+    return save_response(client, args, payload, out, code)
+
+
+def diff_target(initiative, under_id):
+    where = "  ".join(
+        part for part in (initiative.get("name") or "", initiative.get("url") or "") if part
+    )
+    return where if under_id is None else "%{0} in {1}".format(under_id, where)
+
+
+def completion_row(entry):
+    return "  {0}  source {1}  live {2}  %{3}".format(
+        entry.get("path") or "",
+        "[x]" if entry.get("source_done") else "[ ]",
+        "[x]" if entry.get("live_done") else "[ ]",
+        entry.get("id"),
+    )
+
+
+def order_row(entry):
+    return "  under {0}: source {1} / live {2}".format(
+        entry.get("parent") or "",
+        " > ".join(entry.get("source") or []),
+        " > ".join(entry.get("live") or []),
+    )
+
+
+#: Each finding list, in the order a reader acts on it, with its row renderer.
+DIFF_SECTIONS = (
+    ("missing", lambda entry: "  {0}".format(entry.get("path") or "")),
+    ("extra", lambda entry: "  {0}  %{1}".format(entry.get("path") or "", entry.get("id"))),
+    ("completion", completion_row),
+    ("order", order_row),
+)
+
+
+def write_diff(report, out):
+    for key, render in DIFF_SECTIONS:
+        entries = report.get(key) or []
+        if not entries:
+            continue
+        out.write("{0} ({1}):\n".format(key, len(entries)))
+        for entry in entries:
+            out.write(render(entry) + "\n")
+    out.write("matched {0}\n".format((report.get("summary") or {}).get("matched", 0)))
+
+
+def cmd_diff(client, args, out, err):
+    text = read_source(args.file)
+    initiative_id = parse_initiative_ref(args.initiative)
+    under_id = parse_task_ref(args.under) if args.under else None
+
+    # Named before the document goes up: a bad reference costs no upload, and
+    # the report can say which Initiative it read.
+    initiative = read_initiative(client, initiative_id)
+
+    target = {"initiative_id": initiative_id}
+    if under_id is not None:
+        target["parent_task_id"] = under_id
+
+    payload = client.request(
+        "POST",
+        IMPORTS_PATH,
+        body={
+            "text": text,
+            "filename": os.path.basename(args.file),
+            "target": target,
+            "preview": True,
+        },
+    )
+
+    report = payload.get("diff")
+    if not isinstance(report, dict):
+        raise ApiError(
+            200,
+            "unexpected_response",
+            "the preview came back without a diff for Initiative {0}.".format(initiative_id),
+        )
+
+    if report.get("clean"):
+        out.write("clean: {0} matches {1}\n".format(args.file, diff_target(initiative, under_id)))
+        code = EXIT_OK
+    else:
+        write_diff(report, out)
+        code = EXIT_DIFFERENT
+    return save_response(client, args, payload, out, code)
+
+
+# --------------------------------------------------------------------------
 # Seam: local completion mirroring (m03.04 item 4.7 — nothing built yet)
 # --------------------------------------------------------------------------
 # Mirroring belongs on this side of the wire: the API owns import parsing and
@@ -1206,6 +1481,37 @@ def build_parser():
     describe.add_argument("text", help="the description (1-{0} characters)".format(DESCRIPTION_MAX))
     describe.set_defaults(handler=cmd_describe)
 
+    importing = subparsers.add_parser(
+        "import", parents=[saving], help="import a document as a Task tree"
+    )
+    importing.add_argument("file", help="the source document (UTF-8 text)")
+    importing.add_argument(
+        "--into", metavar="INITIATIVE", help="import into this existing Initiative (id or URL)"
+    )
+    importing.add_argument(
+        "--under", metavar="TASK", help="import under this Task inside --into (id or %%<id>)"
+    )
+    importing.add_argument(
+        "--as",
+        dest="name",
+        metavar="NAME",
+        help="name the new Initiative (default: the document's first '# ' heading, else the file name)",
+    )
+    importing.add_argument(
+        "--preview", action="store_true", help="report what would be imported; write nothing"
+    )
+    importing.set_defaults(handler=cmd_import)
+
+    diffing = subparsers.add_parser(
+        "diff", parents=[saving], help="compare a document with an existing Initiative"
+    )
+    diffing.add_argument("file", help="the source document (UTF-8 text)")
+    diffing.add_argument("initiative", help="Initiative id or URL")
+    diffing.add_argument(
+        "--under", metavar="TASK", help="compare against this Task's children (id or %%<id>)"
+    )
+    diffing.set_defaults(handler=cmd_diff)
+
     retry = subparsers.add_parser("retry", parents=[saving], help="resend writes whose outcome is unknown")
     retry.add_argument("key", nargs="?", help="one pending key; omit to resend all, oldest first")
     retry.set_defaults(handler=cmd_retry)
@@ -1213,7 +1519,10 @@ def build_parser():
     return parser
 
 
-VERBS = "list, tree, comments, activity, add, done, progress, move, comment, retitle, describe, retry"
+VERBS = (
+    "list, tree, comments, activity, add, done, progress, move, comment, "
+    "retitle, describe, import, diff, retry"
+)
 
 
 def main(argv=None, env=None, transport=None, out=None, err=None, sleeper=None):
