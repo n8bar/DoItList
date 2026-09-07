@@ -86,7 +86,7 @@ defmodule DoIt.MixProject do
       # test (it's UI, not API logic, and the slowest single — it rides the full
       # suite). Add the Arc 2 MCP test paths here when they land.
       "test.api": [
-        "test test/doit_web/api test/doit/api test/doit/accounts/api_tokens_test.exs"
+        "test test/doit_web/api test/doit/api test/doit/imports test/doit/accounts/api_tokens_test.exs"
       ],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind doit", "esbuild doit"],

@@ -1,0 +1,15 @@
+- [x] Take the recycling out
+- [x] Run the dishwasher
+- [ ] Kitchen
+  - [x] Wipe the counters
+  - [ ] Scrub the sink
+  - [ ] Sort the junk drawer
+- [ ] Laundry
+  - [x] Wash the towels
+  - [ ] Fold the towels
+  - [ ] Put the ironing board away
+- [ ] Garage
+  - [ ] Sweep the floor
+  - [ ] Flatten the moving boxes
+- [ ] Change the furnace filter
+- [ ] Water the front planters
