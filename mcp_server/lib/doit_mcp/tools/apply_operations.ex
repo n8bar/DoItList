@@ -10,7 +10,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
 
       {
         "op": "add" | "update" | "remove",
-        "type": "task" | "initiative" | "comment" | "member" | "notification" | "link",
+        "type": "task" | "initiative" | "comment" | "link",
         "id": <real id for updating or removing an existing resource>,
         "lid": <batch-local id assigned by an add or used by a later same-batch update/remove to target that add>,
         "data": <fields documented by the corresponding domain tool>

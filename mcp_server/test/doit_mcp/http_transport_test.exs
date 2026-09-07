@@ -143,6 +143,30 @@ defmodule DoitMcp.HttpTransportTest do
     refute_received {:api_call, _headers}
   end
 
+  # m03.04 3.4.1/3.4.2 — the restructuring rules ride the server's initialize
+  # instructions, paid for once per session, not repeated per tool description.
+  test "initialize hands the client the Restructuring instructions" do
+    conn = post_frame(initialize_message(1), [])
+
+    assert conn.status == 200
+    assert %{"result" => %{"instructions" => instructions}} = Jason.decode!(conn.resp_body)
+
+    assert instructions =~ "## Restructuring"
+
+    # Read-then-conditionally-write, named as the requirement it is.
+    assert instructions =~ "get_initiative_tree"
+    assert instructions =~ "`version` as `expected_version`"
+
+    # Each restructuring named to its tool, plus the conflict recovery.
+    assert instructions =~ "Reorder, reparent, promote, and demote are all `move_task`"
+    assert instructions =~ "split"
+    assert instructions =~ "merge"
+    assert instructions =~ "`delete_task`"
+    assert instructions =~ "retitle"
+    assert instructions =~ "`update_task`"
+    assert instructions =~ "A `conflict` error applied nothing"
+  end
+
   test "an unknown or expired session id lets a live client carry on cleanly" do
     # A request against a session this tree never saw (same as one whose
     # 30-minute idle expiry fired): anubis recreates the session under the
@@ -232,8 +256,11 @@ defmodule DoitMcp.HttpTransportTest do
   # m03.04 3.3.4 — the tools/list budget. Every session pays for this payload
   # on connect, so description creep costs every conversation. The ceiling sits
   # just above the measured surface: a regression guard, not a target.
+  # Raised 14_000 -> 15_000 at m03.04 3.4.3, when `expected_version` landed on
+  # four more write tools (13.3 KB -> 14.2 KB); the headroom above the measured
+  # surface is unchanged.
   @tool_count 21
-  @tools_list_ceiling_bytes 14_000
+  @tools_list_ceiling_bytes 15_000
 
   test "tools/list holds its tool count and stays under the session byte ceiling" do
     tools = live_tools_list()

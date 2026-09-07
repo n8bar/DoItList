@@ -177,15 +177,15 @@ defmodule DoItWeb.Api.Operations do
 
   Task and Initiative reads carry an integer `version` — a revision counter
   bumped on every intent-bearing write to the record, never by derived
-  roll-up recomputes. An `update task` / `update initiative` op may carry
-  `expected_version` in its `data`: on mismatch nothing applies (the batch
-  rolls back, HTTP **409**), and the per-op `conflict` error carries the
-  serialized **current** record under `current` so the caller re-reads from
-  the response, reconciles, and retries with the fresh version. The compare
-  runs under a row lock inside the batch transaction (`Tasks.check_version/2`
-  / `Initiatives.check_version/2`), so a match can't be invalidated before
-  the write commits. An omitted `expected_version` is exactly today's
-  unconditional write.
+  roll-up recomputes. An `update task`, `update initiative`, or `remove task`
+  op may carry `expected_version` in its `data`: on mismatch nothing applies
+  (the batch rolls back, HTTP **409**), and the per-op `conflict` error
+  carries the serialized **current** record under `current` so the caller
+  re-reads from the response, reconciles, and retries with the fresh version.
+  The compare runs under a row lock inside the batch transaction
+  (`Tasks.check_version/2` / `Initiatives.check_version/2`), so a match can't
+  be invalidated before the write commits. An omitted `expected_version` is
+  exactly today's unconditional write.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -233,7 +233,7 @@ defmodule DoItWeb.Api.Operations do
       ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done),
     {"update", "task"} =>
       ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version),
-    {"remove", "task"} => [],
+    {"remove", "task"} => ~w(expected_version),
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
     {"update", "initiative"} =>
       @initiative_content_fields ++ ~w(subtitle state owner_id expected_version),
@@ -493,7 +493,7 @@ defmodule DoItWeb.Api.Operations do
 
   # Build the targeted per-op error for the first unrecognized `data` key. The
   # message names the bad field and then either lists the op's accepted keys
-  # (sorted) or, for an op that takes no data (remove task/comment), says so.
+  # (sorted) or, for an op that takes no data (remove comment), says so.
   # Pointer = key.
   defp unknown_field_error(verb, type, key, accepted) do
     message =
@@ -584,7 +584,10 @@ defmodule DoItWeb.Api.Operations do
 
   defp dispatch(user, "remove", "task", op, changes) do
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
+         {:ok, _initiative} <-
+           authorize(user, task.initiative_id, :edit, task_not_found(task.id)),
+         {:ok, expected} <- fetch_expected_version(data(op)),
+         :ok <- check_task_version(task, expected) do
       case Tasks.delete_task(task, user) do
         {:ok, deleted} ->
           ok(nil, deleted.id, "task", Map.put(task_result(deleted), :deleted, true))
@@ -1126,13 +1129,13 @@ defmodule DoItWeb.Api.Operations do
 
   # --- conditional writes (m03.04 2.7.4) -----------------------------------
   #
-  # An update op may carry `expected_version` — the `version` from the caller's
-  # last read. The compare runs in the domain contexts under a row lock
-  # (`Tasks.check_version/2` / `Initiatives.check_version/2`), inside the
-  # batch's transaction, so a match can't be invalidated before the write
-  # commits. On mismatch the per-op `conflict` error (batch HTTP 409) carries
-  # the CURRENT record so the caller re-reads from the response. Omitted =
-  # exactly the unconditional write.
+  # An update op (and `remove task`) may carry `expected_version` — the
+  # `version` from the caller's last read. The compare runs in the domain
+  # contexts under a row lock (`Tasks.check_version/2` /
+  # `Initiatives.check_version/2`), inside the batch's transaction, so a match
+  # can't be invalidated before the write commits. On mismatch the per-op
+  # `conflict` error (batch HTTP 409) carries the CURRENT record so the caller
+  # re-reads from the response. Omitted = exactly the unconditional write.
 
   defp fetch_expected_version(data) do
     case Map.get(data, "expected_version") do

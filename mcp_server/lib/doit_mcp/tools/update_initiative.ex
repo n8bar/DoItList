@@ -5,6 +5,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
 
   use Anubis.Server.Component, type: :tool
 
+  alias DoitMcp.Tools.ExpectedVersion
   alias DoitMcp.{Client, ToolResult}
 
   # CALC-GATE-PARKED (m03.04): gate-only deps. Revive with the gated execute +
@@ -31,6 +32,8 @@ defmodule DoitMcp.Tools.UpdateInitiative do
   #   "required" => ["approve"]
   # }
 
+  @expected_version_doc ExpectedVersion.description()
+
   schema do
     field(:initiative_id, :integer, required: true)
     field(:name, :string, required: false)
@@ -52,8 +55,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
 
     field(:expected_version, :integer,
       required: false,
-      description:
-        "Latest Initiative `version`. Always provide it unless overwriting any intervening change is acceptable. A mismatch applies nothing and returns the current Initiative; reconcile it before retrying. Omit only for an unconditional write"
+      description: @expected_version_doc
     )
   end
 

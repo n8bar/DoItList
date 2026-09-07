@@ -7,7 +7,10 @@ defmodule DoitMcp.Tools.UpdateTask do
 
   use Anubis.Server.Component, type: :tool
 
+  alias DoitMcp.Tools.ExpectedVersion
   alias DoitMcp.{Client, ToolResult}
+
+  @expected_version_doc ExpectedVersion.description()
 
   schema do
     field(:task_id, :integer, required: true)
@@ -19,8 +22,7 @@ defmodule DoitMcp.Tools.UpdateTask do
 
     field(:expected_version, :integer,
       required: false,
-      description:
-        "Latest task `version`. Always provide it unless overwriting any intervening change is acceptable. A mismatch applies nothing and returns the current task; reconcile it before retrying. Omit only for an unconditional write"
+      description: @expected_version_doc
     )
   end
 

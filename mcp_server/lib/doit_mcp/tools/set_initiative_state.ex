@@ -5,15 +5,23 @@ defmodule DoitMcp.Tools.SetInitiativeState do
 
   use Anubis.Server.Component, type: :tool
 
+  alias DoitMcp.Tools.ExpectedVersion
   alias DoitMcp.{Client, ToolResult}
+
+  @expected_version_doc ExpectedVersion.description()
 
   schema do
     field(:initiative_id, :integer, required: true)
     field(:state, :string, required: true)
+
+    field(:expected_version, :integer,
+      required: false,
+      description: @expected_version_doc
+    )
   end
 
   def execute(params, frame) do
-    data = %{"state" => params.state}
+    data = ExpectedVersion.put(%{"state" => params.state}, params)
 
     [%{"op" => "update", "type" => "initiative", "id" => params.initiative_id, "data" => data}]
     |> Client.operations()

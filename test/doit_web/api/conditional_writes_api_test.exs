@@ -188,6 +188,61 @@ defmodule DoItWeb.Api.ConditionalWritesApiTest do
     end
   end
 
+  describe "remove task with expected_version (m03.04 3.4.3)" do
+    test "a stale token 409s with the current record and the task stays live", ctx do
+      {:ok, _} = Tasks.update_task(ctx.task, ctx.owner, %{"description" => "operator intent"})
+
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "remove",
+            "type" => "task",
+            "id" => ctx.task.id,
+            "data" => %{"expected_version" => 1}
+          }
+        ])
+
+      assert status == 409
+      assert [%{"status" => "error", "error" => op_error}] = body["results"]
+      assert op_error["code"] == "conflict"
+      assert op_error["pointer"] == "expected_version"
+      assert %{"id" => id, "version" => 2} = op_error["current"]
+      assert id == ctx.task.id
+
+      # Nothing applied — the task the operator just edited is still live.
+      assert Repo.get!(Task, ctx.task.id).deleted_at == nil
+    end
+
+    test "a matching token deletes", ctx do
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{
+            "op" => "remove",
+            "type" => "task",
+            "id" => ctx.task.id,
+            "data" => %{"expected_version" => 1}
+          }
+        ])
+
+      assert status == 200
+      assert [%{"status" => "ok", "data" => %{"deleted" => true}}] = body["results"]
+      refute Repo.get!(Task, ctx.task.id).deleted_at == nil
+    end
+
+    test "an omitted token deletes unconditionally, as before", ctx do
+      {:ok, _} = Tasks.update_task(ctx.task, ctx.owner, %{"description" => "moved on"})
+
+      {status, body} =
+        post_ops(ctx.owner, [
+          %{"op" => "remove", "type" => "task", "id" => ctx.task.id}
+        ])
+
+      assert status == 200
+      assert [%{"status" => "ok", "data" => %{"deleted" => true}}] = body["results"]
+      refute Repo.get!(Task, ctx.task.id).deleted_at == nil
+    end
+  end
+
   describe "update initiative with expected_version" do
     test "matching applies, stale 409s with the current record, omitted unconditional", ctx do
       # Matching.
