@@ -426,6 +426,57 @@ defmodule DoIt.Imports.ParserTest do
     end
   end
 
+  # --- letter+digit markers require a sequence --------------------------------
+
+  describe "letter+digit markers require a sequence" do
+    test "a heading that only looks like a marker keeps its full title" do
+      manifest =
+        parse!("""
+        # Q3 Plan
+        - a
+        - b
+        """)
+
+      assert manifest.title == "Q3 Plan"
+      assert manifest.style == "none"
+    end
+
+    test "different letters are not a sequence, so neither is stripped" do
+      manifest =
+        parse!("""
+        - B2 pencils
+        - C4 paper
+        """)
+
+      assert titles(manifest.items) == ["B2 pencils", "C4 paper"]
+    end
+
+    test "the same letter recurring with different digit runs is numbering" do
+      manifest =
+        parse!("""
+        M1 a
+        M2 b
+        """)
+
+      assert titles(manifest.items) == ["a", "b"]
+      assert manifest.style == "numerical"
+    end
+
+    test "the same letter and digit run twice is not a sequence, so the lines are prose" do
+      manifest =
+        parse!("""
+        - a
+        Q3 targets are aggressive.
+        Q3 goals follow.
+        - b
+        """)
+
+      assert titles(manifest.items) == ["a", "b"]
+      assert hd(manifest.items).description == "Q3 targets are aggressive.\nQ3 goals follow."
+      assert Parser.parse("Q3 Plan\nQ3 goals\n") == {:error, :empty}
+    end
+  end
+
   # --- 2.1 empty input -------------------------------------------------------
 
   describe "empty input" do

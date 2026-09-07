@@ -64,10 +64,12 @@ defmodule DoIt.Imports.Parser do
 
   ## Numbering markers and style detection (2.2)
 
-  Recognized markers: `1.` `1)`, `M1`/`M01` (a capital letter plus digits),
-  roman `I.`/`II)`, alphabetic `A.`/`B)`, and dotted paths like `1.2`,
-  `I.A.2`, `1.a.i`. A dotted path with no trailing terminator needs at least
-  one numeric segment, so prose openers like "e.g." and "i.e." stay prose.
+  Recognized markers: `1.` `1)`, `M1`/`M01` (a capital letter plus digits,
+  counted only when the same letter recurs with a different digit run
+  elsewhere in the document — `M1`/`M2`, never a lone `Q3`), roman `I.`/`II)`,
+  alphabetic `A.`/`B)`, and dotted paths like `1.2`, `I.A.2`, `1.a.i`. A
+  dotted path with no trailing terminator needs at least one numeric segment,
+  so prose openers like "e.g." and "i.e." stay prose.
 
   The document's index style is detected once, from the markers at the
   shallowest depth that carries any (nested levels may differ):
@@ -134,18 +136,18 @@ defmodule DoIt.Imports.Parser do
   Returns `{:error, :empty}` for blank input or input with no items.
   """
   def parse(text) when is_binary(text) do
-    {nodes, lead} = scan(text)
+    {nodes, lead, seq_letters} = scan(text)
 
     case nodes do
       [] ->
         {:error, :empty}
 
       _ ->
-        {title, title_desc, roots, style_nodes} = split_title(nodes, lead)
+        {title, title_desc, roots, style_nodes} = split_title(nodes, lead, seq_letters)
 
         case roots do
           [] -> {:error, :empty}
-          _ -> {:ok, manifest(title, title_desc, build_tree(roots), style_nodes)}
+          _ -> {:ok, manifest(title, title_desc, build_tree(roots, seq_letters), style_nodes)}
         end
     end
   end
@@ -216,20 +218,21 @@ defmodule DoIt.Imports.Parser do
   # Walk the lines once, emitting a flat list of nodes carrying their tree
   # depth, and collecting any prose that precedes the first node.
   defp scan(text) do
-    state = %{fence: false, headings: [], list: [], nodes: [], lead: []}
-
-    state =
+    lines =
       text
       |> String.split("\n")
       |> Enum.map(&String.trim_trailing(&1, "\r"))
-      |> Enum.reduce(state, &scan_line/2)
+
+    seq_letters = sequence_letters(lines)
+    state = %{fence: false, headings: [], list: [], nodes: [], lead: [], seq_letters: seq_letters}
+    state = Enum.reduce(lines, state, &scan_line/2)
 
     nodes =
       state.nodes
       |> Enum.reverse()
       |> Enum.map(fn node -> %{node | desc: Enum.reverse(node.desc)} end)
 
-    {nodes, Enum.reverse(state.lead)}
+    {nodes, Enum.reverse(state.lead), seq_letters}
   end
 
   defp scan_line(line, state) do
@@ -258,8 +261,10 @@ defmodule DoIt.Imports.Parser do
     [ws] = Regex.run(~r/^[ \t]*/, line)
     {token, rest} = split_token(trimmed)
 
-    case marker_of(token) do
-      :none ->
+    case marker_of(token, state.seq_letters) do
+      # A letter+digits token outside a sequence is a word, not a marker: the
+      # line is prose like any other unmarked line.
+      none_or_word when none_or_word in [:none, :word] ->
         add_prose(state, trimmed)
 
       {kind, marker} ->
@@ -301,7 +306,7 @@ defmodule DoIt.Imports.Parser do
   defp add_heading(state, level, text) do
     headings = Enum.drop_while(state.headings, fn {lvl, _} -> lvl >= level end)
     depth = length(headings)
-    {_kind, marker, title} = strip_marker(text)
+    {_kind, marker, title} = strip_marker(text, state.seq_letters)
 
     state
     |> Map.put(:headings, [{level, depth} | headings])
@@ -337,7 +342,7 @@ defmodule DoIt.Imports.Parser do
 
   # The opening heading is the document's title when it is the only heading at
   # the shallowest heading level.
-  defp split_title([first | rest] = nodes, lead) do
+  defp split_title([first | rest] = nodes, lead, seq_letters) do
     levels = for n <- nodes, n.level, do: n.level
 
     title? =
@@ -345,9 +350,9 @@ defmodule DoIt.Imports.Parser do
         Enum.count(levels, &(&1 == first.level)) == 1
 
     if title? do
-      {first.title, finalize_desc(first.desc, first.title), rest, rest}
+      {first.title, finalize_desc(first.desc, first.title, seq_letters), rest, rest}
     else
-      {nil, finalize_desc(lead, nil), nodes, nodes}
+      {nil, finalize_desc(lead, nil, seq_letters), nodes, nodes}
     end
   end
 
@@ -361,28 +366,28 @@ defmodule DoIt.Imports.Parser do
     |> maybe_put(:title_description, title_desc)
   end
 
-  defp build_tree(nodes) do
-    {items, _rest} = do_build(nodes, 0)
+  defp build_tree(nodes, seq_letters) do
+    {items, _rest} = do_build(nodes, 0, seq_letters)
     items
   end
 
-  defp do_build([], _min), do: {[], []}
+  defp do_build([], _min, _seq_letters), do: {[], []}
 
-  defp do_build([%{depth: depth} = node | rest], min) when depth >= min do
-    {children, rest} = do_build(rest, depth + 1)
+  defp do_build([%{depth: depth} = node | rest], min, seq_letters) when depth >= min do
+    {children, rest} = do_build(rest, depth + 1, seq_letters)
 
     item = %{
       title: node.title,
-      description: finalize_desc(node.desc, node.title),
+      description: finalize_desc(node.desc, node.title, seq_letters),
       done: node.done,
       children: children
     }
 
-    {siblings, rest} = do_build(rest, depth)
+    {siblings, rest} = do_build(rest, depth, seq_letters)
     {[item | siblings], rest}
   end
 
-  defp do_build(nodes, _min), do: {[], nodes}
+  defp do_build(nodes, _min, _seq_letters), do: {[], nodes}
 
   defp count_items(items),
     do: Enum.reduce(items, 0, fn i, acc -> acc + 1 + count_items(i.children) end)
@@ -398,9 +403,9 @@ defmodule DoIt.Imports.Parser do
 
   # --- Descriptions -----------------------------------------------------------
 
-  defp finalize_desc(buffer, title) do
+  defp finalize_desc(buffer, title, seq_letters) do
     buffer
-    |> Enum.reject(&echo?(&1, title))
+    |> Enum.reject(&echo?(&1, title, seq_letters))
     |> Enum.drop_while(&(&1 == :blank))
     |> Enum.reverse()
     |> Enum.drop_while(&(&1 == :blank))
@@ -416,26 +421,66 @@ defmodule DoIt.Imports.Parser do
     end
   end
 
-  defp echo?(:blank, _title), do: false
-  defp echo?(_line, nil), do: false
+  defp echo?(:blank, _title, _seq_letters), do: false
+  defp echo?(_line, nil, _seq_letters), do: false
 
-  defp echo?(line, title) do
+  defp echo?(line, title, seq_letters) do
     {_kind, _marker, stripped} =
       line
       |> String.replace(@heading, "\\2")
-      |> strip_marker()
+      |> strip_marker(seq_letters)
 
     {_done, stripped} = checkbox(stripped)
     String.downcase(String.trim(stripped)) == String.downcase(String.trim(title))
   end
 
+  # --- Sequence pre-scan -------------------------------------------------------
+
+  # A letter+digits token (`M1`, `Q3`) only reads as numbering when the
+  # document uses the same letter at least twice with different digit runs
+  # (`M1`/`M2`, `M01.`/`M02.`) — otherwise it is an ordinary capitalized word
+  # (`Q3 Plan`). Scanned once, from the same heading and list-item lines
+  # `marker_of/2` reads tokens from, so it can tell the two apart.
+  defp sequence_letters(lines) do
+    {digits_by_letter, _fence} =
+      Enum.reduce(lines, {%{}, false}, fn line, {digits_by_letter, fence} ->
+        cond do
+          Regex.match?(@fence, line) -> {digits_by_letter, not fence}
+          fence -> {digits_by_letter, fence}
+          true -> {note_letter_digits(digits_by_letter, line), fence}
+        end
+      end)
+
+    digits_by_letter
+    |> Enum.filter(fn {_letter, digit_runs} -> MapSet.size(digit_runs) > 1 end)
+    |> Enum.into(MapSet.new(), fn {letter, _digit_runs} -> letter end)
+  end
+
+  defp note_letter_digits(digits_by_letter, line) do
+    content =
+      case Regex.run(@heading, line) do
+        [_, _hashes, rest] -> String.trim(rest)
+        nil -> String.trim(line)
+      end
+
+    {token, _rest} = split_token(content)
+
+    if Regex.match?(@letter_number, token) do
+      stripped = String.replace(token, ~r/[.)]$/, "")
+      <<letter::binary-size(1), digits::binary>> = stripped
+      Map.update(digits_by_letter, letter, MapSet.new([digits]), &MapSet.put(&1, digits))
+    else
+      digits_by_letter
+    end
+  end
+
   # --- Markers ----------------------------------------------------------------
 
-  defp strip_marker(text) do
+  defp strip_marker(text, seq_letters) do
     {token, rest} = split_token(String.trim(text))
 
-    case marker_of(token) do
-      :none ->
+    case marker_of(token, seq_letters) do
+      none_or_word when none_or_word in [:none, :word] ->
         {:none, nil, String.trim(text)}
 
       {kind, marker} ->
@@ -449,16 +494,24 @@ defmodule DoIt.Imports.Parser do
     end
   end
 
-  defp marker_of(token) do
+  defp marker_of(token, seq_letters) do
     stripped = String.replace(token, ~r/[.)]$/, "")
 
     cond do
       token in @bullets -> {:bullet, nil}
-      Regex.match?(@letter_number, token) -> {:number, stripped}
+      Regex.match?(@letter_number, token) -> letter_number_kind(stripped, seq_letters)
       Regex.match?(@dotted, token) and plausible?(stripped) -> {:number, stripped}
       Regex.match?(@dotted_bare, token) and plausible?(token) -> {:number, token}
       true -> :none
     end
+  end
+
+  # A capital-letter-plus-digits token is numbering only when its letter is
+  # part of a sequence (see `sequence_letters/1`); otherwise it is just a word
+  # that happens to look like one, and must not be stripped from the title.
+  defp letter_number_kind(stripped, seq_letters) do
+    <<letter::binary-size(1), _digits::binary>> = stripped
+    if MapSet.member?(seq_letters, letter), do: {:number, stripped}, else: :word
   end
 
   # A dotted path needs a numeric segment somewhere, so sentence openers like
