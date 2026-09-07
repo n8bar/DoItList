@@ -220,5 +220,6 @@ defmodule DoitMcp.HttpTransportTest do
     names = Enum.map(tools, & &1["name"])
     assert "get_me" in names
     assert "apply_operations" in names
+    assert "import_text" in names
   end
 end

@@ -50,6 +50,28 @@ defmodule DoitMcp.ToolResult do
   end
 
   @doc """
+  Reply for an endpoint whose own 200 body *is* the result — `/api/v1/imports`
+  (m03.04 3.2), which answers with a summary rather than a batch envelope. The
+  body goes back untouched as the tool's JSON; a failure renders the API's own
+  message, the same mapping `reply/2` uses.
+  """
+  def reply_json(frame, client_result) do
+    case client_result do
+      {:ok, body} ->
+        {:reply, Response.json(Response.tool(), body), frame}
+
+      {:error, %{status: status, body: %{"error" => error}}} ->
+        {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}
+
+      {:error, %{status: status, body: body}} ->
+        {:reply, Response.error(Response.tool(), "(#{status}) #{inspect(body)}"), frame}
+
+      {:error, %{reason: reason}} ->
+        {:reply, Response.error(Response.tool(), "Request failed: #{inspect(reason)}"), frame}
+    end
+  end
+
+  @doc """
   Reply for `apply_operations` — passes the full ordered results list through
   as JSON. A rolled-back batch still sets `isError: true` (on top of the JSON
   payload) so a client that only checks the protocol-level error flag doesn't

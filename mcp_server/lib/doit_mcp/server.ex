@@ -24,6 +24,9 @@ defmodule DoitMcp.Server do
   component(DoitMcp.Tools.SetInitiativeState)
   component(DoitMcp.Tools.GetInitiativeActivity)
 
+  # Import — one document in, one Task tree out (m03.04 3.2)
+  component(DoitMcp.Tools.ImportText)
+
   # Comment
   component(DoitMcp.Tools.AddComment)
   component(DoitMcp.Tools.EditComment)
