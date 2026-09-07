@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.ImportsTest do
   @moduledoc """
-  Text import — `POST /api/v1/imports` (m03.04 2.3, 2.4 and 2.5).
+  Text import — `POST /api/v1/imports` (m03.04 2.3 through 2.6).
 
   Covers: preview writing nothing while returning the labeled outline, counts,
   style and title; apply into a new Initiative (nesting, done flags,
@@ -14,8 +14,12 @@ defmodule DoItWeb.Api.ImportsTest do
   or in the comment for an existing target; the preview diff against an
   existing target (clean when the tree still matches the document; missing,
   extra, completion and order findings once it doesn't; scoped to a
-  `parent_task_id`'s children; absent for a new Initiative); and the rejection
-  paths — empty text, malformed target, stranger, viewer, foreign parent Task.
+  `parent_task_id`'s children; absent for a new Initiative); the size limits
+  (2.6) — an over-long source, too many items and an over-long description each
+  refused before a single write, a 200-plus-character title imported whole with
+  its overflow in the description, and the limits echoed in a preview; and the
+  rejection paths — empty text, malformed target, stranger, viewer, foreign
+  parent Task.
 
   Persistence is checked through the domain contexts (not extra API reads) so
   the per-token rate limit (5/window in `config/test.exs`) never bites — each
@@ -119,8 +123,16 @@ defmodule DoItWeb.Api.ImportsTest do
       assert body["preview"] == true
       assert body["title"] == "Quarterly Plan"
       assert body["style"] == "numerical"
-      assert body["counts"] == %{"items" => 4, "done" => 1, "depth" => 2}
+      assert body["counts"] == %{"items" => 4, "done" => 1, "depth" => 2, "title_overflow" => 0}
       assert body["target"] == %{"kind" => "new_initiative", "name" => "Q3 Plan"}
+
+      # 2.6.2 — the size rules are readable without spending a failed request.
+      assert body["limits"] == %{
+               "max_source_bytes" => 1_048_576,
+               "max_items" => 2000,
+               "max_description" => 8000,
+               "max_title" => 200
+             }
 
       assert body["outline"] ==
                """
@@ -336,7 +348,7 @@ defmodule DoItWeb.Api.ImportsTest do
 
       assert body["preview"] == false
       assert body["batches"] == 1
-      assert body["counts"] == %{"items" => 4, "done" => 1, "depth" => 2}
+      assert body["counts"] == %{"items" => 4, "done" => 1, "depth" => 2, "title_overflow" => 0}
 
       id = body["initiative"]["id"]
       assert body["initiative"]["url"] =~ "/initiatives/#{id}"
@@ -481,6 +493,76 @@ defmodule DoItWeb.Api.ImportsTest do
     end
   end
 
+  describe "limits (2.6)" do
+    test "source text over the byte limit is refused before anything is written", %{
+      owner: owner,
+      ini: ini
+    } do
+      # One small item carrying a megabyte of prose: the source-size rule fires
+      # first, so an oversized document never reaches a write.
+      text = "- Item\n" <> String.duplicate("x", 1_048_600)
+
+      {422, body} =
+        post_import(owner, %{"text" => text, "target" => %{"initiative_id" => ini.id}})
+
+      assert body["error"]["message"] =~ "#{byte_size(text)} bytes"
+      assert body["error"]["message"] =~ "1048576"
+      assert length(Tasks.list_initiative_tasks(ini.id)) == 1
+      assert Repo.aggregate(Import, :count) == 0
+    end
+
+    test "more items than the cap are refused before anything is written", %{owner: owner} do
+      limit = DoItWeb.Api.Imports.limits()["max_items"]
+      text = Enum.map_join(1..(limit + 1), fn i -> "- Item #{i}\n" end)
+
+      {422, body} =
+        post_import(owner, %{"text" => text, "target" => %{"initiative_name" => "Too big"}})
+
+      assert body["error"]["message"] =~ "#{limit + 1} items"
+      assert body["error"]["message"] =~ "#{limit}"
+      # Only the setup Initiative: the refusal comes before the first batch.
+      assert Repo.aggregate(Initiative, :count) == 1
+      assert Repo.aggregate(Import, :count) == 0
+    end
+
+    test "an item whose description exceeds the cap is refused, named by its path", %{
+      owner: owner,
+      ini: ini
+    } do
+      text = """
+      - Parent
+        - Child
+          #{String.duplicate("x", 8001)}
+      """
+
+      {422, body} =
+        post_import(owner, %{"text" => text, "target" => %{"initiative_id" => ini.id}})
+
+      assert body["error"]["message"] =~ "\"Parent > Child\""
+      assert body["error"]["message"] =~ "8001-character"
+      assert body["error"]["message"] =~ "8000"
+      assert length(Tasks.list_initiative_tasks(ini.id)) == 1
+      assert Repo.aggregate(Import, :count) == 0
+    end
+
+    test "a title past 200 characters imports whole, the overflow in the description", %{
+      owner: owner,
+      ini: ini
+    } do
+      {200, body} =
+        post_import(owner, %{
+          "text" => "- #{String.duplicate("x", 300)}\n",
+          "target" => %{"initiative_id" => ini.id}
+        })
+
+      assert body["counts"]["title_overflow"] == 1
+
+      task = titles(ini.id)[String.duplicate("x", 200)]
+      assert task
+      assert task.description == String.duplicate("x", 100)
+    end
+  end
+
   describe "idempotency" do
     test "a repeat apply replays the stored body and writes nothing new", %{
       owner: owner,
@@ -583,26 +665,28 @@ defmodule DoItWeb.Api.ImportsTest do
       assert length(Tasks.list_initiative_tasks(ini.id)) == 1
     end
 
-    test "a batch that fails reports the failure and records nothing", %{owner: owner, ini: ini} do
-      # A Task title over the 200-char column limit fails inside the batch (the
-      # pre-write size check is item 2.6): the transaction rolls back, the
-      # response names the failed batch, and no import record is stored — so an
-      # honest retry re-runs instead of replaying a failure.
+    test "a batch that fails reports the failure and records nothing", %{owner: owner} do
+      # The Initiative NAME comes from the caller, not the document, so it is the
+      # one length the 2.6 pre-write checks don't cover — over the schema's 120
+      # it fails inside the batch: the transaction rolls back, the response names
+      # the failed batch, and no import record is stored, so an honest retry
+      # re-runs instead of replaying a failure.
       {422, body} =
         post_import(owner, %{
-          "text" => "- Fine\n- #{String.duplicate("x", 250)}\n",
-          "target" => %{"initiative_id" => ini.id}
+          "text" => @other_source,
+          "target" => %{"initiative_name" => String.duplicate("n", 250)}
         })
 
       assert body["applied_batches"] == 0
       assert body["failed_batch"] == 1
-      assert body["initiative"]["id"] == ini.id
+      # Nothing committed, so there is no Initiative to point at.
+      refute Map.has_key?(body, "initiative")
 
-      assert [%{"status" => "not_applied"}, %{"status" => "error", "index" => 1}] =
-               body["results"]
+      assert [%{"status" => "error", "index" => 0} | rest] = body["results"]
+      assert Enum.all?(rest, &(&1["status"] == "not_applied"))
 
       assert Repo.aggregate(Import, :count) == 0
-      assert length(Tasks.list_initiative_tasks(ini.id)) == 1
+      assert Repo.aggregate(Initiative, :count) == 1
     end
 
     test "a parent Task from another Initiative is 404", %{owner: owner, ini: ini} do

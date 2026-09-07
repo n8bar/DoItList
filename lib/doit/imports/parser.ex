@@ -19,8 +19,8 @@ defmodule DoIt.Imports.Parser do
         title_description: String.t(),        # present only when non-empty
         style: "numerical" | "outline" | "roman" | "alphabetical" | "none",
         items: [item],                        # ordered roots
-        counts: %{items: n, done: n, depth: d} # depth: roots = 1
-      }
+        counts: %{items: n, done: n, depth: d, title_overflow: n}
+      }                                       # depth: roots = 1
 
       item = %{title: String.t(), description: String.t() | nil,
                done: boolean, children: [item]}
@@ -39,7 +39,8 @@ defmodule DoIt.Imports.Parser do
     * `[x]`/`[X]` sets `done: true`; `[ ]` or no checkbox leaves it `false`.
     * The marker and checkbox are stripped from the title; **everything else is
       verbatim** — bold markers, trailing colons, code spans, URLs. Nothing is
-      rewritten and nothing is truncated.
+      rewritten and nothing is truncated (an over-long title is *split*, never
+      cut — see "Title overflow" below).
     * **Top heading.** If the first non-blank line is a heading, its level is
       the shallowest in the document, and it is the only heading at that level,
       it becomes the manifest `title` and its content becomes the roots — never
@@ -61,6 +62,18 @@ defmodule DoIt.Imports.Parser do
   Prose that precedes the first item — the preamble under a top heading, or a
   document's opening paragraph — is the manifest's `title_description`. It
   lands on the import target, never on a Task.
+
+  ## Title overflow (2.6.1)
+
+  A Task title is capped at 200 characters by the schema, so a longer source
+  line is split rather than refused: the title keeps everything up to the last
+  whitespace at or before 200 (a hard cut at 200 when the first 200 characters
+  hold no whitespace) and the remainder moves to the front of that item's
+  description, ahead of any prose already there. Nothing is dropped and no
+  extra Task is invented. `counts.title_overflow` is how many items were split.
+
+  The manifest `title` is never split — it is a document heading, not a Task,
+  and the endpoint names the Initiative from the caller's request anyway.
 
   ## Numbering markers and style detection (2.2)
 
@@ -104,6 +117,10 @@ defmodule DoIt.Imports.Parser do
 
   # A tab indents one level; four columns keeps it comparable to space indents.
   @tab_width 4
+
+  # The schema's own Task title cap (2.6.1). Overflow past it is preserved in
+  # the description, never truncated.
+  @max_title 200
 
   # One segment of a numbering marker: digits, a roman run, or a single letter.
   @seg "(?:[0-9]+|[IVXLCDM]+|[ivxlcdm]+|[A-Za-z])"
@@ -162,6 +179,15 @@ defmodule DoIt.Imports.Parser do
   """
   def count_ops(ops) when is_list(ops), do: length(ops)
   def count_ops(%{counts: %{items: n}}), do: n
+
+  @doc """
+  The character cap a parsed Task title is held to — the schema's own limit.
+
+  Everything past it lands at the front of the item's description; see "Title
+  overflow" above.
+  """
+  @spec max_title() :: pos_integer()
+  def max_title, do: @max_title
 
   @doc """
   Turn a manifest into the ordered `POST /api/v1/operations` op list for
@@ -356,12 +382,19 @@ defmodule DoIt.Imports.Parser do
     end
   end
 
-  defp manifest(title, title_desc, items, style_nodes) do
+  # `nodes` is the flat, pre-tree node list the items were built from — the
+  # source of both the detected style and the count of titles that overflowed.
+  defp manifest(title, title_desc, items, nodes) do
     %{
       title: title,
-      style: detect_style(style_nodes),
+      style: detect_style(nodes),
       items: items,
-      counts: %{items: count_items(items), done: count_done(items), depth: tree_depth(items)}
+      counts: %{
+        items: count_items(items),
+        done: count_done(items),
+        depth: tree_depth(items),
+        title_overflow: Enum.count(nodes, &overflow?(&1.title))
+      }
     }
     |> maybe_put(:title_description, title_desc)
   end
@@ -376,9 +409,12 @@ defmodule DoIt.Imports.Parser do
   defp do_build([%{depth: depth} = node | rest], min, seq_letters) when depth >= min do
     {children, rest} = do_build(rest, depth + 1, seq_letters)
 
+    {title, description} =
+      split_overflow(node.title, finalize_desc(node.desc, node.title, seq_letters))
+
     item = %{
-      title: node.title,
-      description: finalize_desc(node.desc, node.title, seq_letters),
+      title: title,
+      description: description,
       done: node.done,
       children: children
     }
@@ -400,6 +436,41 @@ defmodule DoIt.Imports.Parser do
 
   defp tree_depth([]), do: 0
   defp tree_depth(items), do: 1 + Enum.max(Enum.map(items, &tree_depth(&1.children)))
+
+  # --- Title overflow (2.6.1) -------------------------------------------------
+
+  defp overflow?(title), do: String.length(title) > @max_title
+
+  # Split, never truncate: the title keeps up to the last whitespace at or
+  # before the cap, and the rest of the line leads the description.
+  defp split_overflow(title, description) do
+    if overflow?(title) do
+      {kept, remainder} = cut_title(title)
+      {kept, lead_description(remainder, description)}
+    else
+      {title, description}
+    end
+  end
+
+  defp cut_title(title) do
+    head = String.slice(title, 0, @max_title)
+    tail = String.slice(title, @max_title..-1//1)
+
+    case Regex.run(~r/\s\S*$/u, head, return: :index) do
+      # A whitespace inside the first @max_title characters: cut there, and the
+      # remainder is everything from it onward.
+      [{at, _len}] when at > 0 ->
+        {String.trim(binary_part(head, 0, at)),
+         String.trim(binary_part(head, at, byte_size(head) - at) <> tail)}
+
+      # One unbroken run of @max_title characters: cut hard at the cap.
+      _ ->
+        {String.trim(head), String.trim(tail)}
+    end
+  end
+
+  defp lead_description(remainder, nil), do: remainder
+  defp lead_description(remainder, description), do: remainder <> "\n\n" <> description
 
   # --- Descriptions -----------------------------------------------------------
 

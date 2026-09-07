@@ -1,6 +1,6 @@
 defmodule DoItWeb.Api.Imports do
   @moduledoc """
-  Text import — the service behind `POST /api/v1/imports` (m03.04 2.3, 2.4).
+  Text import — the service behind `POST /api/v1/imports` (m03.04 2.3–2.6).
 
   A document goes in; a Task tree comes out. The shape of the tree is decided
   once, in `DoIt.Imports.Parser` (pure, no Repo), and every write goes through
@@ -32,7 +32,7 @@ defmodule DoItWeb.Api.Imports do
 
       {"title": "Q3 Plan" | null,
        "style": "numerical",
-       "counts": {"items": 42, "done": 7, "depth": 3},
+       "counts": {"items": 42, "done": 7, "depth": 3, "title_overflow": 0},
        "outline": "1 Ship the thing\\n  1.1 Draft [x]\\n...",
        "target": {"kind": "initiative", "id": 12, "parent_task_id": null}}
 
@@ -79,10 +79,21 @@ defmodule DoItWeb.Api.Imports do
   writes nothing. Different text into the same target is a new import — the
   ledger is per document, not per target.
 
-  ## Not here yet
+  ## Limits (2.6)
 
-  Import size limits / title overflow (2.6) are a separate item; nothing here
-  caps the document's total operation count beyond the per-batch cap.
+  A document is measured **before** anything is written, and an over-limit one
+  is a `422` that writes nothing — no truncation, no invented Tasks:
+
+    * source text over `@max_source_bytes`;
+    * more items than `@max_items` (see that attribute for the arithmetic);
+    * any item whose description would exceed `@max_description`.
+
+  An over-long *title* is not a rejection: the parser splits it at 200
+  characters and moves the rest to the front of that item's description
+  (`counts.title_overflow` says how many were split). The description check
+  runs on that final text, so an accepted item always fits in one Task. A
+  preview echoes all four numbers under `"limits"`, so a client can size a
+  document without spending a failed request.
   """
 
   alias DoIt.{Initiatives, Tasks}
@@ -96,6 +107,38 @@ defmodule DoItWeb.Api.Imports do
   # changesets; the preamble is checked against the cap BEFORE any write so an
   # over-long one never leaves a half-imported tree behind.
   @text_limit 4000
+
+  # Retunable default: the largest source document accepted, in bytes (1 MiB).
+  @max_source_bytes 1_048_576
+
+  # Retunable default: the most items one import may carry. Bandit (the
+  # endpoint's adapter, `config/config.exs`) sets no processing deadline —
+  # Thousand Island's 60 s `read_timeout` bounds waiting for client DATA, not a
+  # handler already running — and nothing in `config/*.exs` or the endpoint
+  # overrides it, so the real end-to-end ceiling is the adapter client's 90 s
+  # `receive_timeout` (`DoitMcp.Client`). At the ~24 ms/op the batch engine
+  # applies, 2000 items is ~48 s of work: inside a minute, and well under that
+  # 90 s with room for a slow host.
+  @max_items 2000
+
+  # Retunable default: mirrors the Task schema's description cap, so an
+  # accepted item — title overflow included — always fits in one description.
+  @max_description 8000
+
+  @doc """
+  The import size limits, string-keyed for the response body.
+
+  Public so a client can read them from a preview instead of a failed request.
+  """
+  @spec limits() :: %{optional(String.t()) => pos_integer()}
+  def limits do
+    %{
+      "max_source_bytes" => @max_source_bytes,
+      "max_items" => @max_items,
+      "max_description" => @max_description,
+      "max_title" => Parser.max_title()
+    }
+  end
 
   @doc """
   Run an import request for `user`.
@@ -111,11 +154,15 @@ defmodule DoItWeb.Api.Imports do
          {:ok, filename} <- fetch_filename(params),
          {:ok, request} <- fetch_target(params),
          {:ok, target, initiative} <- resolve_target(user, request),
-         {:ok, manifest} <- parse(text) do
+         {:ok, manifest} <- parse(text),
+         :ok <- enforce_limits(text, manifest) do
       summary = summary(manifest, target, initiative)
 
       if preview? do
-        {:ok, 200, summary |> Map.put("preview", true) |> put_diff(manifest, target, initiative)}
+        {:ok, 200,
+         summary
+         |> Map.merge(%{"preview" => true, "limits" => limits()})
+         |> put_diff(manifest, target, initiative)}
       else
         apply_import(user, text, filename, manifest, target, initiative, summary)
       end
@@ -269,6 +316,76 @@ defmodule DoItWeb.Api.Imports do
     end
   end
 
+  # --- Limits (2.6) -----------------------------------------------------------
+
+  # `check_limits/2` speaks plain messages; the endpoint turns one into a 422.
+  defp enforce_limits(text, manifest) do
+    case check_limits(text, manifest) do
+      :ok -> :ok
+      {:error, message} -> error(422, message)
+    end
+  end
+
+  # Every size rule, measured on the source text and on the parser's OWN output
+  # — the descriptions checked here are the ones that would be written, title
+  # overflow included. Nothing is truncated and no item is split into extra
+  # Tasks; a document that doesn't fit is refused whole.
+  @spec check_limits(String.t(), map()) :: :ok | {:error, String.t()}
+  defp check_limits(text, manifest) do
+    with :ok <- check_source_size(text),
+         :ok <- check_item_count(manifest) do
+      check_descriptions(manifest.items, [])
+    end
+  end
+
+  defp check_source_size(text) do
+    bytes = byte_size(text)
+
+    if bytes <= @max_source_bytes do
+      :ok
+    else
+      {:error,
+       "The source document is #{bytes} bytes; the limit is #{@max_source_bytes}. " <>
+         "Nothing was imported — split it and import the pieces separately."}
+    end
+  end
+
+  defp check_item_count(%{counts: %{items: items}}) do
+    if items <= @max_items do
+      :ok
+    else
+      {:error,
+       "The source document holds #{items} items; the limit is #{@max_items} per import. " <>
+         "Nothing was imported — split it and import the pieces separately."}
+    end
+  end
+
+  defp check_descriptions([], _path), do: :ok
+
+  defp check_descriptions([item | rest], path) do
+    here = path ++ [item.title]
+
+    with :ok <- check_description(item, here),
+         :ok <- check_descriptions(item.children, here) do
+      check_descriptions(rest, path)
+    end
+  end
+
+  defp check_description(%{description: nil}, _path), do: :ok
+
+  defp check_description(%{description: description}, path) do
+    length = String.length(description)
+
+    if length <= @max_description do
+      :ok
+    else
+      {:error,
+       "\"#{Enum.join(path, " > ")}\" carries a #{length}-character description; the limit " <>
+         "is #{@max_description}. Nothing was imported — shorten that item in the source and " <>
+         "retry."}
+    end
+  end
+
   # --- Summary ----------------------------------------------------------------
 
   defp summary(manifest, target, initiative) do
@@ -278,7 +395,8 @@ defmodule DoItWeb.Api.Imports do
       "counts" => %{
         "items" => manifest.counts.items,
         "done" => manifest.counts.done,
-        "depth" => manifest.counts.depth
+        "depth" => manifest.counts.depth,
+        "title_overflow" => manifest.counts.title_overflow
       },
       "outline" => outline(manifest),
       "target" => target_echo(target, initiative)

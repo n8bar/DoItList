@@ -1,7 +1,8 @@
 defmodule DoIt.Imports.ParserTest do
   @moduledoc """
-  Pure tests for the import parser (m03.04 items 2.1 and 2.2). No DB — every
-  supported source form and mapping rule is exercised against text fixtures.
+  Pure tests for the import parser (m03.04 items 2.1, 2.2 and 2.6.1). No DB —
+  every supported source form, mapping rule and the title-overflow split is
+  exercised against text fixtures.
   """
   use ExUnit.Case, async: true
 
@@ -42,7 +43,7 @@ defmodule DoIt.Imports.ParserTest do
       assert titles(manifest.items) == ["dash item", "star item", "plus item"]
       assert manifest.style == "none"
       assert manifest.title == nil
-      assert manifest.counts == %{items: 3, done: 0, depth: 1}
+      assert manifest.counts == %{items: 3, done: 0, depth: 1, title_overflow: 0}
       assert Enum.all?(manifest.items, &(&1.description == nil and &1.done == false))
     end
 
@@ -104,7 +105,7 @@ defmodule DoIt.Imports.ParserTest do
                {"numbered and checked", true}
              ]
 
-      assert manifest.counts == %{items: 5, done: 3, depth: 1}
+      assert manifest.counts == %{items: 5, done: 3, depth: 1, title_overflow: 0}
     end
   end
 
@@ -121,7 +122,7 @@ defmodule DoIt.Imports.ParserTest do
       for text <- [tabs, two, four] do
         manifest = parse!(text)
         assert outline(manifest.items) == expected
-        assert manifest.counts == %{items: 4, done: 0, depth: 3}
+        assert manifest.counts == %{items: 4, done: 0, depth: 3, title_overflow: 0}
       end
     end
 
@@ -159,7 +160,7 @@ defmodule DoIt.Imports.ParserTest do
                {"gamma", []}
              ]
 
-      assert manifest.counts == %{items: 7, done: 0, depth: 3}
+      assert manifest.counts == %{items: 7, done: 0, depth: 3, title_overflow: 0}
       assert manifest.style == "numerical"
     end
   end
@@ -178,7 +179,7 @@ defmodule DoIt.Imports.ParserTest do
 
       assert manifest.title == "Launch plan"
       assert titles(manifest.items) == ["first", "second"]
-      assert manifest.counts == %{items: 2, done: 0, depth: 1}
+      assert manifest.counts == %{items: 2, done: 0, depth: 1, title_overflow: 0}
       refute Map.has_key?(manifest, :title_description)
     end
 
@@ -219,7 +220,7 @@ defmodule DoIt.Imports.ParserTest do
                {"Phase two", [{"b", []}]}
              ]
 
-      assert manifest.counts == %{items: 7, done: 0, depth: 3}
+      assert manifest.counts == %{items: 7, done: 0, depth: 3, title_overflow: 0}
     end
 
     test "a heading-only outline nests by heading level alone" do
@@ -238,7 +239,7 @@ defmodule DoIt.Imports.ParserTest do
                {"Beta", []}
              ]
 
-      assert manifest.counts == %{items: 4, done: 0, depth: 3}
+      assert manifest.counts == %{items: 4, done: 0, depth: 3, title_overflow: 0}
     end
 
     test "an opening heading deeper than the shallowest one is not the title" do
@@ -337,7 +338,7 @@ defmodule DoIt.Imports.ParserTest do
                "| Key | Value |\n|---|---|\n| a | 1 |\n\n```elixir\n1. not a task\n- not a task either\n```"
 
       assert titles(manifest.items) == ["Reference", "Next"]
-      assert manifest.counts == %{items: 2, done: 0, depth: 1}
+      assert manifest.counts == %{items: 2, done: 0, depth: 1, title_overflow: 0}
     end
 
     test "blockquotes are description text" do
@@ -348,6 +349,68 @@ defmodule DoIt.Imports.ParserTest do
         """)
 
       assert find(manifest.items, "Quote holder").description == "> borrowed words"
+    end
+  end
+
+  # --- 2.6.1 title overflow ---------------------------------------------------
+
+  describe "titles past the 200-character cap" do
+    test "split at the last whitespace inside the cap, remainder leading the description" do
+      # 42 five-letter words: the 200th character lands mid-word, so the cut
+      # falls back to the space before it.
+      long = Enum.map_join(1..42, " ", fn _ -> "chunk" end)
+      assert String.length(long) == 251
+
+      [item] = parse!("- #{long}\n").items
+
+      assert String.length(item.title) <= Parser.max_title()
+      # Near the cap, so the cut took the LAST space inside it, not an early one.
+      assert String.length(item.title) > Parser.max_title() - 10
+      # Nothing lost: title and remainder rejoin into the source line.
+      assert item.title <> " " <> item.description == long
+    end
+
+    test "with no whitespace inside the cap, cut hard at the cap" do
+      long = String.duplicate("x", 250)
+
+      [item] = parse!("- #{long}\n").items
+
+      assert item.title == String.duplicate("x", 200)
+      assert item.description == String.duplicate("x", 50)
+    end
+
+    test "the remainder leads prose the item already had" do
+      long = String.duplicate("x", 250)
+
+      [item] =
+        parse!("""
+        - #{long}
+          Some detail about it.
+        """).items
+
+      assert item.description == String.duplicate("x", 50) <> "\n\nSome detail about it."
+    end
+
+    test "counts.title_overflow counts the split items only" do
+      long = String.duplicate("x", 250)
+
+      manifest =
+        parse!("""
+        - #{long}
+        - short one
+          - #{long}
+        """)
+
+      assert manifest.counts == %{items: 3, done: 0, depth: 2, title_overflow: 2}
+      assert Enum.all?(manifest.items, &(String.length(&1.title) <= Parser.max_title()))
+    end
+
+    test "the manifest title is never split — it is a document heading, not a Task" do
+      long = String.duplicate("x", 250)
+      manifest = parse!("# #{long}\n\n- a task\n")
+
+      assert manifest.title == long
+      assert manifest.counts.title_overflow == 0
     end
   end
 
@@ -597,7 +660,7 @@ defmodule DoIt.Imports.ParserTest do
                "Completed Milestones"
              ]
 
-      assert manifest.counts == %{items: 4, done: 0, depth: 1}
+      assert manifest.counts == %{items: 4, done: 0, depth: 1, title_overflow: 0}
       assert manifest.style == "none"
 
       # The preamble lands on the target, not on a Task.
