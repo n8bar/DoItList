@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.CreateInitiative do
   @moduledoc """
-  Create one Initiative, the top-level container that owns a task tree. Creation always uses `leaf_average`; only when the operator explicitly requested another progress calculation, create the Initiative first and then use `update_initiative`.
+  Create one Initiative — the top-level container that owns a task tree. Creation always uses the `leaf_average` progress calculation; when the user asked for another, create first, then `update_initiative`.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -15,7 +15,7 @@ defmodule DoitMcp.Tools.CreateInitiative do
     field(:index_style, :string,
       required: false,
       description:
-        "Task numbering: none (default), outline, numerical, roman, or alphabetical. Always preserve a source's outline, numerical, roman, or alphabetical scheme. If it has none, use numerical for a hierarchy and none for a plain, non-referenced list"
+        "Task numbering: none (default), outline, numerical, roman, or alphabetical. Preserve a source's existing scheme; when it has none, use numerical for a hierarchy and none for a plain, non-referenced list"
     )
 
     field(:auto_promote_co_assignees, :boolean, required: false)

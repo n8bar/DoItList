@@ -10,8 +10,8 @@ defmodule DoitMcp.Tools.GranularOpsTest do
   Every tool's first and only request is the POST — no tool reads before it
   writes.
 
-  `apply_operations`, `mark_notification_read`, and `get_initiative_activity`
-  are covered by their own test files and are intentionally excluded here.
+  `apply_operations`, `import_text`, and `get_initiative_activity` are covered
+  by their own test files and are intentionally excluded here.
   """
 
   use ExUnit.Case, async: false
@@ -21,12 +21,6 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "add", "type" => "comment", "data" => %{"task_id" => 42, "body" => "Looks good"}}},
     {DoitMcp.Tools.AddLink, %{source_task_id: 10, target_task_id: 20},
      %{"op" => "add", "type" => "link", "data" => %{"source_id" => 10, "target_id" => 20}}},
-    {DoitMcp.Tools.AddMember, %{initiative_id: 3, user_id: 7, role: "editor"},
-     %{
-       "op" => "add",
-       "type" => "member",
-       "data" => %{"initiative_id" => 3, "user_id" => 7, "role" => "editor"}
-     }},
     {DoitMcp.Tools.CompleteTask, %{task_id: 5, done: true},
      %{"op" => "update", "type" => "task", "id" => 5, "data" => %{"done" => true}}},
     {DoitMcp.Tools.CreateInitiative, %{name: "Q3 Launch"},
@@ -53,12 +47,8 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"parent_id" => 2}}},
     {DoitMcp.Tools.RemoveLink, %{source_task_id: 10, target_task_id: 20},
      %{"op" => "remove", "type" => "link", "data" => %{"source_id" => 10, "target_id" => 20}}},
-    {DoitMcp.Tools.RemoveMember, %{initiative_id: 3, user_id: 7},
-     %{"op" => "remove", "type" => "member", "data" => %{"initiative_id" => 3, "user_id" => 7}}},
     {DoitMcp.Tools.SetInitiativeState, %{initiative_id: 3, state: "archived"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"state" => "archived"}}},
-    {DoitMcp.Tools.SetTaskCoAssignees, %{task_id: 6, co_assignee_ids: [1, 2, 3]},
-     %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"co_assignee_ids" => [1, 2, 3]}}},
     {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, name: "New name"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"name" => "New name"}}},
     # CALC-GATE-PARKED (m03.04): the parked-state contract — a non-default
@@ -80,12 +70,6 @@ defmodule DoitMcp.Tools.GranularOpsTest do
     #    "id" => 3,
     #    "data" => %{"ai_knobs" => "deploy_day: friday"}
     #  }},
-    {DoitMcp.Tools.UpdateMemberRole, %{initiative_id: 3, user_id: 7, role: "viewer"},
-     %{
-       "op" => "update",
-       "type" => "member",
-       "data" => %{"initiative_id" => 3, "user_id" => 7, "role" => "viewer"}
-     }},
     {DoitMcp.Tools.UpdateTask, %{task_id: 6, title: "New title"},
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"title" => "New title"}}}
   ]

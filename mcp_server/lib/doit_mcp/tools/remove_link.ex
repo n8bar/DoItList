@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.RemoveLink do
   @moduledoc """
-  Remove one directed task-to-task cross-reference link. Always identify it with its exact `source_task_id` and `target_task_id` pair.
+  Remove one directed task-to-task cross-reference link, identified by its exact `source_task_id` and `target_task_id` pair.
   """
 
   use Anubis.Server.Component, type: :tool

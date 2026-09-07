@@ -1,8 +1,6 @@
 defmodule DoitMcp.Tools.UpdateInitiative do
   @moduledoc """
-  Update one Initiative's name, description, subtitle, progress calculation, task numbering, co-assignee auto-promotion, or viewer+ access. `description` and `subtitle` accept `%<task_id>` cross-reference tokens. Always use `set_initiative_state` for archived, hidden, or trashed state; never use this tool for state or ownership. Updates apply immediately without operator confirmation.
-
-  Always pass the latest Initiative `version` as `expected_version` unless overwriting any intervening change is acceptable. A stale version applies nothing and returns the current Initiative; reconcile that record before retrying. Omitting `expected_version` writes unconditionally.
+  Update one Initiative's name, description, subtitle, progress calculation, task numbering, co-assignee auto-promotion, or viewer+ access. `description` and `subtitle` accept `%<task_id>` cross-reference tokens. Use `set_initiative_state` for archived, hidden, or trashed state; this tool never changes state or ownership.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -44,7 +42,7 @@ defmodule DoitMcp.Tools.UpdateInitiative do
     field(:progress_calc, :string,
       required: false,
       description:
-        "leaf_average (default) weights progress through decomposition. Always retain it unless the operator explicitly requests single_level. Recommend single_level only when completed work represented as single done leaves would otherwise be hidden; never recommend it merely to equalize differently sized siblings"
+        "leaf_average (default) weights progress through decomposition. Retain it unless the user asks for single_level. Recommend single_level only when completed work represented as single done leaves would otherwise be hidden; never merely to equalize differently sized siblings"
     )
 
     field(:index_style, :string, required: false)

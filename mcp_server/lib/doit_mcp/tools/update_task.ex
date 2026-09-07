@@ -1,10 +1,8 @@
 defmodule DoitMcp.Tools.UpdateTask do
   @moduledoc """
-  Update a task's title, description, priority, assignee, or manual progress. `title` and `description` accept `%<task_id>` cross-reference tokens. Always use `complete_task` for completion, `move_task` for parent or position changes, and `set_task_co_assignees` for co-assignees.
+  Update one task's title, description, priority, assignee, or manual progress. `title` and `description` accept `%<task_id>` cross-reference tokens. Use `complete_task` for completion and `move_task` for parent or position changes.
 
-  Always pass the latest task `version` as `expected_version` unless overwriting any intervening change is acceptable. A stale version applies nothing and returns the current task; reconcile that record before retrying. Omitting `expected_version` writes unconditionally.
-
-  When a pass updates multiple tasks, always use one `apply_operations` batch; never loop `update_task`.
+  Never loop this tool; batch multiple operations with `apply_operations`.
   """
 
   use Anubis.Server.Component, type: :tool

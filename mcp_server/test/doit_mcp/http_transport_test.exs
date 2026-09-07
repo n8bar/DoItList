@@ -175,7 +175,9 @@ defmodule DoitMcp.HttpTransportTest do
     assert conn.status == 404
   end
 
-  test "initialize → initialized → tools/list over a real HTTP listener" do
+  # A real listener plus the full handshake, returning the session's
+  # `tools/list` payload — exactly what a client pays for on connect.
+  defp live_tools_list do
     bandit =
       start_supervised!(
         {Bandit,
@@ -217,9 +219,32 @@ defmodule DoitMcp.HttpTransportTest do
 
     assert resp.status == 200
     assert %{"result" => %{"tools" => tools}} = resp.body
-    names = Enum.map(tools, & &1["name"])
+    tools
+  end
+
+  test "initialize → initialized → tools/list over a real HTTP listener" do
+    names = Enum.map(live_tools_list(), & &1["name"])
     assert "get_me" in names
     assert "apply_operations" in names
     assert "import_text" in names
+  end
+
+  # m03.04 3.3.4 — the tools/list budget. Every session pays for this payload
+  # on connect, so description creep costs every conversation. The ceiling sits
+  # just above the measured surface: a regression guard, not a target.
+  @tool_count 21
+  @tools_list_ceiling_bytes 14_000
+
+  test "tools/list holds its tool count and stays under the session byte ceiling" do
+    tools = live_tools_list()
+    bytes = tools |> Jason.encode!() |> byte_size()
+
+    IO.puts(
+      "\ntools/list: #{length(tools)} tools, " <>
+        "#{Float.round(bytes / 1024, 1)} KB, ~#{div(bytes, 4)} tokens\n"
+    )
+
+    assert length(tools) == @tool_count
+    assert bytes < @tools_list_ceiling_bytes
   end
 end

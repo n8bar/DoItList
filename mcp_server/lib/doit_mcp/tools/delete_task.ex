@@ -1,8 +1,8 @@
 defmodule DoitMcp.Tools.DeleteTask do
   @moduledoc """
-  Soft-delete one task and its entire subtree; never delete included descendants separately. Recovery is available only through the app's Undo while the deletion remains in the Initiative's undo history.
+  Soft-delete one task and its entire subtree; never delete included descendants separately. Recovery is only through the app's Undo, while the deletion remains in the Initiative's undo history.
 
-  When a pass deletes multiple independent subtrees, always use one `apply_operations` batch; never loop `delete_task`.
+  Never loop this tool; batch multiple operations with `apply_operations`.
   """
 
   use Anubis.Server.Component, type: :tool

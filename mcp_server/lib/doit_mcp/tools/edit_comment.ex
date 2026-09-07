@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.EditComment do
   @moduledoc """
-  Edit one existing comment's body. Only its author can edit it; every other caller is rejected.
+  Edit one comment's body. Only its author may edit it; every other caller is rejected.
   """
 
   use Anubis.Server.Component, type: :tool

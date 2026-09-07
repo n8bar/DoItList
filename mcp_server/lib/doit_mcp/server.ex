@@ -15,7 +15,6 @@ defmodule DoitMcp.Server do
   component(DoitMcp.Tools.UpdateTask)
   component(DoitMcp.Tools.CompleteTask)
   component(DoitMcp.Tools.MoveTask)
-  component(DoitMcp.Tools.SetTaskCoAssignees)
   component(DoitMcp.Tools.DeleteTask)
 
   # Initiative
@@ -31,14 +30,6 @@ defmodule DoitMcp.Server do
   component(DoitMcp.Tools.AddComment)
   component(DoitMcp.Tools.EditComment)
   component(DoitMcp.Tools.DeleteComment)
-
-  # Member
-  component(DoitMcp.Tools.AddMember)
-  component(DoitMcp.Tools.UpdateMemberRole)
-  component(DoitMcp.Tools.RemoveMember)
-
-  # Notification
-  component(DoitMcp.Tools.MarkNotificationRead)
 
   # Cross-reference (link)
   component(DoitMcp.Tools.AddLink)

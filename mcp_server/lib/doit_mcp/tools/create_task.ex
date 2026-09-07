@@ -1,8 +1,8 @@
 defmodule DoitMcp.Tools.CreateTask do
   @moduledoc """
-  Create one task. Use `parent_id` to nest it under an existing task, or use `initiative_id` without `parent_id` to create it at the Initiative's top level. `title` and `description` accept `%<task_id>` cross-reference tokens.
+  Create one task. `parent_id` nests it under an existing task; `initiative_id` alone places it at the Initiative's top level. `title` and `description` accept `%<task_id>` cross-reference tokens.
 
-  When a plan requires multiple task creations, always use `apply_operations`; never loop `create_task`.
+  Never loop this tool; batch multiple operations with `apply_operations`.
   """
 
   use Anubis.Server.Component, type: :tool

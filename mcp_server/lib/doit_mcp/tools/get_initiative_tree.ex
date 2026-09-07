@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.GetInitiativeTree do
   @moduledoc """
-  Read one Initiative's current full task tree with live index labels. Always call this immediately before restructuring because collaborative changes may have invalidated an earlier read.
+  Read one Initiative's full task tree with live index labels. Always read it immediately before restructuring; collaborative changes may have invalidated an earlier read.
 
   When referring the operator to the Initiative, always provide its `url` or name; never provide only its raw ID.
   """

@@ -2,8 +2,9 @@ defmodule DoitMcp.Tools.ConditionalWritesTest do
   @moduledoc """
   Conditional writes through the adapter (m03.04 2.7.4.3): `update_task` /
   `update_initiative` thread `expected_version` into their one-op batch, a 409
-  conflict reply surfaces the message PLUS the current record, and the tool
-  words carry the read-then-conditionally-write contract.
+  conflict reply surfaces the message PLUS the current record, and the
+  `expected_version` parameter carries the read-then-conditionally-write
+  contract.
   """
   use ExUnit.Case, async: false
 
@@ -111,13 +112,17 @@ defmodule DoitMcp.Tools.ConditionalWritesTest do
       end
     end
 
-    test "the three descriptions state conditional-write recovery" do
+    test "the conditional-write recovery rides the parameter and the batch tool" do
+      # m03.04 3.3: the rule sits on the `expected_version` parameter, beside
+      # the field it governs, instead of repeating in the tool description.
       for tool <- [DoitMcp.Tools.UpdateTask, DoitMcp.Tools.UpdateInitiative] do
-        description = tool.__description__() |> String.replace(~r/\s+/, " ")
+        field =
+          tool.input_schema()["properties"]["expected_version"]["description"]
+          |> String.replace(~r/\s+/, " ")
 
-        assert description =~ "expected_version"
-        assert description =~ "reconcile"
-        assert description =~ "before retrying"
+        assert field =~ "Always provide it"
+        assert field =~ "reconcile"
+        assert field =~ "before retrying"
       end
 
       batch = DoitMcp.Tools.ApplyOperations.__description__() |> String.replace(~r/\s+/, " ")

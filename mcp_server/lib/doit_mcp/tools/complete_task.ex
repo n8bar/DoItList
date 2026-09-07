@@ -1,8 +1,8 @@
 defmodule DoitMcp.Tools.CompleteTask do
   @moduledoc """
-  Mark one task done or not done. The server applies the same state to every descendant and updates ancestor roll-up progress; never send separate completion updates for descendants that should match this task.
+  Mark one task done or not done. The server applies the same state to every descendant and rolls up ancestor progress; never send separate completion updates for descendants.
 
-  When a pass changes completion on multiple independent tasks, always use one `apply_operations` batch; never loop `complete_task`.
+  Never loop this tool; batch multiple operations with `apply_operations`.
   """
 
   use Anubis.Server.Component, type: :tool

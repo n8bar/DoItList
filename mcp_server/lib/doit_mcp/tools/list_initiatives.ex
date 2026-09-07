@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.ListInitiatives do
   @moduledoc """
-  List the acting user's Initiatives. Each item includes `root_task_id`, the system root task whose comments form the Initiative's thread.
+  List the acting user's Initiatives. Each item includes `root_task_id`, the system root task whose comments are the Initiative's thread.
 
   When referring the operator to an Initiative, always provide its `url` or name; never provide only its raw ID.
   """

@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.GetInitiativeActivity do
   @moduledoc """
-  Read one Initiative's paginated activity, optionally scoped to a task's subtree. Use `task_id` to scope the subtree and `limit` with `offset` to paginate. Always use this tool when filtering or pagination is required; the equivalent resource returns only the unfiltered first page.
+  Read one Initiative's activity. `task_id` scopes it to that task's subtree; `limit` and `offset` paginate. Use this tool whenever scoping or pagination is needed — the matching resource returns only the unfiltered first page.
   """
 
   use Anubis.Server.Component, type: :tool

@@ -1,6 +1,6 @@
 defmodule DoitMcp.Tools.DeleteComment do
   @moduledoc """
-  Delete one comment. The server soft-deletes it and leaves a tombstone. Only its author can delete it; every other caller is rejected.
+  Delete one comment. The server soft-deletes it, leaving a tombstone. Only its author may delete it; every other caller is rejected.
   """
 
   use Anubis.Server.Component, type: :tool
