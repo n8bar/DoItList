@@ -2,7 +2,7 @@ defmodule DoitMcp.Tools.UpdateTask do
   @moduledoc """
   Update one task's title, description, priority, assignee, or manual progress. `title` and `description` accept `%<task_id>` cross-reference tokens. Use `complete_task` for completion and `move_task` for parent or position changes.
 
-  Never loop this tool; batch multiple operations with `apply_operations`.
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool

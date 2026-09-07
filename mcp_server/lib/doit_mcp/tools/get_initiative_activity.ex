@@ -1,12 +1,12 @@
 defmodule DoitMcp.Tools.GetInitiativeActivity do
   @moduledoc """
-  Read one Initiative's activity. `task_id` scopes it to that task's subtree; `limit` and `offset` paginate. Use this tool whenever scoping or pagination is needed — the matching resource returns only the unfiltered first page.
+  Read one Initiative's activity. `task_id` scopes it to that task's subtree; `limit` and `offset` paginate — use this tool whenever either is needed. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool
 
-  alias DoitMcp.Client
   alias Anubis.Server.Response
+  alias DoitMcp.{Client, ToolResult}
 
   schema do
     field(:initiative_id, :integer, required: true)
@@ -22,7 +22,7 @@ defmodule DoitMcp.Tools.GetInitiativeActivity do
 
     case Client.get("/api/v1/initiatives/#{params.initiative_id}/activity", query) do
       {:ok, data} ->
-        {:reply, Response.json(Response.tool(), data), frame}
+        {:reply, Response.json(ToolResult.user_content(), data), frame}
 
       {:error, %{status: status, body: %{"error" => error}}} ->
         {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}

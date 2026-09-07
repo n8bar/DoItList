@@ -2,7 +2,7 @@ defmodule DoitMcp.Tools.CreateTask do
   @moduledoc """
   Create one task. `parent_id` nests it under an existing task; `initiative_id` alone places it at the Initiative's top level. `title` and `description` accept `%<task_id>` cross-reference tokens.
 
-  Never loop this tool; batch multiple operations with `apply_operations`.
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool

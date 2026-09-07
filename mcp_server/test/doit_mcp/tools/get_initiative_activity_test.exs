@@ -1,6 +1,10 @@
 defmodule DoitMcp.Tools.GetInitiativeActivityTest do
   use ExUnit.Case, async: true
 
+  # m03.04 3.5.1 — the user-content marker opens every reply carrying titles,
+  # descriptions, or comments.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
   alias DoitMcp.Tools.GetInitiativeActivity
   alias Anubis.Server.Response
 
@@ -21,7 +25,9 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == %{"activity" => []}
   end
 
@@ -49,7 +55,9 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == [event, legacy]
   end
 
@@ -75,7 +83,9 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == [event]
   end
 
@@ -100,7 +110,9 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == [event]
   end
 
@@ -116,7 +128,9 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == %{"activity" => []}
   end
 end

@@ -10,6 +10,10 @@ defmodule DoitMcp.Tools.ImportTextTest do
 
   use ExUnit.Case, async: true
 
+  # m03.04 3.5.1 — the user-content marker opens every reply carrying titles,
+  # descriptions, or comments.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
   alias Anubis.Server.Response
   alias DoitMcp.Tools.ImportText
 
@@ -79,7 +83,10 @@ defmodule DoitMcp.Tools.ImportTextTest do
 
       protocol = Response.to_protocol(response)
       assert protocol["isError"] == false
-      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+
+      assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+               protocol["content"]
+
       assert Jason.decode!(text) == summary
     end
 
@@ -102,7 +109,10 @@ defmodule DoitMcp.Tools.ImportTextTest do
 
       protocol = Response.to_protocol(response)
       assert protocol["isError"] == false
-      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+
+      assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+               protocol["content"]
+
       assert Jason.decode!(text) == preview
     end
 

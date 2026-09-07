@@ -10,6 +10,9 @@ defmodule DoitMcp.Resources.InitiativeActivityTest do
 
   use ExUnit.Case, async: true
 
+  # m03.04 3.5.1 — the marker opens the text blob of a read carrying user text.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
   alias DoitMcp.Resources.InitiativeActivity
 
   test "read/2 with only id sends no query string" do
@@ -26,7 +29,8 @@ defmodule DoitMcp.Resources.InitiativeActivityTest do
     assert {:reply, %Anubis.Server.Response{type: :resource} = response, ^frame} =
              InitiativeActivity.read(%{"params" => %{"id" => "42"}}, frame)
 
-    assert Jason.decode!(response.contents["text"]) == []
+    assert [@user_content, json] = String.split(response.contents["text"], "\n", parts: 2)
+    assert Jason.decode!(json) == []
   end
 
   test "read/2 builds a present-only query from task_id/limit/offset when present" do
@@ -45,6 +49,7 @@ defmodule DoitMcp.Resources.InitiativeActivityTest do
     assert {:reply, %Anubis.Server.Response{type: :resource} = response, ^frame} =
              InitiativeActivity.read(params, frame)
 
-    assert Jason.decode!(response.contents["text"]) == []
+    assert [@user_content, json] = String.split(response.contents["text"], "\n", parts: 2)
+    assert Jason.decode!(json) == []
   end
 end

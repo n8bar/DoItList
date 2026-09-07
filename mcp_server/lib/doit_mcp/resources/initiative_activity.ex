@@ -1,6 +1,6 @@
 defmodule DoitMcp.Resources.InitiativeActivity do
   @moduledoc """
-  Read the unfiltered first page of one Initiative's activity. This resource accepts only the Initiative ID. Always use `get_initiative_activity` when subtree filtering or pagination is required.
+  Read the unfiltered first page of one Initiative's activity. This resource accepts only the Initiative ID. Always use `get_initiative_activity` when subtree filtering or pagination is required. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component,
@@ -19,6 +19,7 @@ defmodule DoitMcp.Resources.InitiativeActivity do
       ]
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
 
-    frame |> ResourceResult.reply(Client.get("/api/v1/initiatives/#{id}/activity", query))
+    frame
+    |> ResourceResult.reply_user_content(Client.get("/api/v1/initiatives/#{id}/activity", query))
   end
 end

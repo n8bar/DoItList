@@ -12,36 +12,80 @@ defmodule DoitMcp.Tools.ReadToolsTest do
 
   alias Anubis.Server.Response
 
-  @cases [
+  # m03.04 3.5.1 — the marker that opens every reply carrying user text.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
+  # Trees, Initiatives, and comments carry user-written titles, descriptions,
+  # and comment bodies, so their replies open with the marker.
+  @user_content_cases [
     {DoitMcp.Tools.GetInitiativeTree, %{initiative_id: 37}, "/api/v1/initiatives/37"},
     {DoitMcp.Tools.GetTaskComments, %{initiative_id: 37, task_id: 5},
      "/api/v1/initiatives/37/tasks/5/comments"},
+    {DoitMcp.Tools.ListInitiatives, %{}, "/api/v1/initiatives"}
+  ]
+
+  # Identity reads carry account names only — no marker.
+  @identity_cases [
     {DoitMcp.Tools.GetInitiativeMembers, %{initiative_id: 37}, "/api/v1/initiatives/37/members"},
-    {DoitMcp.Tools.ListInitiatives, %{}, "/api/v1/initiatives"},
     {DoitMcp.Tools.GetMe, %{}, "/api/v1/me"}
   ]
 
+  @cases @user_content_cases ++ @identity_cases
+
+  defp stub_ok(expected_path, module) do
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      assert conn.method == "GET"
+      assert conn.request_path == expected_path, "#{inspect(module)} hit the wrong path"
+      assert conn.query_string == ""
+
+      Req.Test.json(conn, %{"data" => %{"id" => 37}})
+    end)
+  end
+
   test "each read tool GETs its resource twin's path and replies with the data" do
     for {module, params, expected_path} <- @cases do
-      Req.Test.stub(DoitMcp.Client, fn conn ->
-        assert conn.method == "GET"
-        assert conn.request_path == expected_path, "#{inspect(module)} hit the wrong path"
-        assert conn.query_string == ""
-
-        Req.Test.json(conn, %{"data" => %{"id" => 37}})
-      end)
+      stub_ok(expected_path, module)
 
       frame = %{test: true}
       assert {:reply, %Response{} = response, ^frame} = module.execute(params, frame)
 
       protocol = Response.to_protocol(response)
       assert protocol["isError"] == false
+      assert %{"type" => "text", "text" => text} = List.last(protocol["content"])
+      assert Jason.decode!(text) == %{"id" => 37}
+    end
+  end
+
+  test "a read carrying user text opens with the user-content marker" do
+    for {module, params, expected_path} <- @user_content_cases do
+      stub_ok(expected_path, module)
+
+      frame = %{test: true}
+      assert {:reply, response, ^frame} = module.execute(params, frame)
+      protocol = Response.to_protocol(response)
+
+      assert [%{"type" => "text", "text" => @user_content}, %{"text" => text}] =
+               protocol["content"],
+             "#{inspect(module)} didn't open with the user-content marker"
+
+      assert Jason.decode!(text) == %{"id" => 37}
+    end
+  end
+
+  test "an identity read carries names only — no marker" do
+    for {module, params, expected_path} <- @identity_cases do
+      stub_ok(expected_path, module)
+
+      frame = %{test: true}
+      assert {:reply, response, ^frame} = module.execute(params, frame)
+      protocol = Response.to_protocol(response)
+
       assert [%{"type" => "text", "text" => text}] = protocol["content"]
       assert Jason.decode!(text) == %{"id" => 37}
     end
   end
 
-  test "each read tool surfaces an API error as a tool error" do
+  test "each read tool surfaces an API error as a tool error, with no marker" do
     for {module, params, _path} <- @cases do
       Req.Test.stub(DoitMcp.Client, fn conn ->
         conn

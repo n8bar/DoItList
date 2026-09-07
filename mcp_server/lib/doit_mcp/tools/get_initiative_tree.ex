@@ -1,14 +1,12 @@
 defmodule DoitMcp.Tools.GetInitiativeTree do
   @moduledoc """
-  Read one Initiative's full task tree with live index labels. Always read it immediately before restructuring; collaborative changes may have invalidated an earlier read.
-
-  When referring the operator to the Initiative, always provide its `url` or name; never provide only its raw ID.
+  Read one Initiative's full task tree with live index labels. Always read it immediately before restructuring; collaborative changes may have invalidated an earlier read. Reply with `index` and `title`, and the Initiative `url`.
   """
 
   use Anubis.Server.Component, type: :tool
 
-  alias DoitMcp.Client
   alias Anubis.Server.Response
+  alias DoitMcp.{Client, ToolResult}
 
   schema do
     field(:initiative_id, :integer, required: true)
@@ -17,7 +15,7 @@ defmodule DoitMcp.Tools.GetInitiativeTree do
   def execute(params, frame) do
     case Client.get("/api/v1/initiatives/#{params.initiative_id}") do
       {:ok, data} ->
-        {:reply, Response.json(Response.tool(), data), frame}
+        {:reply, Response.json(ToolResult.user_content(), data), frame}
 
       {:error, %{status: status, body: %{"error" => error}}} ->
         {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}

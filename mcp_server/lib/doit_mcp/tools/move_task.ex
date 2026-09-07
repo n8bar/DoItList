@@ -2,7 +2,7 @@ defmodule DoitMcp.Tools.MoveTask do
   @moduledoc """
   Move one task to a new parent and/or sibling position — reorder, reparent, promote, and demote are all this tool. Provide at least one of `parent_id`, `position`, or `reorder`; an empty move is rejected. Omitting `parent_id` keeps the current parent. Set `reorder: true` only for an explicit sibling reorder; it switches the destination to manual sorting. Omit it to append.
 
-  Never loop this tool; batch multiple operations with `apply_operations`.
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool

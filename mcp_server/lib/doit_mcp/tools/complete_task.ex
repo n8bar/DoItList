@@ -2,7 +2,7 @@ defmodule DoitMcp.Tools.CompleteTask do
   @moduledoc """
   Mark one task done or not done. The server applies the same state to every descendant and rolls up ancestor progress; never send separate completion updates for descendants.
 
-  Never loop this tool; batch multiple operations with `apply_operations`.
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool

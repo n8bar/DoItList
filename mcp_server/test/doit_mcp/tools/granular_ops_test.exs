@@ -16,6 +16,10 @@ defmodule DoitMcp.Tools.GranularOpsTest do
 
   use ExUnit.Case, async: false
 
+  # m03.04 3.5.1 — the user-content marker opens every reply carrying titles,
+  # descriptions, or comments.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
   @cases [
     {DoitMcp.Tools.AddComment, %{task_id: 42, body: "Looks good"},
      %{"op" => "add", "type" => "comment", "data" => %{"task_id" => 42, "body" => "Looks good"}}},
@@ -117,7 +121,10 @@ defmodule DoitMcp.Tools.GranularOpsTest do
       protocol = Anubis.Server.Response.to_protocol(response)
 
       assert protocol["isError"] == false
-      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+
+      assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+               protocol["content"]
+
       assert Jason.decode!(text) == %{"id" => 1}
     end
   end

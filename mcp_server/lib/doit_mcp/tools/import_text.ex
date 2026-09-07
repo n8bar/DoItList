@@ -9,7 +9,7 @@ defmodule DoitMcp.Tools.ImportText do
     * `initiative_name` — create a new Initiative;
     * `initiative_id` — an existing Initiative, optionally under `parent_task_id`.
 
-  Applies by default, returning the title, counts, outline, and the Initiative's `url`. Always give the user that `url`, never the raw id.
+  Applies by default, returning the title, counts, outline, and the Initiative's `url`. Reply with the outline's labels and titles, and the Initiative `url`.
 
   `preview: true` writes nothing and returns the same outline, plus a diff against an existing target.
 

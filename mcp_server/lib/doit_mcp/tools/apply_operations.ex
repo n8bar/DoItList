@@ -2,7 +2,7 @@ defmodule DoitMcp.Tools.ApplyOperations do
   @moduledoc """
   Atomically apply up to 150 ordered operations. Always use this tool for multi-operation passes and `lid` references; every other tool submits one operation against a real id.
 
-  Always batch the whole pass, including bulk completions, comments, and edits. Never loop per-operation tools. If the pass exceeds 150 operations, split it into batches filled toward the cap.
+  Always batch the whole pass, including bulk completions, comments, and edits. Never loop per-operation tools. If the pass exceeds 150 operations, split it into batches filled toward the cap. Reply with `index` and `title`, never ids.
 
   ## Wire format
 

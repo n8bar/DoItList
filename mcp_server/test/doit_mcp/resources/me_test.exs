@@ -17,5 +17,8 @@ defmodule DoitMcp.Resources.MeTest do
              Me.read(%{}, frame)
 
     assert Jason.decode!(response.contents["text"]) == %{"id" => 1, "email" => "ada@example.com"}
+
+    # Names only — no user-content marker (m03.04 3.5.1).
+    refute response.contents["text"] =~ DoitMcp.ToolResult.user_content_line()
   end
 end
