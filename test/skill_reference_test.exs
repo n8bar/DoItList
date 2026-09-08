@@ -1,46 +1,57 @@
 defmodule DoIt.SkillReferenceTest do
   use ExUnit.Case, async: true
 
-  # Drift guard: every doitlist tool/resource named in the companion skill's
-  # Quick Reference must still exist as a registered MCP component. Catches a
-  # tool rename/removal in mcp_server that leaves `skills/doitlist/SKILL.md`
-  # pointing at a dead name — turning silent doc rot into a red test.
+  # Drift guard: every MCP tool/resource and every CLI verb the companion skill
+  # names must still exist. Catches a rename or removal in mcp_server or
+  # doitlist.py that leaves `skills/doitlist/SKILL.md` pointing at a dead name.
   #
-  # "Known" names are derived from the `component(...)` registrations in
+  # Known MCP names are derived from the `component(...)` registrations in
   # DoitMcp.Server, read as source text (mcp_server is a sibling mix project,
-  # not a dep, so we can't reflect over its modules from here). "Referenced"
-  # names are the first backtick token in each Quick Reference table row —
-  # which, by the table's format, is always the tool/resource for that row.
+  # not a dep). Known CLI verbs are the subparser names in doitlist.py.
+  # Referenced names are read from the whole skill, not one section, so the
+  # guard survives restructuring: a backticked snake_case token with an
+  # underscore is an MCP name; a backticked token that opens a CLI command
+  # line (`doitlist.py <verb>` or a bare verb followed by arguments) is a verb.
 
   @server Path.expand("../mcp_server/lib/doit_mcp/server.ex", __DIR__)
+  @cli Path.expand("../skills/doitlist/scripts/doitlist.py", __DIR__)
   @skill Path.expand("../skills/doitlist/SKILL.md", __DIR__)
 
-  test "the skill's Quick Reference names only real MCP tools/resources" do
-    # The skill is archived pending the from-zero rewrite (m03.04 item 1.3.7);
-    # the guard re-arms automatically when SKILL.md returns at this path.
-    if not File.exists?(@skill) do
-      assert true
-    else
-      run_drift_guard()
-    end
-  end
+  # Backticked interpreter names in the Platforms section are not verbs.
+  @interpreters ~w(py python python3)
 
-  defp run_drift_guard do
+  test "the skill names only real MCP tools/resources" do
     known = known_component_names()
-    referenced = quick_reference_refs()
+    referenced = mcp_refs()
 
     assert MapSet.size(known) > 0,
            "parsed zero component() registrations from #{@server} — the parser is stale"
 
     assert MapSet.size(referenced) > 0,
-           "parsed zero tool references from the skill's Quick Reference — the table format changed"
+           "parsed zero MCP names from the skill — the naming convention changed"
 
     unknown = MapSet.difference(referenced, known)
 
     assert MapSet.to_list(unknown) == [],
-           "skills/doitlist/SKILL.md Quick Reference names MCP tools/resources that no longer " <>
-             "exist: #{inspect(MapSet.to_list(unknown))}. Rename them here to match mcp_server, " <>
-             "or drop the row."
+           "skills/doitlist/SKILL.md names MCP tools/resources that no longer exist: " <>
+             "#{inspect(MapSet.to_list(unknown))}. Rename them to match mcp_server or drop them."
+  end
+
+  test "the skill names only real CLI verbs" do
+    known = known_cli_verbs()
+    referenced = cli_verb_refs()
+
+    assert MapSet.size(known) > 0,
+           "parsed zero subparsers from #{@cli} — the parser is stale"
+
+    assert MapSet.size(referenced) > 0,
+           "parsed zero CLI verbs from the skill — the command-line convention changed"
+
+    unknown = MapSet.difference(referenced, known)
+
+    assert MapSet.to_list(unknown) == [],
+           "skills/doitlist/SKILL.md names CLI verbs that doitlist.py does not define: " <>
+             "#{inspect(MapSet.to_list(unknown))}."
   end
 
   # `component(DoitMcp.Tools.CreateInitiative)` -> "create_initiative"
@@ -55,32 +66,39 @@ defmodule DoIt.SkillReferenceTest do
     |> MapSet.new()
   end
 
-  # First backtick token in each Quick Reference table row's tool column.
-  defp quick_reference_refs do
-    @skill
-    |> File.read!()
-    |> quick_reference_section()
-    |> String.split("\n")
-    |> Enum.filter(&String.starts_with?(&1, "|"))
-    |> Enum.flat_map(&tool_token/1)
+  # `sub.add_parser("tree", ...)` -> "tree"
+  defp known_cli_verbs do
+    File.read!(@cli)
+    |> then(&Regex.scan(~r/add_parser\(\s*"([a-z]+)"/, &1, capture: :all_but_first))
+    |> Enum.map(fn [verb] -> verb end)
     |> MapSet.new()
   end
 
-  defp quick_reference_section(markdown) do
-    case Regex.run(~r/^## Quick Reference\n(.*?)(?=\n## |\z)/ms, markdown,
-           capture: :all_but_first
-         ) do
-      [section] -> section
-      _ -> ""
-    end
+  # Every backticked snake_case token with an underscore: `import_text`.
+  defp mcp_refs do
+    File.read!(@skill)
+    |> then(&Regex.scan(~r/`([a-z]+(?:_[a-z]+)+)`/, &1, capture: :all_but_first))
+    |> Enum.map(fn [name] -> name end)
+    |> MapSet.new()
   end
 
-  defp tool_token(row) do
-    with cell when is_binary(cell) <- row |> String.split("|") |> Enum.at(2),
-         [token] <- Regex.run(~r/`([a-z][a-z_]+)`/, cell, capture: :all_but_first) do
-      [token]
-    else
-      _ -> []
-    end
+  # A backticked command line: `doitlist.py tree ...`, `tree <initiative> ...`,
+  # or a bare verb in a comma list like `add`, `done`, `move` — any backticked
+  # token that is a single lowercase word, plus the word after `doitlist.py`.
+  defp cli_verb_refs do
+    skill = File.read!(@skill)
+
+    after_script =
+      Regex.scan(~r/`(?:python3 |py -3 |python )?(?:[\w\/\\.]*doitlist\.py) ([a-z]+)/, skill,
+        capture: :all_but_first
+      )
+
+    bare =
+      Regex.scan(~r/`([a-z]+)(?: <[^`]*)?`/, skill, capture: :all_but_first)
+
+    (after_script ++ bare)
+    |> Enum.map(fn [verb] -> verb end)
+    |> Enum.reject(&(&1 in @interpreters))
+    |> MapSet.new()
   end
 end

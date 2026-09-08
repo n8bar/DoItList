@@ -14,18 +14,62 @@ defmodule DoItWeb.UserAuth do
 
   @session_key :user_id
 
+  # m03.04 6.1: a deep link followed while logged out must survive the login
+  # round trip. The requested path is parked here (session, not a query param on
+  # the form) so the login POST needs no extra field.
+  @return_to_key :user_return_to
+
   # --- Plug ------------------------------------------------------------------
 
   @doc """
   Logs the user in by storing their id in the session, and renews the session
   to defend against session fixation.
+
+  Lands on the path parked by `store_return_to/2` when there is one, otherwise
+  the Initiative list. The parked path is read before `renew_session/1` wipes
+  it, so it is consumed exactly once either way.
   """
   def log_in_user(conn, user) do
+    return_to = local_return_path(get_session(conn, @return_to_key))
+
     conn
     |> renew_session()
     |> put_session(@session_key, user.id)
-    |> redirect(to: ~p"/initiatives")
+    |> redirect(to: return_to || ~p"/initiatives")
   end
+
+  @doc """
+  Parks `path` as the post-login destination, when it is a safe local path.
+
+  Anything else (a fully qualified URL, a scheme-relative `//host` reference, a
+  `javascript:` payload) is dropped rather than stored, so the session can never
+  hold an open-redirect target.
+  """
+  def store_return_to(conn, path) do
+    case local_return_path(path) do
+      nil -> conn
+      path -> put_session(conn, @return_to_key, path)
+    end
+  end
+
+  @doc """
+  Returns `path` when it is a local, same-app redirect target, else `nil`.
+
+  Local means a single leading `/` (never `//` or `/\\`, which browsers read as
+  scheme-relative), no scheme, and no whitespace or control characters that
+  could smuggle one past the checks above.
+  """
+  def local_return_path(path) when is_binary(path) do
+    cond do
+      not String.starts_with?(path, "/") -> nil
+      String.starts_with?(path, ["//", "/\\"]) -> nil
+      String.contains?(path, "://") -> nil
+      String.match?(path, ~r/[\x00-\x20\x7f]/) -> nil
+      true -> path
+    end
+  end
+
+  def local_return_path(_path), do: nil
 
   def log_out_user(conn) do
     conn
@@ -44,11 +88,19 @@ defmodule DoItWeb.UserAuth do
       conn
     else
       conn
+      |> maybe_store_request_path()
       |> put_flash(:error, "You must be logged in.")
       |> redirect(to: ~p"/users/log_in")
       |> halt()
     end
   end
+
+  # Only a GET is worth returning to: it is the one the browser can replay after
+  # login. A halted POST/DELETE parks nothing.
+  defp maybe_store_request_path(%Plug.Conn{method: "GET"} = conn),
+    do: store_return_to(conn, current_path(conn))
+
+  defp maybe_store_request_path(conn), do: conn
 
   def redirect_if_user_is_authenticated(conn, _opts) do
     if conn.assigns[:current_user] do
@@ -117,9 +169,34 @@ defmodule DoItWeb.UserAuth do
         {:halt,
          socket
          |> Phoenix.LiveView.put_flash(:error, "You must be logged in.")
-         |> Phoenix.LiveView.redirect(to: ~p"/users/log_in")}
+         |> Phoenix.LiveView.redirect(to: log_in_path(socket))}
     end
   end
+
+  # A halted mount has no conn to park the path in, so it hands the path to the
+  # login page instead; `UserSessionController.new/2` parks it there. Reached
+  # only when the socket connects without a user (the plug already covers the
+  # dead render), so it must recover the path from the socket's connect info —
+  # `:uri` is declared on the LiveView socket in the endpoint for this.
+  defp log_in_path(socket) do
+    case connect_uri_path(socket) do
+      nil -> ~p"/users/log_in"
+      path -> ~p"/users/log_in?#{[return_to: path]}"
+    end
+  end
+
+  defp connect_uri_path(socket) do
+    case Phoenix.LiveView.get_connect_info(socket, :uri) do
+      %URI{path: path} = uri when is_binary(path) ->
+        local_return_path(append_query(path, uri.query))
+
+      _ ->
+        nil
+    end
+  end
+
+  defp append_query(path, query) when query in [nil, ""], do: path
+  defp append_query(path, query), do: path <> "?" <> query
 
   # --- Notifications (m02.08 worklist 2) -------------------------------------
 
