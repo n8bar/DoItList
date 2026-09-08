@@ -19,7 +19,8 @@ RUN apk add --no-cache \
       ncurses-libs \
       bash \
       postgresql-client \
-      python3
+      python3 \
+      nodejs
 
 WORKDIR /app
 
