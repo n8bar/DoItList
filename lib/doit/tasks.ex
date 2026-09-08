@@ -2343,7 +2343,23 @@ defmodule DoIt.Tasks do
       limit: ^limit,
       preload: [:user]
     )
+    |> visible_task_events()
     |> Repo.all()
+  end
+
+  # Reader visibility for activity (m03.04 O&C 6.3): an event whose task is
+  # soft-deleted drops out of every activity surface — the workspace pane, the
+  # HTTP API, and the MCP tool / resource that read through it — because a
+  # reader can't open that task. Restoring the task brings its history back with
+  # no bookkeeping: the join re-admits the rows the moment `deleted_at` clears.
+  # Events with no task (the column is NOT NULL today, so defensive) stay.
+  # Retention and hard deletion are M05 Trash's business, not this filter's.
+  defp visible_task_events(query) do
+    from(e in query,
+      left_join: t in Task,
+      on: t.id == e.task_id,
+      where: is_nil(e.task_id) or is_nil(t.deleted_at)
+    )
   end
 
   @activity_default_limit 50
@@ -2358,7 +2374,8 @@ defmodule DoIt.Tasks do
   `initiative_id` and `task_id`, so the rollup is just a scoped select; no schema
   change. It mirrors the LiveView's `list_task_activity/2` ordering
   (`desc: inserted_at, desc: id`) but rolls the whole Initiative (or a subtree)
-  up rather than a single task.
+  up rather than a single task. Both share `visible_task_events/1`, so events of
+  soft-deleted tasks are excluded and pagination counts only visible rows.
 
   ## Options
 
@@ -2386,6 +2403,7 @@ defmodule DoIt.Tasks do
         order_by: [desc: e.inserted_at, desc: e.id],
         preload: [:user]
       )
+      |> visible_task_events()
 
     scoped = if is_list(task_ids), do: from(e in base, where: e.task_id in ^task_ids), else: base
 
