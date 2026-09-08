@@ -613,6 +613,7 @@ defmodule DoItWeb.Api.Imports do
         },
         "applied_batches" => applied,
         "failed_batch" => applied + 1,
+        "total_batches" => context.total,
         "results" => results
       }
       |> maybe_put_initiative(context, resolved)

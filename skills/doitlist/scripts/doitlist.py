@@ -11,8 +11,8 @@ it. Configuration comes from the environment the connect panel emits:
                          (default ~/.doitlist/state)
 
 Division of labor (m03.04 4.1.2): import parsing stays in the API — this
-client only shapes requests, formats responses, and (later) mirrors
-completion into local Markdown. See the mirroring seam near the bottom.
+client only shapes requests, formats responses, and mirrors completion into
+the operator's own Markdown (m03.04 4.7), which the API never reads or writes.
 
 Operator-facing output uses labels, titles, and URLs; ids appear only as
 `%<id>` beside a title, which is how the companion skill names Tasks.
@@ -40,6 +40,7 @@ Exit codes: 0 ok, 1 API/network error, 2 usage or configuration error.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
@@ -110,6 +111,15 @@ class ConfigError(UsageError):
 
 class TransportError(Exception):
     """The request never produced a usable response. Exit 1."""
+
+
+class MirrorError(Exception):
+    """The mirror's checkbox could not be resolved or written (m03.04 4.7).
+
+    Raised before the live write it becomes a usage error and nothing is sent;
+    raised after it, the live Task is already done, so it is reported as an
+    owed file update rather than a failed completion.
+    """
 
 
 class ApiError(Exception):
@@ -880,13 +890,22 @@ def deliver(client, record, out, sleeper):
     if response.status == 408 or response.status >= 500 or response.payload is None:
         return unresolved(config, record, out, "HTTP {0}".format(response.status)), None
 
-    # Delivered and definitive: whatever it says, this key is settled.
-    clear_pending(config, record["key"])
     payload = response.payload if isinstance(response.payload, dict) else {}
     results = payload.get("results") or []
     top = payload.get("error") or {}
-
     conflict = first_conflict(results)
+    committed = conflict is None and not top and response.status < 400
+
+    # Delivered and definitive: whatever it says, this key is settled — unless
+    # a mirrored completion still owes its local checkbox, in which case the
+    # record advances to `live_done` and stays parked so `retry` can finish the
+    # file without ever re-POSTing the completion (m03.04 4.7.4).
+    if committed and record.get("mirror"):
+        record["stage"] = STAGE_LIVE_DONE
+        save_pending(config, record)
+    else:
+        clear_pending(config, record["key"])
+
     if conflict is not None:
         # 4.3.5: hand back the current record and stop. Resubmitting with the
         # version we just learned would overwrite whatever changed under us.
@@ -975,6 +994,10 @@ def cmd_add(client, args, out, err):
 
 def cmd_done(client, args, out, err):
     task_id = parse_task_ref(args.task)
+    mirror = mirror_options(args)
+    if mirror is not None:
+        return done_mirrored(client, args, out, task_id, mirror)
+
     task = read_task(client, task_id)
     reopening = bool(args.reopen)
     return run_write(
@@ -1134,7 +1157,14 @@ def cmd_retry(client, args, out, err):
     saved = []
     for record in records:
         out.write("retrying: {0}\n".format(record.get("summary") or record["key"]))
+        if record.get("mirror") and record.get("stage") == STAGE_LIVE_DONE:
+            # The live half committed already; only the checkbox is owed, and
+            # re-POSTing it would be a second completion (m03.04 4.7.4).
+            worst = max(worst, resume_mirror(client, record, out))
+            continue
         code, payload = deliver(client, record, out, args.sleeper)
+        if code == EXIT_OK and record.get("mirror"):
+            code = mirror_after_retry(client, record, out)
         worst = max(worst, code)
         if payload is not None:
             saved.append({"key": record["key"], "response": payload})
@@ -1238,16 +1268,21 @@ def write_imported(payload, path, out):
 def write_import_failure(config, payload, status, out):
     """A refused import, and — when batches had already committed — what landed.
 
-    Only `applied_batches` is a number the response carries; the total is in
-    the server's own message, so this line counts what committed and does not
-    invent a denominator to contradict it.
+    `total_batches` is the response's own denominator; without it the line
+    still says what committed rather than inventing one.
     """
     write_failure(config, payload, status, out)
     applied = payload.get("applied_batches") or 0
     if applied:
+        total = payload.get("total_batches")
+        landed = (
+            "applied {0} batch{1}".format(applied, "" if applied == 1 else "es")
+            if not total
+            else "applied {0} of {1} batches".format(applied, total)
+        )
         out.write(
-            "applied {0} batch{1} — the target holds a partial import; "
-            "diff it to see what landed\n".format(applied, "" if applied == 1 else "es")
+            "{0} — the target holds a partial import; "
+            "diff it to see what landed\n".format(landed)
         )
         url = (payload.get("initiative") or {}).get("url")
         if url:
@@ -1388,14 +1423,410 @@ def cmd_diff(client, args, out, err):
 
 
 # --------------------------------------------------------------------------
-# Seam: local completion mirroring (m03.04 item 4.7 — nothing built yet)
+# Local completion mirroring (m03.04 4.7)
 # --------------------------------------------------------------------------
 # Mirroring belongs on this side of the wire: the API owns import parsing and
-# the live tree, the client owns the operator's local files. When 4.7 lands,
-# `done <task> --mirror <file> --section <heading>` reads the live tree through
-# `Client.request`, writes the completion, then rewrites the one matching
-# checkbox in the named section. It reuses `Client`, `parse_task_ref`, and the
-# formatting helpers above; no mirroring state exists yet by design.
+# the live tree, the client owns the operator's local files. `done <task>
+# --mirror <file> --section <heading>` completes the Task and ticks its one
+# matching checkbox in one invocation, over ONE GET and ONE POST (4.7.5) — the
+# GET is the Initiative's whole tree, which carries the Task's title and
+# version for the write and every other Task's live state for the next-leaf
+# line.
+#
+# Two rules shape everything below. Nothing is matched fuzzily: a checkbox is
+# this Task's only when its text is exactly the live title (4.7.2). And the
+# live Task is completed first, the file second, with the mirror's recovery
+# details parked before either — so a half-finished mirror is always a
+# `retry`, never a re-completion (4.7.4).
+
+#: Where a parked mirror write got to. `pending` is the ordinary parked write:
+#: the POST has not been resolved. `live_done` means the completion committed
+#: and only the checkbox is still owed — `retry` must never re-POST from here.
+STAGE_PENDING = "pending"
+STAGE_LIVE_DONE = "live_done"
+
+#: ATX headings, up to three spaces of indent; a closed heading's trailing
+#: hashes are decoration, not text. Setext (underlined) headings are not
+#: sections here — a mirror names its checklists with `#`.
+_HEADING = re.compile(r"^[ \t]{0,3}(#{1,6})[ \t]+(.*)$")
+_CLOSING_HASHES = re.compile(r"[ \t]+#+[ \t]*$")
+
+#: `- [ ] text`, `* [x] text`, `+ [X] text`, `1. [ ] text`, `1) [ ] text`.
+_CHECKBOX = re.compile(r"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+\[([ xX])\][ \t]+(\S.*?)[ \t]*$")
+
+
+def split_text(text):
+    """The file as raw lines with their endings kept, so a rewrite can put
+    every untouched line back byte for byte (CRLF included)."""
+    return text.splitlines(True)
+
+
+def split_line(raw):
+    """One raw line as `(body, ending)`."""
+    parts = raw.splitlines()
+    body = parts[0] if parts else ""
+    return body, raw[len(body):]
+
+
+def heading_of(body):
+    """`(level, text)` for an ATX heading line, else `None`."""
+    match = _HEADING.match(body)
+    if match is None:
+        return None
+    return len(match.group(1)), _CLOSING_HASHES.sub("", match.group(2)).strip()
+
+
+def checkbox_of(body):
+    """`(checked, text, state_span)` for a checkbox line, else `None`.
+
+    The span is where the box's single character sits in `body`, which is how
+    a tick is applied without touching one other byte of the line.
+    """
+    match = _CHECKBOX.match(body)
+    if match is None:
+        return None
+    return match.group(1) != " ", match.group(2), match.span(1)
+
+
+def section_lines(raw, section):
+    """Line indices inside the named heading's section, or `None` if absent.
+
+    The section runs from the heading whose text is exactly `section` to the
+    next heading of the same or a shallower level, or to the end of the file.
+    """
+    start, level = None, 0
+    for index, line in enumerate(raw):
+        found = heading_of(split_line(line)[0])
+        if found is None:
+            continue
+        if start is None:
+            if found[1] == section:
+                start, level = index, found[0]
+        elif found[0] <= level:
+            return list(range(start + 1, index))
+    if start is None:
+        return None
+    return list(range(start + 1, len(raw)))
+
+
+def checkbox_rows(raw, indices):
+    """`(index, checked, text, span)` for every checkbox line in the section."""
+    rows = []
+    for index in indices:
+        found = checkbox_of(split_line(raw[index])[0])
+        if found is not None:
+            rows.append((index, found[0], found[1], found[2]))
+    return rows
+
+
+def locate_checkbox(raw, section, title):
+    """The one line in `section` whose text is exactly `title` (4.7.2).
+
+    Zero matches and several are both refusals: this client never guesses which
+    checkbox an operator meant, and never matches fuzzily.
+    """
+    indices = section_lines(raw, section)
+    if indices is None:
+        raise MirrorError('no "{0}" heading'.format(section))
+    matches = [row for row in checkbox_rows(raw, indices) if row[2] == title]
+    if len(matches) != 1:
+        raise MirrorError(
+            '{0} checkbox lines under "{1}" read exactly "{2}"'.format(
+                len(matches), section, title
+            )
+        )
+    return matches[0]
+
+
+def flip_line(raw_line, span):
+    """The same line with its box ticked — indent, marker, spacing, text, and
+    line ending all untouched."""
+    body, ending = split_line(raw_line)
+    return body[: span[0]] + "x" + body[span[1] :] + ending
+
+
+def file_digest(text):
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def write_mirror(path, raw):
+    """Replace the file atomically: temp alongside it, then `os.replace`.
+
+    A crash therefore leaves either the old file or the new one, never a
+    truncated plan. `newline=""` writes the endings the lines already carry.
+    """
+    target = pathlib.Path(path)
+    temp = target.parent / (target.name + ".doitlist.tmp")
+    try:
+        with open(str(temp), "w", encoding="utf-8", newline="") as handle:
+            handle.write("".join(raw))
+        try:
+            os.chmod(str(temp), os.stat(str(target)).st_mode & 0o7777)
+        except OSError:
+            pass  # the content matters; the mode is a courtesy
+        os.replace(str(temp), str(target))
+    except OSError as exc:
+        try:
+            os.unlink(str(temp))
+        except OSError:
+            pass
+        raise MirrorError("could not write {0}: {1}".format(path, exc.strerror or exc))
+
+
+def apply_mirror(record):
+    """Tick the checkbox now that the live completion has committed (4.7.3).
+
+    The file is read again first. Unchanged since the pre-write read, the
+    parked line index is used directly. Changed under us — the operator edited
+    their plan while this ran — the checkbox is found again by the same
+    exact-match rule, so their edit is preserved and the tick still lands on
+    the right line. Returns `(lines, wrote_anything)`.
+    """
+    mirror = record["mirror"]
+    try:
+        text = read_source(mirror["file"])
+    except UsageError as exc:
+        raise MirrorError(str(exc))
+
+    raw = split_text(text)
+    row = None
+    if file_digest(text) == mirror["file_sha256"]:
+        index = mirror["line_index"]
+        if 0 <= index < len(raw):
+            found = checkbox_of(split_line(raw[index])[0])
+            if found is not None and found[1] == mirror["title"]:
+                row = (index, found[0], found[1], found[2])
+    if row is None:
+        row = locate_checkbox(raw, mirror["section"], mirror["title"])
+
+    index, checked, _title, span = row
+    if checked:
+        return raw, False
+    raw = list(raw)
+    raw[index] = flip_line(raw[index], span)
+    write_mirror(mirror["file"], raw)
+    return raw, True
+
+
+def title_map(nodes, index=None):
+    """Every Task in the tree keyed by its exact title, in tree order."""
+    index = {} if index is None else index
+    for node in nodes:
+        index.setdefault(node.get("title") or "", []).append(node)
+        title_map(node.get("children") or [], index)
+    return index
+
+
+def next_unfinished(raw, section, tasks):
+    """The first still-open leaf named by an unticked line in the section.
+
+    File order decides *which is next*, because the section is the operator's
+    own plan; the live tree decides *unfinished*, because it is authoritative.
+    Only leaves qualify, so a branch's rolled-up Progress never nominates it. A
+    line naming no live Task is skipped rather than guessed at.
+    """
+    indices = section_lines(raw, section)
+    if indices is None:
+        return None
+    index = title_map(tasks)
+    for _line, checked, text, _span in checkbox_rows(raw, indices):
+        if checked:
+            continue
+        for node in index.get(text, []):
+            if node.get("leaf") and not node.get("done"):
+                return node
+    return None
+
+
+def mirror_line(mirror, flipped):
+    return "mirror  {0} § {1}: {2}[x] {3}".format(
+        os.path.basename(mirror["file"]),
+        mirror["section"],
+        "" if flipped else "already ",
+        mirror["title"],
+    )
+
+
+def next_line(node):
+    if node is None:
+        return "next  none in section"
+    cells = [
+        cell
+        for cell in ((node.get("index") or "").strip(), node.get("title") or "")
+        if cell
+    ]
+    return "next  {0}  %{1}".format(" ".join(cells), node.get("id"))
+
+
+def mirror_options(args):
+    """`(file, section)` when this `done` mirrors, else `None`.
+
+    The two options are one instruction, so half of it is a usage error rather
+    than a silent live-only completion; and `--reopen` is refused outright,
+    because unticking someone's plan is not what reopening a Task asked for.
+    """
+    path = getattr(args, "mirror", None)
+    section = getattr(args, "section", None)
+    if not path and not section:
+        if getattr(args, "initiative", None):
+            raise UsageError(
+                "--initiative only applies to a mirrored completion; pass "
+                "--mirror <file> --section <heading> as well."
+            )
+        return None
+    if not path or not section:
+        raise UsageError(
+            "--mirror and --section go together: name the Markdown file and "
+            "the heading whose checklist holds the Task."
+        )
+    if getattr(args, "reopen", False):
+        raise UsageError(
+            "--reopen is not mirrored — reopening leaves the checkbox alone. "
+            "Reopen without --mirror, then complete it again to mirror."
+        )
+    return path, section
+
+
+def mirror_initiative(args, text, path):
+    """Which Initiative the mirror belongs to: `--initiative`, else the file's
+    first Initiative link — the marker a maintained mirror already carries."""
+    if getattr(args, "initiative", None):
+        return parse_initiative_ref(args.initiative)
+    match = _INITIATIVE_URL.search(text)
+    if match:
+        return int(match.group(1))
+    raise UsageError(
+        "{0} carries no Initiative link — add the Initiative URL to the file, "
+        "or pass --initiative <id or URL>.".format(path)
+    )
+
+
+def finish_mirror(config, record, tasks, out):
+    """The local half of a mirrored completion: tick, report, name what's next.
+
+    A failure here never rewrites what already happened on the server. The
+    record stays parked at `live_done`, saying exactly what is owed, and the
+    line says how to settle it (4.7.4).
+    """
+    mirror = record["mirror"]
+    try:
+        raw, flipped = apply_mirror(record)
+    except MirrorError as exc:
+        out.write(
+            "live Task completed; mirror not updated: {0} — fix the file, "
+            "then: doitlist.py retry {1}\n".format(config.redact(exc), record["key"])
+        )
+        return EXIT_API
+    clear_pending(config, record["key"])
+    out.write(mirror_line(mirror, flipped) + "\n")
+    out.write(next_line(next_unfinished(raw, mirror["section"], tasks)) + "\n")
+    return EXIT_OK
+
+
+def mirrored_task_id(record):
+    return record["body"]["operations"][0]["id"]
+
+
+def done_mirrored(client, args, out, task_id, mirror):
+    """`done --mirror`: one GET, one POST, then the checkbox (4.7.1, 4.7.5)."""
+    path, section = mirror
+    text = read_source(path)
+    raw = split_text(text)
+    initiative_id = mirror_initiative(args, text, path)
+
+    initiative = read_initiative(client, initiative_id)
+    tasks = initiative.get("tasks") or []
+    task = find_task(tasks, task_id)
+    if task is None:
+        raise ApiError(
+            404,
+            "not_found",
+            "Task %{0} is not in {1} — mirror a Task from the Initiative the "
+            "file links to.".format(task_id, initiative.get("name") or initiative_id),
+        )
+    title = task.get("title") or ""
+
+    # The match is resolved BEFORE anything is sent: a missing or ambiguous
+    # checkbox refuses the whole command, live Task included (4.7.2).
+    try:
+        row = locate_checkbox(raw, section, title)
+    except MirrorError as exc:
+        raise UsageError("{0} in {1} — nothing was written.".format(exc, path))
+
+    record = {
+        "key": new_key(),
+        "created_at": now_utc(),
+        "method": "POST",
+        "path": OPERATIONS_PATH,
+        "body": {
+            "operations": [
+                {
+                    "op": "update",
+                    "type": "task",
+                    "id": task_id,
+                    "data": {"done": True, "expected_version": task["version"]},
+                }
+            ]
+        },
+        "verb": "done",
+        "summary": "done %{0} {1}".format(task_id, title).rstrip(),
+        "display": {"label": "done", "title": title, "progress": True, "done": True},
+        "stage": STAGE_PENDING,
+        "mirror": {
+            "initiative_id": initiative_id,
+            "file": str(pathlib.Path(path).resolve()),
+            "section": section,
+            "title": title,
+            "line_index": row[0],
+            "file_sha256": file_digest(text),
+        },
+    }
+    save_pending(client.config, record)
+    code, payload = deliver(client, record, out, args.sleeper)
+    if code == EXIT_OK:
+        # The one GET happened before the write; the completion it did not see
+        # is applied here so the next-leaf line cannot nominate this Task.
+        task["done"] = True
+        code = finish_mirror(client.config, record, tasks, out)
+    return save_response(client, args, payload, out, code)
+
+
+def resume_mirror(client, record, out):
+    """`retry` on a record whose live completion already committed (4.7.4).
+
+    Current state is checked before anything is written: still done, only the
+    file is owed; reopened since, this mirror is void — completing it again is
+    a new operation, not a resumption of this one. Never re-POSTs.
+    """
+    mirror = record["mirror"]
+    initiative = read_initiative(client, mirror["initiative_id"])
+    tasks = initiative.get("tasks") or []
+    task = find_task(tasks, mirrored_task_id(record))
+
+    if task is None:
+        out.write(
+            "Task %{0} is no longer in that Initiative; the mirror was not "
+            "updated\n".format(mirrored_task_id(record))
+        )
+        clear_pending(client.config, record["key"])
+        return EXIT_API
+    if not task.get("done"):
+        out.write(
+            "reopened since completion; the mirror was not updated — complete "
+            "it again as a new operation\n"
+        )
+        clear_pending(client.config, record["key"])
+        return EXIT_API
+    return finish_mirror(client.config, record, tasks, out)
+
+
+def mirror_after_retry(client, record, out):
+    """A resent mirror write that committed still owes its checkbox.
+
+    The tree is read after the POST, so it already carries the completion.
+    """
+    initiative = read_initiative(client, record["mirror"]["initiative_id"])
+    return finish_mirror(client.config, record, initiative.get("tasks") or [], out)
 
 
 # --------------------------------------------------------------------------
@@ -1453,6 +1884,21 @@ def build_parser():
     done = subparsers.add_parser("done", parents=[saving], help="complete a Task")
     done.add_argument("task", help="Task id or %%<id>")
     done.add_argument("--reopen", action="store_true", help="reopen it instead")
+    done.add_argument(
+        "--mirror",
+        metavar="FILE",
+        help="also tick this Task's checkbox in a maintained Markdown mirror",
+    )
+    done.add_argument(
+        "--section",
+        metavar="HEADING",
+        help="the heading whose checklist holds the checkbox (goes with --mirror)",
+    )
+    done.add_argument(
+        "--initiative",
+        metavar="INITIATIVE",
+        help="which Initiative the mirror belongs to (default: its first Initiative link)",
+    )
     done.set_defaults(handler=cmd_done)
 
     progress = subparsers.add_parser("progress", parents=[saving], help="set a Task's Progress")

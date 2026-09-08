@@ -11,6 +11,7 @@ Run: python3 -m unittest discover -s skills/doitlist/scripts -p 'test_*.py'
 """
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -1371,8 +1372,14 @@ def applied_body(**overrides):
     return (200, _json(body))
 
 
-def batch_failure_body():
-    """The endpoint's partial-apply shape: some batches committed, one didn't."""
+def batch_failure_body(total=3):
+    """The endpoint's partial-apply shape: some batches committed, one didn't.
+
+    `total=None` is the older body, before the endpoint carried a denominator.
+    """
+    counts = {"applied_batches": 1, "failed_batch": 2}
+    if total is not None:
+        counts["total_batches"] = total
     return (
         422,
         _json(
@@ -1385,8 +1392,6 @@ def batch_failure_body():
                         "so the target holds a partial import."
                     ),
                 },
-                "applied_batches": 1,
-                "failed_batch": 2,
                 "results": [
                     {
                         "index": 4,
@@ -1399,6 +1404,7 @@ def batch_failure_body():
                     }
                 ],
                 "initiative": INITIATIVE,
+                **counts,
             }
         ),
     )
@@ -1621,10 +1627,24 @@ class ImportOutputTest(ImportCase):
             [
                 "failed (422 unprocessable_entity): title can't be blank 1 of 3 batches "
                 "had already committed, so the target holds a partial import.",
-                "applied 1 batch — the target holds a partial import; diff it to see what landed",
+                "applied 1 of 3 batches — the target holds a partial import; "
+                "diff it to see what landed",
                 "  https://doitlist.app/initiatives/12",
                 "  op 4 unprocessable_entity title: title can't be blank",
             ],
+        )
+
+    def test_a_batch_failure_without_a_total_keeps_the_bare_count(self):
+        # No denominator in the body, none invented in the line.
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path, "--into", "12"],
+            {"POST /api/v1/imports": batch_failure_body(total=None)},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(
+            "applied 1 batch — the target holds a partial import; diff it to see what landed",
+            out,
         )
 
     def test_a_validation_refusal_claims_no_partial_import(self):
@@ -1750,6 +1770,577 @@ class DiffTest(ImportCase):
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
         self.assertIn("without a diff", err)
+
+
+# --------------------------------------------------------------------------
+# 4.7 — completion mirroring
+# --------------------------------------------------------------------------
+# The mirror is the operator's own Markdown plan, so every test here works on a
+# real temp file and checks the bytes that come back out: one box ticked, every
+# other byte — indent, marker, spacing, line ending, and the operator's own
+# concurrent edits — exactly as it was.
+
+#: A maintained mirror of `TREE`: an Initiative link, four sections, and every
+#: shape the matcher has to survive — a dash list and a numbered one, a nested
+#: heading that does NOT end its section, a line naming no live Task, a line
+#: naming a branch, a line naming an already-done Task, and one section whose
+#: two identical lines can never be told apart.
+MIRROR_DOC = """# Q3 Launch
+
+Mirror of https://doitlist.app/initiatives/12 — keep the boxes in sync.
+
+## Build the API
+
+Notes about the API stay exactly where they are.
+
+- [x] Write the controller
+- [ ] Write the tests
+
+## Ship the SDK
+
+1. [ ] Package it
+2. [ ] Ghost item
+3. [ ] Pick a name
+4. [ ] Write the controller
+5. [ ] Write the tests
+
+### Packaging notes
+
+* [ ] Nothing to see
+
+## Duplicates
+
+- [ ] Write the tests
+- [ ] Write the tests
+
+## Ticked ahead
+
+- [x] Pick a name
+- [ ] Write the tests
+"""
+
+
+def tree_with_done(*ids):
+    """`TREE` again, with the named Tasks completed — the live state a mirror
+    `retry` reads back after its POST already committed."""
+    tree = json.loads(_json(TREE))
+
+    def walk(nodes):
+        for item in nodes:
+            if item["id"] in ids:
+                item["done"] = True
+                item["progress"] = 100
+            walk(item["children"])
+
+    walk(tree["tasks"])
+    return tree
+
+
+class HookedTransport(FakeTransport):
+    """A transport that runs a callback after a chosen method's reply.
+
+    That is the only place a test can stand: `--mirror` reads the file, POSTs,
+    then writes the file, so "the operator edited the plan while the write was
+    in flight" is exactly "edit it when the POST answers".
+    """
+
+    def __init__(self, routes, method, hook):
+        FakeTransport.__init__(self, routes)
+        self.method = method
+        self.hook = hook
+
+    def send(self, method, url, headers, body):
+        reply = FakeTransport.send(self, method, url, headers, body)
+        if method == self.method:
+            self.hook()
+        return reply
+
+
+class MirrorCase(WriteCase):
+    """Each test gets its own state directory and its own plan file."""
+
+    def setUp(self):
+        WriteCase.setUp(self)
+        self.files = tempfile.mkdtemp(prefix="doitlist-mirror-")
+        self.addCleanup(shutil.rmtree, self.files, True)
+
+    def mirror(self, text=None, name="plan.md", newline="\n"):
+        body = MIRROR_DOC if text is None else text
+        if newline != "\n":
+            body = body.replace("\n", newline)
+        path = os.path.join(self.files, name)
+        self.write_mirror(path, body)
+        return path
+
+    def write_mirror(self, path, body):
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(body)
+
+    def read_mirror(self, path):
+        with open(path, encoding="utf-8", newline="") as handle:
+            return handle.read()
+
+    def routes(self, result=None, tree=None, post=None):
+        if post is None:
+            post = ops_ok(
+                result
+                if result is not None
+                else task_data(id=112, title="Write the tests", progress=100, done=True, version=9)
+            )
+        return {
+            "GET /api/v1/initiatives/12": (200, _json(TREE if tree is None else tree)),
+            "POST /api/v1/operations": post,
+        }
+
+    def cli_with(self, argv, transport):
+        out, err = io.StringIO(), io.StringIO()
+        code = doitlist.main(
+            argv, env=self.env, transport=transport, out=out, err=err, sleeper=lambda _s: None
+        )
+        return code, out.getvalue(), err.getvalue(), transport
+
+    def changed_lines(self, before, after):
+        """The lines that differ, as (before, after) pairs."""
+        old, new = before.splitlines(True), after.splitlines(True)
+        self.assertEqual(len(old), len(new), "a mirror update must not add or drop lines")
+        return [pair for pair in zip(old, new) if pair[0] != pair[1]]
+
+
+class MirrorMatchTest(MirrorCase):
+    """4.7.1 / 4.7.2 — one exact match, or nothing happens at all."""
+
+    def test_a_unique_match_ticks_one_line_and_leaves_every_other_byte(self):
+        path = self.mirror()
+        before = self.read_mirror(path)
+        code, out, err, _ = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        after = self.read_mirror(path)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "done  %112  Write the tests  100%  [x]",
+                "mirror  plan.md § Build the API: [x] Write the tests",
+                "next  none in section",
+            ],
+        )
+        self.assertEqual(
+            self.changed_lines(before, after),
+            [("- [ ] Write the tests\n", "- [x] Write the tests\n")],
+        )
+        self.assertEqual(self.pending_paths(), [])
+
+    def test_a_crlf_mirror_keeps_its_line_endings(self):
+        path = self.mirror(newline="\r\n")
+        before = self.read_mirror(path)
+        code, out, err, _ = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        after = self.read_mirror(path)
+        self.assertEqual(
+            self.changed_lines(before, after),
+            [("- [ ] Write the tests\r\n", "- [x] Write the tests\r\n")],
+        )
+        self.assertEqual(after.count("\r\n"), before.count("\r\n"))
+        self.assertEqual(after.count("\n"), after.count("\r\n"), "no bare LF may creep in")
+
+    def test_a_numbered_marker_and_a_nested_heading_are_both_in_section(self):
+        # `3. [ ] Pick a name` sits under a `###` sub-heading's parent section:
+        # a deeper heading does not end it, and `1.` is a list marker.
+        path = self.mirror()
+        before = self.read_mirror(path)
+        code, out, err, _ = self.cli(
+            [
+                "done",
+                "%131",
+                "--mirror",
+                path,
+                "--section",
+                "Ship the SDK",
+            ],
+            self.routes(result=task_data(id=131, title="Pick a name", progress=100, done=True)),
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.changed_lines(before, self.read_mirror(path)),
+            [("3. [ ] Pick a name\n", "3. [x] Pick a name\n")],
+        )
+
+    def test_a_duplicate_match_refuses_and_writes_nothing_anywhere(self):
+        path = self.mirror()
+        before = self.read_mirror(path)
+        code, out, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Duplicates"], self.routes()
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn('2 checkbox lines under "Duplicates"', err)
+        self.assertIn("nothing was written", err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
+        self.assertEqual(self.read_mirror(path), before)
+        self.assertEqual(self.pending_paths(), [])
+
+    def test_no_match_refuses_and_never_matches_fuzzily(self):
+        # The live title is "Write the tests"; the section holds "Pick a name"
+        # and friends. Nothing close enough is close enough.
+        path = self.mirror()
+        code, out, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Packaging notes"], self.routes()
+        )
+        self.assertEqual(code, 2)
+        self.assertIn('0 checkbox lines under "Packaging notes"', err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
+
+    def test_a_missing_section_names_the_heading_it_wanted(self):
+        path = self.mirror()
+        code, _, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Nowhere"], self.routes()
+        )
+        self.assertEqual(code, 2)
+        self.assertIn('no "Nowhere" heading', err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
+
+    def test_an_already_ticked_line_is_reported_and_left_alone(self):
+        path = self.mirror()
+        before = self.read_mirror(path)
+        code, out, err, _ = self.cli(
+            ["done", "%111", "--mirror", path, "--section", "Build the API"],
+            self.routes(result=task_data(id=111, title="Write the controller")),
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read_mirror(path), before)
+        self.assertIn(
+            "mirror  plan.md § Build the API: already [x] Write the controller", out
+        )
+
+
+class MirrorRequestTest(MirrorCase):
+    """4.7.5 — the normal path costs one GET and one POST, and no more."""
+
+    def test_the_normal_path_makes_exactly_one_get_and_one_post(self):
+        path = self.mirror()
+        code, out, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET", "POST"])
+        body, headers = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0],
+            {
+                "op": "update",
+                "type": "task",
+                "id": 112,
+                "data": {"done": True, "expected_version": 1},
+            },
+        )
+        uuid.UUID(headers["Idempotency-Key"])
+
+    def test_the_initiative_comes_from_the_files_own_link(self):
+        path = self.mirror()
+        code, out, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("/api/v1/initiatives/12", transport.calls[0]["url"])
+
+    def test_initiative_overrides_the_link_and_a_linkless_file_is_refused(self):
+        linkless = self.mirror(text=MIRROR_DOC.replace("https://doitlist.app/initiatives/12", "-"))
+        code, _, err, transport = self.cli(
+            ["done", "%112", "--mirror", linkless, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("carries no Initiative link", err)
+        self.assertEqual(transport.calls, [])
+
+        code, out, err, transport = self.cli(
+            [
+                "done",
+                "%112",
+                "--mirror",
+                linkless,
+                "--section",
+                "Build the API",
+                "--initiative",
+                "https://doitlist.app/initiatives/12",
+            ],
+            self.routes(),
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("[x] Write the tests", out)
+
+    def test_a_task_outside_the_mirrored_initiative_is_refused(self):
+        path = self.mirror()
+        code, out, err, transport = self.cli(
+            ["done", "%999", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("%999 is not in Q3 Launch", err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
+
+
+class MirrorUsageTest(MirrorCase):
+    """4.7.1 — the option pair is one instruction, and reopening is not mirrored."""
+
+    def test_mirror_without_section_is_a_usage_error(self):
+        path = self.mirror()
+        code, _, err, transport = self.cli(["done", "%112", "--mirror", path], self.routes())
+        self.assertEqual(code, 2)
+        self.assertIn("--mirror and --section go together", err)
+        self.assertEqual(transport.calls, [])
+
+    def test_section_without_mirror_is_a_usage_error(self):
+        code, _, err, transport = self.cli(
+            ["done", "%112", "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--mirror and --section go together", err)
+        self.assertEqual(transport.calls, [])
+
+    def test_reopen_cannot_be_mirrored(self):
+        path = self.mirror()
+        code, _, err, transport = self.cli(
+            ["done", "%112", "--reopen", "--mirror", path, "--section", "Build the API"],
+            self.routes(),
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("--reopen is not mirrored", err)
+        self.assertEqual(transport.calls, [])
+
+    def test_initiative_without_mirror_is_a_usage_error(self):
+        code, _, err, transport = self.cli(["done", "%112", "--initiative", "12"], self.routes())
+        self.assertEqual(code, 2)
+        self.assertIn("--initiative only applies to a mirrored completion", err)
+        self.assertEqual(transport.calls, [])
+
+
+class MirrorNextTest(MirrorCase):
+    """4.7.5 — the next unfinished leaf, in the section's own order."""
+
+    def test_next_skips_branches_done_leaves_and_unmatched_lines(self):
+        # In file order after ticking "Pick a name": "Package it" is a branch,
+        # "Ghost item" names no live Task, "Write the controller" is already
+        # done — so the first line that qualifies is "Write the tests" (%112).
+        path = self.mirror()
+        code, out, err, _ = self.cli(
+            ["done", "%131", "--mirror", path, "--section", "Ship the SDK"],
+            self.routes(result=task_data(id=131, title="Pick a name", progress=100, done=True)),
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "done  %131  Pick a name  100%  [x]",
+                "mirror  plan.md § Ship the SDK: [x] Pick a name",
+                "next  1.2 Write the tests  %112",
+            ],
+        )
+
+    def test_next_skips_a_line_the_file_already_ticks(self):
+        # "Pick a name" is ticked in the plan though %131 is still open live.
+        # The section is the operator's own record of what they consider done,
+        # so a ticked line is never handed back as the next thing to do.
+        path = self.mirror()
+        code, out, err, _ = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Ticked ahead"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "done  %112  Write the tests  100%  [x]",
+                "mirror  plan.md § Ticked ahead: [x] Write the tests",
+                "next  none in section",
+            ],
+        )
+
+    def test_the_task_just_completed_is_never_offered_as_next(self):
+        # The live read happened BEFORE the write, so %112 still reads open in
+        # it; the confirmed completion is applied before the section is scanned.
+        path = self.mirror(
+            text=MIRROR_DOC.replace(
+                "- [x] Write the controller\n- [ ] Write the tests\n",
+                "- [ ] Write the tests\n- [x] Write the controller\n",
+            )
+        )
+        code, out, err, _ = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("next  none in section", out)
+
+
+class MirrorConcurrencyTest(MirrorCase):
+    """4.7.3 — a live edit stops the file; a file edit is preserved."""
+
+    def test_a_version_conflict_leaves_the_mirror_untouched(self):
+        path = self.mirror()
+        before = self.read_mirror(path)
+        conflict = ops_error(
+            409,
+            "conflict",
+            "Task 112 has version 4, not 1.",
+            current=task_data(id=112, title="Renamed in the browser", progress=0, done=False, version=4),
+        )
+        code, out, err, _ = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"],
+            self.routes(post=conflict),
+        )
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "conflict: done %112 Write the tests",
+                "  %112  Renamed in the browser  0%  [ ]  version 4",
+                "  nothing was applied — re-read, then decide.",
+            ],
+        )
+        self.assertEqual(self.read_mirror(path), before)
+        self.assertEqual(self.pending_paths(), [], "a conflict is settled, not owed")
+
+    def test_a_file_edit_during_the_write_is_preserved_and_the_right_line_ticks(self):
+        path = self.mirror()
+
+        def edit():
+            # The operator adds two lines at the top while the POST is in
+            # flight: every parked line index is now wrong.
+            self.write_mirror(
+                path,
+                self.read_mirror(path).replace(
+                    "# Q3 Launch\n", "# Q3 Launch\n\nAdded by hand mid-run.\n", 1
+                ),
+            )
+
+        transport = HookedTransport(self.routes(), "POST", edit)
+        code, out, err, _ = self.cli_with(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], transport
+        )
+        self.assertEqual(code, 0, out + err)
+        after = self.read_mirror(path)
+        self.assertIn("Added by hand mid-run.", after)
+        self.assertIn("- [x] Write the tests\n", after)
+        self.assertIn("## Duplicates\n\n- [ ] Write the tests\n- [ ] Write the tests\n", after)
+        self.assertEqual(after.count("- [x] Write the tests"), 1)
+        self.assertEqual(self.pending_paths(), [])
+
+
+class MirrorRecoveryTest(MirrorCase):
+    """4.7.4 — recovery details are parked before the write, and resumed after."""
+
+    def _lose_the_post(self):
+        path = self.mirror()
+        routes = self.routes(post=doitlist.TransportError("could not reach the host"))
+        code, out, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], routes
+        )
+        return path, code, out, transport
+
+    def _strand_at_live_done(self):
+        """Complete the live Task, then make the file unreadable to the mirror
+        stage — the record must survive at `live_done`, owing only the file."""
+        path = self.mirror()
+        transport = HookedTransport(self.routes(), "POST", lambda: os.unlink(path))
+        code, out, err, _ = self.cli_with(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], transport
+        )
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("live Task completed; mirror not updated", out)
+        return path, out, self.pending_records()[0]
+
+    def test_an_interrupted_write_parks_the_mirror_details_and_touches_nothing(self):
+        path, code, out, _ = self._lose_the_post()
+        self.assertEqual(code, 1)
+        self.assertIn("outcome unknown: done %112 Write the tests", out)
+        self.assertNotIn("mirror  ", out)
+        self.assertEqual(self.read_mirror(path), MIRROR_DOC)
+
+        record = self.pending_records()[0]
+        self.assertEqual(record["stage"], "pending")
+        self.assertEqual(record["mirror"]["initiative_id"], 12)
+        self.assertEqual(record["mirror"]["file"], os.path.realpath(path))
+        self.assertEqual(record["mirror"]["section"], "Build the API")
+        self.assertEqual(record["mirror"]["title"], "Write the tests")
+        self.assertEqual(record["mirror"]["line_index"], 9)
+        self.assertEqual(
+            record["mirror"]["file_sha256"],
+            hashlib.sha256(MIRROR_DOC.encode("utf-8")).hexdigest(),
+        )
+        self.assertNotIn(TOKEN, json.dumps(record))
+
+    def test_retry_from_pending_resends_the_same_key_then_mirrors(self):
+        path, _, _, first = self._lose_the_post()
+        record = self.pending_records()[0]
+        before = self.read_mirror(path)
+
+        code, out, err, transport = self.cli(["retry"], self.routes(tree=tree_with_done(112)))
+        self.assertEqual(code, 0, out + err)
+        _body, headers = self.posted(transport)[0]
+        self.assertEqual(headers["Idempotency-Key"], record["key"])
+        self.assertEqual(
+            self.changed_lines(before, self.read_mirror(path)),
+            [("- [ ] Write the tests\n", "- [x] Write the tests\n")],
+        )
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "retrying: done %112 Write the tests",
+                "done  %112  Write the tests  100%  [x]",
+                "mirror  plan.md § Build the API: [x] Write the tests",
+                "next  none in section",
+            ],
+        )
+        self.assertEqual(self.pending_paths(), [])
+
+    def test_a_stranded_mirror_keeps_the_record_at_live_done(self):
+        _path, out, record = self._strand_at_live_done()
+        self.assertEqual(record["stage"], "live_done")
+        self.assertIn("doitlist.py retry {0}".format(record["key"]), out)
+        self.assertIn("mirror", record)
+
+    def test_retry_from_live_done_mirrors_without_a_second_post(self):
+        path, _out, record = self._strand_at_live_done()
+        self.write_mirror(path, MIRROR_DOC)  # the operator put the file back
+        # No POST route at all: re-completing from `live_done` would fail here.
+        routes = {"GET /api/v1/initiatives/12": (200, _json(tree_with_done(112)))}
+        code, out, err, transport = self.cli(["retry", record["key"]], routes)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
+        self.assertIn("- [x] Write the tests\n", self.read_mirror(path))
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "retrying: done %112 Write the tests",
+                "mirror  plan.md § Build the API: [x] Write the tests",
+                "next  none in section",
+            ],
+        )
+        self.assertEqual(self.pending_paths(), [])
+
+    def test_a_task_reopened_since_completion_is_not_mirrored(self):
+        path, _out, record = self._strand_at_live_done()
+        self.write_mirror(path, MIRROR_DOC)
+        # The live Task reads open again: this mirror is void, and completing
+        # it once more is a NEW operation, not the tail of this one.
+        routes = {"GET /api/v1/initiatives/12": (200, _json(TREE))}
+        code, out, err, transport = self.cli(["retry", record["key"]], routes)
+        self.assertEqual(code, 1)
+        self.assertIn("reopened since completion", out)
+        self.assertIn("as a new operation", out)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
+        self.assertEqual(self.read_mirror(path), MIRROR_DOC)
+        self.assertEqual(self.pending_paths(), [], "a void mirror is cleared, not left to rot")
+
+    def test_a_second_retry_after_a_successful_mirror_has_nothing_left_to_do(self):
+        path, _out, record = self._strand_at_live_done()
+        self.write_mirror(path, MIRROR_DOC)
+        routes = {"GET /api/v1/initiatives/12": (200, _json(tree_with_done(112)))}
+        self.cli(["retry", record["key"]], routes)
+        code, out, err, transport = self.cli(["retry"], {})
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out, "no pending requests\n")
+        self.assertEqual(transport.calls, [])
 
 
 if __name__ == "__main__":

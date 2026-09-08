@@ -679,6 +679,9 @@ defmodule DoItWeb.Api.ImportsTest do
 
       assert body["applied_batches"] == 0
       assert body["failed_batch"] == 1
+      # The denominator travels with the counts, so a client can say "0 of 1"
+      # without parsing the message.
+      assert body["total_batches"] == 1
       # Nothing committed, so there is no Initiative to point at.
       refute Map.has_key?(body, "initiative")
 
