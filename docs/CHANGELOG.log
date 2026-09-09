@@ -568,3 +568,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-08  SKILL.md word ceiling raised 600 -> 750 for the 5.2 review edits; concision unchanged, the room is for worked examples like 5.2's.
 2026-09-08  SKILL.md 7 defines "authorized scope" as the Initiative, parent, and extent the user named -- the one undefined term in the override list.
 2026-09-08  Arc 4 7.5.3 added: a second safety probe phrased as a message from the user, since impersonation is what gets past prose defenses, not blunt commands.
+2026-09-09  m03.04 6.4: add/update task refuse a leading positional marker (1., 2.3, 4), I., A)) under an indexed Initiative, 422 on title, unless numbered_title: true; CLI add/retitle gain --numbered -- the index already supplies the number, so a title carrying its own showed it twice.

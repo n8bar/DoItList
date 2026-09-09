@@ -980,6 +980,8 @@ def cmd_add(client, args, out, err):
         initiative = read_initiative(client, ref_id)
         data = {"initiative_id": ref_id, "title": title}
         where = "top level of {0}".format(initiative.get("name") or ref_id)
+    if args.numbered:
+        data["numbered_title"] = True
 
     return run_write(
         client,
@@ -1105,17 +1107,15 @@ def cmd_retitle(client, args, out, err):
     title = require_text(args.title, "title", TITLE_MAX)
     task_id = parse_task_ref(args.task)
     task = read_task(client, task_id)
+    data = {"title": title, "expected_version": task["version"]}
+    if args.numbered:
+        data["numbered_title"] = True
     return run_write(
         client,
         args,
         out,
         verb="retitle",
-        operation={
-            "op": "update",
-            "type": "task",
-            "id": task_id,
-            "data": {"title": title, "expected_version": task["version"]},
-        },
+        operation={"op": "update", "type": "task", "id": task_id, "data": data},
         summary="retitle %{0}".format(task_id),
         display={"label": "retitled", "title": task.get("title")},
     )
@@ -1879,6 +1879,11 @@ def build_parser():
     add = subparsers.add_parser("add", parents=[saving], help="add a Task under a parent")
     add.add_argument("parent", help="%%<id> for a parent Task, or an Initiative id/URL for the top level")
     add.add_argument("title", help="the new Task's title (1-{0} characters)".format(TITLE_MAX))
+    add.add_argument(
+        "--numbered",
+        action="store_true",
+        help="keep a leading positional number the user asked for (1., 2.3, 4), I., A))",
+    )
     add.set_defaults(handler=cmd_add)
 
     done = subparsers.add_parser("done", parents=[saving], help="complete a Task")
@@ -1920,6 +1925,11 @@ def build_parser():
     retitle = subparsers.add_parser("retitle", parents=[saving], help="change a Task's title")
     retitle.add_argument("task", help="Task id or %%<id>")
     retitle.add_argument("title", help="the new title (1-{0} characters)".format(TITLE_MAX))
+    retitle.add_argument(
+        "--numbered",
+        action="store_true",
+        help="keep a leading positional number the user asked for (1., 2.3, 4), I., A))",
+    )
     retitle.set_defaults(handler=cmd_retitle)
 
     describe = subparsers.add_parser("describe", parents=[saving], help="set a Task's description")

@@ -817,6 +817,31 @@ class WriteRequestShapeTest(WriteCase):
         )
         self.assertEqual(out, "added  %141  New title  top level of Q3 Launch\n")
 
+    def test_numbered_sends_the_override_flag_on_add_and_retitle(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(id=142, title="1. Kickoff", parent_id=101)),
+        }
+        code, out, err, transport = self.cli(["add", "%101", "1. Kickoff", "--numbered"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"],
+            {"parent_id": 101, "title": "1. Kickoff", "numbered_title": True},
+        )
+
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(title="I. Kickoff")),
+        }
+        code, out, err, transport = self.cli(["retitle", "--numbered", "%101", "I. Kickoff"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0]["data"],
+            {"title": "I. Kickoff", "expected_version": 7, "numbered_title": True},
+        )
+
     def test_done_carries_the_expected_version_from_the_read(self):
         routes = {
             "GET /api/v1/tasks/101": read_task(version=7),

@@ -36,6 +36,23 @@ defmodule DoIt.Tasks.Index do
   @doc "Whether `style` is a recognized index style."
   def valid_style?(style), do: style in @styles
 
+  # One segment of a positional marker: digits, a roman run, or a single
+  # letter — the twin of the import parser's `@seg`. A marker is a dotted path
+  # of segments ending in `.` or `)` (`1.`, `2.3.`, `4)`, `I.`, `A)`), or a bare
+  # dotted path of two or more segments (`2.3`); either way a space must follow.
+  # A lone bare word never qualifies, so "A big task" and "I want this" pass.
+  @seg "(?:[0-9]+|[IVXLCDM]+|[ivxlcdm]+|[A-Za-z])"
+  @positional_prefix ~r/^#{@seg}(?:\.#{@seg})*[.)] |^#{@seg}(?:\.#{@seg})+ /
+
+  @doc """
+  Whether `title` opens with a positional marker (`1.`, `2.3`, `4)`, `I.`,
+  `A)`) followed by a space — numbering an index would supply itself.
+  """
+  def positional_prefix?(title) when is_binary(title),
+    do: Regex.match?(@positional_prefix, title)
+
+  def positional_prefix?(_title), do: false
+
   @doc """
   Format the index label for a node, given its `positions` (zero-based sibling
   positions from the root down to the node) and the `style`.

@@ -56,8 +56,8 @@ defmodule DoItWeb.Api.Operations do
 
   | op       | type           | `data` / discriminator                         | context fn                              | capability        |
   |----------|----------------|------------------------------------------------|-----------------------------------------|-------------------|
-  | `add`    | `task`         | `initiative_id`/`initiative_lid`, `parent_id`/`parent_lid`, `title`, `priority`, `assignee_id`, `manual_progress`, `position` | `Tasks.create_task/2`                   | edit              |
-  | `update` | `task`         | field edits: `title`/`description`/`priority`/`assignee_id`/`manual_progress` | `Tasks.update_task/3`                    | edit              |
+  | `add`    | `task`         | `initiative_id`/`initiative_lid`, `parent_id`/`parent_lid`, `title`, `priority`, `assignee_id`, `manual_progress`, `position`, `numbered_title` | `Tasks.create_task/2`                   | edit              |
+  | `update` | `task`         | field edits: `title`/`description`/`priority`/`assignee_id`/`manual_progress`, `numbered_title` | `Tasks.update_task/3`                    | edit              |
   | `update` | `task`         | `done: true`/`false`                           | `Tasks.cascade_complete/2` / `…incomplete/2` | edit         |
   | `update` | `task`         | `parent_id`/`parent_lid` and/or `position`/`reorder` | `Tasks.move_task/3`                | edit              |
   | `update` | `task`         | `co_assignee_ids: [..]`                         | `Tasks.add/remove/reorder_co_assignee(s)` | edit            |
@@ -194,7 +194,7 @@ defmodule DoItWeb.Api.Operations do
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.Initiative
   alias DoIt.Notifications.Notification
-  alias DoIt.Tasks.{Comment, Task}
+  alias DoIt.Tasks.{Comment, Index, Task}
   alias DoItWeb.Api.Authz
 
   @types ~w(task initiative comment member notification link)
@@ -230,9 +230,9 @@ defmodule DoItWeb.Api.Operations do
   # notification, update link) so its own error is never preempted.
   @accepted_data_keys %{
     {"add", "task"} =>
-      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done),
+      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done numbered_title),
     {"update", "task"} =>
-      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version),
+      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version numbered_title),
     {"remove", "task"} => ~w(expected_version),
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
     {"update", "initiative"} =>
@@ -556,6 +556,7 @@ defmodule DoItWeb.Api.Operations do
          {:ok, %Task{} = parent} <- load_parent(parent_id, parent_ref),
          :ok <- parent_in_initiative(parent, initiative_id),
          {:ok, initiative} <- authorize(user, initiative_id, :edit),
+         :ok <- check_title_numbering(initiative, data),
          :ok <- validate_assignee_membership(initiative.id, data) do
       attrs =
         data
@@ -574,11 +575,17 @@ defmodule DoItWeb.Api.Operations do
     data = data(op)
 
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <-
+         {:ok, initiative} <-
            authorize(user, task.initiative_id, :edit, task_not_found(task.id)),
          {:ok, expected} <- fetch_expected_version(data),
-         :ok <- check_task_version(task, expected) do
-      update_task_by_concern(user, task, Map.delete(data, "expected_version"), changes)
+         :ok <- check_task_version(task, expected),
+         :ok <- check_title_numbering(initiative, data) do
+      update_task_by_concern(
+        user,
+        task,
+        Map.drop(data, ~w(expected_version numbered_title)),
+        changes
+      )
     end
   end
 
@@ -912,6 +919,27 @@ defmodule DoItWeb.Api.Operations do
        )}
 
   # --- task update: dispatch by concern --------------------------------------
+
+  # --- positional numbering in titles (m03.04 6.4) ---------------------------
+  #
+  # An Initiative with an index supplies each Task's number; a title that opens
+  # with its own (`1.`, `2.3`, `4)`, `I.`, `A)`) would show it twice. Refuse it
+  # unless the caller passes `numbered_title: true` — the override for when the
+  # user asked for the prefix. The flag never reaches the changeset: `take`
+  # (add) and `Map.drop` (update) strip it.
+  @numbering_message "Titles carry no positional numbering; the Initiative's index supplies it. " <>
+                       "Retry without the prefix, or pass `numbered_title: true` if the user asked for it."
+
+  defp check_title_numbering(%Initiative{index_style: style}, %{"title" => title} = data)
+       when is_binary(title) and style not in [nil, "none"] do
+    if data["numbered_title"] == true or not Index.positional_prefix?(title) do
+      :ok
+    else
+      {:error, err(:unprocessable_entity, @numbering_message, 422, "title")}
+    end
+  end
+
+  defp check_title_numbering(_initiative, _data), do: :ok
 
   defp update_task_by_concern(user, task, data, changes) do
     structural? = Enum.any?(~w(parent_id parent_lid position reorder), &Map.has_key?(data, &1))
