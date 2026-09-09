@@ -559,3 +559,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-08  Arc 4 automated checks pass on the finished implementation: web app 747 tests, adapter 103, CLI 128 through mix test, JS 19; copy-pinning tests cover every surviving tool description.
 2026-09-08  Arc 4 O&C 6.4 drafted: the operations layer refuses agent-written titles that open with a positional marker when the Initiative has an index style, with an explicit numbered_title override -- a mechanism instead of skill text, prompted by the operator's in-use skill growing that rule.
 2026-09-08  Arc 4 O&C 6.5 drafted: the Initiative shows its own unit count (the root task's leaf or child count) in the header, the API, and the CLI.
+2026-09-08  SKILL.md sections and rules numbered (## 1.-8., numbered lists per section) so the operator can reference rules by number during the 5.2 review.
