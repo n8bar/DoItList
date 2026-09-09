@@ -389,10 +389,12 @@ def parse_initiative_ref(value):
 
 
 def parse_task_ref(value):
-    """Accept a numeric id or the `%<id>` form the skill uses for Tasks."""
+    """Accept a numeric id, `%272`, or the stored `%<272>` form (literal brackets)."""
     text = (value or "").strip()
     if text.startswith("%"):
         text = text[1:]
+        if text.startswith("<") and text.endswith(">"):
+            text = text[1:-1]
     if text.isdigit():
         return int(text)
     raise UsageError("{0!r} is not a Task — pass its id or %<id>.".format(value))

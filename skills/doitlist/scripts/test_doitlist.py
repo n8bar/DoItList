@@ -316,9 +316,21 @@ class ReferenceTest(unittest.TestCase):
         self.assertEqual(doitlist.parse_task_ref("101"), 101)
         self.assertEqual(doitlist.parse_task_ref("%101"), 101)
 
+    def test_task_accepts_the_stored_bracketed_form(self):
+        # Task fields store references as `%<272>` with literal brackets, so
+        # all three spellings must name the same Task.
+        self.assertEqual(doitlist.parse_task_ref("%<272>"), 272)
+        self.assertEqual(doitlist.parse_task_ref("%272"), 272)
+        self.assertEqual(doitlist.parse_task_ref("272"), 272)
+        self.assertEqual(doitlist.parse_parent_ref("%<272>"), ("task", 272))
+
     def test_task_rejects_a_label(self):
         with self.assertRaises(doitlist.UsageError):
             doitlist.parse_task_ref("%1.2")
+        with self.assertRaisesRegex(doitlist.UsageError, "is not a Task"):
+            doitlist.parse_task_ref("%<abc>")
+        with self.assertRaisesRegex(doitlist.UsageError, "is not a Task"):
+            doitlist.parse_parent_ref("%<abc>")
 
     def test_unknown_verb_exits_two(self):
         with contextlib.redirect_stderr(io.StringIO()) as usage:
