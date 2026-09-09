@@ -562,3 +562,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-08  SKILL.md sections and rules numbered (## 1.-8., numbered lists per section) so the operator can reference rules by number during the 5.2 review.
 2026-09-08  SKILL.md 4.1 reworded: completing a Task and ticking its mirror checkbox are one act, not two steps in one call.
 2026-09-08  SKILL.md 4.2 added: done and 100% Progress are one state, so a completion is one write -- guards against agents doubling the action.
+2026-09-08  SKILL.md 4.2 folded into 4.1 by the operator: the one-write rule rides the completion call; rationale cut, prohibition kept.
