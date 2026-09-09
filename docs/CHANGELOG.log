@@ -578,3 +578,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-09  Arc 4 O&C 6.8 drafted: the CLI's pending store falls back to a workspace-local directory when ~/.doitlist is unwritable -- the comparison run's sandbox hit a traceback there.
 2026-09-09  Arc 4 O&C 6.8 redrafted to one change: the CLI's retry store defaults to the working directory, where a sandboxed agent's mirror already lives -- no fallback logic.
 2026-09-09  m03.04 6.8: the CLI's retry store defaults to ./.doitlist/state so a sandboxed agent never writes outside its working directory; DOITLIST_STATE_DIR still overrides.
+2026-09-09  Arc 4 5.2 done: SKILL.md reviewed and approved by the operator -- Worklist 5 complete.
