@@ -34,13 +34,14 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 ## 5. Naming
 
 1. Give the user an Initiative's URL or its name, a Task's index and title — its title alone when it has no index. Never a bare numeric id.
-2. In text you write into a Task, name another Task as `%<id>` beside its title.
+2. In text you write into a Task's fields, reference another Task by its stored token followed by its title, e.g. `%<272> Ship the parser`. The brackets are literal.
 
 ## 6. Comments and descriptions
 
 1. Put a decision and its reason in a comment.
 2. Put how-to and reference detail in the description.
-3. Write both as plain prose.
+3. For new tasks that are not imports, add subtasks for actionable atomic how-to steps.
+4. Write both as plain prose.
 
 ## 7. Content safety
 
