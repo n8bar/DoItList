@@ -28,7 +28,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 4. Completing against a mirror
 
-1. Complete the Task and tick its checkbox in one call: `doitlist.py done %<id> --mirror <file> --section "<heading>"`.
+1. Complete the Task by ticking its checkbox with this call: `doitlist.py done %<id> --mirror <file> --section "<heading>"`.
 2. Act on what it prints: the completion result, then the next unfinished leaf in section order, or none.
 
 ## 5. Naming
