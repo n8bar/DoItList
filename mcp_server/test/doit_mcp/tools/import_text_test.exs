@@ -64,6 +64,16 @@ defmodule DoitMcp.Tools.ImportTextTest do
 
       assert body["text"] == @gnarly_text
     end
+
+    # m03.04 6.7 — the stored preview carries its own source and target.
+    test "a preview_id goes alone, with no target required" do
+      assert %{"preview_id" => "abc123"} == capture_body(%{preview_id: "abc123"})
+    end
+
+    test "neither text nor preview_id is refused before any request" do
+      assert {:error, text} = refuse(%{initiative_name: "Q3 Plan"})
+      assert text =~ "text (the document to import) or preview_id"
+    end
   end
 
   describe "reply" do
@@ -167,8 +177,11 @@ defmodule DoitMcp.Tools.ImportTextTest do
 
     assert %{"type" => "object"} = schema
     assert %{"type" => "string"} = schema["properties"]["text"]
+    assert %{"type" => "string"} = schema["properties"]["preview_id"]
     assert %{"type" => "boolean"} = schema["properties"]["preview"]
-    assert schema["required"] == ["text"]
+    # One of text / preview_id is required; the schema can't say "one of", so
+    # neither is marked required and the tool enforces it (m03.04 6.7.3).
+    refute "text" in List.wrap(schema["required"])
   end
 
   # Runs the tool against a stub that records the decoded request body.

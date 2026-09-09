@@ -8,8 +8,9 @@ defmodule DoItWeb.Api.ImportController do
   contract, the parse → chunk → apply pipeline, the source comment, and the
   per-source-text idempotency all live in `DoItWeb.Api.Imports`.
 
-  This controller is the thin HTTP edge: it pulls the acting user (resolved by
-  `DoItWeb.Api.AuthPlug`) off the conn, delegates, and renders whichever
+  This controller is the thin HTTP edge: it pulls the acting user and the
+  access token id (both resolved by `DoItWeb.Api.AuthPlug`; stored previews
+  are keyed by token) off the conn, delegates, and renders whichever
   `{status, body}` the service returned.
   """
   use DoItWeb, :controller
@@ -17,7 +18,7 @@ defmodule DoItWeb.Api.ImportController do
   alias DoItWeb.Api.Imports
 
   def create(conn, params) do
-    {_, status, body} = Imports.run(conn.assigns.current_user, params)
+    {_, status, body} = Imports.run(conn.assigns.current_user, conn.assigns.api_token_id, params)
     conn |> put_status(status) |> json(body)
   end
 end

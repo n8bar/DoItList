@@ -1740,7 +1740,10 @@ defmodule DoItWeb.Api.Operations do
     }
   end
 
-  defp initiative_result(%Initiative{} = initiative) do
+  # Public so the imports endpoint's stale-preview reply carries the same
+  # `current` record a conflicting op does (m03.04 6.7.2).
+  @doc false
+  def initiative_result(%Initiative{} = initiative) do
     %{
       id: initiative.id,
       type: "initiative",

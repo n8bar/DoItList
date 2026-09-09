@@ -11,14 +11,15 @@ defmodule DoItWeb.Api.Imports do
 
   ## Request
 
-      {"text": "...",                                   // required, non-blank
+      {"text": "...",                                   // non-blank; or "preview_id"
        "filename": "plan.md",                           // optional
        "target": {"initiative_name": "Q3 Plan"}         // a NEW Initiative
               | {"initiative_id": 12,                   // or an existing one,
                  "parent_task_id": 34},                 //   optionally under a Task
        "preview": false}                                // default false
 
-  A missing/blank `text`, a non-boolean `preview`, a malformed target, or both
+  Exactly one of `text` and `preview_id` (see "Apply by preview_id"). A
+  missing/blank `text`, a non-boolean `preview`, a malformed target, or both
   target forms at once is a `422` single-error. Source text with no items in it
   is a `422` too. An existing target runs through
   `DoItWeb.Api.Authz.fetch_initiative/3` at `:edit` (`404` unknown / agent
@@ -43,8 +44,10 @@ defmodule DoItWeb.Api.Imports do
 
   ## Preview vs apply
 
-  `preview: true` returns `{"preview": true, ...summary}` and writes **nothing**
-  — no Tasks, no comment, no import record.
+  `preview: true` returns `{"preview": true, "preview_id": "...", ...summary}`
+  and writes **nothing** to the tree — no Tasks, no comment, no import record.
+  It does store the preview itself (`DoIt.Imports.put_preview/4`) so the caller
+  can apply it by id.
 
   Against an **existing** target the preview also carries a `"diff"` (2.5): the
   document read against the live tree already there — Tasks the document has
@@ -70,6 +73,18 @@ defmodule DoItWeb.Api.Imports do
   root Task, or the parent Task — reading `Imported from <filename>` or
   `Imported from pasted text`. A preamble (prose above the first item) rides
   with it: on a new Initiative it becomes the Initiative's description instead.
+
+  ## Apply by preview_id (6.7)
+
+  A request carrying `"preview_id"` instead of `"text"` applies the stored
+  preview: its source text, filename and target — anything sent alongside is
+  ignored. The preview must belong to the same access token and be under an
+  hour old; an unknown, expired, other-token or already-applied id is a `404`
+  telling the caller to preview again. If the target Initiative's `version`
+  moved since the preview, the apply is refused with the standard stale-write
+  reply — `409`, code `conflict`, the current record under `error.current` —
+  exactly as a conflicting `expected_version` op reports. An apply consumes the
+  preview, whichever way it ends; `preview_id` with `preview: true` is a `422`.
 
   ## Idempotency (2.3.5)
 
@@ -97,7 +112,7 @@ defmodule DoItWeb.Api.Imports do
   """
 
   alias DoIt.{Initiatives, Tasks}
-  alias DoIt.Imports.{Diff, Import, Parser}
+  alias DoIt.Imports.{Diff, Import, Parser, Preview}
   alias DoIt.Initiatives.Initiative
   alias DoIt.Tasks.{Index, Task}
   alias DoItWeb.Api
@@ -141,17 +156,37 @@ defmodule DoItWeb.Api.Imports do
   end
 
   @doc """
-  Run an import request for `user`.
+  Run an import request for `user`, acting under access token `token_id`
+  (stored previews are keyed by it).
 
   Returns `{:ok, status, body}` or `{:error, status, body}` — the controller
   renders either verbatim.
   """
-  @spec run(DoIt.Accounts.User.t(), map()) ::
+  @spec run(DoIt.Accounts.User.t(), integer(), map()) ::
           {:ok, 200, map()} | {:error, 403 | 404 | 409 | 422, map()}
-  def run(user, params) when is_map(params) do
-    with {:ok, text} <- fetch_text(params),
-         {:ok, preview?} <- fetch_preview(params),
-         {:ok, filename} <- fetch_filename(params),
+  def run(user, token_id, params) when is_map(params) do
+    with {:ok, preview?} <- fetch_preview(params),
+         {:ok, source} <- fetch_source(params) do
+      case source do
+        {:text, text} ->
+          run_text(user, token_id, text, preview?, params)
+
+        {:preview_id, _id} when preview? ->
+          error(
+            422,
+            "\"preview_id\" applies a stored preview; to preview again, send the source in \"text\"."
+          )
+
+        {:preview_id, id} ->
+          run_preview_id(user, token_id, id)
+      end
+    end
+  end
+
+  def run(_user, _token_id, _params), do: error(422, "Request body must be a JSON object.")
+
+  defp run_text(user, token_id, text, preview?, params) do
+    with {:ok, filename} <- fetch_filename(params),
          {:ok, request} <- fetch_target(params),
          {:ok, target, initiative} <- resolve_target(user, request),
          {:ok, manifest} <- parse(text),
@@ -159,34 +194,51 @@ defmodule DoItWeb.Api.Imports do
       summary = summary(manifest, target, initiative)
 
       if preview? do
-        {:ok, 200,
-         summary
-         |> Map.merge(%{"preview" => true, "limits" => limits()})
-         |> put_diff(manifest, target, initiative)}
+        preview(token_id, text, filename, manifest, target, initiative, summary)
       else
         apply_import(user, text, filename, manifest, target, initiative, summary)
       end
     end
   end
 
-  def run(_user, _params), do: error(422, "Request body must be a JSON object.")
-
   # --- Request validation -----------------------------------------------------
 
-  defp fetch_text(params) do
-    case Map.get(params, "text") do
-      text when is_binary(text) ->
-        if String.trim(text) == "",
-          do: error(422, "\"text\" is blank; send the source document to import."),
-          else: {:ok, text}
+  # Exactly one of `text` (the document) and `preview_id` (a stored preview).
+  defp fetch_source(params) do
+    case {Map.get(params, "text"), Map.get(params, "preview_id")} do
+      {nil, nil} ->
+        error(
+          422,
+          "Missing required \"text\" — the source document to import — or \"preview_id\" from a preview."
+        )
 
-      nil ->
-        error(422, "Missing required \"text\" — the source document to import.")
+      {text, nil} ->
+        fetch_text(text)
 
-      other ->
-        error(422, "\"text\" must be a string (got #{inspect(other)}).")
+      {nil, id} when is_binary(id) and id != "" ->
+        {:ok, {:preview_id, id}}
+
+      {nil, other} ->
+        error(
+          422,
+          "\"preview_id\" must be the non-empty string a preview returned (got #{inspect(other)})."
+        )
+
+      {_text, _id} ->
+        error(
+          422,
+          "\"preview_id\" replaces \"text\"; send one or the other, not both."
+        )
     end
   end
+
+  defp fetch_text(text) when is_binary(text) do
+    if String.trim(text) == "",
+      do: error(422, "\"text\" is blank; send the source document to import."),
+      else: {:ok, {:text, text}}
+  end
+
+  defp fetch_text(other), do: error(422, "\"text\" must be a string (got #{inspect(other)}).")
 
   defp fetch_preview(params) do
     case Map.get(params, "preview") do
@@ -462,6 +514,80 @@ defmodule DoItWeb.Api.Imports do
     Enum.find_value(items, fn item ->
       if item.id == task_id, do: item, else: find_node(item.children, task_id)
     end)
+  end
+
+  # --- Stored previews (6.7) --------------------------------------------------
+
+  # Runs after `enforce_limits/2`, so the stored text is within
+  # `@max_source_bytes`. A newer preview for the same (token, target Initiative)
+  # replaces the older one inside `put_preview/4`.
+  defp preview(token_id, text, filename, manifest, target, initiative, summary) do
+    {:ok, %Preview{id: preview_id}} =
+      DoIt.Imports.put_preview(token_id, target, initiative, %{text: text, filename: filename})
+
+    {:ok, 200,
+     summary
+     |> Map.merge(%{"preview" => true, "preview_id" => preview_id, "limits" => limits()})
+     |> put_diff(manifest, target, initiative)}
+  end
+
+  # The stored target is re-resolved (authorization may have changed) and the
+  # document re-parsed; then the row is consumed BEFORE the write, so a second
+  # apply of the same id is refused whichever way this one ends.
+  defp run_preview_id(user, token_id, id) do
+    case DoIt.Imports.fetch_preview(id, token_id) do
+      nil ->
+        minutes = div(DoIt.Imports.preview_ttl_seconds(), 60)
+
+        error(
+          404,
+          "No applicable preview #{inspect(id)} for this access token — it is unknown, " <>
+            "expired (previews last #{minutes} minutes), or already applied. Send the source " <>
+            "in \"text\" with \"preview\": true again, then apply the new \"preview_id\".",
+          :not_found
+        )
+
+      %Preview{text: text, filename: filename} = stored ->
+        with {:ok, target, initiative} <- resolve_target(user, preview_target(stored)),
+             :ok <- check_preview_version(stored, initiative),
+             {:ok, manifest} <- parse(text),
+             :ok <- enforce_limits(text, manifest) do
+          DoIt.Imports.delete_preview(stored)
+          summary = summary(manifest, target, initiative)
+          apply_import(user, text, filename, manifest, target, initiative, summary)
+        end
+    end
+  end
+
+  # Rebuild the request target the preview was made with — the shape
+  # `fetch_target/1` produces.
+  defp preview_target(%Preview{target_kind: "new_initiative", target_name: name}),
+    do: {:new_initiative, name}
+
+  defp preview_target(%Preview{target_kind: "initiative", target_id: id}),
+    do: {:existing, id, nil}
+
+  defp preview_target(%Preview{target_kind: "task", initiative_id: ini_id, target_id: task_id}),
+    do: {:existing, ini_id, task_id}
+
+  # The standard stale-write reply (m03.04 2.7.4): 409 `conflict` with the
+  # CURRENT record, so the caller re-reads from the response.
+  defp check_preview_version(%Preview{initiative_version: nil}, _initiative), do: :ok
+
+  defp check_preview_version(%Preview{initiative_version: v}, %Initiative{version: v}), do: :ok
+
+  defp check_preview_version(%Preview{}, %Initiative{} = current) do
+    body =
+      Api.error_body(
+        409,
+        :conflict,
+        "Initiative #{current.id} is at version #{current.version} — it changed since your " <>
+          "preview. Nothing was applied. Re-read from this error's `current` record, preview " <>
+          "again, then apply the new preview_id."
+      )
+      |> put_in([:error, :current], Operations.initiative_result(current))
+
+    {:error, 409, body}
   end
 
   # --- Apply ------------------------------------------------------------------
