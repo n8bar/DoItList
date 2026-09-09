@@ -8,7 +8,7 @@ it. Configuration comes from the environment the connect panel emits:
     DOITLIST_API_URL     e.g. http://localhost:4000  (hosted: https://...)
     DOITLIST_API_TOKEN   the bearer token minted by the connect panel
     DOITLIST_STATE_DIR   optional; where pending writes are parked
-                         (default ~/.doitlist/state)
+                         (default ./.doitlist/state — retry from the same directory)
 
 Division of labor (m03.04 4.1.2): import parsing stays in the API — this
 client only shapes requests, formats responses, and mirrors completion into
@@ -147,18 +147,13 @@ class Config(object):
 
     @property
     def state_dir(self):
-        """Where pending writes are parked. Resolved lazily: a read verb never
-        needs it, so a machine with no home directory can still read."""
+        """Where pending writes are parked: `.doitlist/state` under the current
+        directory (m03.04 6.8) — the sandbox an agent runs in already permits
+        that, where the home directory may not — unless DOITLIST_STATE_DIR says
+        otherwise. A retry must run from the same directory as the write."""
         if self._state_dir:
             return pathlib.Path(self._state_dir)
-        try:
-            home = pathlib.Path.home()
-        except (RuntimeError, OSError):
-            raise ConfigError(
-                "no home directory to park pending writes in — set {0} to a "
-                "writable directory.".format(ENV_STATE_DIR)
-            )
-        return home / ".doitlist" / "state"
+        return pathlib.Path.cwd() / ".doitlist" / "state"
 
     @property
     def pending_dir(self):

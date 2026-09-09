@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import os
+import pathlib
 import shutil
 import sys
 import tempfile
@@ -1149,6 +1150,31 @@ class LostResponseTest(WriteCase):
 
 class RetryIdentityTest(WriteCase):
     """4.3.4 — a retry is the same key and the same body, or it is not a retry."""
+
+    def test_the_store_defaults_to_the_working_directory(self):
+        # 6.8 — no DOITLIST_STATE_DIR: the record parks under ./.doitlist/state,
+        # inside whatever sandbox the agent runs in, and retry finds it there.
+        env = {k: v for k, v in self.env.items() if k != "DOITLIST_STATE_DIR"}
+        workdir = tempfile.mkdtemp(prefix="doitlist-cwd-")
+        before = os.getcwd()
+        os.chdir(workdir)
+        try:
+            routes = {
+                "GET /api/v1/tasks/101": read_task(),
+                "POST /api/v1/operations": doitlist.TransportError("could not reach the host"),
+            }
+            code, _, _, _ = run(["done", "%101"], routes, env=env)
+            self.assertEqual(code, 1)
+            parked = sorted(pathlib.Path(workdir, ".doitlist", "state", "pending").glob("*.json"))
+            self.assertEqual(len(parked), 1)
+            self.assertFalse(list(pathlib.Path(self.state).glob("**/*.json")))
+
+            code, out, err, _ = run(["retry"], {"POST /api/v1/operations": ops_ok(task_data())}, env=env)
+            self.assertEqual(code, 0, out + err)
+            self.assertFalse(list(pathlib.Path(workdir, ".doitlist").glob("**/*.json")))
+        finally:
+            os.chdir(before)
+            shutil.rmtree(workdir, ignore_errors=True)
 
     def _lose_one(self):
         routes = {

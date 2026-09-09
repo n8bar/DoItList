@@ -577,3 +577,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-09  Arc 4 7.7.3.1-2 and 7.7.3.4.1 done: one Codex completion per client against twin imports of the large fixture; the skill lane cost less on every axis (7 vs 9 tool calls, 5 vs 8 requests, 141 vs 188 s) with one recoverable failure in each lane; numbers and the tradeoff read-out are on the items.
 2026-09-09  Arc 4 O&C 6.8 drafted: the CLI's pending store falls back to a workspace-local directory when ~/.doitlist is unwritable -- the comparison run's sandbox hit a traceback there.
 2026-09-09  Arc 4 O&C 6.8 redrafted to one change: the CLI's retry store defaults to the working directory, where a sandboxed agent's mirror already lives -- no fallback logic.
+2026-09-09  m03.04 6.8: the CLI's retry store defaults to ./.doitlist/state so a sandboxed agent never writes outside its working directory; DOITLIST_STATE_DIR still overrides.
