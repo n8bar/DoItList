@@ -106,6 +106,8 @@ TREE = {
     "name": "Q3 Launch",
     "url": "https://doitlist.app/initiatives/12",
     "progress": 42,
+    "progress_calc": "leaf_average",
+    "unit_count": 3,
     "index_style": "numerical",
     "root_task_id": 100,
     "version": 3,
@@ -450,7 +452,7 @@ class TreeTest(unittest.TestCase):
         self.assertEqual(
             out.splitlines(),
             [
-                "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%",
+                "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%  3 leaves",
                 "Scope: whole tree",
                 "Depth: all",
                 "1 Build the API  %101  50%  [ ]  branch",
@@ -460,6 +462,32 @@ class TreeTest(unittest.TestCase):
                 "  2.1 Package it  %121  25%  [ ]  branch",
                 "    2.1.1 Pick a name  %131  25%  [ ]  leaf",
             ],
+        )
+
+    def test_header_names_the_unit_the_calc_mode_counts(self):
+        single = dict(TREE, progress_calc="single_level", unit_count=2)
+        routes = {"GET /api/v1/initiatives/12": (200, _json(single))}
+        code, out, err, _ = run(["tree", "12"], routes)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            out.splitlines()[0],
+            "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%  2 top-level Tasks",
+        )
+
+        one = dict(TREE, unit_count=1)
+        routes = {"GET /api/v1/initiatives/12": (200, _json(one))}
+        code, out, _, _ = run(["tree", "12"], routes)
+        self.assertEqual(code, 0)
+        self.assertTrue(out.splitlines()[0].endswith("  42%  1 leaf"))
+
+    def test_header_omits_the_unit_cell_when_the_server_reports_none(self):
+        older = {k: v for k, v in TREE.items() if k != "unit_count"}
+        routes = {"GET /api/v1/initiatives/12": (200, _json(older))}
+        code, out, _, _ = run(["tree", "12"], routes)
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            out.splitlines()[0],
+            "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%",
         )
 
     def test_completed_tasks_are_always_visible(self):
@@ -476,7 +504,7 @@ class TreeTest(unittest.TestCase):
         self.assertEqual(
             out.splitlines(),
             [
-                "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%",
+                "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%  3 leaves",
                 "Scope: under %102 Ship the SDK",
                 "Depth: all",
                 "2 Ship the SDK  %102  25%  [ ]  branch",
@@ -492,7 +520,7 @@ class TreeTest(unittest.TestCase):
         self.assertEqual(
             out.splitlines(),
             [
-                "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%",
+                "Initiative: Q3 Launch  https://doitlist.app/initiatives/12  42%  3 leaves",
                 "Scope: under %102 Ship the SDK",
                 "Depth: 1",
                 "2 Ship the SDK  %102  25%  [ ]  branch",

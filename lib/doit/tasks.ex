@@ -2495,6 +2495,55 @@ defmodule DoIt.Tasks do
     |> Map.new()
   end
 
+  @doc """
+  Each Initiative's unit count (m03.04 6.5) — the system root's
+  `Progress.unit_count/2` — as `%{initiative_id => count}`, for the API list
+  summary. Two grouped queries over the whole set (no per-Initiative fan-out):
+  live top-level Tasks for the `single_level` Initiatives, live leaves (a
+  non-root Task with no live child) for the `leaf_average` ones. An Initiative
+  with no live Tasks is absent from the map (callers default to 0).
+  """
+  def unit_counts_for_initiatives(initiatives) do
+    {single, leaf} = Enum.split_with(initiatives, &(&1.progress_calc == "single_level"))
+
+    Map.merge(
+      top_level_counts(Enum.map(single, & &1.root_task_id)),
+      leaf_counts(Enum.map(leaf, & &1.id))
+    )
+  end
+
+  defp top_level_counts([]), do: %{}
+
+  defp top_level_counts(root_ids) do
+    from(t in Task,
+      where: t.parent_id in ^root_ids and is_nil(t.deleted_at),
+      group_by: t.initiative_id,
+      select: {t.initiative_id, count(t.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  # Soft-delete marks the whole subtree, so "no live child" is a leaf test
+  # without walking; the parentless system root is excluded by `parent_id`.
+  defp leaf_counts([]), do: %{}
+
+  defp leaf_counts(initiative_ids) do
+    from(t in Task,
+      as: :node,
+      where: t.initiative_id in ^initiative_ids and is_nil(t.deleted_at),
+      where: not is_nil(t.parent_id),
+      where:
+        not exists(
+          from(c in Task, where: c.parent_id == parent_as(:node).id and is_nil(c.deleted_at))
+        ),
+      group_by: t.initiative_id,
+      select: {t.initiative_id, count(t.id)}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   # --- Cross-references (task->task links, m03.01 worklist 4) -----------------
 
   @doc """

@@ -50,6 +50,33 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     %{conn: log_in(conn, owner), owner: owner, alpha: alpha, beta: beta}
   end
 
+  test "the header shows the Initiative's unit count and keeps it live (m03.04 6.5)",
+       %{conn: conn, owner: owner, alpha: alpha, beta: beta} do
+    # Alpha: a branch over two leaves + a lone leaf = 3 leaves; beta stays empty.
+    parent = new_task(owner, alpha, %{"title" => "Parent"})
+    _ = new_task(owner, alpha, %{"title" => "Kid 1", "parent_id" => parent.id})
+    _ = new_task(owner, alpha, %{"title" => "Kid 2", "parent_id" => parent.id})
+    _ = new_task(owner, alpha, %{"title" => "Lone"})
+
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
+    assert has_element?(view, "#initiative-unit-count", "3")
+    assert has_element?(view, "#initiative-unit-count[title='Leaves in this branch']")
+
+    # A collaborator's add lands in the header without a reload.
+    _ = new_task(owner, alpha, %{"title" => "Kid 3", "parent_id" => parent.id})
+    _ = :sys.get_state(view.pid)
+    assert has_element?(view, "#initiative-unit-count", "4")
+
+    # single_level counts the two top-level Tasks instead.
+    {:ok, _} = Initiatives.update_initiative(alpha, %{"progress_calc" => "single_level"})
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
+    assert has_element?(view, "#initiative-unit-count", "2")
+
+    # No Tasks, no badge.
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{beta.id}")
+    refute has_element?(view, "#initiative-unit-count")
+  end
+
   test "list mode renders the index with the always-present shell hook", %{conn: conn} do
     {:ok, view, _html} = live(conn, ~p"/initiatives")
 

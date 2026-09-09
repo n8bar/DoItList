@@ -113,6 +113,38 @@ defmodule DoIt.Tasks.Progress do
     {value, Map.put(acc, task.id, value)}
   end
 
+  # --- Unit count ---------------------------------------------------------
+
+  @doc """
+  How many units a branch's roll-up averages over — the number on the tree's
+  chevron badge and, for the system root, the Initiative header (m03.04 6.5).
+  `:leaf_average` counts every descendant leaf; `:single_level` counts each
+  direct child as one unit. Takes a node whose `children` are assembled (the
+  root with the top-level list attached gives the Initiative's count) or the
+  sibling list itself. A childless node has no units — the badge never shows
+  for it.
+  """
+  @spec unit_count(%{children: [map()]} | [map()], :leaf_average | :single_level) ::
+          non_neg_integer()
+  def unit_count(%{children: kids}, mode) when is_list(kids), do: unit_count(kids, mode)
+  def unit_count(nodes, :single_level) when is_list(nodes), do: length(nodes)
+
+  def unit_count(nodes, :leaf_average) when is_list(nodes),
+    do: nodes |> Enum.map(&leaf_count/1) |> Enum.sum()
+
+  defp leaf_count(%{children: []}), do: 1
+
+  defp leaf_count(%{children: kids}) when is_list(kids),
+    do: kids |> Enum.map(&leaf_count/1) |> Enum.sum()
+
+  @doc """
+  The Initiative's stored `progress_calc` string as the mode atom the functions
+  above take — `"single_level"` → `:single_level`, anything else → `:leaf_average`.
+  """
+  @spec mode(String.t() | nil) :: :leaf_average | :single_level
+  def mode("single_level"), do: :single_level
+  def mode(_calc), do: :leaf_average
+
   # --- Shared -------------------------------------------------------------
 
   @doc """

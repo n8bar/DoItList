@@ -889,11 +889,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   defp tree_path(_node, _target_id), do: nil
 
-  defp progress_calc_mode(socket) do
-    if socket.assigns.initiative.progress_calc == "single_level",
-      do: :single_level,
-      else: :leaf_average
-  end
+  defp progress_calc_mode(socket), do: Progress.mode(socket.assigns.initiative.progress_calc)
 
   # A sort change on the system root re-resolves every inheriting branch.
   defp maybe_refresh_root_sort(socket, %{id: root_id}, root_id),
@@ -3689,6 +3685,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   initiative={@initiative}
                   subtitle={@subtitle}
                   initiative_progress={@initiative_progress}
+                  unit_count={Progress.unit_count(@tree, Progress.mode(@initiative.progress_calc))}
                   can_edit={@can_edit}
                 />
 
@@ -5557,11 +5554,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   attr :initiative, :map, required: true
   attr :subtitle, :string, required: true
   attr :initiative_progress, :integer, required: true
+  # The system root's branch unit count (m03.04 6.5) — computed at the call site
+  # from the in-memory @tree, so it moves with every tree patch, like the rows.
+  attr :unit_count, :integer, required: true
   attr :can_edit, :boolean, required: true
 
   @doc """
-  The initiative header — grove icon + name, subtitle/description, roll-up
-  progress bar, and the desktop "New List" button (m02.07 item 1.2). On the
+  The initiative header — grove icon + name, unit-count badge, subtitle/
+  description, roll-up progress bar, and the desktop "New List" button
+  (m02.07 item 1.2). On the
   shell it's the center column's flex-none top: a fixed sibling above the
   tree's scroll box (never sticky inside it), so the tree scrolls beneath while
   the header stays put.
@@ -5604,6 +5605,22 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </h1>
           </span>
         <% end %>
+
+        <%!-- The Initiative's unit count — the system root's branch badge, same
+             markup and title as the rows' chevron badge (m03.04 6.5). Outside
+             the edit affordance so it never reads as part of the name. --%>
+        <span
+          :if={@unit_count > 0}
+          id="initiative-unit-count"
+          title={branch_unit_title(@initiative.progress_calc)}
+          class="flex-none relative top-[-0.4em] mt-2 inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400"
+        >
+          <.botanical_icon
+            kind={badge_icon(@initiative.progress_calc)}
+            class={badge_icon_class(@initiative.progress_calc)}
+          />
+          {@unit_count}
+        </span>
         <button
           :if={@can_edit}
           type="button"
@@ -7696,13 +7713,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   defp assignee_title(_task, _member_ids), do: "Unassigned"
 
-  defp leaf_count(%{children: []}), do: 1
-  defp leaf_count(%{children: children}), do: Enum.sum(Enum.map(children, &leaf_count/1))
-
   # The chevron badge counts what the progress mode counts: every descendant
   # leaf (leaf_average), or each direct child as one unit (single_level).
-  defp branch_unit_count(task, "single_level"), do: length(task.children)
-  defp branch_unit_count(task, _calc), do: leaf_count(task)
+  defp branch_unit_count(task, calc), do: Progress.unit_count(task, Progress.mode(calc))
 
   defp branch_unit_title("single_level"), do: "Direct children — each counts equally"
   defp branch_unit_title(_calc), do: "Leaves in this branch"

@@ -29,7 +29,7 @@ defmodule DoItWeb.Api.SerializerRepoMarkerTest do
   test "the list summary and the tree header carry AgentConnect's composed marker" do
     ini = initiative()
 
-    summary = Serializer.initiative_summary(ini, "owner", 42)
+    summary = Serializer.initiative_summary(ini, "owner", 42, 0)
     tree = Serializer.initiative_tree(ini, [], "owner", "ship it", 42, %{}, %{}, [])
 
     assert summary.repo_marker == AgentConnect.repo_marker(ini)
@@ -37,7 +37,7 @@ defmodule DoItWeb.Api.SerializerRepoMarkerTest do
   end
 
   test "the marker leads with the '## Do It List' heading and carries the Initiative's URL" do
-    %{repo_marker: marker} = Serializer.initiative_summary(initiative(), "owner", 42)
+    %{repo_marker: marker} = Serializer.initiative_summary(initiative(), "owner", 42, 0)
 
     assert String.starts_with?(marker, "## Do It List\n")
     assert marker =~ DoItWeb.Endpoint.url() <> "/initiatives/57"

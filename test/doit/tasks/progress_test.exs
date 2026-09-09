@@ -26,6 +26,39 @@ defmodule DoIt.Tasks.ProgressTest do
     }
   end
 
+  describe "unit_count/2 (m03.04 6.5)" do
+    # Root: A(a1, a2(a2x, a2y)), B, C(c1) — 5 leaves, 3 top-level tasks.
+    defp forest do
+      [
+        branch([leaf(0), branch([leaf(0), leaf(0)])]),
+        leaf(0),
+        branch([leaf(100)])
+      ]
+    end
+
+    test "leaf_average counts every descendant leaf" do
+      assert Progress.unit_count(forest(), :leaf_average) == 5
+      assert Progress.unit_count(branch(forest()), :leaf_average) == 5
+    end
+
+    test "single_level counts each direct child as one unit" do
+      assert Progress.unit_count(forest(), :single_level) == 3
+      assert Progress.unit_count(branch(forest()), :single_level) == 3
+    end
+
+    test "a childless node has no units in either mode" do
+      assert Progress.unit_count([], :leaf_average) == 0
+      assert Progress.unit_count(branch([]), :leaf_average) == 0
+      assert Progress.unit_count(branch([]), :single_level) == 0
+    end
+
+    test "mode/1 maps the stored calc string to the mode atom" do
+      assert Progress.mode("single_level") == :single_level
+      assert Progress.mode("leaf_average") == :leaf_average
+      assert Progress.mode(nil) == :leaf_average
+    end
+  end
+
   describe "leaf tasks" do
     test "uses manual_progress" do
       assert Progress.compute(leaf(0)) == 0

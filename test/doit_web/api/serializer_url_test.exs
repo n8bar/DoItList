@@ -24,7 +24,7 @@ defmodule DoItWeb.Api.SerializerUrlTest do
   end
 
   test "the url is composed from the endpoint's public URL config" do
-    %{url: url} = Serializer.initiative_summary(initiative(), "owner", 42)
+    %{url: url} = Serializer.initiative_summary(initiative(), "owner", 42, 0)
 
     endpoint = URI.parse(DoItWeb.Endpoint.url())
     composed = URI.parse(url)
@@ -39,7 +39,7 @@ defmodule DoItWeb.Api.SerializerUrlTest do
     ini = initiative()
     expected = DoItWeb.Endpoint.url() <> "/initiatives/#{ini.id}"
 
-    summary = Serializer.initiative_summary(ini, "owner", 42)
+    summary = Serializer.initiative_summary(ini, "owner", 42, 0)
     tree = Serializer.initiative_tree(ini, [], "owner", "ship it", 42, %{}, %{}, [])
 
     assert summary.url == expected

@@ -460,6 +460,19 @@ def fmt_progress(value):
     return "{0}%".format(int(value or 0))
 
 
+def fmt_units(payload):
+    """The Initiative's unit count as `N leaves` / `N top-level Tasks`, per its
+    `progress_calc`; `None` when the server did not report one."""
+    if "unit_count" not in payload:
+        return None
+    count = int(payload.get("unit_count") or 0)
+    if payload.get("progress_calc") == "single_level":
+        noun = "top-level Task" if count == 1 else "top-level Tasks"
+    else:
+        noun = "leaf" if count == 1 else "leaves"
+    return "{0} {1}".format(count, noun)
+
+
 def fmt_time(value):
     """ISO-8601 UTC -> `YYYY-MM-DD HH:MM`; unparseable input passes through."""
     text = (value or "").strip()
@@ -597,13 +610,15 @@ def cmd_tree(client, args, out, err):
         scope = "whole tree"
         nodes, level, offset = tasks, 1, 1
 
-    out.write(
-        "Initiative: {0}  {1}  {2}\n".format(
-            payload.get("name") or "",
-            payload.get("url") or "",
-            fmt_progress(payload.get("progress")),
-        )
-    )
+    header = [
+        payload.get("name") or "",
+        payload.get("url") or "",
+        fmt_progress(payload.get("progress")),
+    ]
+    units = fmt_units(payload)
+    if units is not None:
+        header.append(units)
+    out.write("Initiative: {0}\n".format("  ".join(header)))
     out.write("Scope: {0}\n".format(scope))
     out.write("Depth: {0}\n".format("all" if depth is None else depth))
 

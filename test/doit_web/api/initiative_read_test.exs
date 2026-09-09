@@ -141,6 +141,22 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["index"] =~ ~r/^\d+\.\d+$/
     end
 
+    test "the tree root carries unit_count under both calc modes (m03.04 6.5)", ctx do
+      # Phase 1's two leaves + Phase 2 = 3 leaves; 2 top-level tasks.
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => %{"unit_count" => 3}} = json_response(conn, 200)
+
+      {:ok, _} = Initiatives.update_initiative(ctx.ini, %{"progress_calc" => "single_level"})
+
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => %{"progress_calc" => "single_level", "unit_count" => 2}} =
+               json_response(conn, 200)
+    end
+
     test "task nodes carry description verbatim and a live comment_count", ctx do
       # Descriptions: one set, the rest untouched (null).
       {:ok, _} = Tasks.update_task(ctx.phase1, ctx.owner, %{"description" => "how: build it"})
@@ -203,6 +219,29 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert %{"data" => list} = json_response(conn, 200)
       row = Enum.find(list, &(&1["id"] == ctx.ini.id))
       assert row["root_task_id"] == ctx.ini.root_task_id
+    end
+
+    test "list rows carry unit_count per each Initiative's calc mode (m03.04 6.5)", ctx do
+      # A second, single_level Initiative with one top-level branch over two
+      # leaves (1 unit) beside Q3 Launch's leaf_average 3 — both in one read.
+      {:ok, other} =
+        Initiatives.create_initiative(ctx.owner, %{"name" => "Single"}, agent_access: true)
+
+      {:ok, other} = Initiatives.update_initiative(other, %{"progress_calc" => "single_level"})
+      parent = top_task(ctx.owner, other, "Parent")
+      _ = top_task(ctx.owner, other, "Kid 1", %{"parent_id" => parent.id})
+      _ = top_task(ctx.owner, other, "Kid 2", %{"parent_id" => parent.id})
+
+      {:ok, empty} =
+        Initiatives.create_initiative(ctx.owner, %{"name" => "Empty"}, agent_access: true)
+
+      conn = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives")
+      assert %{"data" => rows} = json_response(conn, 200)
+      by_id = Map.new(rows, &{&1["id"], &1["unit_count"]})
+
+      assert by_id[ctx.ini.id] == 3
+      assert by_id[other.id] == 1
+      assert by_id[empty.id] == 0
     end
 
     test "does not leak Initiatives the user isn't a member of", ctx do

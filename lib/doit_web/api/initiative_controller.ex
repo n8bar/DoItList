@@ -33,10 +33,18 @@ defmodule DoItWeb.Api.InitiativeController do
   def index(conn, _params) do
     user = conn.assigns.current_user
 
+    initiatives = Initiatives.list_visible_initiatives(user, agent_access_only: true)
+    unit_counts = Tasks.unit_counts_for_initiatives(initiatives)
+
     summaries =
-      user
-      |> Initiatives.list_visible_initiatives(agent_access_only: true)
-      |> Enum.map(fn ini -> Serializer.initiative_summary(ini, ini.my_role, ini.progress) end)
+      Enum.map(initiatives, fn ini ->
+        Serializer.initiative_summary(
+          ini,
+          ini.my_role,
+          ini.progress,
+          Map.get(unit_counts, ini.id, 0)
+        )
+      end)
 
     json(conn, Api.data(summaries))
   end

@@ -24,6 +24,7 @@ defmodule DoItWeb.Api.Serializer do
         "repo_marker": "## Do It List\nTasks: https://doitlist.app/initiatives/12 — work this tree via the doitlist MCP server, not a TODO.md or PLAN.md.",
         "role": "owner",
         "progress": 42,
+        "unit_count": 7,
         "root_task_id": 100,
         "version": 3
       }
@@ -38,9 +39,12 @@ defmodule DoItWeb.Api.Serializer do
   panel renders, so the wording can never fork. `role` is
   the acting user's role on the Initiative (`owner` | `editor` |
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
-  system root task's `computed_progress`, 0..100). `root_task_id` is the
-  Initiative's system root task — the Initiative's own comment thread lives on
-  it (item 6.4): read/write comments with `task_id = root_task_id`.
+  system root task's `computed_progress`, 0..100). `unit_count` is how many
+  units that roll-up averages over — live leaves under `leaf_average`,
+  top-level tasks under `single_level` (the header badge in the UI).
+  `root_task_id` is the Initiative's system root task — the Initiative's own
+  comment thread lives on it (item 6.4): read/write comments with
+  `task_id = root_task_id`.
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
 
@@ -55,6 +59,7 @@ defmodule DoItWeb.Api.Serializer do
         "role": "owner",
         "progress": 42,
         "progress_calc": "leaf_average",
+        "unit_count": 7,
         "index_style": "numerical",
         "root_task_id": 100,
         "version": 3,
@@ -68,6 +73,9 @@ defmodule DoItWeb.Api.Serializer do
   * `progress_calc` — how branch progress rolls up: `leaf_average` (every
     descendant leaf counts one unit) or `single_level` (each direct child one
     unit). The agent needs this to predict the effect of a progress write.
+  * `unit_count` — how many units the Initiative's roll-up averages over
+    (live leaves under `leaf_average`, top-level tasks under `single_level`);
+    the same number the tree's branch badges show, taken at the root.
   * `index_style` — the positional index style the labels below are rendered in
     (`none` | `outline` | `numerical` | `roman` | `alphabetical`).
   * `root_task_id` — the id of the Initiative's system root task. It is **not** a
@@ -259,11 +267,14 @@ defmodule DoItWeb.Api.Serializer do
   use DoItWeb, :verified_routes
 
   alias DoIt.Tasks
-  alias DoIt.Tasks.{ActivityEvent, Comment, Task}
+  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Task}
   alias DoItWeb.AgentConnect
 
-  @doc "An Initiative list item (`GET /api/v1/initiatives`)."
-  def initiative_summary(initiative, role, progress) do
+  @doc """
+  An Initiative list item (`GET /api/v1/initiatives`). `unit_count` comes from
+  the controller's batched `Tasks.unit_counts_for_initiatives/1` lookup.
+  """
+  def initiative_summary(initiative, role, progress, unit_count) do
     %{
       id: initiative.id,
       name: initiative.name,
@@ -272,6 +283,7 @@ defmodule DoItWeb.Api.Serializer do
       repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
       progress: progress || 0,
+      unit_count: unit_count,
       root_task_id: initiative.root_task_id,
       version: initiative.version
     }
@@ -312,6 +324,7 @@ defmodule DoItWeb.Api.Serializer do
       role: role,
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
+      unit_count: Progress.unit_count(tree, Progress.mode(initiative.progress_calc)),
       index_style: index_style,
       # AI-KNOBS-PARKED (m03.04): not serialized to agents pending the skill
       # rebuild; column retained. Revive this line.
