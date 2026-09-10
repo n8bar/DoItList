@@ -579,3 +579,5 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-09  Arc 4 O&C 6.8 redrafted to one change: the CLI's retry store defaults to the working directory, where a sandboxed agent's mirror already lives -- no fallback logic.
 2026-09-09  m03.04 6.8: the CLI's retry store defaults to ./.doitlist/state so a sandboxed agent never writes outside its working directory; DOITLIST_STATE_DIR still overrides.
 2026-09-09  Arc 4 5.2 done: SKILL.md reviewed and approved by the operator -- Worklist 5 complete.
+2026-09-09  Arc 4 7.2.1 done via Codex with only the MCP tools: the ticker plan imported faithfully in one import_text call with its URL returned; this repo's PLAN.md is an arc index, so it was not the paste.
+2026-09-09  Arc 4 O&C 6.9 drafted: diff stops reporting completion drift on heading-derived branches, whose completion the source cannot express -- surfaced by the 7.2.1 diff.
