@@ -1012,6 +1012,22 @@ class WriteRequestShapeTest(WriteCase):
         )
         self.assertEqual(out, "described  %101  Write the controller\n")
 
+    def test_delete_sends_one_remove_op_versioned_by_the_read(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(version=7),
+            "POST /api/v1/operations": ops_ok(dict(task_data(progress=0, done=False), deleted=True)),
+        }
+        code, out, err, transport = self.cli(["delete", "%<101>"], routes)
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET", "POST"])
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"],
+            [{"op": "remove", "type": "task", "id": 101, "data": {"expected_version": 7}}],
+        )
+        self.assertEqual(out, "deleted  %101  Write the controller\n")
+        self.assertEqual(self.pending_paths(), [])
+
     def test_a_committed_write_leaves_nothing_pending(self):
         routes = {
             "GET /api/v1/tasks/101": read_task(),
@@ -1621,6 +1637,25 @@ class ImportRequestShapeTest(ImportCase):
         )
         self.assertEqual(code, 0, out + err)
         self.assertIs(self.posted(transport)[0]["preview"], True)
+
+    def test_section_rides_in_the_target_for_either_form(self):
+        path = self.document()
+        code, out, err, transport = self.cli(
+            ["import", path, "--into", "12", "--section", "## Arc 4"],
+            {"POST /api/v1/imports": applied_body()},
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.posted(transport)[0]["target"], {"initiative_id": 12, "section": "## Arc 4"}
+        )
+
+        code, out, err, transport = self.cli(
+            ["import", path, "--section", "Arc 4"], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.posted(transport)[0]["target"], {"initiative_name": "Q3 Plan", "section": "Arc 4"}
+        )
 
     def test_under_without_into_is_refused_before_any_request(self):
         path = self.document()

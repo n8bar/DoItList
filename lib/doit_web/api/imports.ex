@@ -15,13 +15,18 @@ defmodule DoItWeb.Api.Imports do
        "filename": "plan.md",                           // optional
        "target": {"initiative_name": "Q3 Plan"}         // a NEW Initiative
               | {"initiative_id": 12,                   // or an existing one,
-                 "parent_task_id": 34},                 //   optionally under a Task
+                 "parent_task_id": 34,                  //   optionally under a Task
+                 "section": "Arc 4"},                   // either form: one heading's content
        "preview": false}                                // default false
 
   Exactly one of `text` and `preview_id` (see "Apply by preview_id"). A
   missing/blank `text`, a non-boolean `preview`, a malformed target, or both
   target forms at once is a `422` single-error. Source text with no items in it
-  is a `422` too. An existing target runs through
+  is a `422` too. `target.section` names a heading (`DoIt.Imports.Parser.section/2`
+  decides the match); only the lines under it are imported, the heading
+  itself left out, so the section's first child lands at index 1. A heading
+  that is absent or matches more than once is a `422` naming it, and the
+  summary's `target` echoes the section. An existing target runs through
   `DoItWeb.Api.Authz.fetch_initiative/3` at `:edit` (`404` unknown / agent
   access off, `403` role denies); a `parent_task_id` that isn't a live Task in
   that Initiative is a `404`.
@@ -188,10 +193,12 @@ defmodule DoItWeb.Api.Imports do
   defp run_text(user, token_id, text, preview?, params) do
     with {:ok, filename} <- fetch_filename(params),
          {:ok, request} <- fetch_target(params),
+         {:ok, section} <- fetch_section(params),
          {:ok, target, initiative} <- resolve_target(user, request),
+         {:ok, text} <- slice(text, section),
          {:ok, manifest} <- parse(text),
          :ok <- enforce_limits(text, manifest) do
-      summary = summary(manifest, target, initiative)
+      summary = manifest |> summary(target, initiative) |> put_section(section)
 
       if preview? do
         preview(token_id, text, filename, manifest, target, initiative, summary)
@@ -297,6 +304,51 @@ defmodule DoItWeb.Api.Imports do
 
   defp new_initiative_target(%{"initiative_name" => other}),
     do: error(422, "\"initiative_name\" must be a string (got #{inspect(other)}).")
+
+  # `target.section` narrows the import to one heading's content (6.10). Read
+  # after `fetch_target/1`, so the target is already known to be a map.
+  defp fetch_section(params) do
+    case get_in(params, ["target", "section"]) do
+      nil ->
+        {:ok, nil}
+
+      heading when is_binary(heading) ->
+        if String.trim(heading) == "",
+          do: error(422, "\"section\" is blank; name the heading whose content to import."),
+          else: {:ok, String.trim(heading)}
+
+      other ->
+        error(422, "\"section\" must be a heading's text (got #{inspect(other)}).")
+    end
+  end
+
+  # From here on the section IS the document: it is what gets parsed, measured,
+  # stored for a preview, hashed for idempotency, and written.
+  defp slice(text, nil), do: {:ok, text}
+
+  defp slice(text, heading) do
+    case Parser.section(text, heading) do
+      {:ok, slice} ->
+        {:ok, slice}
+
+      {:error, :not_found} ->
+        error(
+          422,
+          "No heading #{inspect(heading)} in the source document. \"section\" must match one " <>
+            "heading's text exactly (leading #s and a [ ]/[x] box aside); check the heading and retry."
+        )
+
+      {:error, {:ambiguous, n}} ->
+        error(
+          422,
+          "The heading #{inspect(heading)} appears #{n} times in the source document; " <>
+            "\"section\" must name one. Import the whole document, or a section whose heading is unique."
+        )
+    end
+  end
+
+  defp put_section(summary, nil), do: summary
+  defp put_section(summary, heading), do: put_in(summary, ["target", "section"], heading)
 
   defp target_help(problem) do
     problem <>

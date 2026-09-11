@@ -604,6 +604,113 @@ defmodule DoItWeb.Api.ImportsTest do
     end
   end
 
+  describe "section (6.10)" do
+    @sectioned """
+    # Milestone
+
+    Front matter.
+
+    ## Arc 3
+
+    1. Old work
+
+    ## Arc 4
+
+    1. First item
+       1. Nested item
+    2. Second item
+
+    ## Arc 5
+
+    1. Later work
+    """
+
+    test "a preview reports the section and an outline starting at index 1", %{
+      owner: owner,
+      ini: ini
+    } do
+      {200, body} =
+        post_import(owner, %{
+          "text" => @sectioned,
+          "target" => %{"initiative_id" => ini.id, "section" => "## Arc 4"},
+          "preview" => true
+        })
+
+      assert body["outline"] == "1 First item\n  1.1 Nested item\n2 Second item"
+      assert body["title"] == nil
+      assert body["counts"]["items"] == 3
+
+      assert body["target"] == %{
+               "kind" => "initiative",
+               "id" => ini.id,
+               "parent_task_id" => nil,
+               "section" => "## Arc 4"
+             }
+
+      assert Repo.aggregate(Import, :count) == 0
+    end
+
+    test "an apply lands the section's first child at index 1, heading omitted", %{
+      owner: owner,
+      ini: ini
+    } do
+      {200, body} =
+        post_import(owner, %{
+          "text" => @sectioned,
+          "filename" => "m03.md",
+          "target" => %{"initiative_id" => ini.id, "section" => "Arc 4"}
+        })
+
+      assert body["target"]["section"] == "Arc 4"
+      assert %Import{response: %{"target" => %{"section" => "Arc 4"}}} = Repo.one!(Import)
+
+      by_title = titles(ini.id)
+      refute Map.has_key?(by_title, "Arc 4")
+      refute Map.has_key?(by_title, "Old work")
+      refute Map.has_key?(by_title, "Later work")
+
+      # The section's first child is the root's first child: index 1.
+      assert Tasks.ordered_child_ids(ini.root_task_id) == [
+               by_title["First item"].id,
+               by_title["Second item"].id
+             ]
+
+      assert by_title["Nested item"].parent_id == by_title["First item"].id
+    end
+
+    test "a missing or ambiguous heading is 422 naming it, and writes nothing", %{
+      owner: owner,
+      ini: ini
+    } do
+      {422, missing} =
+        post_import(owner, %{
+          "text" => @sectioned,
+          "target" => %{"initiative_id" => ini.id, "section" => "Arc 9"}
+        })
+
+      assert missing["error"]["message"] =~ ~s(No heading "Arc 9")
+
+      {422, ambiguous} =
+        post_import(owner, %{
+          "text" => @sectioned <> "\n## Arc 4\n\n1. Again\n",
+          "target" => %{"initiative_id" => ini.id, "section" => "Arc 4"}
+        })
+
+      assert ambiguous["error"]["message"] =~ ~s("Arc 4" appears 2 times)
+
+      {422, blank} =
+        post_import(owner, %{
+          "text" => @sectioned,
+          "target" => %{"initiative_name" => "X", "section" => "  "}
+        })
+
+      assert blank["error"]["message"] =~ "blank"
+
+      assert length(Tasks.list_initiative_tasks(ini.id)) == 1
+      assert Repo.aggregate(Import, :count) == 0
+    end
+  end
+
   describe "rejections" do
     test "blank text and text with no items are both 422", %{owner: owner} do
       {422, blank} =

@@ -9,6 +9,8 @@ defmodule DoitMcp.Tools.ImportText do
     * `initiative_name` — create a new Initiative;
     * `initiative_id` — an existing Initiative, optionally under `parent_task_id`.
 
+  Add `section` (a heading's text) to import only that heading's content.
+
   Applies by default, returning the title, counts, outline, and the Initiative's `url`. Reply with the outline's labels and titles, and the Initiative `url`.
 
   `preview: true` writes nothing and returns the same outline, a diff against an existing target, and a `preview_id`; to apply it, pass `preview_id` instead of `text` (one of the two is required).
@@ -28,6 +30,7 @@ defmodule DoitMcp.Tools.ImportText do
     field(:initiative_name, :string, required: false)
     field(:initiative_id, :integer, required: false)
     field(:parent_task_id, :integer, required: false)
+    field(:section, :string, required: false)
     field(:preview, :boolean, required: false)
   end
 
@@ -56,6 +59,7 @@ defmodule DoitMcp.Tools.ImportText do
 
   defp body(%{text: text} = params) when is_binary(text) do
     with {:ok, target} <- target(params) do
+      target = put_present(target, "section", Map.get(params, :section))
       {:ok, %{"text" => text, "target" => target}}
     end
   end

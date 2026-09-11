@@ -643,4 +643,106 @@ defmodule DoIt.Imports.ParserTest do
       assert length(Enum.uniq(Enum.map(ops, & &1["lid"]))) == length(ops)
     end
   end
+
+  # --- 6.10.1 section slice ---------------------------------------------------
+
+  describe "section/2" do
+    @doc_with_sections """
+    # Milestone 3
+
+    Front matter that must not import with a section.
+
+    ## Arc 3
+
+    - Old work
+
+    ## Arc 4
+
+    Intro to the arc.
+
+    1. First item
+       1. Nested item
+    2. Second item
+
+    ### Worklist notes
+
+    - A note under a deeper heading
+
+    ## Arc 5
+
+    - Later work
+    """
+
+    test "the slice starts after the heading and stops at the next same-level heading" do
+      {:ok, slice} = Parser.section(@doc_with_sections, "Arc 4")
+
+      assert slice == """
+
+             Intro to the arc.
+
+             1. First item
+                1. Nested item
+             2. Second item
+
+             ### Worklist notes
+
+             - A note under a deeper heading
+             """
+
+      manifest = parse!(slice)
+      # The heading itself is gone, so the section's first child is the first root.
+      assert manifest.title == nil
+
+      assert outline(manifest.items) == [
+               {"First item", [{"Nested item", []}]},
+               {"Second item", []},
+               {"Worklist notes", [{"A note under a deeper heading", []}]}
+             ]
+
+      assert manifest.title_description == "Intro to the arc."
+    end
+
+    test "a higher-level heading also ends the slice" do
+      {:ok, slice} = Parser.section("## A\n- a1\n# Top\n- t1\n", "A")
+      assert slice == "- a1"
+    end
+
+    test "the last section runs to the end of the document" do
+      {:ok, slice} = Parser.section(@doc_with_sections, "Arc 5")
+      assert String.trim(slice) == "- Later work"
+    end
+
+    test "leading #s, surrounding space, and a checkbox on either side are ignored" do
+      text = "## [x] Ship it\n- s1\n## Next\n- n1\n"
+
+      for heading <- ["Ship it", "## Ship it", "  Ship it  ", "[ ] Ship it", "##  [x] Ship it"] do
+        assert {:ok, "- s1"} = Parser.section(text, heading), heading
+      end
+    end
+
+    test "matching is exact otherwise" do
+      text = "## Ship it\n- s1\n"
+      assert {:error, :not_found} = Parser.section(text, "ship it")
+      assert {:error, :not_found} = Parser.section(text, "Ship")
+      assert {:error, :not_found} = Parser.section(text, "Nowhere")
+    end
+
+    test "a heading that appears more than once is ambiguous" do
+      text = "## Notes\n- a\n## Other\n- b\n### Notes\n- c\n"
+      assert {:error, {:ambiguous, 2}} = Parser.section(text, "Notes")
+    end
+
+    test "headings inside fenced code are not candidates or boundaries" do
+      text = "## Real\n- r1\n```\n## Fake\n- not an item\n```\n- r2\n## Next\n- n1\n"
+      assert {:error, :not_found} = Parser.section(text, "Fake")
+      {:ok, slice} = Parser.section(text, "Real")
+      assert slice == "- r1\n```\n## Fake\n- not an item\n```\n- r2"
+    end
+
+    test "a heading with nothing under it slices to nothing, which parse refuses" do
+      {:ok, slice} = Parser.section("## Empty\n## Next\n- n1\n", "Empty")
+      assert slice == ""
+      assert Parser.parse(slice) == {:error, :empty}
+    end
+  end
 end

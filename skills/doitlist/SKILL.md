@@ -9,9 +9,9 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 1. Lanes
 
-1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--as NAME] [--preview]`. One call per file — a plan split across sub-documents is one import per document.
+1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--section HEADING] [--as NAME] [--preview]`. One call per file — a plan split across sub-documents is one import per document.
 2. Text the user pastes or types in chat goes through `import_text`.
-3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`.
+3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`, `delete`.
 4. Read with `list`, `tree <initiative> [--under TASK] [--depth N]`, `comments <task>`, `activity <initiative>`; compare a document against a tree with `diff <file> <initiative>`. Add `--out FILE` to a write to save its full response instead of printing JSON.
 
 ## 2. Reading
@@ -25,7 +25,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 1. Pass the source verbatim. The API parses it and sets the grain; never summarize, reorder, or reformat first.
 2. When the source, the destination Initiative or parent, or the extent — whole document or one section — stays ambiguous after checking the mirror, the repo's instructions, and the conversation, ask the user before acting. Do not guess.
 3. When a write reports `outcome unknown`, run the recovery it prints — `doitlist.py retry <key>`, or for `import` the same command again — before any other command.
-4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow the extent, never edit the document. State the top ranks, get a yes, then apply the preview by its id.
+4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id.
 
 ## 4. Completing against a mirror
 

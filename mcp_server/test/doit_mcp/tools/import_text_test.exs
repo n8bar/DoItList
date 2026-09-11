@@ -42,6 +42,20 @@ defmodule DoitMcp.Tools.ImportTextTest do
                capture_body(%{text: "1. Do it", initiative_id: 12, parent_task_id: 34})
     end
 
+    # m03.04 6.10 — one heading's content, passed through unchanged.
+    test "section rides in the target only when given" do
+      body = capture_body(%{text: "1. Do it", initiative_id: 12, section: "## Arc 4"})
+      assert body["target"] == %{"initiative_id" => 12, "section" => "## Arc 4"}
+
+      body = capture_body(%{text: "1. Do it", initiative_name: "Q3 Plan", section: "Arc 4"})
+      assert body["target"] == %{"initiative_name" => "Q3 Plan", "section" => "Arc 4"}
+
+      refute Map.has_key?(
+               capture_body(%{text: "1. Do it", initiative_id: 12})["target"],
+               "section"
+             )
+    end
+
     test "preview rides the request only when given" do
       body = capture_body(%{text: "1. Do it", initiative_id: 12, preview: true})
       assert body["preview"] == true

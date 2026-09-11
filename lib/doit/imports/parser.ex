@@ -117,6 +117,17 @@ defmodule DoIt.Imports.Parser do
   its root task); for `{:task, id}` they carry `"parent_id" => id`.
   `title_description` is deliberately not an op — the endpoint decides where a
   preamble goes.
+
+  ## Sections (`section/2`)
+
+  `section(text, heading)` slices the lines under one heading — from the line
+  after it up to, not including, the next heading at the same or a higher
+  level — so a caller can import one part of a document through `parse/1`
+  with the usual rules and no wrapper Task. The heading is matched by its
+  text, exactly, after trimming, ignoring leading `#`s and a leading
+  `[ ]`/`[x]` box on either side; headings inside fenced code are not
+  candidates. No match is `{:error, :not_found}`; several is
+  `{:error, {:ambiguous, n}}`.
   """
 
   # A tab indents one level; four columns keeps it comparable to space indents.
@@ -242,6 +253,67 @@ defmodule DoIt.Imports.Parser do
 
   defp maybe_put(map, _key, value) when value in [nil, false], do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  # --- Sections ---------------------------------------------------------------
+
+  @doc """
+  The text under the heading `heading`, without the heading itself.
+
+  See "Sections" above for the matching rule and the slice's extent.
+  """
+  @spec section(String.t(), String.t()) ::
+          {:ok, String.t()} | {:error, :not_found | {:ambiguous, pos_integer()}}
+  def section(text, heading) when is_binary(text) and is_binary(heading) do
+    lines = text |> String.split("\n") |> Enum.map(&String.trim_trailing(&1, "\r"))
+    headings = heading_lines(lines)
+    wanted = heading_key(heading)
+
+    case Enum.filter(headings, fn {_at, _level, key} -> key == wanted end) do
+      [{at, level, _key}] ->
+        stop =
+          Enum.find_value(headings, length(lines), fn {i, lvl, _key} ->
+            if i > at and lvl <= level, do: i
+          end)
+
+        {:ok, lines |> Enum.slice(at + 1, stop - at - 1) |> Enum.join("\n")}
+
+      [] ->
+        {:error, :not_found}
+
+      many ->
+        {:error, {:ambiguous, length(many)}}
+    end
+  end
+
+  # `[{line index, level, key}]` for every heading outside fenced code.
+  defp heading_lines(lines) do
+    {found, _fence} =
+      lines
+      |> Enum.with_index()
+      |> Enum.reduce({[], false}, fn {line, i}, {acc, fence} ->
+        cond do
+          Regex.match?(@fence, line) -> {acc, not fence}
+          fence -> {acc, fence}
+          match = Regex.run(@heading, line) -> {[heading_entry(i, match) | acc], fence}
+          true -> {acc, fence}
+        end
+      end)
+
+    Enum.reverse(found)
+  end
+
+  defp heading_entry(i, [_, hashes, rest]), do: {i, String.length(hashes), heading_key(rest)}
+
+  # The comparable form of a heading: trimmed, without leading `#`s and
+  # without a leading checkbox — applied to the source heading and the
+  # requested one alike.
+  defp heading_key(text) do
+    text
+    |> String.trim()
+    |> String.replace(~r/^#+[ \t]*/, "")
+    |> String.replace(~r/^\[[ xX]\][ \t]*/, "")
+    |> String.trim()
+  end
 
   # --- Scanning ---------------------------------------------------------------
 

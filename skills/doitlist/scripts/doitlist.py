@@ -1153,6 +1153,27 @@ def cmd_describe(client, args, out, err):
     )
 
 
+def cmd_delete(client, args, out, err):
+    """One `remove task` op, versioned by the read (6.10.3). Soft on the server:
+    the web app's Trash can restore it; Initiatives stay web-only."""
+    task_id = parse_task_ref(args.task)
+    task = read_task(client, task_id)
+    return run_write(
+        client,
+        args,
+        out,
+        verb="delete",
+        operation={
+            "op": "remove",
+            "type": "task",
+            "id": task_id,
+            "data": {"expected_version": task["version"]},
+        },
+        summary="delete %{0}".format(task_id),
+        display={"label": "deleted", "title": task.get("title")},
+    )
+
+
 def cmd_retry(client, args, out, err):
     """Resend parked writes under their original keys and bodies (4.3.4)."""
     records = load_pending(client.config, args.key)
@@ -1238,13 +1259,17 @@ def initiative_name(text, path, given):
 
 
 def import_target(args, text):
-    """Where the document lands: an existing Initiative, or a new one."""
+    """Where the document lands — an existing Initiative, or a new one — and
+    which heading's content, when only one section is wanted."""
     if args.into:
         target = {"initiative_id": parse_initiative_ref(args.into)}
         if args.under:
             target["parent_task_id"] = parse_task_ref(args.under)
-        return target
-    return {"initiative_name": initiative_name(text, args.file, args.name)}
+    else:
+        target = {"initiative_name": initiative_name(text, args.file, args.name)}
+    if getattr(args, "section", None):
+        target["section"] = args.section
+    return target
 
 
 def counts_line(payload, batches=None):
@@ -1949,6 +1974,10 @@ def build_parser():
     describe.add_argument("text", help="the description (1-{0} characters)".format(DESCRIPTION_MAX))
     describe.set_defaults(handler=cmd_describe)
 
+    delete = subparsers.add_parser("delete", parents=[saving], help="delete a Task (and its subtree)")
+    delete.add_argument("task", help="Task id or %%<id>")
+    delete.set_defaults(handler=cmd_delete)
+
     importing = subparsers.add_parser(
         "import", parents=[saving], help="import a document as a Task tree"
     )
@@ -1958,6 +1987,11 @@ def build_parser():
     )
     importing.add_argument(
         "--under", metavar="TASK", help="import under this Task inside --into (id or %%<id>)"
+    )
+    importing.add_argument(
+        "--section",
+        metavar="HEADING",
+        help="import only the lines under this heading, without the heading itself",
     )
     importing.add_argument(
         "--as",
@@ -1989,7 +2023,7 @@ def build_parser():
 
 VERBS = (
     "list, tree, comments, activity, add, done, progress, move, comment, "
-    "retitle, describe, import, diff, retry"
+    "retitle, describe, delete, import, diff, retry"
 )
 
 
