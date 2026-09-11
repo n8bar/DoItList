@@ -1450,6 +1450,10 @@ class CompactResultTest(WriteCase):
 #: A small source document: a `# ` heading, a tab-indented child, one `[x]`.
 DOC = "# Q3 Plan\n\n- Ship the thing\n\t- Draft [x]\n- Tell everyone\n"
 
+#: DOC's lines 3, 4 and 5 are its three items, in source order — what a 200
+#: names so the import can write each id back onto its own line.
+ITEMS = [{"line": 3, "id": 111}, {"line": 4, "id": 112}, {"line": 5, "id": 113}]
+
 #: The read of the document every 200 carries, in both modes.
 SUMMARY = {
     "title": "Q3 Plan",
@@ -1699,22 +1703,26 @@ class ImportRequestShapeTest(ImportCase):
 
 
 class ImportOutputTest(ImportCase):
-    def test_an_apply_reports_the_tree_the_url_and_the_batches(self):
+    def test_an_apply_reports_the_tree_the_url_the_batches_and_the_ids(self):
         path = self.document()
-        code, out, err, _ = self.cli(["import", path], {"POST /api/v1/imports": applied_body()})
+        code, out, err, _ = self.cli(
+            ["import", path], {"POST /api/v1/imports": applied_body(items=ITEMS)}
+        )
         self.assertEqual(code, 0, out + err)
         self.assertEqual(
             out.splitlines(),
             [
                 "imported  Q3 Plan  https://doitlist.app/initiatives/12",
                 "3 items, 1 done, depth 2, style numerical, 1 batch",
+                "ids  plan.md: 3 written",
             ],
         )
 
     def test_a_replay_says_nothing_new_was_created(self):
         path = self.document()
         code, out, err, _ = self.cli(
-            ["import", path], {"POST /api/v1/imports": applied_body(batches=3, replayed=True)}
+            ["import", path],
+            {"POST /api/v1/imports": applied_body(batches=3, replayed=True, items=ITEMS)},
         )
         self.assertEqual(code, 0, out + err)
         self.assertEqual(
@@ -1723,6 +1731,7 @@ class ImportOutputTest(ImportCase):
                 "imported  Q3 Plan  https://doitlist.app/initiatives/12",
                 "3 items, 1 done, depth 2, style numerical, 3 batches",
                 "replayed (nothing new was created)",
+                "ids  plan.md: 3 written",
             ],
         )
 
@@ -1823,10 +1832,7 @@ class ImportOutputTest(ImportCase):
 
 
 class WriteIdsTest(ImportCase):
-    """6.12.4 — the apply's own ids, written back onto the document's lines."""
-
-    #: DOC's lines 3, 4 and 5 are its three items, in source order.
-    ITEMS = [{"line": 3, "id": 111}, {"line": 4, "id": 112}, {"line": 5, "id": 113}]
+    """6.13.1 — every import writes its own ids back onto the document's lines."""
 
     ANNOTATED = (
         "# Q3 Plan\n"
@@ -1843,8 +1849,8 @@ class WriteIdsTest(ImportCase):
     def test_each_returned_line_gets_its_id_and_nothing_else_moves(self):
         path = self.document()
         code, out, err, _ = self.cli(
-            ["import", path, "--write-ids"],
-            {"POST /api/v1/imports": applied_body(items=self.ITEMS)},
+            ["import", path],
+            {"POST /api/v1/imports": applied_body(items=ITEMS)},
         )
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.read(path), self.ANNOTATED)
@@ -1857,8 +1863,8 @@ class WriteIdsTest(ImportCase):
     def test_a_line_already_carrying_its_own_id_is_left_alone(self):
         path = self.document(text=self.ANNOTATED)
         code, out, err, _ = self.cli(
-            ["import", path, "--write-ids"],
-            {"POST /api/v1/imports": applied_body(items=self.ITEMS, replayed=True)},
+            ["import", path],
+            {"POST /api/v1/imports": applied_body(items=ITEMS, replayed=True)},
         )
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.read(path), self.ANNOTATED)  # byte for byte
@@ -1873,11 +1879,11 @@ class WriteIdsTest(ImportCase):
                 handle.write(edited)
 
         transport = HookedTransport(
-            {"POST /api/v1/imports": applied_body(items=self.ITEMS)}, "POST", edit
+            {"POST /api/v1/imports": applied_body(items=ITEMS)}, "POST", edit
         )
         out, err = io.StringIO(), io.StringIO()
         code = doitlist.main(
-            ["import", path, "--write-ids"],
+            ["import", path],
             env=self.env,
             transport=transport,
             out=out,
@@ -1892,19 +1898,21 @@ class WriteIdsTest(ImportCase):
         self.assertNotIn("failed", out)
         self.assertIn("imported  Q3 Plan", out)
 
-    def test_preview_refuses_write_ids_before_any_request(self):
+    def test_a_preview_annotates_nothing(self):
+        # A preview creates no Tasks, so there are no ids to write and the
+        # document is left exactly as it was.
         path = self.document()
-        code, out, err, transport = self.cli(["import", path, "--preview", "--write-ids"], {})
-        self.assertEqual(code, 2)
-        self.assertEqual(out, "")
-        self.assertIn("--write-ids", err)
-        self.assertEqual(transport.calls, [])
+        code, out, err, _ = self.cli(
+            ["import", path, "--preview"], {"POST /api/v1/imports": preview_body()}
+        )
+        self.assertEqual(code, 0, out + err)
         self.assertEqual(self.read(path), DOC)
+        self.assertNotIn("ids", out)
 
     def test_a_response_naming_no_lines_writes_nothing(self):
         path = self.document()
         code, out, err, _ = self.cli(
-            ["import", path, "--write-ids"], {"POST /api/v1/imports": applied_body()}
+            ["import", path], {"POST /api/v1/imports": applied_body()}
         )
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.read(path), DOC)
@@ -1913,22 +1921,25 @@ class WriteIdsTest(ImportCase):
     def test_a_crlf_document_keeps_its_line_endings(self):
         path = self.document(text=DOC.replace("\n", "\r\n"))
         code, out, err, _ = self.cli(
-            ["import", path, "--write-ids"],
-            {"POST /api/v1/imports": applied_body(items=self.ITEMS)},
+            ["import", path],
+            {"POST /api/v1/imports": applied_body(items=ITEMS)},
         )
         self.assertEqual(code, 0, out + err)
         after = self.read(path)
         self.assertEqual(after, self.ANNOTATED.replace("\n", "\r\n"))
         self.assertEqual(after.count("\n"), after.count("\r\n"), "no bare LF may creep in")
 
-    def test_without_the_flag_the_document_is_never_touched(self):
+    def test_no_ids_leaves_the_document_byte_for_byte(self):
+        # The opt-out for a document the user wants left alone: the import
+        # still lands, and not one byte of the source moves.
         path = self.document()
         code, out, err, _ = self.cli(
-            ["import", path], {"POST /api/v1/imports": applied_body(items=self.ITEMS)}
+            ["import", path, "--no-ids"], {"POST /api/v1/imports": applied_body(items=ITEMS)}
         )
         self.assertEqual(code, 0, out + err)
         self.assertEqual(self.read(path), DOC)
         self.assertNotIn("ids", out)
+        self.assertIn("imported  Q3 Plan", out)
 
 
 class DiffTest(ImportCase):

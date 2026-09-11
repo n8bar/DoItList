@@ -260,6 +260,44 @@ defmodule DoIt.Imports.ParserTest do
       assert manifest.counts == %{items: 4, done: 0, depth: 3, title_overflow: 0}
     end
 
+    test "a heading's own checkbox is a marker, not part of its name" do
+      manifest =
+        parse!("""
+        ## Section
+        #### [ ] 1 — Settings page
+        	1. [ ] Build a settings screen
+        #### [x] 2 — Virtual stick size
+        """)
+
+      assert manifest.title == "Section"
+
+      assert outline(manifest.items) == [
+               {"Settings page", [{"Build a settings screen", []}]},
+               {"Virtual stick size", []}
+             ]
+
+      # A heading still cannot express completion; its Progress comes from its
+      # leaves, so even a ticked one imports open.
+      assert Enum.all?(manifest.items, &(&1.done == false and &1.checkbox == false))
+    end
+
+    test "source numbering with a dash separator leaves the name, not a range" do
+      manifest =
+        parse!("""
+        - 1 — Settings page
+        - 2 - Virtual stick size
+        - 2 - 3 players supported
+        - 10.2 — Deep one
+        """)
+
+      assert titles(manifest.items) == [
+               "Settings page",
+               "Virtual stick size",
+               "2 - 3 players supported",
+               "Deep one"
+             ]
+    end
+
     test "an opening heading deeper than the shallowest one is not the title" do
       manifest =
         parse!("""
@@ -764,7 +802,7 @@ defmodule DoIt.Imports.ParserTest do
     end
 
     test "an annotated heading still names its section" do
-      # A mirror written back by `--write-ids` carries the branch's own id on
+      # A mirror written back by its own import carries the branch's id on
       # the heading line; naming the section must not have to know that.
       text = "## Arc 4 %<110>\n- a1\n## Arc 5\n- b1\n"
       assert {:ok, "- a1", 1} = Parser.section(text, "Arc 4")

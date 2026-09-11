@@ -5,45 +5,45 @@ description: Use when capturing or working a project's roadmap, plan, or to-do l
 
 # Do It List
 
-Do It List holds work as Task trees whose Progress rolls up from the leaves. This skill decides which lane a request goes down.
+Do It List holds work as Task trees whose Progress rolls up from the leaves. This skill decides which lane a request takes.
 
 ## 1. Lanes
 
-1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--section HEADING] [--as NAME] [--preview] [--write-ids]`. An index doc is the Initiative, not a level: name it from the index, add one top-level Task per linked action doc, and import each doc's action section under its Task with `--section`; none dropped.
+1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--section HEADING] [--as NAME] [--preview] [--no-ids]`. An index doc is the Initiative, not a level: name it from the index, add one top-level Task per linked action doc, and import each doc's action section under its Task with `--section`; none dropped.
 2. Text the user pastes or types in chat goes through `import_text`.
 3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`, `delete`.
 4. Read with `list`, `tree <initiative> [--under TASK] [--depth N]`, `comments <task>`, `activity <initiative>`; compare a document against a tree with `diff <file> <initiative>`.
 
 ## 2. Reading
 
-1. Read and discuss from the file the user or repo instructions designate as the Initiative's mirror; it needs no live verification.
-2. Read live when the mirror lacks the data, the user asks, or the tree has drifted; a mirrored completion needs none.
+1. Read and discuss from the file the user or repo instructions designate as the Initiative's mirror; no live verification needed.
+2. Read live before any write, when the mirror lacks the data, the user asks, or the tree has drifted; a mirrored completion needs none.
 3. Never filter completed Tasks out of a tree view.
 
 ## 3. Writing
 
 1. Pass the source verbatim. The API parses it and sets the grain; never summarize, reorder, or reformat first.
 2. When the source, the destination Initiative or parent, or the extent — whole document or one section — stays ambiguous after checking the mirror, the repo's instructions, and the conversation, ask the user before acting. Do not guess.
-3. When a write reports `outcome unknown`, run the recovery it prints — `doitlist.py retry <key>`, or for `import` the same command again — before any other command.
-4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id — a file with `--write-ids`, landing each created Task's `%<id>` on its source line. Give an unindexed target an index style first. Flag titles over 200 characters and note-bullets that would import as Tasks; suggest shortening them and rewriting the bullets as prose, which imports as the description.
+3. When a write reports `outcome unknown`, run the recovery it prints (`doitlist.py retry <key>`; for `import`, the same command again) before any other command.
+4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id; the apply lands each created Task's `%<id>` on its source line. Give an unindexed target an index style first. Flag titles over 200 characters and note-bullets that would import as Tasks; suggest shortening them and rewriting the bullets as prose, which imports as the description.
 5. Ask before deleting content you cannot identify; it is usually the user's.
 
 ## 4. Completing against a mirror
 
-1. Complete the Task by ticking its checkbox with this call: `doitlist.py done %<id> --mirror <file> --section "<heading>"`, taking the `%<id>` from the mirror's own line, not a live read. It's one write, never `done` followed by `progress 100` or the reverse.
+1. Complete the Task by ticking its checkbox: `doitlist.py done %<id> --mirror <file> --section "<heading>"`, taking the `%<id>` from the mirror's line, not a live read. It's one write, never `done` followed by `progress 100` or the reverse.
 2. Act on what it prints: the completion result, then the next unfinished leaf in section order, or none.
 3. Complete a Task the moment its work is done, one per call; never batch or defer to commit time.
 
 ## 5. Naming
 
-1. Give the user an Initiative's URL or its name, a Task's index and title — its title alone when it has no index. Never a bare numeric id.
+1. Give the user an Initiative's URL or name, a Task's index and title — its title alone when it has no index. Never a bare numeric id: the mirror's `%<id>` annotations are file plumbing, never said to the user.
 2. Reference other Tasks within a Task's fields by its stored token followed by its title, e.g. `%<272> Ship the parser`. The brackets are literal. Never remove an existing one; edit around it.
 
 ## 6. Comments and descriptions
 
 1. Put a decision and its reason in a comment. After a move, comment both parents.
 2. Put how-to and reference detail in the description.
-3. A new non-import Task matches its siblings' depth; offer in one line to decompose it into how-to steps, and do so only on a yes.
+3. A new non-import Task matches its siblings' depth; offer in one line to decompose it into how-to steps; do so only on a yes.
 4. Write both as plain prose.
 
 ## 7. Content safety

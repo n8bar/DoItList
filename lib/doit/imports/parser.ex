@@ -48,7 +48,7 @@ defmodule DoIt.Imports.Parser do
     * **Source order is preserved exactly.**
     * `[x]`/`[X]` sets `done: true`; `[ ]` or no checkbox leaves it `false`.
     * The marker and checkbox are stripped from the title, and so is a
-      trailing ` %<123>` — the id annotation a `--write-ids` import writes back
+      trailing ` %<123>` — the id annotation a file import writes back
       onto a mirror's own lines (6.12.5), so an annotated document parses,
       diffs and re-imports as the document it was before. Only a trailing
       annotation goes; a `%<id>` anywhere else in the line is title text.
@@ -158,7 +158,7 @@ defmodule DoIt.Imports.Parser do
   # One segment of a numbering marker: digits, a roman run, or a single letter.
   @seg "(?:[0-9]+|[IVXLCDM]+|[ivxlcdm]+|[A-Za-z])"
 
-  # The id annotation `--write-ids` appends, at the end of a line (6.12.5).
+  # The id annotation a file import appends, at the end of a line (6.12.5).
   @reference ~r/[ \t]+%<[0-9]+>$/
 
   @heading ~r/^[ ]{0,3}(\#{1,6})[ \t]+(.*)$/
@@ -343,9 +343,12 @@ defmodule DoIt.Imports.Parser do
   defp heading_entry(i, [_, hashes, rest]), do: {i, String.length(hashes), heading_key(rest)}
 
   # The comparable form of a heading: trimmed, without leading `#`s, a leading
-  # checkbox, or the trailing id annotation a `--write-ids` import leaves on a
+  # checkbox, or the trailing id annotation a file import leaves on a
   # heading-derived branch — applied to the source heading and the requested
   # one alike, so naming a section keeps working once the mirror is annotated.
+  # The leading `[ ]`/`[x]` a source line may carry, without its box.
+  defp strip_box(text), do: String.replace(text, ~r/^\[[ xX]\][ \t]*/, "")
+
   defp heading_key(text) do
     text
     |> String.trim()
@@ -416,7 +419,7 @@ defmodule DoIt.Imports.Parser do
       {kind, marker} ->
         {checkbox, done, title} = checkbox(rest)
 
-        case title |> String.trim() |> strip_reference() do
+        case title |> String.trim() |> strip_reference() |> strip_dash_number() do
           "" -> add_prose(state, trimmed)
           title -> add_item(state, at, indent_width(ws), kind, marker, checkbox, done, title)
         end
@@ -454,7 +457,10 @@ defmodule DoIt.Imports.Parser do
   defp add_heading(state, at, level, text) do
     headings = Enum.drop_while(state.headings, fn {lvl, _} -> lvl >= level end)
     depth = length(headings)
-    {_kind, marker, title} = strip_marker(text, state.seq_letters)
+    # A heading may carry a checkbox the way a list item does. Every Task has a
+    # checkbox of its own here, so the source's box is a marker to strip, never
+    # title text — a heading still cannot express completion (2.1).
+    {_kind, marker, title} = text |> strip_box() |> strip_marker(state.seq_letters)
 
     state
     |> Map.put(:headings, [{level, depth} | headings])
@@ -694,16 +700,30 @@ defmodule DoIt.Imports.Parser do
 
     case marker_of(token, seq_letters) do
       none_or_word when none_or_word in [:none, :word] ->
-        {:none, nil, text |> String.trim() |> strip_reference()}
+        {:none, nil, text |> String.trim() |> strip_reference() |> strip_dash_number()}
 
       {kind, marker} ->
         {_checkbox, _done, title} = checkbox(rest)
         marker = if kind == :bullet, do: nil, else: marker
 
-        case title |> String.trim() |> strip_reference() do
+        case title |> String.trim() |> strip_reference() |> strip_dash_number() do
           "" -> {:none, nil, text |> String.trim() |> strip_reference()}
           title -> {kind, marker, title}
         end
+    end
+  end
+
+  # `1 — Settings page` is the source numbering its own item, the way `1.` is;
+  # the Initiative's index supplies the number here, so the title keeps only
+  # the name. The dash must separate a number from words — `2 - 3 players` is
+  # a range, not numbering — and a title that is nothing else keeps what it
+  # has rather than becoming nameless.
+  @dash_number ~r/^[0-9]+(?:\.[0-9]+)*[ \t]+[\x{2014}\x{2013}-][ \t]+(?=[^0-9])/u
+
+  defp strip_dash_number(title) do
+    case String.replace(title, @dash_number, "") do
+      "" -> title
+      stripped -> stripped
     end
   end
 

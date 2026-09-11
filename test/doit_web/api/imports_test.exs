@@ -94,7 +94,7 @@ defmodule DoItWeb.Api.ImportsTest do
     task_id |> Tasks.list_comments() |> Enum.map(& &1.body)
   end
 
-  # What `doitlist.py import --write-ids` does to the document it just
+  # What `doitlist.py import` does by default to the document it just
   # imported: every line the response named gets its Task's ` %<id>`.
   defp annotate(text, items) do
     items
@@ -617,7 +617,7 @@ defmodule DoItWeb.Api.ImportsTest do
 
       assert second["replayed"] == true
       assert Map.delete(second, "replayed") == first
-      # The replay still names the lines and ids, so `--write-ids` can finish
+      # The replay still names the lines and ids, so the write-back can finish
       # a run whose first attempt got the response but not the file (6.12.4).
       assert second["items"] == first["items"]
 

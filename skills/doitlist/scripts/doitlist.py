@@ -368,8 +368,8 @@ def _data(payload):
 
 _INITIATIVE_URL = re.compile(r"/initiatives/(\d+)")
 
-#: The id annotation an import writes back onto a source line with
-#: `--write-ids` (m03.04 6.12): ` %<123>`, at the very end of the line
+#: The id annotation an import writes back onto a source line
+#: (m03.04 6.12, 6.13): ` %<123>`, at the very end of the line
 #: and nowhere else. It is not part of the text it trails, on either side of
 #: the wire — the API's parser strips exactly the same thing.
 _REFERENCE = re.compile(r"[ \t]+%<(\d+)>$")
@@ -1241,11 +1241,12 @@ def cmd_retry(client, args, out, err):
 # replays the first apply instead of duplicating it. `diff` is the same
 # endpoint's preview against an existing target: read-only on both sides.
 #
-# `--write-ids` is the one thing here that touches the source file, and only
+# The write-back is the one thing here that touches the source file, and only
 # after a clean apply: the 200 says which line became which Task, and each of
 # those lines gets its ` %<id>`. A mirror annotated once carries every id a
 # later completion needs, so nothing has to read the live tree to find one
-# (6.12).
+# (6.12). Every file import does it; `--no-ids` is the opt-out for a document
+# the user wants left alone, and a preview creates nothing to annotate (6.13).
 
 
 def read_source(path):
@@ -1406,7 +1407,7 @@ def apply_ids(path, sent_text, items):
 
 
 def write_back_ids(path, sent_text, payload, out):
-    """`--write-ids`: put the import's own ids into the document it imported.
+    """Put the import's own ids into the document it imported.
 
     The import has already landed by the time this runs, so a failure here is
     reported as what it is — ids not written — and never as a failed import.
@@ -1433,11 +1434,6 @@ def cmd_import(client, args, out, err):
     if args.under and not args.into:
         raise UsageError(
             "--under names a Task inside --into; pass --into <initiative> as well."
-        )
-    if args.write_ids and args.preview:
-        raise UsageError(
-            "--write-ids annotates the lines an apply created Tasks from; a "
-            "preview creates none. Preview first, then import with --write-ids."
         )
 
     text = read_source(args.file)
@@ -1609,7 +1605,7 @@ def split_line(raw):
 def heading_of(body):
     """`(level, text)` for an ATX heading line, else `None`.
 
-    A heading-derived branch gets annotated by `--write-ids` like any other
+    A heading-derived branch gets annotated by an import like any other
     item, so its trailing ` %<id>` is dropped here too: naming a section keeps
     working once the mirror carries its ids.
     """
@@ -2113,9 +2109,13 @@ def build_parser():
         "--preview", action="store_true", help="report what would be imported; write nothing"
     )
     importing.add_argument(
-        "--write-ids",
-        action="store_true",
-        help="append each created Task's %%<id> to the source line it came from",
+        "--no-ids",
+        dest="write_ids",
+        action="store_false",
+        help=(
+            "leave the document untouched; by default an import appends each "
+            "created Task's %%<id> to the source line it came from"
+        ),
     )
     importing.set_defaults(handler=cmd_import)
 
