@@ -9,10 +9,10 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 1. Lanes
 
-1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--section HEADING] [--as NAME] [--preview]`. A plan split across action docs imports whole: add each doc's parent Task, then import the doc under it with `--section`; a linked action doc is imported or asked about, never dropped.
+1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--section HEADING] [--as NAME] [--preview]`. An index doc is the Initiative, not a level: name it from the index, add one top-level Task per linked action doc, and import each doc's action section under its Task with `--section`; none dropped.
 2. Text the user pastes or types in chat goes through `import_text`.
 3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`, `delete`.
-4. Read with `list`, `tree <initiative> [--under TASK] [--depth N]`, `comments <task>`, `activity <initiative>`; compare a document against a tree with `diff <file> <initiative>`. Add `--out FILE` to a write to save its full response instead of printing JSON.
+4. Read with `list`, `tree <initiative> [--under TASK] [--depth N]`, `comments <task>`, `activity <initiative>`; compare a document against a tree with `diff <file> <initiative>`.
 
 ## 2. Reading
 
@@ -25,7 +25,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 1. Pass the source verbatim. The API parses it and sets the grain; never summarize, reorder, or reformat first.
 2. When the source, the destination Initiative or parent, or the extent — whole document or one section — stays ambiguous after checking the mirror, the repo's instructions, and the conversation, ask the user before acting. Do not guess.
 3. When a write reports `outcome unknown`, run the recovery it prints — `doitlist.py retry <key>`, or for `import` the same command again — before any other command.
-4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id. Give an unindexed target an index style first.
+4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id. Give an unindexed target an index style first. Flag titles over 200 characters and note-bullets that would import as Tasks; both are fixed in the doc.
 5. Ask before deleting content you cannot identify; it is usually the user's.
 
 ## 4. Completing against a mirror
