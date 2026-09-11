@@ -17,9 +17,11 @@ defmodule DoItWeb.Api.ImportsTest do
   `parent_task_id`'s children; absent for a new Initiative); the size limits
   (2.6) — an over-long source, too many items and an over-long description each
   refused before a single write, a 200-plus-character title imported whole with
-  its overflow in the description, and the limits echoed in a preview; and the
-  rejection paths — empty text, malformed target, stranger, viewer, foreign
-  parent Task.
+  its overflow in the description, and the limits echoed in a preview; the
+  `items` report (6.12.3) naming the source line each created Task came from,
+  in whole-document lines through a section import, and an annotated document
+  diffing clean and re-importing as its plain self; and the rejection paths —
+  empty text, malformed target, stranger, viewer, foreign parent Task.
 
   Persistence is checked through the domain contexts (not extra API reads) so
   the per-token rate limit (5/window in `config/test.exs`) never bites — each
@@ -92,6 +94,16 @@ defmodule DoItWeb.Api.ImportsTest do
     task_id |> Tasks.list_comments() |> Enum.map(& &1.body)
   end
 
+  # What `doitlist.py import --write-ids` does to the document it just
+  # imported: every line the response named gets its Task's ` %<id>`.
+  defp annotate(text, items) do
+    items
+    |> Enum.reduce(String.split(text, "\n"), fn %{"line" => line, "id" => id}, lines ->
+      List.update_at(lines, line - 1, &(&1 <> " %<#{id}>"))
+    end)
+    |> Enum.join("\n")
+  end
+
   setup do
     owner = user("owner")
     viewer = user("viewer")
@@ -125,6 +137,9 @@ defmodule DoItWeb.Api.ImportsTest do
       assert body["style"] == "numerical"
       assert body["counts"] == %{"items" => 4, "done" => 1, "depth" => 2, "title_overflow" => 0}
       assert body["target"] == %{"kind" => "new_initiative", "name" => "Q3 Plan"}
+
+      # 6.12.3 — a preview creates nothing, so there are no ids to report.
+      refute Map.has_key?(body, "items")
 
       # 2.6.2 — the size rules are readable without spending a failed request.
       assert body["limits"] == %{
@@ -382,6 +397,27 @@ defmodule DoItWeb.Api.ImportsTest do
       assert comment_bodies(initiative.root_task_id) == ["Imported from plan.md"]
     end
 
+    test "reports the source line each created Task came from (6.12.3)", %{owner: owner} do
+      {200, body} =
+        post_import(owner, %{
+          "text" => @source,
+          "target" => %{"initiative_name" => "Q3 Plan"}
+        })
+
+      tasks = titles(body["initiative"]["id"])
+
+      # Line 5 of @source is "1. Ship the thing", 6 its nested draft, 8 the
+      # ticked room, 9 "Tell everyone" — depth-first, in source order.
+      assert body["items"] == [
+               %{"line" => 5, "id" => tasks["Ship the thing"].id},
+               %{"line" => 6, "id" => tasks["Draft the spec"].id},
+               %{"line" => 8, "id" => tasks["Book the room"].id},
+               %{"line" => 9, "id" => tasks["Tell everyone"].id}
+             ]
+
+      assert @source |> String.split("\n") |> Enum.at(4) == "1. Ship the thing"
+    end
+
     test "without a filename the source comment says pasted text", %{owner: owner} do
       {200, body} =
         post_import(owner, %{
@@ -581,6 +617,9 @@ defmodule DoItWeb.Api.ImportsTest do
 
       assert second["replayed"] == true
       assert Map.delete(second, "replayed") == first
+      # The replay still names the lines and ids, so `--write-ids` can finish
+      # a run whose first attempt got the response but not the file (6.12.4).
+      assert second["items"] == first["items"]
 
       assert length(Tasks.list_initiative_tasks(ini.id)) == tasks_after_first
 
@@ -678,6 +717,28 @@ defmodule DoItWeb.Api.ImportsTest do
       assert by_title["Nested item"].parent_id == by_title["First item"].id
     end
 
+    test "items report whole-document lines, not the slice's (6.12.3)", %{
+      owner: owner,
+      ini: ini
+    } do
+      {200, body} =
+        post_import(owner, %{
+          "text" => @sectioned,
+          "target" => %{"initiative_id" => ini.id, "section" => "Arc 4"}
+        })
+
+      by_title = titles(ini.id)
+
+      assert body["items"] == [
+               %{"line" => 11, "id" => by_title["First item"].id},
+               %{"line" => 12, "id" => by_title["Nested item"].id},
+               %{"line" => 13, "id" => by_title["Second item"].id}
+             ]
+
+      # Line 11 of the whole document, not line 2 of the slice.
+      assert @sectioned |> String.split("\n") |> Enum.at(10) == "1. First item"
+    end
+
     test "a missing or ambiguous heading is 422 naming it, and writes nothing", %{
       owner: owner,
       ini: ini
@@ -708,6 +769,39 @@ defmodule DoItWeb.Api.ImportsTest do
 
       assert length(Tasks.list_initiative_tasks(ini.id)) == 1
       assert Repo.aggregate(Import, :count) == 0
+    end
+  end
+
+  describe "annotated mirrors (6.12.5)" do
+    test "an annotated document diffs clean and re-imports as its plain self", %{
+      owner: owner,
+      ini: ini
+    } do
+      {200, first} =
+        post_import(owner, %{"text" => @source, "target" => %{"initiative_id" => ini.id}})
+
+      annotated = annotate(@source, first["items"])
+      ship = titles(ini.id)["Ship the thing"]
+      assert annotated =~ "1. Ship the thing %<#{ship.id}>"
+
+      {200, preview} =
+        post_import(owner, %{
+          "text" => annotated,
+          "target" => %{"initiative_id" => ini.id},
+          "preview" => true
+        })
+
+      assert preview["diff"]["clean"] == true
+      assert preview["counts"] == first["counts"]
+      assert preview["outline"] == first["outline"]
+
+      # And imported fresh, the annotations are not part of any title.
+      {200, copy} =
+        post_import(owner, %{"text" => annotated, "target" => %{"initiative_name" => "Copy"}})
+
+      copied = Tasks.list_initiative_tasks(copy["initiative"]["id"])
+      refute Enum.any?(copied, &(&1.title =~ "%<"))
+      assert Enum.any?(copied, &(&1.title == "Ship the thing"))
     end
   end
 

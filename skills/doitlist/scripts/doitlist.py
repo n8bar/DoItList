@@ -368,6 +368,29 @@ def _data(payload):
 
 _INITIATIVE_URL = re.compile(r"/initiatives/(\d+)")
 
+#: The id annotation an import writes back onto a source line with
+#: `--write-ids` (m03.04 6.12): ` %<123>`, at the very end of the line
+#: and nowhere else. It is not part of the text it trails, on either side of
+#: the wire — the API's parser strips exactly the same thing.
+_REFERENCE = re.compile(r"[ \t]+%<(\d+)>$")
+
+
+def strip_reference(text):
+    """`text` without its trailing ` %<123>` annotation.
+
+    Only a trailing one goes: a `%<id>` the operator wrote inside a title is
+    that title's own text. A line that is nothing but an annotation keeps it,
+    rather than becoming nameless.
+    """
+    stripped = _REFERENCE.sub("", text)
+    return stripped if stripped else text
+
+
+def line_reference(body):
+    """The id a line's trailing annotation names, or `None`."""
+    match = _REFERENCE.search(body)
+    return int(match.group(1)) if match else None
+
 
 def parse_initiative_ref(value):
     """Accept a numeric id or an Initiative URL (.../initiatives/12)."""
@@ -1217,6 +1240,12 @@ def cmd_retry(client, args, out, err):
 # is already idempotent by source hash per target — re-running the same command
 # replays the first apply instead of duplicating it. `diff` is the same
 # endpoint's preview against an existing target: read-only on both sides.
+#
+# `--write-ids` is the one thing here that touches the source file, and only
+# after a clean apply: the 200 says which line became which Task, and each of
+# those lines gets its ` %<id>`. A mirror annotated once carries every id a
+# later completion needs, so nothing has to read the live tree to find one
+# (6.12).
 
 
 def read_source(path):
@@ -1335,10 +1364,80 @@ def import_unknown(config, path, out, reason):
     return EXIT_API
 
 
+def apply_ids(path, sent_text, items):
+    r"""Append each created Task's ` %<id>` to the source line it came from.
+
+    Returns `(written, present)`. The file is read again first and must be
+    byte-for-byte what went up: these ids belong to those lines, and a file
+    edited since would take them on the wrong ones. A line already ending in
+    its own id is left alone, so a second run writes nothing.
+
+    Lines are counted on `\n` alone — the way the API counts them — so line 12
+    of the response is line 12 here, whatever exotic separators the text holds.
+    A CRLF line keeps its `\r` after the annotation, and the atomic replace is
+    the mirror's (4.7.3): no byte moves but the one appended.
+    """
+    try:
+        current = read_source(path)
+    except UsageError as exc:
+        raise MirrorError(str(exc))
+    if current != sent_text:
+        raise MirrorError("{0} changed since it was read".format(os.path.basename(path)))
+
+    lines = current.split("\n")
+    written, present = 0, 0
+    for item in items if isinstance(items, list) else []:
+        line, task_id = item.get("line"), item.get("id")
+        if not isinstance(line, int) or not isinstance(task_id, int):
+            continue
+        if not 1 <= line <= len(lines):
+            continue
+        body = lines[line - 1]
+        ending = "\r" if body.endswith("\r") else ""
+        body = body[: len(body) - len(ending)] if ending else body
+        if line_reference(body) == task_id:
+            present += 1
+            continue
+        lines[line - 1] = "{0} %<{1}>{2}".format(body, task_id, ending)
+        written += 1
+    if written:
+        write_mirror(path, ["\n".join(lines)])
+    return written, present
+
+
+def write_back_ids(path, sent_text, payload, out):
+    """`--write-ids`: put the import's own ids into the document it imported.
+
+    The import has already landed by the time this runs, so a failure here is
+    reported as what it is — ids not written — and never as a failed import.
+    Re-running the command would import the document again, so the line says
+    not to.
+    """
+    try:
+        written, present = apply_ids(path, sent_text, payload.get("items"))
+    except MirrorError as exc:
+        out.write("ids not written: {0}\n".format(exc))
+        out.write(
+            "  the import landed — do not re-run it; save the response with "
+            "--out to read the ids\n"
+        )
+        return EXIT_API
+    cells = ["{0} written".format(written)]
+    if present:
+        cells.append("{0} already there".format(present))
+    out.write("ids  {0}: {1}\n".format(os.path.basename(path), ", ".join(cells)))
+    return EXIT_OK
+
+
 def cmd_import(client, args, out, err):
     if args.under and not args.into:
         raise UsageError(
             "--under names a Task inside --into; pass --into <initiative> as well."
+        )
+    if args.write_ids and args.preview:
+        raise UsageError(
+            "--write-ids annotates the lines an apply created Tasks from; a "
+            "preview creates none. Preview first, then import with --write-ids."
         )
 
     text = read_source(args.file)
@@ -1371,6 +1470,8 @@ def cmd_import(client, args, out, err):
     else:
         write_imported(payload, args.file, out)
         code = EXIT_OK
+        if args.write_ids:
+            code = write_back_ids(args.file, text, payload, out)
     return save_response(client, args, payload, out, code)
 
 
@@ -1506,23 +1607,32 @@ def split_line(raw):
 
 
 def heading_of(body):
-    """`(level, text)` for an ATX heading line, else `None`."""
+    """`(level, text)` for an ATX heading line, else `None`.
+
+    A heading-derived branch gets annotated by `--write-ids` like any other
+    item, so its trailing ` %<id>` is dropped here too: naming a section keeps
+    working once the mirror carries its ids.
+    """
     match = _HEADING.match(body)
     if match is None:
         return None
-    return len(match.group(1)), _CLOSING_HASHES.sub("", match.group(2)).strip()
+    text = _CLOSING_HASHES.sub("", match.group(2)).strip()
+    return len(match.group(1)), strip_reference(text)
 
 
 def checkbox_of(body):
     """`(checked, text, state_span)` for a checkbox line, else `None`.
 
+    The text is what the line says minus a trailing ` %<id>` annotation, which
+    is how an annotated mirror still matches the live title exactly (4.7.2).
     The span is where the box's single character sits in `body`, which is how
-    a tick is applied without touching one other byte of the line.
+    a tick is applied without touching one other byte of the line — the
+    annotation included.
     """
     match = _CHECKBOX.match(body)
     if match is None:
         return None
-    return match.group(1) != " ", match.group(2), match.span(1)
+    return match.group(1) != " ", strip_reference(match.group(2)), match.span(1)
 
 
 def section_lines(raw, section):
@@ -2001,6 +2111,11 @@ def build_parser():
     )
     importing.add_argument(
         "--preview", action="store_true", help="report what would be imported; write nothing"
+    )
+    importing.add_argument(
+        "--write-ids",
+        action="store_true",
+        help="append each created Task's %%<id> to the source line it came from",
     )
     importing.set_defaults(handler=cmd_import)
 

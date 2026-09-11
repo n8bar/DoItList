@@ -11,6 +11,11 @@ defmodule DoIt.Imports.Preview do
   request's target the same way `DoIt.Imports.Import` does, so the apply
   rebuilds exactly the target that was previewed.
 
+  `line_offset` is how many whole-document lines precede a `section` preview's
+  slice — the one fact the slice itself lost, and what lets the apply report
+  `items` lines in the document the caller holds (6.12.3). A whole-document
+  preview stores 0.
+
   The id is a random base64url string (`generate_id/0`); `api_token_id` is set
   programmatically, never cast.
   """
@@ -26,6 +31,7 @@ defmodule DoIt.Imports.Preview do
     field :target_name, :string
     field :text, :string
     field :filename, :string
+    field :line_offset, :integer, default: 0
     field :expires_at, :utc_datetime
 
     belongs_to :api_token, DoIt.Accounts.ApiToken
@@ -48,6 +54,7 @@ defmodule DoIt.Imports.Preview do
       :target_name,
       :text,
       :filename,
+      :line_offset,
       :expires_at
     ])
     |> validate_required([:target_kind, :text, :expires_at])

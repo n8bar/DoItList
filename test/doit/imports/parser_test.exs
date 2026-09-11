@@ -674,7 +674,7 @@ defmodule DoIt.Imports.ParserTest do
     """
 
     test "the slice starts after the heading and stops at the next same-level heading" do
-      {:ok, slice} = Parser.section(@doc_with_sections, "Arc 4")
+      {:ok, slice, _offset} = Parser.section(@doc_with_sections, "Arc 4")
 
       assert slice == """
 
@@ -703,12 +703,12 @@ defmodule DoIt.Imports.ParserTest do
     end
 
     test "a higher-level heading also ends the slice" do
-      {:ok, slice} = Parser.section("## A\n- a1\n# Top\n- t1\n", "A")
+      {:ok, slice, _offset} = Parser.section("## A\n- a1\n# Top\n- t1\n", "A")
       assert slice == "- a1"
     end
 
     test "the last section runs to the end of the document" do
-      {:ok, slice} = Parser.section(@doc_with_sections, "Arc 5")
+      {:ok, slice, _offset} = Parser.section(@doc_with_sections, "Arc 5")
       assert String.trim(slice) == "- Later work"
     end
 
@@ -716,7 +716,7 @@ defmodule DoIt.Imports.ParserTest do
       text = "## [x] Ship it\n- s1\n## Next\n- n1\n"
 
       for heading <- ["Ship it", "## Ship it", "  Ship it  ", "[ ] Ship it", "##  [x] Ship it"] do
-        assert {:ok, "- s1"} = Parser.section(text, heading), heading
+        assert {:ok, "- s1", _} = Parser.section(text, heading), heading
       end
     end
 
@@ -735,14 +735,173 @@ defmodule DoIt.Imports.ParserTest do
     test "headings inside fenced code are not candidates or boundaries" do
       text = "## Real\n- r1\n```\n## Fake\n- not an item\n```\n- r2\n## Next\n- n1\n"
       assert {:error, :not_found} = Parser.section(text, "Fake")
-      {:ok, slice} = Parser.section(text, "Real")
+      {:ok, slice, _offset} = Parser.section(text, "Real")
       assert slice == "- r1\n```\n## Fake\n- not an item\n```\n- r2"
     end
 
     test "a heading with nothing under it slices to nothing, which parse refuses" do
-      {:ok, slice} = Parser.section("## Empty\n## Next\n- n1\n", "Empty")
+      {:ok, slice, _offset} = Parser.section("## Empty\n## Next\n- n1\n", "Empty")
       assert slice == ""
       assert Parser.parse(slice) == {:error, :empty}
+    end
+
+    test "the offset is how many whole-document lines precede the slice" do
+      # Line 9 of @doc_with_sections is "## Arc 4", so its slice starts at
+      # line 10 and nine lines precede it.
+      {:ok, slice, offset} = Parser.section(@doc_with_sections, "Arc 4")
+      assert offset == 9
+
+      lines = String.split(@doc_with_sections, "\n")
+      first = parse!(slice).items |> hd()
+
+      assert first.title == "First item"
+      assert Enum.at(lines, first.line + offset - 1) == "1. First item"
+    end
+
+    test "the first section's slice starts right after its heading" do
+      {:ok, _slice, offset} = Parser.section("## A\n- a1\n", "A")
+      assert offset == 1
+    end
+
+    test "an annotated heading still names its section" do
+      # A mirror written back by `--write-ids` carries the branch's own id on
+      # the heading line; naming the section must not have to know that.
+      text = "## Arc 4 %<110>\n- a1\n## Arc 5\n- b1\n"
+      assert {:ok, "- a1", 1} = Parser.section(text, "Arc 4")
+      assert {:ok, "- a1", 1} = Parser.section(text, "## Arc 4 %<110>")
+    end
+  end
+
+  # --- 6.12.2 source lines ----------------------------------------------------
+
+  describe "source lines" do
+    test "every item records the 1-based line that produced it" do
+      manifest =
+        parse!("""
+        # Plan
+
+        Preamble prose.
+
+        ## Arc 4
+
+        1. First item
+           prose under the first item
+
+           1. Nested item
+        2. [x] Second item
+        """)
+
+      assert [arc] = manifest.items
+      assert {arc.title, arc.line} == {"Arc 4", 5}
+
+      assert Enum.map(arc.children, &{&1.title, &1.line}) == [
+               {"First item", 7},
+               {"Second item", 11}
+             ]
+
+      assert [nested] = hd(arc.children).children
+      assert {nested.title, nested.line} == {"Nested item", 10}
+    end
+
+    test "a document with no title heading counts from its first line" do
+      manifest = parse!("- alpha\n- beta\n")
+      assert Enum.map(manifest.items, & &1.line) == [1, 2]
+    end
+
+    test "a fenced code block's lines are counted, not skipped" do
+      manifest =
+        parse!("""
+        - alpha
+
+        ```
+        - not an item
+        ```
+
+        - beta
+        """)
+
+      assert Enum.map(manifest.items, &{&1.title, &1.line}) == [{"alpha", 1}, {"beta", 7}]
+    end
+
+    test "an overflowing title keeps the line of the one source line it came from" do
+      long = String.duplicate("word ", 60)
+      manifest = parse!("- first\n- #{long}\n")
+      assert Enum.map(manifest.items, & &1.line) == [1, 2]
+      assert manifest.counts.title_overflow == 1
+    end
+  end
+
+  # --- 6.12.2 operations carry their lines ------------------------------------
+
+  describe "operations_and_lines/2" do
+    test "pairs every task lid with the source line it came from, in emission order" do
+      manifest =
+        parse!("""
+        1. alpha
+          - alpha one
+        2. beta
+        """)
+
+      {ops, lines} = Parser.operations_and_lines(manifest, {:new_initiative, "Imported"})
+
+      assert lines == [{"t1", 1}, {"t2", 2}, {"t3", 3}]
+      # The Initiative op is no item's line, so it gets no pair.
+      assert length(ops) == length(lines) + 1
+      assert Parser.operations(manifest, {:new_initiative, "Imported"}) == ops
+    end
+
+    test "an existing target pairs the same lids" do
+      manifest = parse!("- alpha\n- beta\n")
+      assert {_ops, [{"t1", 1}, {"t2", 2}]} = Parser.operations_and_lines(manifest, {:task, 7})
+    end
+  end
+
+  # --- 6.12.5 the id annotation is not title text -----------------------------
+
+  describe "trailing id annotations" do
+    test "a trailing %<id> is stripped from a checkbox, bullet, numbered or heading title" do
+      manifest =
+        parse!("""
+        ## Arc 4 %<110>
+
+        - [x] Ship it %<111>
+        - Tell everyone %<112>
+        1. Numbered %<113>
+        """)
+
+      # The lone top heading is the manifest title, annotation and all stripped.
+      assert manifest.title == "Arc 4"
+
+      assert Enum.map(manifest.items, & &1.title) == ["Ship it", "Tell everyone", "Numbered"]
+    end
+
+    test "an annotated document parses exactly as its unannotated self" do
+      plain = "# Plan\n\n- [x] Ship it\n  - Draft it\n- Tell everyone\n"
+      annotated = "# Plan %<100>\n\n- [x] Ship it %<111>\n  - Draft it %<112>\n- Tell everyone %<113>\n"
+
+      assert parse!(annotated) == parse!(plain)
+    end
+
+    test "only a trailing annotation goes" do
+      manifest =
+        parse!("""
+        - See %<272> Ship the parser for the shape
+        - %<9>
+        - Trailing only %<9>
+        """)
+
+      assert titles(manifest.items) == [
+               "See %<272> Ship the parser for the shape",
+               "%<9>",
+               "Trailing only"
+             ]
+    end
+
+    test "an annotation does not follow the title into a description" do
+      manifest = parse!("- Ship it %<111>\n  detail about %<111> the work\n")
+      assert [item] = manifest.items
+      assert item.title == "Ship it"
+      assert item.description == "detail about %<111> the work"
     end
   end
 end

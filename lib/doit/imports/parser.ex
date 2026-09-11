@@ -23,11 +23,17 @@ defmodule DoIt.Imports.Parser do
       }                                       # depth: roots = 1
 
       item = %{title: String.t(), description: String.t() | nil,
-               done: boolean, checkbox: boolean, children: [item]}
+               done: boolean, checkbox: boolean, line: pos_integer(),
+               children: [item]}
 
   `checkbox` records whether the source line carried a `[ ]`/`[x]` box at all.
   A heading or plain bullet cannot express completion, so a consumer comparing
   `done` against live state (the import diff) leaves those items out.
+
+  `line` is the 1-based line of the source text that produced the item — the
+  bullet, numbered or checkbox line, or the heading line for a heading-derived
+  branch. It is how an apply reports which line each created Task came from
+  (6.12.3), so a mirror can be annotated with the ids it created.
 
   ## Structure rules (2.1)
 
@@ -41,10 +47,14 @@ defmodule DoIt.Imports.Parser do
       tab outlines all nest correctly, and mixed marker characters are fine.
     * **Source order is preserved exactly.**
     * `[x]`/`[X]` sets `done: true`; `[ ]` or no checkbox leaves it `false`.
-    * The marker and checkbox are stripped from the title; **everything else is
-      verbatim** — bold markers, trailing colons, code spans, URLs. Nothing is
-      rewritten and nothing is truncated (an over-long title is *split*, never
-      cut — see "Title overflow" below).
+    * The marker and checkbox are stripped from the title, and so is a
+      trailing ` %<123>` — the id annotation a `--write-ids` import writes back
+      onto a mirror's own lines (6.12.5), so an annotated document parses,
+      diffs and re-imports as the document it was before. Only a trailing
+      annotation goes; a `%<id>` anywhere else in the line is title text.
+      **Everything else is verbatim** — bold markers, trailing colons, code
+      spans, URLs. Nothing is rewritten and nothing is truncated (an over-long
+      title is *split*, never cut — see "Title overflow" below).
     * **Top heading.** If the first non-blank line is a heading, its level is
       the shallowest in the document, and it is the only heading at that level,
       it becomes the manifest `title` and its content becomes the roots — never
@@ -118,16 +128,24 @@ defmodule DoIt.Imports.Parser do
   `title_description` is deliberately not an op — the endpoint decides where a
   preamble goes.
 
+  `operations_and_lines/2` returns the same ops plus `[{lid, line}]` in
+  emission order, so a caller that harvests `lid -> id` from the applied
+  batches can say which source line each created Task came from.
+
   ## Sections (`section/2`)
 
   `section(text, heading)` slices the lines under one heading — from the line
   after it up to, not including, the next heading at the same or a higher
   level — so a caller can import one part of a document through `parse/1`
   with the usual rules and no wrapper Task. The heading is matched by its
-  text, exactly, after trimming, ignoring leading `#`s and a leading
-  `[ ]`/`[x]` box on either side; headings inside fenced code are not
-  candidates. No match is `{:error, :not_found}`; several is
-  `{:error, {:ambiguous, n}}`.
+  text, exactly, after trimming, ignoring leading `#`s, a leading
+  `[ ]`/`[x]` box and a trailing ` %<123>` annotation on either side; headings
+  inside fenced code are not candidates. No match is `{:error, :not_found}`;
+  several is `{:error, {:ambiguous, n}}`.
+
+  A match returns `{:ok, slice, offset}`, where `offset` is how many
+  whole-document lines precede the slice: a slice item's `line` plus `offset`
+  is its line in the document the caller holds.
   """
 
   # A tab indents one level; four columns keeps it comparable to space indents.
@@ -139,6 +157,9 @@ defmodule DoIt.Imports.Parser do
 
   # One segment of a numbering marker: digits, a roman run, or a single letter.
   @seg "(?:[0-9]+|[IVXLCDM]+|[ivxlcdm]+|[A-Za-z])"
+
+  # The id annotation `--write-ids` appends, at the end of a line (6.12.5).
+  @reference ~r/[ \t]+%<[0-9]+>$/
 
   @heading ~r/^[ ]{0,3}(\#{1,6})[ \t]+(.*)$/
   @fence ~r/^[ \t]*(?:`{3,}|~{3,})/
@@ -208,9 +229,23 @@ defmodule DoIt.Imports.Parser do
   Turn a manifest into the ordered `POST /api/v1/operations` op list for
   `target`.
   """
-  def operations(manifest, target)
+  def operations(manifest, target) do
+    {ops, _lines} = operations_and_lines(manifest, target)
+    ops
+  end
 
-  def operations(%{items: items, style: style}, {:new_initiative, name}) do
+  @doc """
+  `{ops, [{lid, line}]}` — the op list for `target` and each task op's source
+  line, both in emission order.
+
+  The pairs are what turns the applied batches' `lid -> id` map into "this
+  source line became that Task" (6.12.3). The Initiative op, when there is one,
+  has no source line and no pair.
+  """
+  @spec operations_and_lines(map(), tuple()) :: {[map()], [{String.t(), pos_integer()}]}
+  def operations_and_lines(manifest, target)
+
+  def operations_and_lines(%{items: items, style: style}, {:new_initiative, name}) do
     initiative = %{
       "op" => "add",
       "type" => "initiative",
@@ -218,18 +253,18 @@ defmodule DoIt.Imports.Parser do
       "data" => %{"name" => name, "index_style" => style}
     }
 
-    {ops, _n} = task_ops(items, %{"initiative_lid" => "i1"}, 1)
-    [initiative | ops]
+    {ops, lines, _n} = task_ops(items, %{"initiative_lid" => "i1"}, 1)
+    {[initiative | ops], lines}
   end
 
-  def operations(%{items: items}, {:initiative, id}) do
-    {ops, _n} = task_ops(items, %{"initiative_id" => id}, 1)
-    ops
+  def operations_and_lines(%{items: items}, {:initiative, id}) do
+    {ops, lines, _n} = task_ops(items, %{"initiative_id" => id}, 1)
+    {ops, lines}
   end
 
-  def operations(%{items: items}, {:task, id}) do
-    {ops, _n} = task_ops(items, %{"parent_id" => id}, 1)
-    ops
+  def operations_and_lines(%{items: items}, {:task, id}) do
+    {ops, lines, _n} = task_ops(items, %{"parent_id" => id}, 1)
+    {ops, lines}
   end
 
   defp task_ops(items, link, n) do
@@ -244,11 +279,12 @@ defmodule DoIt.Imports.Parser do
           |> maybe_put("done", item.done && true)
 
         op = %{"op" => "add", "type" => "task", "lid" => lid, "data" => data}
-        {children, next} = task_ops(item.children, %{"parent_lid" => lid}, n + 1)
-        {[op | children], next}
+        {children, child_lines, next} = task_ops(item.children, %{"parent_lid" => lid}, n + 1)
+        {{[op | children], [{lid, item.line} | child_lines]}, next}
       end)
 
-    {Enum.concat(chunks), next}
+    {ops, lines} = Enum.unzip(chunks)
+    {Enum.concat(ops), Enum.concat(lines), next}
   end
 
   defp maybe_put(map, _key, value) when value in [nil, false], do: map
@@ -257,12 +293,14 @@ defmodule DoIt.Imports.Parser do
   # --- Sections ---------------------------------------------------------------
 
   @doc """
-  The text under the heading `heading`, without the heading itself.
+  The text under the heading `heading`, without the heading itself, and how
+  many whole-document lines precede it.
 
   See "Sections" above for the matching rule and the slice's extent.
   """
   @spec section(String.t(), String.t()) ::
-          {:ok, String.t()} | {:error, :not_found | {:ambiguous, pos_integer()}}
+          {:ok, String.t(), non_neg_integer()}
+          | {:error, :not_found | {:ambiguous, pos_integer()}}
   def section(text, heading) when is_binary(text) and is_binary(heading) do
     lines = text |> String.split("\n") |> Enum.map(&String.trim_trailing(&1, "\r"))
     headings = heading_lines(lines)
@@ -275,7 +313,7 @@ defmodule DoIt.Imports.Parser do
             if i > at and lvl <= level, do: i
           end)
 
-        {:ok, lines |> Enum.slice(at + 1, stop - at - 1) |> Enum.join("\n")}
+        {:ok, lines |> Enum.slice(at + 1, stop - at - 1) |> Enum.join("\n"), at + 1}
 
       [] ->
         {:error, :not_found}
@@ -304,15 +342,17 @@ defmodule DoIt.Imports.Parser do
 
   defp heading_entry(i, [_, hashes, rest]), do: {i, String.length(hashes), heading_key(rest)}
 
-  # The comparable form of a heading: trimmed, without leading `#`s and
-  # without a leading checkbox — applied to the source heading and the
-  # requested one alike.
+  # The comparable form of a heading: trimmed, without leading `#`s, a leading
+  # checkbox, or the trailing id annotation a `--write-ids` import leaves on a
+  # heading-derived branch — applied to the source heading and the requested
+  # one alike, so naming a section keeps working once the mirror is annotated.
   defp heading_key(text) do
     text
     |> String.trim()
     |> String.replace(~r/^#+[ \t]*/, "")
     |> String.replace(~r/^\[[ xX]\][ \t]*/, "")
     |> String.trim()
+    |> strip_reference()
   end
 
   # --- Scanning ---------------------------------------------------------------
@@ -327,7 +367,11 @@ defmodule DoIt.Imports.Parser do
 
     seq_letters = sequence_letters(lines)
     state = %{fence: false, headings: [], list: [], nodes: [], lead: [], seq_letters: seq_letters}
-    state = Enum.reduce(lines, state, &scan_line/2)
+
+    state =
+      lines
+      |> Enum.with_index(1)
+      |> Enum.reduce(state, fn {line, at}, state -> scan_line(line, at, state) end)
 
     nodes =
       state.nodes
@@ -337,7 +381,7 @@ defmodule DoIt.Imports.Parser do
     {nodes, Enum.reverse(state.lead), seq_letters}
   end
 
-  defp scan_line(line, state) do
+  defp scan_line(line, at, state) do
     trimmed = String.trim(line)
 
     cond do
@@ -352,14 +396,14 @@ defmodule DoIt.Imports.Parser do
 
       match = Regex.run(@heading, line) ->
         [_, hashes, rest] = match
-        add_heading(state, String.length(hashes), rest)
+        add_heading(state, at, String.length(hashes), rest)
 
       true ->
-        scan_item(state, line, trimmed)
+        scan_item(state, at, line, trimmed)
     end
   end
 
-  defp scan_item(state, line, trimmed) do
+  defp scan_item(state, at, line, trimmed) do
     [ws] = Regex.run(~r/^[ \t]*/, line)
     {token, rest} = split_token(trimmed)
 
@@ -372,9 +416,9 @@ defmodule DoIt.Imports.Parser do
       {kind, marker} ->
         {checkbox, done, title} = checkbox(rest)
 
-        case String.trim(title) do
+        case title |> String.trim() |> strip_reference() do
           "" -> add_prose(state, trimmed)
-          title -> add_item(state, indent_width(ws), kind, marker, checkbox, done, title)
+          title -> add_item(state, at, indent_width(ws), kind, marker, checkbox, done, title)
         end
     end
   end
@@ -407,7 +451,7 @@ defmodule DoIt.Imports.Parser do
 
   # A heading pops every heading at or below its own level; what is left is its
   # ancestry, and its depth. A heading always starts a fresh list context.
-  defp add_heading(state, level, text) do
+  defp add_heading(state, at, level, text) do
     headings = Enum.drop_while(state.headings, fn {lvl, _} -> lvl >= level end)
     depth = length(headings)
     {_kind, marker, title} = strip_marker(text, state.seq_letters)
@@ -417,6 +461,7 @@ defmodule DoIt.Imports.Parser do
     |> Map.put(:list, [])
     |> push(%{
       depth: depth,
+      line: at,
       title: title,
       marker: marker,
       checkbox: false,
@@ -427,7 +472,7 @@ defmodule DoIt.Imports.Parser do
   end
 
   # A list item nests below the open heading, then by relative indent.
-  defp add_item(state, indent, kind, marker, checkbox, done, title) do
+  defp add_item(state, at, indent, kind, marker, checkbox, done, title) do
     base =
       case state.headings do
         [{_lvl, depth} | _] -> depth + 1
@@ -442,6 +487,7 @@ defmodule DoIt.Imports.Parser do
     |> Map.put(:list, [{indent, depth} | list])
     |> push(%{
       depth: depth,
+      line: at,
       title: title,
       marker: marker,
       checkbox: checkbox,
@@ -511,6 +557,7 @@ defmodule DoIt.Imports.Parser do
       description: description,
       done: node.done,
       checkbox: node.checkbox,
+      line: node.line,
       children: children
     }
 
@@ -647,16 +694,27 @@ defmodule DoIt.Imports.Parser do
 
     case marker_of(token, seq_letters) do
       none_or_word when none_or_word in [:none, :word] ->
-        {:none, nil, String.trim(text)}
+        {:none, nil, text |> String.trim() |> strip_reference()}
 
       {kind, marker} ->
         {_checkbox, _done, title} = checkbox(rest)
         marker = if kind == :bullet, do: nil, else: marker
 
-        case String.trim(title) do
-          "" -> {:none, nil, String.trim(text)}
+        case title |> String.trim() |> strip_reference() do
+          "" -> {:none, nil, text |> String.trim() |> strip_reference()}
           title -> {kind, marker, title}
         end
+    end
+  end
+
+  # The id annotation a `--write-ids` import appends to a mirror's own lines
+  # (6.12.4) — ` %<123>` at the very end of the line, and nothing else. A
+  # `%<id>` the operator wrote mid-title is title text and stays put, and a
+  # line that is *only* an annotation keeps it rather than becoming nameless.
+  defp strip_reference(title) do
+    case Regex.replace(@reference, title, "") do
+      "" -> title
+      stripped -> stripped
     end
   end
 

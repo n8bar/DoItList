@@ -1822,6 +1822,115 @@ class ImportOutputTest(ImportCase):
         self.assertNotIn(TOKEN, raw)
 
 
+class WriteIdsTest(ImportCase):
+    """6.12.4 — the apply's own ids, written back onto the document's lines."""
+
+    #: DOC's lines 3, 4 and 5 are its three items, in source order.
+    ITEMS = [{"line": 3, "id": 111}, {"line": 4, "id": 112}, {"line": 5, "id": 113}]
+
+    ANNOTATED = (
+        "# Q3 Plan\n"
+        "\n"
+        "- Ship the thing %<111>\n"
+        "\t- Draft [x] %<112>\n"
+        "- Tell everyone %<113>\n"
+    )
+
+    def read(self, path):
+        with open(path, encoding="utf-8", newline="") as handle:
+            return handle.read()
+
+    def test_each_returned_line_gets_its_id_and_nothing_else_moves(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path, "--write-ids"],
+            {"POST /api/v1/imports": applied_body(items=self.ITEMS)},
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read(path), self.ANNOTATED)
+        self.assertIn("ids  plan.md: 3 written", out)
+        # The import's own report still comes first, unchanged.
+        self.assertEqual(
+            out.splitlines()[0], "imported  Q3 Plan  https://doitlist.app/initiatives/12"
+        )
+
+    def test_a_line_already_carrying_its_own_id_is_left_alone(self):
+        path = self.document(text=self.ANNOTATED)
+        code, out, err, _ = self.cli(
+            ["import", path, "--write-ids"],
+            {"POST /api/v1/imports": applied_body(items=self.ITEMS, replayed=True)},
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read(path), self.ANNOTATED)  # byte for byte
+        self.assertIn("ids  plan.md: 0 written, 3 already there", out)
+
+    def test_a_file_changed_since_it_was_sent_refuses_the_write_back(self):
+        path = self.document()
+        edited = DOC + "- Added while the import was in flight\n"
+
+        def edit():
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(edited)
+
+        transport = HookedTransport(
+            {"POST /api/v1/imports": applied_body(items=self.ITEMS)}, "POST", edit
+        )
+        out, err = io.StringIO(), io.StringIO()
+        code = doitlist.main(
+            ["import", path, "--write-ids"],
+            env=self.env,
+            transport=transport,
+            out=out,
+            err=err,
+        )
+        out = out.getvalue()
+
+        self.assertEqual(code, 1, out + err.getvalue())
+        self.assertEqual(self.read(path), edited)  # the operator's edit stands
+        self.assertIn("ids not written: plan.md changed since it was read", out)
+        self.assertIn("the import landed", out)
+        self.assertNotIn("failed", out)
+        self.assertIn("imported  Q3 Plan", out)
+
+    def test_preview_refuses_write_ids_before_any_request(self):
+        path = self.document()
+        code, out, err, transport = self.cli(["import", path, "--preview", "--write-ids"], {})
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("--write-ids", err)
+        self.assertEqual(transport.calls, [])
+        self.assertEqual(self.read(path), DOC)
+
+    def test_a_response_naming_no_lines_writes_nothing(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path, "--write-ids"], {"POST /api/v1/imports": applied_body()}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read(path), DOC)
+        self.assertIn("ids  plan.md: 0 written", out)
+
+    def test_a_crlf_document_keeps_its_line_endings(self):
+        path = self.document(text=DOC.replace("\n", "\r\n"))
+        code, out, err, _ = self.cli(
+            ["import", path, "--write-ids"],
+            {"POST /api/v1/imports": applied_body(items=self.ITEMS)},
+        )
+        self.assertEqual(code, 0, out + err)
+        after = self.read(path)
+        self.assertEqual(after, self.ANNOTATED.replace("\n", "\r\n"))
+        self.assertEqual(after.count("\n"), after.count("\r\n"), "no bare LF may creep in")
+
+    def test_without_the_flag_the_document_is_never_touched(self):
+        path = self.document()
+        code, out, err, _ = self.cli(
+            ["import", path], {"POST /api/v1/imports": applied_body(items=self.ITEMS)}
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(self.read(path), DOC)
+        self.assertNotIn("ids", out)
+
+
 class DiffTest(ImportCase):
     """`diff` is the preview against an existing target: read-only, exit-coded."""
 
@@ -2140,6 +2249,62 @@ class MirrorMatchTest(MirrorCase):
         self.assertIn(
             "mirror  plan.md § Build the API: already [x] Write the controller", out
         )
+
+
+class AnnotatedMirrorTest(MirrorCase):
+    """6.12.6 — a mirror carrying the ids `--write-ids` wrote still matches."""
+
+    #: The same plan after an import with `--write-ids`: every line, heading
+    #: included, carries the id of the Task it created.
+    ANNOTATED = (
+        "# Q3 Launch\n"
+        "\n"
+        "Mirror of https://doitlist.app/initiatives/12 — keep the boxes in sync.\n"
+        "\n"
+        "## Build the API %<101>\n"
+        "\n"
+        "- [x] Write the controller %<111>\n"
+        "- [ ] Write the tests %<112>\n"
+        "- [ ] Pick a name %<131>\n"
+    )
+
+    def test_an_annotated_line_matches_exactly_and_keeps_its_id(self):
+        # One action, three things: the annotated heading still names the
+        # section, the annotated line still matches the live title exactly,
+        # and the tick leaves the annotation — and every other byte — alone.
+        path = self.mirror(text=self.ANNOTATED)
+        before = self.read_mirror(path)
+        code, out, err, _ = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(
+            self.changed_lines(before, self.read_mirror(path)),
+            [("- [ ] Write the tests %<112>\n", "- [x] Write the tests %<112>\n")],
+        )
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "done  %112  Write the tests  100%  [x]",
+                "mirror  plan.md § Build the API: [x] Write the tests",
+                # The next-leaf line reads through the annotation too.
+                "next  2.1.1 Pick a name  %131",
+            ],
+        )
+
+    def test_an_id_the_operator_wrote_mid_title_is_still_title_text(self):
+        # Only a trailing annotation is ignored; a reference inside the text is
+        # part of the title, and a line that does not match is not matched.
+        text = self.ANNOTATED.replace(
+            "- [ ] Write the tests %<112>", "- [ ] Write the tests after %<99> lands"
+        )
+        path = self.mirror(text=text)
+        code, out, err, transport = self.cli(
+            ["done", "%112", "--mirror", path, "--section", "Build the API"], self.routes()
+        )
+        self.assertEqual(code, 2)
+        self.assertIn('0 checkbox lines under "Build the API"', err)
+        self.assertEqual([call["method"] for call in transport.calls], ["GET"])
 
 
 class MirrorRequestTest(MirrorCase):

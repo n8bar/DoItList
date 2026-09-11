@@ -73,6 +73,13 @@ defmodule DoItWeb.Api.Imports do
   that fails rolls back *itself*; earlier batches stay committed and the
   response says so.
 
+  A committed apply also reports `"items"` (6.12.3) — `{"line": n, "id": 42}`
+  for every Task it created, in source order, where `line` is the 1-based line
+  of the source document that produced it. A `section` import reports lines in
+  the **whole** document, not the slice, so the caller's own file is the one
+  the numbers point into and a mirror can be annotated with the ids it just
+  created. A preview creates nothing and carries no `"items"`.
+
   When every batch has committed, the **source comment** (2.4) lands once on
   the imported root — the new Initiative's root Task, the existing Initiative's
   root Task, or the parent Task — reading `Imported from <filename>` or
@@ -195,15 +202,16 @@ defmodule DoItWeb.Api.Imports do
          {:ok, request} <- fetch_target(params),
          {:ok, section} <- fetch_section(params),
          {:ok, target, initiative} <- resolve_target(user, request),
-         {:ok, text} <- slice(text, section),
+         {:ok, text, offset} <- slice(text, section),
          {:ok, manifest} <- parse(text),
          :ok <- enforce_limits(text, manifest) do
       summary = manifest |> summary(target, initiative) |> put_section(section)
+      source = %{text: text, filename: filename, line_offset: offset}
 
       if preview? do
-        preview(token_id, text, filename, manifest, target, initiative, summary)
+        preview(token_id, source, manifest, target, initiative, summary)
       else
-        apply_import(user, text, filename, manifest, target, initiative, summary)
+        apply_import(user, source, manifest, target, initiative, summary)
       end
     end
   end
@@ -323,13 +331,15 @@ defmodule DoItWeb.Api.Imports do
   end
 
   # From here on the section IS the document: it is what gets parsed, measured,
-  # stored for a preview, hashed for idempotency, and written.
-  defp slice(text, nil), do: {:ok, text}
+  # stored for a preview, hashed for idempotency, and written. The offset is
+  # the one thing that still refers to the whole document — the apply's
+  # `items` report lines the caller's own file can be annotated by (6.12.3).
+  defp slice(text, nil), do: {:ok, text, 0}
 
   defp slice(text, heading) do
     case Parser.section(text, heading) do
-      {:ok, slice} ->
-        {:ok, slice}
+      {:ok, _slice, _offset} = sliced ->
+        sliced
 
       {:error, :not_found} ->
         error(
@@ -573,9 +583,13 @@ defmodule DoItWeb.Api.Imports do
   # Runs after `enforce_limits/2`, so the stored text is within
   # `@max_source_bytes`. A newer preview for the same (token, target Initiative)
   # replaces the older one inside `put_preview/4`.
-  defp preview(token_id, text, filename, manifest, target, initiative, summary) do
+  defp preview(token_id, source, manifest, target, initiative, summary) do
     {:ok, %Preview{id: preview_id}} =
-      DoIt.Imports.put_preview(token_id, target, initiative, %{text: text, filename: filename})
+      DoIt.Imports.put_preview(token_id, target, initiative, %{
+        text: source.text,
+        filename: source.filename,
+        line_offset: source.line_offset
+      })
 
     {:ok, 200,
      summary
@@ -599,14 +613,15 @@ defmodule DoItWeb.Api.Imports do
           :not_found
         )
 
-      %Preview{text: text, filename: filename} = stored ->
+      %Preview{text: text, filename: filename, line_offset: offset} = stored ->
         with {:ok, target, initiative} <- resolve_target(user, preview_target(stored)),
              :ok <- check_preview_version(stored, initiative),
              {:ok, manifest} <- parse(text),
              :ok <- enforce_limits(text, manifest) do
           DoIt.Imports.delete_preview(stored)
           summary = summary(manifest, target, initiative)
-          apply_import(user, text, filename, manifest, target, initiative, summary)
+          source = %{text: text, filename: filename, line_offset: offset || 0}
+          apply_import(user, source, manifest, target, initiative, summary)
         end
     end
   end
@@ -644,8 +659,8 @@ defmodule DoItWeb.Api.Imports do
 
   # --- Apply ------------------------------------------------------------------
 
-  defp apply_import(user, text, filename, manifest, target, initiative, summary) do
-    hash = DoIt.Imports.source_hash(text)
+  defp apply_import(user, source, manifest, target, initiative, summary) do
+    hash = DoIt.Imports.source_hash(source.text)
 
     case DoIt.Imports.fetch(user, target, hash) do
       %Import{response: body} ->
@@ -654,10 +669,10 @@ defmodule DoItWeb.Api.Imports do
 
       nil ->
         preamble = Map.get(manifest, :title_description)
+        {ops, lines} = Parser.operations_and_lines(manifest, target)
 
-        with {:ok, ops, comment_body} <-
-               prepare(Parser.operations(manifest, target), target, preamble, filename) do
-          write(user, ops, comment_body, hash, target, initiative, summary)
+        with {:ok, ops, comment_body} <- prepare(ops, target, preamble, source.filename) do
+          write(user, {ops, lines, comment_body}, hash, source, target, initiative, summary)
         end
     end
   end
@@ -704,7 +719,7 @@ defmodule DoItWeb.Api.Imports do
     if preamble, do: source <> "\n\n" <> preamble, else: source
   end
 
-  defp write(user, ops, comment_body, hash, target, initiative, summary) do
+  defp write(user, {ops, lines, comment_body}, hash, source, target, initiative, summary) do
     chunks = Enum.chunk_every(ops, Operations.max_batch_size())
     context = %{target: target, initiative: initiative, total: length(chunks)}
 
@@ -718,6 +733,7 @@ defmodule DoItWeb.Api.Imports do
           |> Map.merge(%{
             "preview" => false,
             "batches" => batches,
+            "items" => items(lines, resolved, source.line_offset),
             "initiative" => %{
               "id" => initiative_id,
               "url" => Serializer.initiative_url(initiative_id)
@@ -731,6 +747,19 @@ defmodule DoItWeb.Api.Imports do
       {:error, status, body} ->
         {:error, status, body}
     end
+  end
+
+  # Which source line became which Task (6.12.3), in source order: the lines
+  # the parser recorded against each op's lid, joined to the ids those ops
+  # committed as. `offset` puts a section import's lines back in the caller's
+  # whole document, so the file they hold is the one the numbers refer to.
+  defp items(lines, resolved, offset) do
+    Enum.flat_map(lines, fn {lid, line} ->
+      case Map.fetch(resolved, lid) do
+        {:ok, id} -> [%{"line" => line + offset, "id" => id}]
+        :error -> []
+      end
+    end)
   end
 
   # Apply the batches in order. Each commits on its own; the lids it created are
