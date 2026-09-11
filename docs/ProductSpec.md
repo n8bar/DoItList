@@ -83,6 +83,16 @@ Two alternate formulas are available as a per-initiative setting (Initiative pan
   progress(branch) = sum(weight(child) × progress(child)) / sum(weight(child))
   ```
 
+  A subtree's weight in its parent, for a subtree of 90 leaves and for a single branch holding two:
+
+  | Subtree | Leaf average | Depth-weighted |
+  |---|---|---|
+  | 90 leaves, flat | 90 | 81 |
+  | 90 leaves, nested four deep | 90 | 59 |
+  | 2 leaves under one branch | 2 | 1.8 |
+
+  The damping is a discount, not a transfer — nothing moves sideways to siblings, so a subtree's weight never reaches zero and never goes negative, and every added leaf still adds. **Rejected:** the toll variant, where a branch counts as two leaf-units and funds that out of its own posterity by paying its leaf siblings. It zeroes a two-leaf branch, hands a windfall to a lone leaf sitting among branch siblings, and has no recipient at all when every sibling is a branch.
+
   Detail still adds — a branch is always worth more the more leaves it holds — but each added layer of decomposition adds a little less than the last. It answers the case where work is decomposed late and in depth as a deadline nears, and the fresh detail swamps the bar it was meant to clarify. The 0.9 damping factor is a fixed constant, not a setting: importance stays a matter of decomposition, not configuration.
 
 Edge cases (status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
