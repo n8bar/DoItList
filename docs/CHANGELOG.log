@@ -583,3 +583,5 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-09  Arc 4 O&C 6.9 drafted: diff stops reporting completion drift on heading-derived branches, whose completion the source cannot express -- surfaced by the 7.2.1 diff.
 2026-09-09  Arc 4 7.2.2 done: the chores list imported clean with nesting and completion intact from a plain request -- Worklist 7.2 complete.
 2026-09-09  Arc 4 7.3 done: conversational adds and completions through the MCP tools land immediately and are acknowledged by index and title; the agent re-reads the whole tree around every write, noted for cost.
+2026-09-10  SKILL.md 3.4 added: importing a mirror previews first, stops on top-level numbering that differs from the document's own, and applies the preview by id after a readback yes -- the alignment check and readback gate the slim rewrite dropped, restored after Initiative 77 landed every arc at index 6.
+2026-09-10  Arc 4 O&C 6.10 drafted: imports take a `section` extent so a milestone doc's arcs land at index 1, and the CLI gains `delete <task>`.
