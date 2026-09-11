@@ -71,7 +71,19 @@ sum(leaf_progress) / leaf_count
 
 Because every leaf counts the same, a subtree's pull on its ancestors is its leaf count — decomposing a branch further is how the user makes it matter more. The Initiative header bar is the system root's roll-up — the same math end to end.
 
-The previous formula — the single-level average, where each direct child counts as one unit regardless of how many leaves it contains — is available as a per-initiative setting (Initiative pane → Settings → Progress calculation); leaf average is the default.
+Two alternate formulas are available as a per-initiative setting (Initiative pane → Settings → Progress calculation); leaf average is the default.
+
+- **Single-level average** — the original formula. Each direct child counts as one unit regardless of how many leaves it contains.
+- **Depth-weighted leaf average** — the leaf average, damped by nesting. A leaf's pull on an ancestor falls by 10% for every branch level that sits between them:
+
+  ```
+  weight(leaf)   = 1
+  weight(branch) = 0.9 × sum of children's weights
+
+  progress(branch) = sum(weight(child) × progress(child)) / sum(weight(child))
+  ```
+
+  Detail still adds — a branch is always worth more the more leaves it holds — but each added layer of decomposition adds a little less than the last. It answers the case where work is decomposed late and in depth as a deadline nears, and the fresh detail swamps the bar it was meant to clarify. The 0.9 damping factor is a fixed constant, not a setting: importance stays a matter of decomposition, not configuration.
 
 Edge cases (status transitions, root-task behavior) are owned by the milestone doc that introduced them — currently [`milestones/m01-baseapp/m01-baseapp.md`](milestones/m01-baseapp/m01-baseapp.md) → "Progress Rules".
 
