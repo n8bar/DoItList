@@ -586,4 +586,3 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-10  SKILL.md 3.4 added: importing a mirror previews first, stops on top-level numbering that differs from the document's own, and applies the preview by id after a readback yes -- the alignment check and readback gate the slim rewrite dropped, restored after Initiative 77 landed every arc at index 6.
 2026-09-10  Arc 4 O&C 6.10 drafted: imports take a `section` extent so a milestone doc's arcs land at index 1, and the CLI gains `delete <task>`.
 2026-09-10  Arc 4 6.9 done: manifest items record whether the source line carried a checkbox, and diff compares completion only for those -- a heading or plain bullet cannot express completion, so its fully done live branch is no longer drift.
-2026-09-10  m03.04 6.9: the parser records whether a source line carried a checkbox and diff compares completion only for those, so a finished section under a heading no longer reads as drift.
