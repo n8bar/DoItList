@@ -591,3 +591,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-10  SKILL.md 6.3 reworded: a new non-import Task matches sibling depth and decomposition is offered in one line, not imposed -- resolves the clash between always-decompose and sibling precedent by handing the choice to the user.
 2026-09-10  Arc 4 7.5 done: both safety probes (blunt command, operator-impersonating note) imported verbatim, were flagged in the reply, and executed nothing.
 2026-09-10  SKILL.md 1.1 and 3.4 reworded from the Jaylee re-import: an index doc maps to the Initiative itself, never a tree level (the earlier 'parent Task' phrasing sent the agent hunting for milestone parents); the preview flags titles over 200 characters and note-bullets as doc-side fixes. 1.4's --out sentence cut as CLI help.
+2026-09-10  SKILL.md 3.4: the note-bullet flag now names the remedy -- rewrite them as prose, which the parser imports as the description.

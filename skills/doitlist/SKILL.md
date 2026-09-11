@@ -25,7 +25,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 1. Pass the source verbatim. The API parses it and sets the grain; never summarize, reorder, or reformat first.
 2. When the source, the destination Initiative or parent, or the extent — whole document or one section — stays ambiguous after checking the mirror, the repo's instructions, and the conversation, ask the user before acting. Do not guess.
 3. When a write reports `outcome unknown`, run the recovery it prints — `doitlist.py retry <key>`, or for `import` the same command again — before any other command.
-4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id. Give an unindexed target an index style first. Flag titles over 200 characters and note-bullets that would import as Tasks; both are fixed in the doc.
+4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id. Give an unindexed target an index style first. Flag titles over 200 characters and note-bullets that would import as Tasks; suggest shortening the titles and rewriting the bullets as prose, which imports as the description.
 5. Ask before deleting content you cannot identify; it is usually the user's.
 
 ## 4. Completing against a mirror
