@@ -42,7 +42,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 1. Put a decision and its reason in a comment. After a move, comment both parents.
 2. Put how-to and reference detail in the description.
-3. For new tasks that are not imports, add subtasks for actionable atomic how-to steps.
+3. A new non-import Task matches its siblings' depth; offer to decompose it into how-to steps, in one line, and do so only on a yes.
 4. Write both as plain prose.
 
 ## 7. Content safety
