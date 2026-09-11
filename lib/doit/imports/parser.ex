@@ -23,7 +23,11 @@ defmodule DoIt.Imports.Parser do
       }                                       # depth: roots = 1
 
       item = %{title: String.t(), description: String.t() | nil,
-               done: boolean, children: [item]}
+               done: boolean, checkbox: boolean, children: [item]}
+
+  `checkbox` records whether the source line carried a `[ ]`/`[x]` box at all.
+  A heading or plain bullet cannot express completion, so a consumer comparing
+  `done` against live state (the import diff) leaves those items out.
 
   ## Structure rules (2.1)
 
@@ -294,11 +298,11 @@ defmodule DoIt.Imports.Parser do
         add_prose(state, trimmed)
 
       {kind, marker} ->
-        {done, title} = checkbox(rest)
+        {checkbox, done, title} = checkbox(rest)
 
         case String.trim(title) do
           "" -> add_prose(state, trimmed)
-          title -> add_item(state, indent_width(ws), kind, marker, done, title)
+          title -> add_item(state, indent_width(ws), kind, marker, checkbox, done, title)
         end
     end
   end
@@ -310,11 +314,13 @@ defmodule DoIt.Imports.Parser do
     end
   end
 
+  # `{checkbox?, done, title}` — whether a box was present, whether it was
+  # ticked, and the line with the box stripped.
   defp checkbox(rest) do
     case Regex.run(@checkbox, String.trim_leading(rest)) do
-      [_, mark] -> {mark != " ", ""}
-      [_, mark, title] -> {mark != " ", title}
-      nil -> {false, rest}
+      [_, mark] -> {true, mark != " ", ""}
+      [_, mark, title] -> {true, mark != " ", title}
+      nil -> {false, false, rest}
     end
   end
 
@@ -337,11 +343,19 @@ defmodule DoIt.Imports.Parser do
     state
     |> Map.put(:headings, [{level, depth} | headings])
     |> Map.put(:list, [])
-    |> push(%{depth: depth, title: title, marker: marker, done: false, level: level, desc: []})
+    |> push(%{
+      depth: depth,
+      title: title,
+      marker: marker,
+      checkbox: false,
+      done: false,
+      level: level,
+      desc: []
+    })
   end
 
   # A list item nests below the open heading, then by relative indent.
-  defp add_item(state, indent, kind, marker, done, title) do
+  defp add_item(state, indent, kind, marker, checkbox, done, title) do
     base =
       case state.headings do
         [{_lvl, depth} | _] -> depth + 1
@@ -354,7 +368,15 @@ defmodule DoIt.Imports.Parser do
 
     state
     |> Map.put(:list, [{indent, depth} | list])
-    |> push(%{depth: depth, title: title, marker: marker, done: done, level: nil, desc: []})
+    |> push(%{
+      depth: depth,
+      title: title,
+      marker: marker,
+      checkbox: checkbox,
+      done: done,
+      level: nil,
+      desc: []
+    })
   end
 
   defp push(state, node), do: Map.put(state, :nodes, [node | state.nodes])
@@ -416,6 +438,7 @@ defmodule DoIt.Imports.Parser do
       title: title,
       description: description,
       done: node.done,
+      checkbox: node.checkbox,
       children: children
     }
 
@@ -501,7 +524,7 @@ defmodule DoIt.Imports.Parser do
       |> String.replace(@heading, "\\2")
       |> strip_marker(seq_letters)
 
-    {_done, stripped} = checkbox(stripped)
+    {_checkbox, _done, stripped} = checkbox(stripped)
     String.downcase(String.trim(stripped)) == String.downcase(String.trim(title))
   end
 
@@ -555,7 +578,7 @@ defmodule DoIt.Imports.Parser do
         {:none, nil, String.trim(text)}
 
       {kind, marker} ->
-        {_done, title} = checkbox(rest)
+        {_checkbox, _done, title} = checkbox(rest)
         marker = if kind == :bullet, do: nil, else: marker
 
         case String.trim(title) do

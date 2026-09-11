@@ -11,7 +11,8 @@ defmodule DoIt.Imports.Diff do
 
       compare(source_items, live_items) :: report
 
-      source_item = %{title: String.t(), done: boolean, children: [source_item]}
+      source_item = %{title: String.t(), done: boolean, children: [source_item],
+                      checkbox: boolean}  # optional; `false` skips completion
       live_item   = %{title: String.t(), done: boolean, children: [live_item],
                       id: term}      # `id` optional; echoed in findings
 
@@ -43,7 +44,9 @@ defmodule DoIt.Imports.Diff do
 
     * an unmatched **source** item is `missing` (it isn't in the live tree);
     * an unmatched **live** item is `extra` (it isn't in the document);
-    * a matched pair whose `done` differs is a `completion` mismatch;
+    * a matched pair whose `done` differs is a `completion` mismatch — unless
+      the source item has `checkbox: false` (a heading or plain bullet, which
+      cannot express completion), in which case its completion is not compared;
     * a level whose matched items sit in a different relative order live than
       in the source is one `order` entry naming the parent and both orderings.
 
@@ -105,9 +108,11 @@ defmodule DoIt.Imports.Diff do
 
   # --- Findings ---------------------------------------------------------------
 
+  # A source line without a checkbox has nothing to say about completion, so
+  # its live counterpart being done is not drift (6.9).
   defp add_completion(acc, pairs, path) do
     Enum.reduce(pairs, acc, fn {{source, _si}, {live, _li}}, acc ->
-      if done?(source) == done?(live) do
+      if not checkbox?(source) or done?(source) == done?(live) do
         acc
       else
         push(acc, :completion, %{
@@ -239,6 +244,9 @@ defmodule DoIt.Imports.Diff do
   end
 
   defp done?(item), do: Map.get(item, :done) == true
+
+  # Absent means the producer did not say; compare as before.
+  defp checkbox?(item), do: Map.get(item, :checkbox, true) != false
 
   defp id(item), do: Map.get(item, :id)
 end

@@ -33,7 +33,7 @@ defmodule DoItWeb.Api.ImportsTest do
 
   # A small document exercising every mapping at once: a top heading (→ the
   # target, never a wrapper Task), a preamble, numeric markers (→ "numerical"),
-  # indent nesting, a checkbox, and prose that adds to its item's title.
+  # indent nesting, checkboxes (one ticked), and prose that adds to its item's title.
   @source """
   # Quarterly Plan
 
@@ -43,7 +43,7 @@ defmodule DoItWeb.Api.ImportsTest do
     1. Draft the spec
        Some detail about the draft.
     2. [x] Book the room
-  2. Tell everyone
+  2. [ ] Tell everyone
   """
 
   @other_source """

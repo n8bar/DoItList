@@ -111,6 +111,20 @@ defmodule DoIt.Imports.ParserTest do
 
       assert manifest.counts == %{items: 5, done: 3, depth: 1, title_overflow: 0}
     end
+
+    test "items record whether the line carried a checkbox at all" do
+      manifest =
+        parse!("""
+        # Plan
+        ## Section
+        - [ ] boxed
+        - plain
+        """)
+
+      assert Enum.map(manifest.items, &{&1.title, &1.checkbox}) == [{"Section", false}]
+      [%{children: children}] = manifest.items
+      assert Enum.map(children, &{&1.title, &1.checkbox}) == [{"boxed", true}, {"plain", false}]
+    end
   end
 
   # --- 2.1.2 nesting ---------------------------------------------------------

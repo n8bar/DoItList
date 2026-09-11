@@ -9,12 +9,14 @@ defmodule DoIt.Imports.DiffTest do
 
   # --- helpers ---------------------------------------------------------------
 
-  # A source (manifest) item.
+  # A source (manifest) item. `checkbox: false` is a heading or plain bullet —
+  # a line that had no `[ ]`/`[x]` to compare.
   defp src(title, opts \\ []) do
     %{
       title: title,
       description: nil,
       done: Keyword.get(opts, :done, false),
+      checkbox: Keyword.get(opts, :checkbox, true),
       children: Keyword.get(opts, :children, [])
     }
   end
@@ -171,6 +173,91 @@ defmodule DoIt.Imports.DiffTest do
                  "id" => 3
                }
              ]
+    end
+  end
+
+  # --- 6.9 derived completion -------------------------------------------------
+
+  describe "completion without a source checkbox" do
+    test "a heading whose section is fully done live is not drift" do
+      source = [
+        src("Ship the thing",
+          checkbox: false,
+          children: [src("Draft the spec", done: true), src("Book the room", done: true)]
+        )
+      ]
+
+      live = [
+        live("Ship the thing",
+          id: 1,
+          done: true,
+          children: [
+            live("Draft the spec", id: 2, done: true),
+            live("Book the room", id: 3, done: true)
+          ]
+        )
+      ]
+
+      report = Diff.compare(source, live)
+
+      assert report["clean"] == true
+      assert report["summary"]["matched"] == 3
+      assert report["completion"] == []
+    end
+
+    test "a real checkbox mismatch under such a heading is still reported" do
+      source = [
+        src("Ship the thing",
+          checkbox: false,
+          children: [src("Draft the spec", done: true), src("Book the room")]
+        )
+      ]
+
+      live = [
+        live("Ship the thing",
+          id: 1,
+          done: true,
+          children: [live("Draft the spec", id: 2), live("Book the room", id: 3, done: true)]
+        )
+      ]
+
+      report = Diff.compare(source, live)
+
+      assert report["summary"]["completion"] == 2
+
+      assert report["completion"] == [
+               %{
+                 "path" => "Ship the thing > Draft the spec",
+                 "source_done" => true,
+                 "live_done" => false,
+                 "id" => 2
+               },
+               %{
+                 "path" => "Ship the thing > Book the room",
+                 "source_done" => false,
+                 "live_done" => true,
+                 "id" => 3
+               }
+             ]
+    end
+
+    test "a plain bullet whose live counterpart is done is not drift" do
+      report =
+        Diff.compare([src("Water the plants", checkbox: false)], [
+          live("Water the plants", id: 7, done: true)
+        ])
+
+      assert report["clean"] == true
+      assert report["completion"] == []
+    end
+
+    test "a source item that never says whether it had a checkbox is compared as before" do
+      report =
+        Diff.compare([%{title: "Loose", done: false, children: []}], [
+          live("Loose", id: 1, done: true)
+        ])
+
+      assert report["summary"]["completion"] == 1
     end
   end
 
