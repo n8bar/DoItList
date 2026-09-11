@@ -26,6 +26,7 @@ import {hooks as colocatedHooks} from "phoenix-colocated/doit"
 import topbar from "../vendor/topbar"
 import DoitRollup from "./rollup.js"
 import {segments, transformForSave, rehydrate} from "./refs.js"
+import {probeUrl, probeWebSocket, connectAfterReprobe} from "./transport.js"
 
 const {computeRollup, computeDoneCascade} = DoitRollup
 
@@ -6977,9 +6978,10 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   // Cold/first connects (especially after a dev recompile, when HEEx templates
   // JIT-warm and a mount can take ~3s) trip a tight WS budget and fall back to
-  // LongPoll — which then STICKS via sessionStorage["phx:fallback:LongPoll"].
-  // WS is proven working here (heartbeat replies ~900ms warm, upgrades ~7s), so
-  // give the primary transport real room to win the race before falling back.
+  // LongPoll, which Phoenix memorizes in sessionStorage["phx:fallback:LongPoll"]
+  // for the tab's life. Two defences: give the primary transport real room to
+  // win the race here, and — at connect time below — re-probe the websocket
+  // whenever that flag is set, clearing it if the socket opens (O&C 6.11).
   longPollFallbackMs: 6000,
   // Halve the default 30s heartbeat so a SILENT drop that fires no browser
   // "offline" event (a server-side / half-open socket) is still detected — and
@@ -7147,8 +7149,17 @@ window.addEventListener("phx:page-loading-stop", e => {
   if (e.detail && e.detail.kind === "initial") { connEverLive = true; setConnStatus(null) }
 })
 
-// connect if there are any LiveViews on the page
-liveSocket.connect()
+// connect if there are any LiveViews on the page. A tab Phoenix pinned to
+// long-poll (sessionStorage["phx:fallback:LongPoll"]) first probes a throwaway
+// websocket (~2s budget) and drops the pin if it opens, so the LiveSocket
+// connects over the websocket again; unpinned tabs connect at once, no probe.
+connectAfterReprobe(
+  window.sessionStorage,
+  () => probeWebSocket(probeUrl(window.location, csrfToken), window.WebSocket),
+  () => liveSocket.connect()
+).then(cleared => {
+  if (cleared) console.debug("[transport] websocket probe opened; cleared memorized long-poll fallback")
+})
 
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()
