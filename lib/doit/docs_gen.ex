@@ -1,6 +1,6 @@
 defmodule DoIt.DocsGen do
   @moduledoc """
-  Generates the fenced blocks in `docs/specs/agent_integration.md` from the
+  Generates the fenced blocks in `docs/reference/agent_surfaces.md` from the
   live code (m03.05 worklist 2) — the op table, the response shapes, the MCP
   tool list, and the scripted client's verbs and options. Anything mechanical
   lives here so it can't drift from the code it describes; the surrounding
@@ -19,7 +19,7 @@ defmodule DoIt.DocsGen do
     defexception [:message]
   end
 
-  @doc_relpath "docs/specs/agent_integration.md"
+  @doc_relpath "docs/reference/agent_surfaces.md"
   @mcp_relpath "mcp_server"
   @cli_relpath "skills/doitlist/scripts/doitlist.py"
 
@@ -41,7 +41,7 @@ defmodule DoIt.DocsGen do
   /generated: SOURCE -->` block replaced by freshly generated content.
   Content outside the fences is returned byte-for-byte.
 
-  Raises `FenceError` — naming `docs/specs/agent_integration.md` — when a
+  Raises `FenceError` — naming `docs/reference/agent_surfaces.md` — when a
   fence is missing, or any fence in the file is unbalanced (an unmatched
   open or close, or a close that names the wrong source).
   """

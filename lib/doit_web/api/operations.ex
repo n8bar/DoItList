@@ -251,7 +251,7 @@ defmodule DoItWeb.Api.Operations do
   # --- doc generation (m03.05 worklist 2) ------------------------------------
   #
   # `mix doit.docs.gen` reads this to render the op table in
-  # docs/specs/agent_integration.md. Rows come straight from
+  # docs/reference/agent_surfaces.md. Rows come straight from
   # @accepted_data_keys — the same map validate_data_keys/3 enforces at
   # runtime — so a newly wired {verb, type} appears in the doc the next time
   # it's regenerated, with no second list to keep in sync.

@@ -1,6 +1,6 @@
 defmodule DoIt.DocsGenTest do
   @moduledoc """
-  The drift gate for `docs/specs/agent_integration.md` (m03.05 worklist 2):
+  The drift gate for `docs/reference/agent_surfaces.md` (m03.05 worklist 2):
   regenerating the committed file must reproduce it byte-for-byte. A hand
   edit inside a fence, or a code change that shifts a generated block
   without regenerating, fails this test with a readable diff.
@@ -18,7 +18,7 @@ defmodule DoIt.DocsGenTest do
 
     if regenerated != committed do
       flunk("""
-      docs/specs/agent_integration.md is stale — run `mix doit.docs.gen` and commit the result.
+      docs/reference/agent_surfaces.md is stale — run `mix doit.docs.gen` and commit the result.
 
       #{readable_diff(committed, regenerated)}
       """)
@@ -26,12 +26,15 @@ defmodule DoIt.DocsGenTest do
   end
 
   test "the hand-written prose stays under its cap" do
-    words =
-      DoIt.DocsGen.doc_path()
-      |> File.read!()
-      |> DoIt.DocsGen.prose_word_count()
+    for relpath <- ["docs/reference/agent_surfaces.md", "docs/specs/agent_integration.md"] do
+      words =
+        File.cwd!()
+        |> Path.join(relpath)
+        |> File.read!()
+        |> DoIt.DocsGen.prose_word_count()
 
-    assert words < 800, "prose is #{words} words; the cap is 800 (m03.05 6.3)"
+      assert words < 800, "#{relpath} is #{words} prose words; the cap is 800 (m03.05 6.3)"
+    end
   end
 
   test "refuses to write when a fence is missing, naming the file" do
@@ -40,7 +43,7 @@ defmodule DoIt.DocsGenTest do
     <!-- /generated: DoItWeb.Api.Operations -->
     """
 
-    assert_raise DocsGen.FenceError, ~r/agent_integration\.md.*missing fence/s, fn ->
+    assert_raise DocsGen.FenceError, ~r/agent_surfaces\.md.*missing fence/s, fn ->
       DocsGen.regenerate(text)
     end
   end
@@ -54,7 +57,7 @@ defmodule DoIt.DocsGenTest do
     <!-- /generated: scripts/doitlist.py -->
     """
 
-    assert_raise DocsGen.FenceError, ~r/agent_integration\.md/, fn ->
+    assert_raise DocsGen.FenceError, ~r/agent_surfaces\.md/, fn ->
       DocsGen.regenerate(text)
     end
   end

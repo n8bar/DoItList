@@ -1,8 +1,8 @@
 defmodule Mix.Tasks.Doit.Docs.Gen do
-  @shortdoc "Regenerate the fenced blocks in docs/specs/agent_integration.md"
+  @shortdoc "Regenerate the fenced blocks in docs/reference/agent_surfaces.md"
 
   @moduledoc """
-  Rewrites the fenced generated blocks in `docs/specs/agent_integration.md`
+  Rewrites the fenced generated blocks in `docs/reference/agent_surfaces.md`
   from the live code (m03.05 worklist 2):
 
     * the op table, from `DoItWeb.Api.Operations`
@@ -43,16 +43,16 @@ defmodule Mix.Tasks.Doit.Docs.Gen do
 
     cond do
       updated == original ->
-        Mix.shell().info("docs/specs/agent_integration.md is already up to date.")
+        Mix.shell().info("docs/reference/agent_surfaces.md is already up to date.")
 
       check? ->
         Mix.raise(
-          "docs/specs/agent_integration.md is stale — run `mix doit.docs.gen` and commit the result."
+          "docs/reference/agent_surfaces.md is stale — run `mix doit.docs.gen` and commit the result."
         )
 
       true ->
         File.write!(path, updated)
-        Mix.shell().info("Regenerated docs/specs/agent_integration.md.")
+        Mix.shell().info("Regenerated docs/reference/agent_surfaces.md.")
     end
   end
 
