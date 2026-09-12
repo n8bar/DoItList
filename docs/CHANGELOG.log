@@ -619,3 +619,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-12  SKILL.md §3.4 split into six subitems in execution order -- the import paragraph packed six separate actions into one line. 728 -> 733 words.
 2026-09-12  SKILL.md §3.4.3 suggests an index style instead of setting one -- the style is the user's tree-wide display choice, the CLI has no verb for it, and a created Initiative already takes the document's own.
 2026-09-12  Tweak: SKILL.md §3.4.2 and §3.4.4 reworded by the operator -- the numbering mismatch says "without editing the document", and an over-long title now suggests descriptions and subtasks too. 733 -> 740 words.
+2026-09-12  Tweak: SKILL.md §2.1 states the mirror condition, §3.5 contracts, and the naming example uses a four-digit token. 740 -> 745 words.
