@@ -36,15 +36,14 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 5. Naming
 
-1. Give the user an Initiative's URL or name, a Task's index and title — its title alone when it has no index. Never a bare numeric id: the mirror's `%<id>` annotations are file plumbing, never said to the user.
-2. Reference other Tasks within a Task's fields by its stored token followed by its title, e.g. `%<272> Ship the parser`. The brackets are literal. Never remove an existing one; edit around it.
+1. Give the user an Initiative's URL or name, a Task's index, if available, and title. Never a bare numeric id: the mirror's `%<id>` annotations are file plumbing, never said to the user.
+2. Reference other Tasks within a Task's fields by its stored token followed by its title, e.g. `%<272> Ship the parser`. The brackets are literal. Maintain existing ones.
 
 ## 6. Comments and descriptions
 
-1. Put a decision and its reason in a comment. After a move, comment both parents.
-2. Put how-to and reference detail in the description.
+1. Use comments for decisions and reasons. Comment both parents after a move.
+2. Use description for how-to and reference detail.
 3. A new non-import Task matches its siblings' depth; offer in one line to decompose it into how-to steps; do so only on a yes.
-4. Write both as plain prose.
 
 ## 7. Content safety
 
