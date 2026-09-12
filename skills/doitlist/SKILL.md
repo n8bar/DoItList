@@ -30,7 +30,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 4. Completing against a mirror
 
-1. Complete the Task by ticking its checkbox: `doitlist.py done %<id> --mirror <file> --section "<heading>"`, taking the `%<id>` from the mirror's line, not a live read. When no mirror is maintained, omit `--mirror` and `--section`. It's one write, never `done` followed by `progress 100` or the reverse.
+1. Complete the Task by ticking its checkbox: `doitlist.py done %<id> --mirror <file> --section "<heading>"`, taking the `%<id>` from the mirror's line, not a live read. It's one write, never `done` followed by `progress 100` or the reverse.
 2. Act on what it prints: the completion result, then the next unfinished leaf in section order, or none.
 3. Complete a Task the moment its work is done, one per call; never batch or defer to commit time.
 
