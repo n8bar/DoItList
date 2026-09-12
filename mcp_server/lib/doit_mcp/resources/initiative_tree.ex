@@ -1,15 +1,6 @@
 defmodule DoitMcp.Resources.InitiativeTree do
   @moduledoc """
-  One Initiative's full nested task tree — mirrors `GET /api/v1/initiatives/:id`.
-
-  Parameterized via `uri_template` (RFC 6570 Level 1 simple `{var}` expansion,
-  confirmed supported by `anubis_mcp` v1.6.2 — see
-  `deps/anubis_mcp/lib/anubis/server/component/resource.ex` moduledoc and
-  `deps/anubis_mcp/lib/anubis/server/component/uri_template.ex`). The MCP
-  server matches an incoming `resources/read` URI against `uri_template` and
-  delivers the extracted variables to `read/2` as the `"params"` key of the
-  first argument, e.g. `%{"uri" => uri, "params" => %{"id" => "42"}}` (see
-  `deps/anubis_mcp/lib/anubis/server/handlers/resources.ex`, `read_single_resource/5`).
+  Read one Initiative's current full task tree with live index labels. Always read it immediately before restructuring because collaborative changes may have invalidated an earlier read. Reply with `index` and `title`, and the Initiative `url`.
   """
 
   use Anubis.Server.Component, type: :resource, uri_template: "doitlist://initiatives/{id}"
@@ -18,6 +9,6 @@ defmodule DoitMcp.Resources.InitiativeTree do
 
   @impl true
   def read(%{"params" => %{"id" => id}}, frame) do
-    frame |> ResourceResult.reply(Client.get("/api/v1/initiatives/#{id}"))
+    frame |> ResourceResult.reply_user_content(Client.get("/api/v1/initiatives/#{id}"))
   end
 end

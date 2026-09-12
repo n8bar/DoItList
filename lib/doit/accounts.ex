@@ -50,13 +50,16 @@ defmodule DoIt.Accounts do
 
   @doc """
   Change the password after verifying the current one. A wrong (or blank)
-  current password fails with an error on `:current_password`.
+  current password fails with an error on `:current_password`. A successful
+  change always clears `password_change_required`.
   """
   def update_password(%User{} = user, attrs) do
     changeset = User.password_changeset(user, attrs)
 
     if User.valid_password?(user, attrs["current_password"] || "") do
-      Repo.update(changeset)
+      changeset
+      |> Ecto.Changeset.put_change(:password_change_required, false)
+      |> Repo.update()
     else
       {:error,
        changeset
@@ -86,6 +89,16 @@ defmodule DoIt.Accounts do
   end
 
   @doc """
+  Flags the user to be forced through the change-password flow on their next
+  authenticated request. Cleared by a successful `update_password/2`.
+  """
+  def require_password_change(%User{} = user) do
+    user
+    |> Ecto.Changeset.change(password_change_required: true)
+    |> Repo.update()
+  end
+
+  @doc """
   The user's preferences row, or an unsaved defaults struct when they've
   never changed anything — callers read either the same way.
   """
@@ -93,8 +106,14 @@ defmodule DoIt.Accounts do
     Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
   end
 
+  # Batch-memoized (m03.04 2.7.5.2): every task create in an operations batch
+  # reads the initiative owner's defaults — serve repeats from the batch memo.
+  # No operation in the batch surface writes preferences; update_preferences/2
+  # busts anyway as a safety net. Outside a batch scope: a plain read, as before.
   def get_preferences_by_user_id(user_id) do
-    Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
+    DoIt.BatchMemo.fetch({:user_prefs, user_id}, fn ->
+      Repo.get_by(UserPreferences, user_id: user_id) || %UserPreferences{user_id: user_id}
+    end)
   end
 
   def change_preferences(%UserPreferences{} = prefs, attrs \\ %{}) do
@@ -106,6 +125,10 @@ defmodule DoIt.Accounts do
     |> get_preferences()
     |> UserPreferences.changeset(attrs)
     |> Repo.insert_or_update()
+    |> tap(fn
+      {:ok, _} -> DoIt.BatchMemo.bust({:user_prefs, user.id})
+      _ -> :ok
+    end)
   end
 
   @doc """
@@ -144,7 +167,7 @@ defmodule DoIt.Accounts do
   # Per-user Bearer tokens. Implementation lives in `DoIt.Accounts.ApiTokens`;
   # delegated here so callers use the context as the single front door.
 
-  defdelegate mint_api_token(user, label \\ nil), to: ApiTokens
+  defdelegate mint_api_token(user, label), to: ApiTokens
   defdelegate max_active_api_tokens(), to: ApiTokens
   defdelegate list_api_tokens(user), to: ApiTokens
   defdelegate revoke_api_token(user, id), to: ApiTokens

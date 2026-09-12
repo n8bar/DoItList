@@ -47,12 +47,25 @@ defmodule DoItWeb.Router do
     get "/initiatives/:id", InitiativeController, :show
     get "/initiatives/:id/activity", InitiativeController, :activity
     get "/initiatives/:id/members", InitiativeController, :members
+    get "/initiatives/:id/task_count", InitiativeController, :task_count
     get "/initiatives/:id/tasks/:task_id/comments", CommentController, :index
+
+    # Task → Initiative resolver (m03.04 2.8.1.1): the one read keyed on a
+    # bare task id, so the MCP import gate can count parent_id-anchored adds.
+    # Deviates from the policy above on purpose: unknown ids AND tasks the
+    # caller can't view are a UNIFORM 404 — a bare task id is no existence
+    # oracle.
+    get "/tasks/:id", TaskController, :show
 
     # Atomic mutation surface (m03.01 worklist 3). One endpoint over the
     # reversible op set; an ordered batch applied all-or-nothing. Per-op authz +
     # the per-op error contract live in DoItWeb.Api.Operations.
     post "/operations", OperationsController, :create
+
+    # Text import (m03.04 2.3): a source document in, a Task tree out. Parsed
+    # by DoIt.Imports.Parser, applied through the operations engine above in
+    # cap-sized batches. Preview mode writes nothing.
+    post "/imports", ImportController, :create
   end
 
   scope "/", DoItWeb do

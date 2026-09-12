@@ -2,10 +2,15 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
   @moduledoc """
   Idempotent retries on `POST /api/v1/operations` (m03.03 worklist 2.2).
 
-  A repeat request carrying the same `Idempotency-Key` replays the first
-  attempt's stored response and does NOT re-execute — proven by the side effect
-  happening exactly once. Covers a committed batch, a rolled-back batch, the
-  no-key baseline (unchanged, nothing stored), and distinct keys (both execute).
+  A repeat request carrying the same `Idempotency-Key` and the same payload
+  replays the first attempt's stored response and does NOT re-execute — proven
+  by the side effect happening exactly once. The key binds to its payload
+  (m03.04 fix 20): a same-key request with a changed payload is a 422 naming
+  the key conflict, and a rolled-back batch stores nothing, so an honest retry
+  after a rollback re-executes. A committed payload re-sent under a NEW key is
+  a 422 naming the earlier key and its commit time (m03.04 2.7.6) — only a
+  changed payload takes a new key; unkeyed re-sends stay uncheckable and
+  apply. Also covers the no-key baseline (unchanged, nothing stored).
 
   Each `post_ops` mints a fresh token, so the per-token rate limit (5/window in
   `config/test.exs`) never bites across a test's few requests. Idempotency is
@@ -72,11 +77,15 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
 
   setup do
     owner = user("owner")
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"})
+
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"}, agent_access: true)
+
     %{owner: owner, ini: ini}
   end
 
-  test "same key replays the committed response and does not execute twice", ctx do
+  test "same key + same payload replays the committed response and does not execute twice",
+       ctx do
     key = "idem-#{System.unique_integer([:positive])}"
     ops = [add_task(ctx.ini, "OnceOnly")]
 
@@ -94,29 +103,56 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
     assert [%{"data" => %{"id" => ^id}}] = b2["results"]
   end
 
-  test "a rolled-back batch's 4xx is stored and replayed too", ctx do
+  test "same key + changed payload is a 422 naming the key conflict, not a replay", ctx do
+    key = "idem-#{System.unique_integer([:positive])}"
+
+    {s1, b1} = post_ops(ctx.owner, [add_task(ctx.ini, "FirstPayload")], key)
+    assert s1 == 200
+    assert count_tasks("FirstPayload") == 1
+
+    # Same key, different batch: rejected — neither replayed nor executed.
+    {s2, b2} = post_ops(ctx.owner, [add_task(ctx.ini, "ChangedPayload")], key)
+    assert s2 == 422
+    assert b2["error"]["code"] == "unprocessable_entity"
+    assert b2["error"]["message"] =~ "Idempotency-Key conflict"
+    assert b2["error"]["message"] =~ "One key per batch"
+    assert count_tasks("ChangedPayload") == 0
+
+    # The stored response is untouched — the original payload still replays.
+    {s3, b3} = post_ops(ctx.owner, [add_task(ctx.ini, "FirstPayload")], key)
+    assert s3 == 200
+    assert b3 == b1
+    assert count_tasks("FirstPayload") == 1
+  end
+
+  test "a rolled-back batch stores nothing — an honest retry on the same key re-executes",
+       ctx do
     key = "idem-#{System.unique_integer([:positive])}"
 
     # op 0 would create a task; op 1 targets a non-existent task, so the WHOLE
-    # batch rolls back with a 422 — nothing persists.
-    ops = [
+    # batch rolls back with a 422 — nothing persists, and nothing is stored.
+    bad_ops = [
       add_task(ctx.ini, "RolledBack"),
       %{"op" => "update", "type" => "task", "id" => 999_999_999, "data" => %{"done" => true}}
     ]
 
-    {s1, b1} = post_ops(ctx.owner, ops, key)
+    {s1, b1} = post_ops(ctx.owner, bad_ops, key)
     assert s1 == 422
     assert b1["error"]["status"] == 422
     assert count_tasks("RolledBack") == 0
 
-    # Retry with the same key replays the identical 422 — still nothing created.
-    {s2, b2} = post_ops(ctx.owner, ops, key)
-    assert s2 == 422
-    assert b2 == b1
-    assert count_tasks("RolledBack") == 0
+    assert Repo.aggregate(from(r in IdempotencyKey, where: r.user_id == ^ctx.owner.id), :count) ==
+             0
+
+    # The honest retry — same key, batch revised to drop the bad op — really
+    # re-executes (a stored 422 would have replayed or key-conflicted instead).
+    {s2, b2} = post_ops(ctx.owner, [add_task(ctx.ini, "RolledBack")], key)
+    assert s2 == 200
+    assert [%{"status" => "ok"}] = b2["results"]
+    assert count_tasks("RolledBack") == 1
   end
 
-  test "no key: behavior unchanged and nothing is stored", ctx do
+  test "no key: behavior unchanged, re-sends apply, and nothing is stored", ctx do
     ops = [add_task(ctx.ini, "NoKey")]
 
     {status, body} = post_ops(ctx.owner, ops)
@@ -124,20 +160,67 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
     assert [%{"status" => "ok"}] = body["results"]
     assert count_tasks("NoKey") == 1
 
+    # An unkeyed same-payload re-send stays as today: without a key the server
+    # can't distinguish retry from intent, so it applies (a second copy).
+    {status2, _} = post_ops(ctx.owner, ops)
+    assert status2 == 200
+    assert count_tasks("NoKey") == 2
+
     # No idempotency row recorded for this user.
     assert Repo.aggregate(from(r in IdempotencyKey, where: r.user_id == ^ctx.owner.id), :count) ==
              0
   end
 
-  test "different keys both execute", ctx do
-    ops = [add_task(ctx.ini, "TwoKeys")]
+  test "the same payload under a new key is refused naming the earlier key and its time",
+       ctx do
+    n = System.unique_integer([:positive])
+    key_a = "key-a-#{n}"
+    ops = [add_task(ctx.ini, "OneCopy")]
 
-    {s1, _} = post_ops(ctx.owner, ops, "key-a-#{System.unique_integer([:positive])}")
-    {s2, _} = post_ops(ctx.owner, ops, "key-b-#{System.unique_integer([:positive])}")
+    {s1, b1} = post_ops(ctx.owner, ops, key_a)
+    assert s1 == 200
+    assert count_tasks("OneCopy") == 1
+
+    committed_at =
+      Repo.one!(
+        from r in IdempotencyKey,
+          where: r.user_id == ^ctx.owner.id and r.idempotency_key == ^key_a,
+          select: r.inserted_at
+      )
+
+    # Identical payload, fresh key: refused — the 422 names the earlier key,
+    # its commit time, and both recoveries. No second subtree (m03.04 2.7.6).
+    {s2, b2} = post_ops(ctx.owner, ops, "key-b-#{n}")
+    assert s2 == 422
+    assert b2["error"]["code"] == "unprocessable_entity"
+    assert b2["error"]["message"] =~ "Duplicate batch"
+    assert b2["error"]["message"] =~ "\"#{key_a}\""
+    assert b2["error"]["message"] =~ DateTime.to_iso8601(committed_at)
+    assert b2["error"]["message"] =~ "change the payload if a second copy is meant"
+    assert count_tasks("OneCopy") == 1
+
+    # The named recovery works: the earlier key still replays its response.
+    {s3, b3} = post_ops(ctx.owner, ops, key_a)
+    assert s3 == 200
+    assert b3 == b1
+    assert count_tasks("OneCopy") == 1
+
+    # KEYED batches only: the same payload unkeyed still applies.
+    {s4, _} = post_ops(ctx.owner, ops)
+    assert s4 == 200
+    assert count_tasks("OneCopy") == 2
+  end
+
+  test "a changed payload under a new key applies", ctx do
+    n = System.unique_integer([:positive])
+
+    {s1, _} = post_ops(ctx.owner, [add_task(ctx.ini, "CopyOne")], "key-a-#{n}")
+    {s2, _} = post_ops(ctx.owner, [add_task(ctx.ini, "CopyTwo")], "key-b-#{n}")
 
     assert s1 == 200
     assert s2 == 200
-    # Distinct keys are distinct requests — both created a task.
-    assert count_tasks("TwoKeys") == 2
+    # Distinct payloads under distinct keys are distinct requests.
+    assert count_tasks("CopyOne") == 1
+    assert count_tasks("CopyTwo") == 1
   end
 end

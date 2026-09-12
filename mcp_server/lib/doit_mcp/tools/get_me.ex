@@ -1,8 +1,6 @@
 defmodule DoitMcp.Tools.GetMe do
   @moduledoc """
-  Read the acting user — mirrors `GET /api/v1/me`. Tool twin of
-  `DoitMcp.Resources.Me`, for agents that only look for reads in
-  `tools/list`.
+  Read the acting user's identity and account details.
   """
 
   use Anubis.Server.Component, type: :tool

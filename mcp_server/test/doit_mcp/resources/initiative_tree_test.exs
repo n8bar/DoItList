@@ -1,6 +1,9 @@
 defmodule DoitMcp.Resources.InitiativeTreeTest do
   use ExUnit.Case, async: true
 
+  # m03.04 3.5.1 — the marker opens the text blob of a read carrying user text.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
   alias DoitMcp.Resources.InitiativeTree
 
   test "read/2 fetches the initiative's nested tree and relays the reply/frame through" do
@@ -22,6 +25,7 @@ defmodule DoitMcp.Resources.InitiativeTreeTest do
     assert {:reply, %Anubis.Server.Response{type: :resource} = response, ^frame} =
              InitiativeTree.read(%{"params" => %{"id" => "42"}}, frame)
 
-    assert Jason.decode!(response.contents["text"]) == tree
+    assert [@user_content, json] = String.split(response.contents["text"], "\n", parts: 2)
+    assert Jason.decode!(json) == tree
   end
 end

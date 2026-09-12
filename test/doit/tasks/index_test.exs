@@ -23,6 +23,30 @@ defmodule DoIt.Tasks.IndexTest do
     end
   end
 
+  describe "positional_prefix?/1" do
+    test "a marker is a dotted path ending in . or ), or a bare multi-segment path, then a space" do
+      for title <- [
+            "1. Kickoff",
+            "2.3 Draft",
+            "2.3. Draft",
+            "4) Ship",
+            "I. Plan",
+            "A) Sort",
+            "iv. Low"
+          ] do
+        assert Index.positional_prefix?(title), title
+      end
+    end
+
+    test "a bare word followed by a space is not a marker" do
+      for title <- ["A big task", "I want this", "12 monkeys", "Kickoff", "1.5x speed", "1.", ""] do
+        refute Index.positional_prefix?(title), title
+      end
+
+      refute Index.positional_prefix?(nil)
+    end
+  end
+
   describe "none / empty / invalid" do
     test "none style yields no label at any depth" do
       assert Index.label([0], "none") == ""

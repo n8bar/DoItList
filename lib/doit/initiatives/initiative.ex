@@ -20,11 +20,21 @@ defmodule DoIt.Initiatives.Initiative do
     # m02.07 item 1.7: positional task-index style for this tree (per-Initiative,
     # not per-account). "none" = no index shown (default). See DoIt.Tasks.Index.
     field :index_style, :string, default: "none"
-    # m03.04 item 2.4: per-Initiative constants store for AI agents — plain text
+    # m03.04 item 3.4: per-Initiative constants store for AI agents — plain text
     # the product stores but never interprets.
     field :ai_knobs, :string
+    # m03.04 2.4.1: per-Initiative agent access, off by default. Off means
+    # the /api/v1 surface treats this Initiative as not-found. Never cast from
+    # params — the UI flips it via Initiatives.set_agent_access/2 (owner-only)
+    # and the API create path grants it server-side at creation.
+    field :agent_access, :boolean, default: false
     # Trash (m02.06): set when the Initiative is soft-deleted; nil = live.
     field :trashed_at, :utc_datetime
+    # Conditional writes (m03.04 2.7.4): integer revision counter, bumped
+    # DB-side on every write to this row (content, subtitle, lifecycle) —
+    # never cast from params. Callers may send expected_version to refuse a
+    # stale write.
+    field :version, :integer, default: 1
     field :my_role, :string, virtual: true
     # The viewing member's manual index order (initiative_members.sort_order).
     field :my_sort_order, :integer, virtual: true
@@ -41,6 +51,13 @@ defmodule DoIt.Initiatives.Initiative do
     # `Initiatives.list_visible_initiatives/1`; defaults empty so a struct built
     # without the attach renders no row.
     field :members, :any, virtual: true, default: []
+    # Whether the VIEWING user's next member add here needs the one-time
+    # agent-trust confirm (m03.04 2.4.2): they administer it, it's
+    # agent-accessible, and they haven't acknowledged yet. Batch-attached by
+    # `Initiatives.list_visible_initiatives/1` for the rail's collaborator-add
+    # paths (menu + drag); defaults false so a struct built without the attach
+    # never demands a confirm the dialog isn't rendered for.
+    field :trust_confirm_required, :boolean, virtual: true, default: false
 
     belongs_to :owner, User
     # The system-managed root task: the Initiative IS this task (its title is the

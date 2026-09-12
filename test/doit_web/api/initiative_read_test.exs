@@ -67,7 +67,9 @@ defmodule DoItWeb.Api.InitiativeReadTest do
     viewer = user("viewer")
     stranger = user("stranger")
 
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"})
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"}, agent_access: true)
+
     {:ok, ini} = Initiatives.update_initiative(ini, %{"index_style" => "numerical"})
     {:ok, _} = Initiatives.update_subtitle(ini, "ship the dashboard")
     {:ok, _} = Initiatives.add_member(ini.id, editor.id, "editor")
@@ -83,7 +85,9 @@ defmodule DoItWeb.Api.InitiativeReadTest do
     {:ok, _} = Tasks.update_task(docs, owner, %{"manual_progress" => 100})
 
     # A second Initiative owned by the stranger, to source a foreign task id.
-    {:ok, other} = Initiatives.create_initiative(stranger, %{"name" => "Other"})
+    {:ok, other} =
+      Initiatives.create_initiative(stranger, %{"name" => "Other"}, agent_access: true)
+
     foreign = top_task(stranger, other, "Foreign")
 
     %{
@@ -137,6 +141,22 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["index"] =~ ~r/^\d+\.\d+$/
     end
 
+    test "the tree root carries unit_count under both calc modes (m03.04 6.5)", ctx do
+      # Phase 1's two leaves + Phase 2 = 3 leaves; 2 top-level tasks.
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => %{"unit_count" => 3}} = json_response(conn, 200)
+
+      {:ok, _} = Initiatives.update_initiative(ctx.ini, %{"progress_calc" => "single_level"})
+
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => %{"progress_calc" => "single_level", "unit_count" => 2}} =
+               json_response(conn, 200)
+    end
+
     test "task nodes carry description verbatim and a live comment_count", ctx do
       # Descriptions: one set, the rest untouched (null).
       {:ok, _} = Tasks.update_task(ctx.phase1, ctx.owner, %{"description" => "how: build it"})
@@ -163,6 +183,8 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["comment_count"] == 0
     end
 
+    # AI-KNOBS-PARKED (m03.04): knobs off the API read; revive with the serializer line.
+    @tag :skip
     test "ai_knobs is surfaced verbatim in the tree envelope but not the list row (fix 14)",
          ctx do
       knobs = "deploy_day: friday\nlocale: en"
@@ -199,6 +221,29 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert row["root_task_id"] == ctx.ini.root_task_id
     end
 
+    test "list rows carry unit_count per each Initiative's calc mode (m03.04 6.5)", ctx do
+      # A second, single_level Initiative with one top-level branch over two
+      # leaves (1 unit) beside Q3 Launch's leaf_average 3 — both in one read.
+      {:ok, other} =
+        Initiatives.create_initiative(ctx.owner, %{"name" => "Single"}, agent_access: true)
+
+      {:ok, other} = Initiatives.update_initiative(other, %{"progress_calc" => "single_level"})
+      parent = top_task(ctx.owner, other, "Parent")
+      _ = top_task(ctx.owner, other, "Kid 1", %{"parent_id" => parent.id})
+      _ = top_task(ctx.owner, other, "Kid 2", %{"parent_id" => parent.id})
+
+      {:ok, empty} =
+        Initiatives.create_initiative(ctx.owner, %{"name" => "Empty"}, agent_access: true)
+
+      conn = build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives")
+      assert %{"data" => rows} = json_response(conn, 200)
+      by_id = Map.new(rows, &{&1["id"], &1["unit_count"]})
+
+      assert by_id[ctx.ini.id] == 3
+      assert by_id[other.id] == 1
+      assert by_id[empty.id] == 0
+    end
+
     test "does not leak Initiatives the user isn't a member of", ctx do
       conn = build_conn() |> bearer(token(ctx.stranger)) |> get(~p"/api/v1/initiatives")
 
@@ -208,7 +253,10 @@ defmodule DoItWeb.Api.InitiativeReadTest do
 
     test "a blank subtitle reads as \"\" in the list, matching the tree", _ctx do
       solo = user("solo")
-      {:ok, blank} = Initiatives.create_initiative(solo, %{"name" => "No Subtitle"})
+
+      {:ok, blank} =
+        Initiatives.create_initiative(solo, %{"name" => "No Subtitle"}, agent_access: true)
+
       tok = token(solo)
 
       list = build_conn() |> bearer(tok) |> get(~p"/api/v1/initiatives")

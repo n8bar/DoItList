@@ -1,8 +1,6 @@
 defmodule DoitMcp.Resources.Initiatives do
   @moduledoc """
-  The caller's Initiatives — mirrors `GET /api/v1/initiatives`. Each item
-  carries `root_task_id` — the Initiative's system root task, whose comments
-  are the Initiative's own thread.
+  List the acting user's Initiatives. Each item includes `root_task_id`, the system root task whose comments form the Initiative's thread. Reply with the Initiative `url`, never its id.
   """
 
   use Anubis.Server.Component, type: :resource, uri: "doitlist://initiatives"
@@ -11,6 +9,6 @@ defmodule DoitMcp.Resources.Initiatives do
 
   @impl true
   def read(_params, frame) do
-    frame |> ResourceResult.reply(Client.get("/api/v1/initiatives"))
+    frame |> ResourceResult.reply_user_content(Client.get("/api/v1/initiatives"))
   end
 end

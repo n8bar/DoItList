@@ -11,7 +11,7 @@ defmodule DoIt.Initiatives do
 
   alias DoIt.Repo
   alias DoIt.Accounts.User
-  alias DoIt.Initiatives.{Initiative, InitiativeMember, Collaborator}
+  alias DoIt.Initiatives.{AgentAccessAck, Initiative, InitiativeMember, Collaborator}
   alias DoIt.Notifications
   alias DoIt.Tasks.{Task, TaskCoAssignee}
 
@@ -24,10 +24,18 @@ defmodule DoIt.Initiatives do
   archived or hidden drops from their **active** list — both flags live on the
   caller's own membership row, so this never affects anyone else's view. The
   archived ones resurface via `list_archived_initiatives/1`.
+
+  `agent_access_only: true` (m03.04 2.4.1.2) additionally filters to
+  Initiatives with agent access on — the /api/v1 list uses it so an agent's
+  token never even enumerates a flagged-off Initiative. The web UI never passes
+  it, so the human's dashboard is unaffected.
   """
-  def list_visible_initiatives(%User{id: user_id}) do
+  def list_visible_initiatives(%User{id: user_id}, opts \\ []) do
+    agent_only? = Keyword.get(opts, :agent_access_only, false)
+
     from(i in Initiative,
       where: is_nil(i.trashed_at),
+      where: ^if(agent_only?, do: dynamic([i], i.agent_access == true), else: true),
       join: m in InitiativeMember,
       on: m.initiative_id == i.id and m.user_id == ^user_id,
       where: is_nil(m.archived_at) and is_nil(m.hidden_at),
@@ -47,6 +55,7 @@ defmodule DoIt.Initiatives do
     )
     |> Repo.all()
     |> attach_member_avatars()
+    |> attach_trust_confirm_state(user_id)
   end
 
   # Batch-load each Initiative's members into the virtual `:members` field for
@@ -75,6 +84,64 @@ defmodule DoIt.Initiatives do
     Enum.map(initiatives, fn i ->
       %{i | members: Map.get(members_by_initiative, i.id, [])}
     end)
+  end
+
+  # Batch-set the virtual `:trust_confirm_required` flag (m03.04 2.4.2):
+  # the rail's collaborator add is a member add, so on an agent-accessible
+  # Initiative this user administers it needs the one-time trust confirm until
+  # they acknowledge. ONE query over the acks for the candidate set (no N+1);
+  # the rail renders it as a per-entry data attribute the client reads at
+  # click/drop time (UX_GUARDRAILS 6.5 — decide with no round trip).
+  defp attach_trust_confirm_state([], _user_id), do: []
+
+  defp attach_trust_confirm_state(initiatives, user_id) do
+    candidate_ids =
+      for i <- initiatives, i.agent_access and can_admin?(i.my_role), into: MapSet.new(), do: i.id
+
+    acked_ids =
+      if MapSet.size(candidate_ids) == 0 do
+        MapSet.new()
+      else
+        from(a in AgentAccessAck,
+          where: a.user_id == ^user_id and a.initiative_id in ^MapSet.to_list(candidate_ids),
+          select: a.initiative_id
+        )
+        |> Repo.all()
+        |> MapSet.new()
+      end
+
+    Enum.map(initiatives, fn i ->
+      %{
+        i
+        | trust_confirm_required:
+            MapSet.member?(candidate_ids, i.id) and not MapSet.member?(acked_ids, i.id)
+      }
+    end)
+  end
+
+  @doc """
+  Agent-accessible Initiatives for the given user, as `%{id: id, name: name}`
+  maps — the repo-marker panel's option list (m03.04 2.1.1.4). Same
+  visibility rules and ordering as `list_visible_initiatives/2` with
+  `agent_access_only: true` (member, not trashed, not archived/hidden, agent
+  access on), but names and ids only — no members, progress, or trees.
+  """
+  def list_agent_accessible_initiatives(%User{id: user_id}) do
+    from(i in Initiative,
+      where: is_nil(i.trashed_at) and i.agent_access == true,
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id == ^user_id,
+      where: is_nil(m.archived_at) and is_nil(m.hidden_at),
+      select: %{id: i.id, name: i.name},
+      order_by: [
+        asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
+        desc: i.updated_at,
+        # Deterministic among same-second updated_at ties (timestamps are
+        # second-precision) so the panel's default doesn't wobble.
+        desc: i.id
+      ]
+    )
+    |> Repo.all()
   end
 
   @doc """
@@ -165,14 +232,25 @@ defmodule DoIt.Initiatives do
   end
 
   def get_initiative!(id), do: Repo.get!(Initiative, id)
-  def get_initiative(id), do: Repo.get(Initiative, id)
+
+  # Batch-memoized (m03.04 2.7.5.2): inside an operations batch repeated loads
+  # of the same Initiative are served from the batch memo; every initiative-row
+  # write busts the key (see bump_version/1). Outside a batch scope this is a
+  # plain Repo.get, exactly as before.
+  def get_initiative(id),
+    do: DoIt.BatchMemo.fetch({:initiative, id}, fn -> Repo.get(Initiative, id) end)
 
   @doc """
   Create an Initiative and make the creator its owner. The owner's "My
   Initiative Defaults" (m02.04 §2.2) seed the progress calc and the root
   task's sort — explicit attrs still win.
+
+  `agent_access: true` (m03.04 2.4.1.1) grants agent access at creation —
+  the API/MCP create path passes it (an agent creating an Initiative can
+  obviously reach it); it's applied server-side as a struct-level change, never
+  cast from `attrs`. UI-created Initiatives omit it and land off.
   """
-  def create_initiative(%User{} = owner, attrs) do
+  def create_initiative(%User{} = owner, attrs, opts \\ []) do
     prefs = DoIt.Accounts.get_preferences(owner)
 
     attrs =
@@ -182,8 +260,13 @@ defmodule DoIt.Initiatives do
       |> Map.put_new("auto_promote_co_assignees", prefs.initiative_auto_promote)
       |> Map.put_new("viewer_plus", prefs.initiative_viewer_plus)
 
+    changeset =
+      %Initiative{}
+      |> Initiative.changeset(attrs)
+      |> maybe_grant_agent_access(opts)
+
     Repo.transaction(fn ->
-      with {:ok, initiative} <- %Initiative{} |> Initiative.changeset(attrs) |> Repo.insert(),
+      with {:ok, initiative} <- Repo.insert(changeset),
            {:ok, _member} <-
              %InitiativeMember{}
              |> InitiativeMember.changeset(%{
@@ -200,6 +283,16 @@ defmodule DoIt.Initiatives do
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
+  end
+
+  # agent_access is deliberately NOT in the changeset's cast list; the API
+  # create path grants it here, server-side (m03.04 2.4.1.1).
+  defp maybe_grant_agent_access(changeset, opts) do
+    if Keyword.get(opts, :agent_access, false) do
+      Ecto.Changeset.change(changeset, agent_access: true)
+    else
+      changeset
+    end
   end
 
   defp maybe_default_progress_calc(attrs, %{initiative_progress_calc: nil}), do: attrs
@@ -231,6 +324,47 @@ defmodule DoIt.Initiatives do
     Initiative.changeset(initiative, attrs)
   end
 
+  # --- Conditional writes (m03.04 2.7.4) -----------------------------------
+  #
+  # `version` is an integer revision counter on the initiatives row: every
+  # write to the row itself bumps it (content updates, subtitle — Initiative
+  # content even though it lives on the root task — trash/restore,
+  # agent-access, ownership). Membership-row writes (archive/hide, roles) and
+  # derived progress never touch it.
+
+  @doc """
+  Compare a caller's `expected_version` against the Initiative's CURRENT row
+  under a row lock (`FOR UPDATE`): `:ok` on match,
+  `{:error, {:version_conflict, current}}` on mismatch, `{:error, :not_found}`
+  for a vanished row; `nil` expected always passes. Must run inside the same
+  transaction as the guarded write — the lock holds until it ends (mirrors
+  `DoIt.Tasks.check_version/2`).
+  """
+  def check_version(_initiative, nil), do: :ok
+
+  def check_version(%Initiative{id: id}, expected) when is_integer(expected) do
+    case Repo.one(from(i in Initiative, where: i.id == ^id, lock: "FOR UPDATE")) do
+      nil -> {:error, :not_found}
+      %Initiative{version: ^expected} -> :ok
+      %Initiative{} = current -> {:error, {:version_conflict, current}}
+    end
+  end
+
+  # DB-side increment (never computed from a loaded struct) so concurrent
+  # bumps can't collapse into one. Returns the struct with the fresh version.
+  # Every intent-bearing initiative-row write funnels through here, so this is
+  # also the single bust point for the row's batch-memo keys (m03.04 2.7.5.2):
+  # a later op in the same batch re-reads the fresh row.
+  defp bump_version(%Initiative{id: id} = initiative) do
+    {1, [version]} =
+      from(i in Initiative, where: i.id == ^id, select: i.version)
+      |> Repo.update_all(inc: [version: 1])
+
+    DoIt.BatchMemo.bust({:initiative, id})
+    DoIt.BatchMemo.bust({:initiative_progress_calc, id})
+    %{initiative | version: version}
+  end
+
   @doc "Update an Initiative's editable fields (name, description). Owner stays as-is."
   def update_initiative(%Initiative{} = initiative, attrs) do
     changeset = Initiative.changeset(initiative, stringify_keys(attrs))
@@ -238,6 +372,8 @@ defmodule DoIt.Initiatives do
     index_changed? = Ecto.Changeset.get_change(changeset, :index_style) != nil
 
     with {:ok, updated} <- Repo.update(changeset) do
+      # A no-change update writes nothing and must not bump (item 32).
+      updated = if changeset.changes == %{}, do: updated, else: bump_version(updated)
       # A progress_calc switch invalidates every cached branch value at once;
       # recompute the whole tree so stored roll-ups don't linger in the old
       # mode until the next edit.
@@ -286,12 +422,30 @@ defmodule DoIt.Initiatives do
   is stored as a single space (the column is non-null and a struct-level change
   bypasses the task-title min-1 validation). No-op write path — no activity event.
   """
-  def update_subtitle(%Initiative{root_task_id: root_id}, subtitle) when is_binary(subtitle) do
+  def update_subtitle(%Initiative{root_task_id: root_id} = initiative, subtitle)
+      when is_binary(subtitle) do
     title = if String.trim(subtitle) == "", do: " ", else: subtitle
 
     case Repo.get(Task, root_id) do
-      %Task{} = root -> root |> Ecto.Changeset.change(title: title) |> Repo.update()
-      nil -> {:error, :no_root_task}
+      # Unchanged subtitle: no write, no bump (item 32).
+      %Task{title: ^title} = root ->
+        {:ok, root}
+
+      %Task{} = root ->
+        with {:ok, updated} <- root |> Ecto.Changeset.change(title: title) |> Repo.update() do
+          # The subtitle is Initiative content surfaced on its payloads, so it
+          # bumps the Initiative's version (an expected_version must cover
+          # subtitle staleness); the root task row bumps too, like any task
+          # content write.
+          {1, _} =
+            from(t in Task, where: t.id == ^updated.id) |> Repo.update_all(inc: [version: 1])
+
+          bump_version(initiative)
+          {:ok, updated}
+        end
+
+      nil ->
+        {:error, :no_root_task}
     end
   end
 
@@ -310,6 +464,7 @@ defmodule DoIt.Initiatives do
     initiative
     |> Ecto.Changeset.change(trashed_at: DateTime.utc_now() |> DateTime.truncate(:second))
     |> Repo.update()
+    |> bump_on_ok()
   end
 
   @doc "Restore a trashed Initiative back to every member's dashboard."
@@ -317,7 +472,12 @@ defmodule DoIt.Initiatives do
     initiative
     |> Ecto.Changeset.change(trashed_at: nil)
     |> Repo.update()
+    |> bump_on_ok()
   end
+
+  # Lifecycle flips write the Initiative's own row — intent-bearing (item 32).
+  defp bump_on_ok({:ok, updated}), do: {:ok, bump_version(updated)}
+  defp bump_on_ok(other), do: other
 
   @doc """
   Permanently delete an Initiative. Its tasks, members, and activity cascade
@@ -381,6 +541,9 @@ defmodule DoIt.Initiatives do
       )
       |> Repo.update_all(set: [{field, value}])
 
+    # Doesn't change the role, but it IS a membership-row write — bust per the
+    # simplest-safe batch-memo rule (m03.04 2.7.5.2).
+    DoIt.BatchMemo.bust_tag(:member_role)
     {:ok, count}
   end
 
@@ -628,12 +791,19 @@ defmodule DoIt.Initiatives do
     |> Map.new()
   end
 
+  # Batch-memoized (m03.04 2.7.5.2): an operations batch authorizes the same
+  # {initiative, user} pair once per op — serve repeats from the batch memo.
+  # Any membership-row write busts the :member_role tag; a nil (non-member) is
+  # never stored, so a same-batch add_member is always seen. Outside a batch
+  # scope this is a plain query, exactly as before.
   def get_role(initiative_id, user_id) do
-    Repo.one(
-      from m in InitiativeMember,
-        where: m.initiative_id == ^initiative_id and m.user_id == ^user_id,
-        select: m.role
-    )
+    DoIt.BatchMemo.fetch({:member_role, initiative_id, user_id}, fn ->
+      Repo.one(
+        from m in InitiativeMember,
+          where: m.initiative_id == ^initiative_id and m.user_id == ^user_id,
+          select: m.role
+      )
+    end)
   end
 
   @doc """
@@ -647,6 +817,7 @@ defmodule DoIt.Initiatives do
     |> Repo.insert()
     |> tap(fn
       {:ok, _} ->
+        DoIt.BatchMemo.bust_tag(:member_role)
         record_collaborators(initiative_id, user_id)
         broadcast_members_changed(initiative_id)
         notify_membership(actor, user_id, initiative_id, "member_added")
@@ -691,6 +862,7 @@ defmodule DoIt.Initiatives do
     |> Repo.delete_all()
     |> tap(fn
       {n, _} when n > 0 ->
+        DoIt.BatchMemo.bust_tag(:member_role)
         broadcast_members_changed(initiative_id)
         notify_membership(actor, user_id, initiative_id, "member_removed")
 
@@ -765,6 +937,8 @@ defmodule DoIt.Initiatives do
           {:ok, updated} =
             initiative |> Ecto.Changeset.change(owner_id: new_owner_id) |> Repo.update()
 
+          updated = bump_version(updated)
+
           {:ok, _} = do_update_member_role(initiative.id, new_owner_id, "owner")
           {:ok, _} = do_update_member_role(initiative.id, old_owner_id, "editor")
           updated
@@ -801,8 +975,17 @@ defmodule DoIt.Initiatives do
   # broadcasts once, after commit).
   defp do_update_member_role(initiative_id, user_id, role) do
     case Repo.get_by(InitiativeMember, initiative_id: initiative_id, user_id: user_id) do
-      nil -> {:error, :not_found}
-      member -> member |> InitiativeMember.changeset(%{role: role}) |> Repo.update()
+      nil ->
+        {:error, :not_found}
+
+      member ->
+        member
+        |> InitiativeMember.changeset(%{role: role})
+        |> Repo.update()
+        |> tap(fn
+          {:ok, _} -> DoIt.BatchMemo.bust_tag(:member_role)
+          _ -> :ok
+        end)
     end
   end
 
@@ -814,6 +997,109 @@ defmodule DoIt.Initiatives do
 
   def can_admin?("owner"), do: true
   def can_admin?(_), do: false
+
+  # --- Agent access (m03.04 2.4.1) ---------------------------------------
+  #
+  # A token exposes every Initiative its user can see, and other members'
+  # content is a prompt-injection surface — so agent access is per-Initiative,
+  # off by default, and the human's checkbox is the trust approval,
+  # server-enforced ahead of any agent reading a byte (the /api/v1 surface
+  # reads a flagged-off Initiative as not-found; see DoItWeb.Api.Authz).
+
+  @doc """
+  Turn the Initiative's agent access on or off (owner-only; the caller
+  enforces the actor). Applied as a struct-level change — `agent_access` is
+  never cast from params. Broadcasts the Initiative update so other open
+  sessions re-render the knobs control's derived state live.
+  """
+  def set_agent_access(%Initiative{} = initiative, on) when is_boolean(on) do
+    with {:ok, updated} <-
+           initiative |> Ecto.Changeset.change(agent_access: on) |> Repo.update() do
+      updated = bump_version(updated)
+      DoIt.Tasks.notify_initiative_updated(updated.id)
+      {:ok, updated}
+    end
+  end
+
+  @doc "Whether this admin has acknowledged the agent-trust confirm for this Initiative."
+  def agent_trust_acked?(user_id, initiative_id) do
+    Repo.exists?(
+      from(a in AgentAccessAck,
+        where: a.user_id == ^user_id and a.initiative_id == ^initiative_id
+      )
+    )
+  end
+
+  @doc """
+  Record the admin's one-time agent-trust acknowledgement for this Initiative
+  (m03.04 2.4.1.4) — after it the trust confirm never shows again for this
+  (admin, Initiative), across sessions. Ids are set programmatically (never
+  cast); idempotent via the unique index.
+  """
+  def record_agent_trust_ack(%User{id: user_id}, %Initiative{id: initiative_id}) do
+    now = now()
+
+    Repo.insert_all(
+      AgentAccessAck,
+      [%{user_id: user_id, initiative_id: initiative_id, inserted_at: now, updated_at: now}],
+      on_conflict: :nothing
+    )
+
+    :ok
+  end
+
+  @doc "Any member besides `user_id` on the Initiative (every member holds viewer or higher)."
+  def other_members?(initiative_id, user_id) do
+    Repo.exists?(
+      from(m in InitiativeMember,
+        where: m.initiative_id == ^initiative_id and m.user_id != ^user_id
+      )
+    )
+  end
+
+  @doc """
+  Whether `admin`'s next `action` on `initiative` needs the one-time
+  agent-trust confirm (m03.04 2.4.1.4). Never once the admin has
+  acknowledged for this Initiative. Actions:
+
+    * `:enable_agent_access` — turning the flag on while members besides the
+      admin already exist (their content becomes agent-readable at the flip).
+    * `{:add_member, role}` — adding a member at viewer or higher (every role
+      is viewer or higher) to an agent-accessible Initiative.
+    * `{:promote_member, old_role, new_role}` — raising an existing member to
+      a higher role, at viewer or higher, on an agent-accessible Initiative.
+  """
+  def agent_trust_confirm_required?(%User{id: admin_id}, %Initiative{} = initiative, action) do
+    not agent_trust_acked?(admin_id, initiative.id) and
+      agent_trust_trigger?(initiative, admin_id, action)
+  end
+
+  defp agent_trust_trigger?(
+         %Initiative{agent_access: false} = initiative,
+         admin_id,
+         :enable_agent_access
+       ) do
+    other_members?(initiative.id, admin_id)
+  end
+
+  defp agent_trust_trigger?(%Initiative{} = initiative, _admin_id, {:add_member, role}) do
+    initiative.agent_access and can_view?(role)
+  end
+
+  defp agent_trust_trigger?(
+         %Initiative{} = initiative,
+         _admin_id,
+         {:promote_member, old_role, new_role}
+       ) do
+    initiative.agent_access and can_view?(new_role) and role_outranks?(new_role, old_role)
+  end
+
+  defp agent_trust_trigger?(_initiative, _admin_id, _action), do: false
+
+  @role_rank %{"viewer" => 1, "editor" => 2, "owner" => 3}
+
+  defp role_outranks?(new_role, old_role),
+    do: Map.get(@role_rank, new_role, 0) > Map.get(@role_rank, old_role, 0)
 
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn

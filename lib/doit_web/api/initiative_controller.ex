@@ -20,18 +20,31 @@ defmodule DoItWeb.Api.InitiativeController do
   alias DoIt.{Initiatives, Tasks}
   alias DoIt.Tasks.Task
   alias DoItWeb.Api
-  alias DoItWeb.Api.{Authz, Serializer}
+  alias DoItWeb.Api.{Authz, Errors, Serializer}
 
   action_fallback DoItWeb.Api.FallbackController
 
-  @doc "List the Initiatives the acting user belongs to (no per-Initiative authz: the query is already scoped to their memberships)."
+  @doc """
+  List the Initiatives the acting user belongs to (no per-Initiative authz: the
+  query is already scoped to their memberships). Filtered to agent-accessible
+  Initiatives (m03.04 2.4.1.2) — a flagged-off one never appears, matching
+  the 404 its direct reads return.
+  """
   def index(conn, _params) do
     user = conn.assigns.current_user
 
+    initiatives = Initiatives.list_visible_initiatives(user, agent_access_only: true)
+    unit_counts = Tasks.unit_counts_for_initiatives(initiatives)
+
     summaries =
-      user
-      |> Initiatives.list_visible_initiatives()
-      |> Enum.map(fn ini -> Serializer.initiative_summary(ini, ini.my_role, ini.progress) end)
+      Enum.map(initiatives, fn ini ->
+        Serializer.initiative_summary(
+          ini,
+          ini.my_role,
+          ini.progress,
+          Map.get(unit_counts, ini.id, 0)
+        )
+      end)
 
     json(conn, Api.data(summaries))
   end
@@ -106,6 +119,48 @@ defmodule DoItWeb.Api.InitiativeController do
     with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
       members = initiative.id |> Initiatives.list_members() |> Enum.map(&Serializer.member/1)
       json(conn, Api.data(members))
+    end
+  end
+
+  # Live task counts (root excluded), optionally scoped to tasks created at or
+  # after `?created_at=<ISO8601>` — dumb facts for a caller sizing up a tree:
+  # `count` and `done_count` in that scope, `live_count` for the whole live
+  # tree, plus the Initiative's creation instant, name, and `index_style`.
+  def task_count(conn, %{"id" => id} = params) do
+    user = conn.assigns.current_user
+
+    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
+      case parse_created_at(Map.get(params, "created_at")) do
+        {:ok, created_at} ->
+          json(
+            conn,
+            Api.data(%{
+              count: Tasks.count_created(initiative.id, created_at),
+              done_count: Tasks.count_created_done(initiative.id, created_at),
+              live_count: Tasks.count_created(initiative.id),
+              initiative_created_at: DateTime.to_iso8601(initiative.inserted_at),
+              initiative_index_style: initiative.index_style,
+              initiative_name: initiative.name
+            })
+          )
+
+        :error ->
+          Errors.send_error(
+            conn,
+            422,
+            :unprocessable_entity,
+            "created_at must be an ISO 8601 datetime, e.g. 2026-07-23T17:00:00Z."
+          )
+      end
+    end
+  end
+
+  defp parse_created_at(nil), do: {:ok, nil}
+
+  defp parse_created_at(raw) when is_binary(raw) do
+    case DateTime.from_iso8601(raw) do
+      {:ok, dt, _offset} -> {:ok, dt}
+      _ -> :error
     end
   end
 

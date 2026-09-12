@@ -7,23 +7,24 @@ defmodule DoitMcp.Tools.GranularOpsTest do
   works — it does not re-test `Client` or `ToolResult` themselves (see
   `client_test.exs`).
 
-  `apply_operations`, `mark_notification_read`, and `get_initiative_activity`
-  are covered by their own test files and are intentionally excluded here.
+  Every tool's first and only request is the POST — no tool reads before it
+  writes.
+
+  `apply_operations`, `import_text`, and `get_initiative_activity` are covered
+  by their own test files and are intentionally excluded here.
   """
 
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  # m03.04 3.5.1 — the user-content marker opens every reply carrying titles,
+  # descriptions, or comments.
+  @user_content DoitMcp.ToolResult.user_content_line()
 
   @cases [
     {DoitMcp.Tools.AddComment, %{task_id: 42, body: "Looks good"},
      %{"op" => "add", "type" => "comment", "data" => %{"task_id" => 42, "body" => "Looks good"}}},
     {DoitMcp.Tools.AddLink, %{source_task_id: 10, target_task_id: 20},
      %{"op" => "add", "type" => "link", "data" => %{"source_id" => 10, "target_id" => 20}}},
-    {DoitMcp.Tools.AddMember, %{initiative_id: 3, user_id: 7, role: "editor"},
-     %{
-       "op" => "add",
-       "type" => "member",
-       "data" => %{"initiative_id" => 3, "user_id" => 7, "role" => "editor"}
-     }},
     {DoitMcp.Tools.CompleteTask, %{task_id: 5, done: true},
      %{"op" => "update", "type" => "task", "id" => 5, "data" => %{"done" => true}}},
     {DoitMcp.Tools.CreateInitiative, %{name: "Q3 Launch"},
@@ -34,6 +35,13 @@ defmodule DoitMcp.Tools.GranularOpsTest do
        "type" => "task",
        "data" => %{"initiative_id" => 1, "title" => "Draft the outline"}
      }},
+    # `done` rides the create (m03.04 2.5.4): a completed item is one op.
+    {DoitMcp.Tools.CreateTask, %{initiative_id: 1, title: "Already done", done: true},
+     %{
+       "op" => "add",
+       "type" => "task",
+       "data" => %{"initiative_id" => 1, "title" => "Already done", "done" => true}
+     }},
     {DoitMcp.Tools.DeleteComment, %{comment_id: 9},
      %{"op" => "remove", "type" => "comment", "id" => 9}},
     {DoitMcp.Tools.DeleteTask, %{task_id: 12}, %{"op" => "remove", "type" => "task", "id" => 12}},
@@ -43,31 +51,35 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"parent_id" => 2}}},
     {DoitMcp.Tools.RemoveLink, %{source_task_id: 10, target_task_id: 20},
      %{"op" => "remove", "type" => "link", "data" => %{"source_id" => 10, "target_id" => 20}}},
-    {DoitMcp.Tools.RemoveMember, %{initiative_id: 3, user_id: 7},
-     %{"op" => "remove", "type" => "member", "data" => %{"initiative_id" => 3, "user_id" => 7}}},
     {DoitMcp.Tools.SetInitiativeState, %{initiative_id: 3, state: "archived"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"state" => "archived"}}},
-    {DoitMcp.Tools.SetTaskCoAssignees, %{task_id: 6, co_assignee_ids: [1, 2, 3]},
-     %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"co_assignee_ids" => [1, 2, 3]}}},
     {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, name: "New name"},
      %{"op" => "update", "type" => "initiative", "id" => 3, "data" => %{"name" => "New name"}}},
-    {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, ai_knobs: "deploy_day: friday"},
+    # CALC-GATE-PARKED (m03.04): the parked-state contract — a non-default
+    # progress_calc change applies ungated, with no read and no elicitation
+    # (the apply-only stub below fails loudly on a read). Retire when the
+    # gate revives.
+    {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, progress_calc: "single_level"},
      %{
        "op" => "update",
        "type" => "initiative",
        "id" => 3,
-       "data" => %{"ai_knobs" => "deploy_day: friday"}
+       "data" => %{"progress_calc" => "single_level"}
      }},
-    {DoitMcp.Tools.UpdateMemberRole, %{initiative_id: 3, user_id: 7, role: "viewer"},
-     %{
-       "op" => "update",
-       "type" => "member",
-       "data" => %{"initiative_id" => 3, "user_id" => 7, "role" => "viewer"}
-     }},
+    # AI-KNOBS-PARKED (m03.04): ai_knobs off the tool; revive this case with the schema field.
+    # {DoitMcp.Tools.UpdateInitiative, %{initiative_id: 3, ai_knobs: "deploy_day: friday"},
+    #  %{
+    #    "op" => "update",
+    #    "type" => "initiative",
+    #    "id" => 3,
+    #    "data" => %{"ai_knobs" => "deploy_day: friday"}
+    #  }},
     {DoitMcp.Tools.UpdateTask, %{task_id: 6, title: "New title"},
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"title" => "New title"}}}
   ]
 
+  # AI-KNOBS-PARKED (m03.04): revive with the schema field.
+  @tag :skip
   test "update_initiative exposes the optional ai_knobs param in its input schema" do
     schema = DoitMcp.Tools.UpdateInitiative.input_schema()
 
@@ -80,7 +92,7 @@ defmodule DoitMcp.Tools.GranularOpsTest do
 
     refute Map.has_key?(schema["properties"], "progress_calc")
 
-    # The setting moves only via update_initiative, where the gate lives.
+    # The setting moves only via update_initiative.
     update_schema = DoitMcp.Tools.UpdateInitiative.input_schema()
     assert %{"type" => "string"} = update_schema["properties"]["progress_calc"]
   end
@@ -88,17 +100,17 @@ defmodule DoitMcp.Tools.GranularOpsTest do
   test "each granular tool builds its expected single op and relays the reply/frame through" do
     for {module, params, expected_op} <- @cases do
       Req.Test.stub(DoitMcp.Client, fn conn ->
-        assert conn.method == "POST"
-        assert conn.request_path == "/api/v1/operations"
+        case {conn.method, conn.request_path} do
+          {"POST", "/api/v1/operations"} ->
+            {:ok, body, conn} = Plug.Conn.read_body(conn)
 
-        {:ok, body, conn} = Plug.Conn.read_body(conn)
+            assert Jason.decode!(body) == %{"operations" => [expected_op]},
+                   "#{inspect(module)} built the wrong op"
 
-        assert Jason.decode!(body) == %{"operations" => [expected_op]},
-               "#{inspect(module)} built the wrong op"
-
-        Req.Test.json(conn, %{
-          "results" => [%{"index" => 0, "status" => "ok", "data" => %{"id" => 1}}]
-        })
+            Req.Test.json(conn, %{
+              "results" => [%{"index" => 0, "status" => "ok", "data" => %{"id" => 1}}]
+            })
+        end
       end)
 
       frame = %{test: true}
@@ -109,7 +121,10 @@ defmodule DoitMcp.Tools.GranularOpsTest do
       protocol = Anubis.Server.Response.to_protocol(response)
 
       assert protocol["isError"] == false
-      assert [%{"type" => "text", "text" => text}] = protocol["content"]
+
+      assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+               protocol["content"]
+
       assert Jason.decode!(text) == %{"id" => 1}
     end
   end

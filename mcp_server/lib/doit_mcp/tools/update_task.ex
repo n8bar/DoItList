@@ -1,19 +1,16 @@
 defmodule DoitMcp.Tools.UpdateTask do
   @moduledoc """
-  Edit a task's plain fields (title, description, priority, assignee,
-  manual progress); `title` and `description` accept `%<task_id>`
-  cross-reference tokens. This tool only edits plain fields — completion
-  (`complete_task`), moves (`move_task`), and co-assignees
-  (`set_task_co_assignees`) are separate tools, matching the API's
-  "one concern per update" rule.
+  Update one task's title, description, priority, assignee, or manual progress. `title` and `description` accept `%<task_id>` cross-reference tokens. Use `complete_task` for completion and `move_task` for parent or position changes.
 
-  Editing more than a couple of tasks in one pass → use `apply_operations`
-  as one batch instead of looping this tool.
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool
 
+  alias DoitMcp.Tools.ExpectedVersion
   alias DoitMcp.{Client, ToolResult}
+
+  @expected_version_doc ExpectedVersion.description()
 
   schema do
     field(:task_id, :integer, required: true)
@@ -22,6 +19,11 @@ defmodule DoitMcp.Tools.UpdateTask do
     field(:priority, :string, required: false)
     field(:assignee_id, :integer, required: false)
     field(:manual_progress, :integer, required: false)
+
+    field(:expected_version, :integer,
+      required: false,
+      description: @expected_version_doc
+    )
   end
 
   def execute(params, frame) do
@@ -32,7 +34,8 @@ defmodule DoitMcp.Tools.UpdateTask do
         :description,
         :priority,
         :assignee_id,
-        :manual_progress
+        :manual_progress,
+        :expected_version
       ])
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

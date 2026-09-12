@@ -1,7 +1,6 @@
 defmodule DoitMcp.Tools.AddLink do
   @moduledoc """
-  Add a task-to-task cross-reference link. Same-Initiative only — the acting
-  user needs edit access on the source task's Initiative.
+  Add one directed task-to-task cross-reference link. Both tasks are in the same Initiative, and the caller needs edit access to it.
   """
 
   use Anubis.Server.Component, type: :tool

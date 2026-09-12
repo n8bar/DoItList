@@ -20,18 +20,31 @@ defmodule DoItWeb.Api.Serializer do
         "id": 12,
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
+        "url": "https://doitlist.app/initiatives/12",
+        "repo_marker": "## Do It List\nTasks: https://doitlist.app/initiatives/12 — work this tree via the doitlist MCP server, not a TODO.md or PLAN.md.",
         "role": "owner",
         "progress": 42,
-        "root_task_id": 100
+        "unit_count": 7,
+        "root_task_id": 100,
+        "version": 3
       }
 
-  `role` is the acting user's role on the Initiative (`owner` | `editor` |
+  `url` is the Initiative's web address — the operator-facing handle (m03.04
+  m03.04 2.1.3): when telling a human about an Initiative, hand them the URL or
+  the name, never a raw id. Composed server-side from the endpoint's public
+  URL config, so a future id-scheme change costs the reader nothing.
+  `repo_marker` is the Initiative's two-line snippet for a repo's
+  agent-instruction file (m03.04 2.1.4.1), composed by
+  `DoItWeb.AgentConnect.repo_marker/1` — the same source the account-page
+  panel renders, so the wording can never fork. `role` is
+  the acting user's role on the Initiative (`owner` | `editor` |
   `viewer`). `progress` is the Initiative's top-level rolled-up progress (its
-  system root task's `computed_progress`, 0..100). `root_task_id` is the
-  Initiative's system root task — the Initiative's own comment thread lives on
-  it (item 6.4): read/write comments with `task_id = root_task_id`. `ai_knobs`
-  is deliberately **not** here (m03.04 fix 14) — it's per-Initiative context,
-  read it from the tree response.
+  system root task's `computed_progress`, 0..100). `unit_count` is how many
+  units that roll-up averages over — live leaves under `leaf_average`,
+  top-level tasks under `single_level` (the header badge in the UI).
+  `root_task_id` is the Initiative's system root task — the Initiative's own
+  comment thread lives on it (item 6.4): read/write comments with
+  `task_id = root_task_id`.
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
 
@@ -41,23 +54,30 @@ defmodule DoItWeb.Api.Serializer do
         "id": 12,
         "name": "Q3 Launch",
         "subtitle": "ship the new dashboard",
+        "url": "https://doitlist.app/initiatives/12",
+        "repo_marker": "## Do It List\nTasks: https://doitlist.app/initiatives/12 — work this tree via the doitlist MCP server, not a TODO.md or PLAN.md.",
         "role": "owner",
         "progress": 42,
         "progress_calc": "leaf_average",
+        "unit_count": 7,
         "index_style": "numerical",
-        "ai_knobs": "deploy_day: friday",
         "root_task_id": 100,
+        "version": 3,
         "tasks": [ <task node>, ... ]
       }
 
+  * `url` — the Initiative's web address, the operator-facing handle (same as
+    on the list summary above).
+  * `repo_marker` — the agent-instruction-file snippet (same as on the list
+    summary above).
   * `progress_calc` — how branch progress rolls up: `leaf_average` (every
     descendant leaf counts one unit) or `single_level` (each direct child one
     unit). The agent needs this to predict the effect of a progress write.
+  * `unit_count` — how many units the Initiative's roll-up averages over
+    (live leaves under `leaf_average`, top-level tasks under `single_level`);
+    the same number the tree's branch badges show, taken at the root.
   * `index_style` — the positional index style the labels below are rendered in
     (`none` | `outline` | `numerical` | `roman` | `alphabetical`).
-  * `ai_knobs` — the per-Initiative constants store for AI agents, surfaced
-    verbatim (plain text the product stores but never interprets; `null` when
-    unset).
   * `root_task_id` — the id of the Initiative's system root task. It is **not** a
     node in `tasks` (the tree starts at its children), but it's the `parent_id`
     every top-level task carries — so to add a task at the top level (worklist 3),
@@ -91,6 +111,7 @@ defmodule DoItWeb.Api.Serializer do
         "referenced_by": [
           {"source_id": 140, "source_index": "1.3", "source_title": "Plan the launch"}
         ],
+        "version": 5,
         "children": [ <task node>, ... ]
       }
 
@@ -98,7 +119,7 @@ defmodule DoItWeb.Api.Serializer do
     reorder/reparent).
   * `description` — the task's how-to text, verbatim (`null` when unset). The
     read-back of the `description` the write ops accept; the `ingest_report`
-    lint facts (m03.04 item 2.5) are computed over it adapter-side.
+    lint facts (m03.04 item 3.5) are computed over it adapter-side.
   * `index` — the m02.07 §1.7 positional label for the Initiative's
     `index_style`. Derived purely from sibling position, so it's correct after
     any reorder. `""` under the `none` style.
@@ -121,7 +142,7 @@ defmodule DoItWeb.Api.Serializer do
   * `co_assignee_ids` — the **complete** co-assignee user id list in promotion
     order (uncapped, unlike the UI's avatar chip).
   * `comment_count` — how many **live** comments the task has (tombstones
-    excluded). A dumb count (m03.04 item 2.5.2): the reader decides what a zero
+    excluded). A dumb count (m03.04 item 3.5.2): the reader decides what a zero
     means; batched in one grouped query (no N+1).
   * `cross_references` — this task's **outgoing** task→task references (worklist
     4). Each entry carries the target's stable `target_id` and its **live**
@@ -134,7 +155,26 @@ defmodule DoItWeb.Api.Serializer do
     cross-reference this one, each with the `source_id` / `source_index` /
     `source_title`. `[]` when nothing points here. Same single link query feeds
     both directions (no extra round-trip).
+  * `version` — the record's revision counter (m03.04 2.7.4): bumped on every
+    intent-bearing write to the record itself, never by derived roll-up
+    recomputes. Pass it back as `expected_version` on an update to refuse a
+    stale write; on mismatch nothing applies and the conflict returns the
+    current record. Present on task nodes and on both Initiative payloads
+    (each tracking its own record).
   * `children` — nested task nodes (empty for a leaf).
+
+  ## Task ref — `GET /api/v1/tasks/:id`
+
+      {
+        "id": 101,
+        "initiative_id": 12,
+        "version": 5
+      }
+
+  The task → Initiative resolver (m03.04 2.8.1.1) — deliberately minimal:
+  just enough for a caller holding a bare task id (e.g. a `parent_id`) to
+  learn which Initiative it belongs to. The full task shape lives in the
+  Initiative tree read above.
 
   ## Activity event — `GET /api/v1/initiatives/:id/activity`
 
@@ -144,6 +184,9 @@ defmodule DoItWeb.Api.Serializer do
         "task_id": 101,
         "user_id": 7,
         "user_name": "Ada Lovelace",
+        "actor_kind": "api_token",
+        "api_token_id": 3,
+        "api_token_label": "planning agent",
         "data": {"from": 0, "to": 50},
         "inserted_at": "2026-06-26T21:16:46Z"
       }
@@ -154,6 +197,24 @@ defmodule DoItWeb.Api.Serializer do
   (the "review-as-diff" content). The activity endpoint wraps a list of these in
   `data` with a sibling `meta` pagination object — see
   `DoItWeb.Api.InitiativeController`.
+
+  `actor_kind` is execution provenance (m03.04 2.10.1): `"browser"` for a
+  session write, `"api_token"` for a token-borne write (with the token's id and
+  label — label snapshotted at write time, so it survives token revocation),
+  `null` for events recorded before provenance existed.
+
+  A `child_deleted` event (whose `task_id` is the *parent*) additionally
+  carries `deleted_task_id` — the deleted child's stable id — and
+  `deleted_ids` — its whole deleted subtree's ids (m03.04 2.10.2). Both are
+  derived at read time from the event's undo payload, so pre-existing events
+  answer too; an event whose payload lacks them omits both fields.
+
+  A `status_changed` event covers a completion/reopen's whole cascade in one
+  record (its `task_id` is the acted task); `cascaded_ids` lists the other
+  tasks the flip carried along — cascaded ancestors/descendants — so a reader
+  can tell explicit completion from inherited (m03.04 2.10.3). `[]` means
+  the flip touched only the acted task; a legacy per-task event omits the
+  field. Derived at read time from the undo payload, like the deletion ids.
 
   ## Member — `GET /api/v1/initiatives/:id/members`
 
@@ -203,18 +264,28 @@ defmodule DoItWeb.Api.Serializer do
   the row stays so the thread shape and any references survive.
   """
 
-  alias DoIt.Tasks
-  alias DoIt.Tasks.{ActivityEvent, Comment, Task}
+  use DoItWeb, :verified_routes
 
-  @doc "An Initiative list item (`GET /api/v1/initiatives`)."
-  def initiative_summary(initiative, role, progress) do
+  alias DoIt.Tasks
+  alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Task}
+  alias DoItWeb.AgentConnect
+
+  @doc """
+  An Initiative list item (`GET /api/v1/initiatives`). `unit_count` comes from
+  the controller's batched `Tasks.unit_counts_for_initiatives/1` lookup.
+  """
+  def initiative_summary(initiative, role, progress, unit_count) do
     %{
       id: initiative.id,
       name: initiative.name,
       subtitle: blank_to_empty(initiative.subtitle),
+      url: initiative_url(initiative.id),
+      repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
       progress: progress || 0,
-      root_task_id: initiative.root_task_id
+      unit_count: unit_count,
+      root_task_id: initiative.root_task_id,
+      version: initiative.version
     }
   end
 
@@ -248,12 +319,18 @@ defmodule DoItWeb.Api.Serializer do
       id: initiative.id,
       name: initiative.name,
       subtitle: blank_to_empty(subtitle),
+      url: initiative_url(initiative.id),
+      repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
+      unit_count: Progress.unit_count(tree, Progress.mode(initiative.progress_calc)),
       index_style: index_style,
-      ai_knobs: initiative.ai_knobs,
+      # AI-KNOBS-PARKED (m03.04): not serialized to agents pending the skill
+      # rebuild; column retained. Revive this line.
+      # ai_knobs: initiative.ai_knobs,
       root_task_id: initiative.root_task_id,
+      version: initiative.version,
       tasks: task_nodes(tree, ctx, [], 0)
     }
   end
@@ -287,10 +364,17 @@ defmodule DoItWeb.Api.Serializer do
         comment_count: Map.get(ctx.comment_counts, task.id, 0),
         cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
         referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
+        version: task.version,
         children: task_nodes(task.children, ctx, positions, depth + 1)
       }
     end)
   end
+
+  @doc """
+  The Initiative's web URL — the operator-facing handle (m03.04 2.1.3) —
+  composed from the endpoint's public URL config via verified routes.
+  """
+  def initiative_url(id), do: url(~p"/initiatives/#{id}")
 
   # `[{source_id, target_id}]` -> `%{task_id => [other_id, ...]}` keyed by the
   # source (outgoing) or target (incoming) side.
@@ -322,6 +406,11 @@ defmodule DoItWeb.Api.Serializer do
   defp reference_entry(:source, id, index, title),
     do: %{source_id: id, source_index: index, source_title: title}
 
+  @doc "The task → Initiative resolver body (`GET /api/v1/tasks/:id`)."
+  def task_ref(%Task{} = task) do
+    %{id: task.id, initiative_id: task.initiative_id, version: task.version}
+  end
+
   @doc "One activity event (`GET /api/v1/initiatives/:id/activity`)."
   def activity_event(%ActivityEvent{} = event) do
     %{
@@ -330,9 +419,42 @@ defmodule DoItWeb.Api.Serializer do
       task_id: event.task_id,
       user_id: event.user_id,
       user_name: user_name(event.user),
+      actor_kind: event.actor_kind,
+      api_token_id: event.api_token_id,
+      api_token_label: event.api_token_label,
       data: event.data || %{},
       inserted_at: iso8601(event.inserted_at)
     }
+    |> Map.merge(deleted_ids_fields(event))
+    |> Map.merge(cascade_fields(event))
+  end
+
+  # A `child_deleted` event's `inverse_payload` already names the deleted child
+  # (`"task_id"`) and its subtree (`"deleted_ids"`) for undo — expose them as
+  # `deleted_task_id`/`deleted_ids` (m03.04 2.10.2). Derived at read time so
+  # pre-existing events answer too; anything short of the undo shape omits both
+  # fields rather than crashing the read. `inverse_payload` itself never
+  # crosses the API.
+  defp deleted_ids_fields(%{
+         kind: "child_deleted",
+         inverse_payload: %{"task_id" => task_id, "deleted_ids" => ids}
+       })
+       when is_integer(task_id) and is_list(ids) do
+    %{deleted_task_id: task_id, deleted_ids: ids}
+  end
+
+  defp deleted_ids_fields(_event), do: %{}
+
+  # A `status_changed` event's undo payload names every task the cascade
+  # flipped — expose the non-acted ones as `cascaded_ids` (m03.04 2.10.3),
+  # derived at read time so pre-existing events answer too. `[]` pins "no
+  # cascade"; anything short of the undo shape omits the field rather than
+  # crashing the read. `inverse_payload` itself never crosses the API.
+  defp cascade_fields(event) do
+    case Tasks.cascaded_ids(event) do
+      nil -> %{}
+      ids -> %{cascaded_ids: ids}
+    end
   end
 
   @doc "One Initiative member with their role (`GET /api/v1/initiatives/:id/members`)."

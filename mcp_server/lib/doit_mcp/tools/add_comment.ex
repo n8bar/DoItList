@@ -1,16 +1,8 @@
 defmodule DoitMcp.Tools.AddComment do
   @moduledoc """
-  Add a comment to a task — mirrors `add comment` in the Arc 1 op table.
-  The `body` accepts `%<task_id>` cross-reference tokens.
+  Add one comment to a task. `body` accepts `%<task_id>` cross-reference tokens. To comment on an Initiative, use its `root_task_id` as `task_id`. Keep a comment to one or two sentences; material detail belongs on the task.
 
-  The Initiative's own thread is its root task's comments: to comment on the
-  Initiative itself, pass `task_id` = the Initiative payload's `root_task_id`.
-
-  A journal comment is one or two tight sentences — what changed and why;
-  detail that matters lives on the task, not in the comment.
-
-  Commenting on more than a couple of tasks in one pass → use
-  `apply_operations` as one batch instead of looping this tool.
+  Never loop this tool; batch multiple operations with `apply_operations`.
   """
 
   use Anubis.Server.Component, type: :tool

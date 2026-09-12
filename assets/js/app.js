@@ -26,6 +26,7 @@ import {hooks as colocatedHooks} from "phoenix-colocated/doit"
 import topbar from "../vendor/topbar"
 import DoitRollup from "./rollup.js"
 import {segments, transformForSave, rehydrate} from "./refs.js"
+import {probeUrl, probeWebSocket, connectAfterReprobe} from "./transport.js"
 
 const {computeRollup, computeDoneCascade} = DoitRollup
 
@@ -1083,7 +1084,7 @@ function syncRail() {
 // it never touches the server. It teleports between phx-update="ignore"
 // slots, so no patch can disturb it mid-typing; create_task reads the two
 // hidden inputs the client sets here.
-// The placeholder gets a hint that Up/Down relocate the form (item 2.2): the
+// The placeholder gets a hint that Up/Down relocate the form (m03.04 2.2.3): the
 // base intent + the reposition signifier, so the keyboard affordance is visible.
 const ADD_MOVE_HINT = "  (↑↓ to move)"
 const DoitAddForm = {
@@ -3351,6 +3352,35 @@ document.addEventListener("click", (e) => {
   const uid = btn.dataset.userId
   const iid = btn.dataset.initiativeId
   if (!uid || !iid) return
+  // m03.04 2.4.2: the rail add is a member add — on an agent-accessible
+  // initiative it rides the same one-time trust confirm as the members panel.
+  // Decide AT CLICK from the rail entry's render-known data attribute (§6.5,
+  // no round trip); the optimistic stand-in waits for the decision, so Cancel
+  // pushes nothing and leaves nothing behind. Only Proceed's push carries the
+  // proof marker.
+  if (railTrustConfirmRequired(iid)) {
+    openAgentTrustConfirm({
+      control: btn,
+      held: null,
+      proceed: () => optimisticCollaboratorAdd(btn, uid, iid, true),
+      cancel: null,
+    })
+    return
+  }
+  optimisticCollaboratorAdd(btn, uid, iid, false)
+})
+
+// Whether the rail's collaborator add onto initiative `iid` needs the one-time
+// agent-trust confirm (m03.04 2.4.2): the rail entry carries the
+// render-known per-initiative state (server-computed; its rail refresh flips
+// it once the committed add records the ack). No entry → no confirm — the
+// server's proof-carrying predicate still can't burn an ack from a bare push.
+function railTrustConfirmRequired(iid) {
+  const entry = document.querySelector(`[data-rail-initiative-id="${iid}"]`)
+  return !!entry && entry.dataset.trustConfirm === "true"
+}
+
+function optimisticCollaboratorAdd(btn, uid, iid, trustConfirmed) {
   // Insert a pending stand-in into every visible members list lacking a real
   // row for this user. Keyed by echo so the reply pulls exactly these.
   const echoId = "m" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
@@ -3396,14 +3426,18 @@ document.addEventListener("click", (e) => {
   // 8s safety so a dropped reply never strands the stand-in / held chip
   // (mirrors the drag-add path — MUST NOT LIE).
   const timer = setTimeout(pull, 8000)
-  window.DoitPush("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+  const params = {"user-id": uid, "initiative-id": iid}
+  // Proof-carrying (2.16): set only on the trust confirm's Proceed re-dispatch,
+  // so the server records the one-time ack only off a human acceptance.
+  if (trustConfirmed) params["trust_confirmed"] = "true"
+  window.DoitPush("add_collaborator_to", params, (reply) => {
     // On ok the server refresh carries the real row/avatar; pull the stand-in
     // either way (success → superseded; failure → must not stand).
     clearTimeout(timer)
     pull()
     if (!reply || reply.ok === false) { if (window.DoitBonk) window.DoitBonk() }
   })
-})
+}
 
 // A dimmed pending member row: avatar + name + @username only. Deliberately
 // minimal — it never claims a role or owner-controls the server didn't grant.
@@ -3553,6 +3587,208 @@ document.addEventListener("keydown", (e) => {
   const m = document.getElementById("remove-member-confirm")
   if (m && !m.hidden && !removeMemberInFlight) m.hidden = true
 })
+
+// Agent-trust confirm (m03.04 2.4.1.4 + 2.16, UX_GUARDRAILS 6.5): the
+// one-time "trust this initiative's members with AI access" dialog,
+// client-opened at the click with NO round trip. The decision reads
+// #agent-trust-state (fresh DOM at click time — the server re-renders it as
+// the flag / members / the ack change); the dialog opens for three trigger
+// paths:
+//   (a) adding a member, or promoting one to a higher role, on an
+//       agent-accessible initiative (every role is viewer or higher);
+//   (b) enabling AI access when members besides the admin already exist;
+//   (c) the rail's collaborator add — menu click or drag-drop (2.16), which
+//       decides off the target rail entry's own data-trust-confirm instead of
+//       #agent-trust-state (the target can be any rail initiative, in list or
+//       detail mode).
+//
+// INTERCEPTION ORDERING (why input + change, at document CAPTURE): LiveView
+// binds phx-change to BOTH "input" and "change" (deps/phoenix_live_view
+// live_socket.js bindForms: `for (const type of ["change","input"])`) via
+// LiveSocket.on → window.addEventListener — window target, BUBBLE phase — and
+// treats the *input* event as the acting one (a change following an input is
+// ignored via its prev-iteration bookkeeping). A change-only interceptor
+// therefore runs AFTER the input-driven push has already left. These
+// document-level CAPTURE listeners run strictly ahead of any window bubble
+// listener, and stopImmediatePropagation keeps the event from ever reaching
+// LiveView — the push genuinely cannot fire until Proceed re-dispatches with
+// the bypass latch set.
+//
+// §6.6: the gated control HOLDS its new state while the dialog decides (the
+// branch-cascade precedent) — the checkbox stays flipped, the select keeps the
+// chosen role; Cancel reverts it, Proceed carries it through. Focus moves to
+// the dialog's Cancel on open (delete-confirm precedent) and returns to the
+// triggering control on close.
+//
+// Proof-carrying ack (server side of 2.12.4): ONLY the Proceed path injects a
+// transient hidden `trust_confirmed` input into the gated form before the
+// re-dispatch, so the pushed params carry the human's actual confirmation. The
+// server records the one-time (admin, initiative) ack only when that marker
+// arrives; ungated fallbacks (no #agent-trust-state, no dialog) never inject
+// it, so they can never burn the ack.
+let agentTrustBypass = false
+// While the dialog is open: {control, held, proceed, cancel, restoreFocus}.
+let agentTrustPending = null
+
+function agentTrustState() {
+  const el = document.getElementById("agent-trust-state")
+  return el ? el.dataset : null
+}
+
+// Run `fn` with the proof-carrying marker present in `form`, removing it on
+// the next tick so later, unconfirmed changes never carry it.
+function withTrustConfirmed(form, fn) {
+  if (!form) { fn(); return }
+  const marker = document.createElement("input")
+  marker.type = "hidden"
+  marker.name = "trust_confirmed"
+  marker.value = "true"
+  form.appendChild(marker)
+  try { fn() } finally { setTimeout(() => marker.remove(), 0) }
+}
+
+function openAgentTrustConfirm(opts) {
+  const modal = document.getElementById("agent-trust-confirm")
+  if (!modal) {
+    // No dialog mounted — fail SAFE: an unconfirmed action must not commit,
+    // so run the revert path, never the action. (Unreachable in practice:
+    // the workspace renders the dialog whenever #agent-trust-state does AND
+    // whenever any rail entry carries data-trust-confirm=true; /assigned
+    // mirrors the rail rule — m03.04 2.4.3.)
+    if (opts.cancel) opts.cancel()
+    return
+  }
+  agentTrustPending = {...opts, restoreFocus: document.activeElement}
+  modal.hidden = false
+  const cancel = modal.querySelector("[data-trust-cancel]")
+  if (cancel) cancel.focus()
+}
+
+function settleAgentTrust(kind) {
+  const modal = document.getElementById("agent-trust-confirm")
+  if (modal) modal.hidden = true
+  const pending = agentTrustPending
+  agentTrustPending = null
+  if (!pending) return
+  if (kind === "proceed" && pending.proceed) pending.proceed()
+  if (kind === "cancel" && pending.cancel) pending.cancel()
+  const el = pending.restoreFocus
+  if (el && el.isConnected && el.focus) el.focus()
+}
+
+document.addEventListener("click", (e) => {
+  const modal = document.getElementById("agent-trust-confirm")
+  if (!modal || modal.hidden) return
+  if (e.target === modal || e.target.closest("[data-trust-cancel]")) {
+    settleAgentTrust("cancel")
+    return
+  }
+  if (e.target.closest("[data-trust-proceed]")) settleAgentTrust("proceed")
+})
+
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return
+  const m = document.getElementById("agent-trust-confirm")
+  if (m && !m.hidden) settleAgentTrust("cancel")
+})
+
+// The shared input/change interceptor for the two form-control paths. See the
+// ordering note above for why BOTH event types are captured.
+function interceptAgentTrust(e) {
+  if (agentTrustBypass) return
+  const st = agentTrustState()
+  if (!st) return
+  const t = e.target
+  if (!t || !t.matches) return
+  const isBox = t.matches("input[name='agent_access']")
+  const isSel = t.matches("select[data-member-role-select]")
+  if (!isBox && !isSel) return
+
+  // While the dialog is deciding, the gated controls are frozen: swallow any
+  // further input/change (e.g. Space re-toggling the checkbox under the
+  // overlay) and re-assert the held state, so nothing pushes or double-arms
+  // mid-decision.
+  if (agentTrustPending) {
+    e.stopImmediatePropagation()
+    if (agentTrustPending.control === t) {
+      if (isBox) t.checked = agentTrustPending.held
+      if (isSel) t.value = agentTrustPending.held
+    }
+    return
+  }
+
+  if (st.acked === "true") return
+
+  // (b) enabling AI access with members already present. The native click has
+  // already flipped the box — that flip IS the §6.6 hold; only the push is
+  // stopped until the human decides.
+  if (isBox) {
+    if (!t.checked) return // disabling never confirms
+    if (st.otherMembers !== "true") return // no member content to trust yet
+    e.stopImmediatePropagation()
+    openAgentTrustConfirm({
+      control: t,
+      held: true,
+      proceed: () =>
+        withTrustConfirmed(t.form, () => {
+          agentTrustBypass = true
+          t.dispatchEvent(new Event("input", {bubbles: true}))
+          agentTrustBypass = false
+        }),
+      cancel: () => { t.checked = false },
+    })
+    return
+  }
+
+  // (a) promoting a member — a rank increase vs the render-selected option
+  // (defaultSelected) — on an agent-accessible initiative. The select keeps
+  // showing the chosen new role while the dialog decides.
+  if (st.agentAccess !== "true") return
+  const rank = {viewer: 1, editor: 2, owner: 3}
+  const prev = Array.from(t.options).find((o) => o.defaultSelected)
+  if (!prev || (rank[t.value] || 0) <= (rank[prev.value] || 0)) return
+  e.stopImmediatePropagation()
+  openAgentTrustConfirm({
+    control: t,
+    held: t.value,
+    proceed: () =>
+      withTrustConfirmed(t.form, () => {
+        agentTrustBypass = true
+        t.dispatchEvent(new Event("input", {bubbles: true}))
+        agentTrustBypass = false
+      }),
+    cancel: () => { t.value = prev.value },
+  })
+}
+
+document.addEventListener("input", interceptAgentTrust, true)
+document.addEventListener("change", interceptAgentTrust, true)
+
+// (a) adding a member (any role — every role is viewer or higher) on an
+// agent-accessible initiative: cancel the submit, ask, re-dispatch on Proceed
+// with the proof-carrying marker. (Submit is dispatched synchronously and
+// pushed by LiveView's window-bubble submit binding, so the same capture
+// ordering argument applies.)
+document.addEventListener("submit", (e) => {
+  if (agentTrustBypass) return
+  const form = e.target.closest && e.target.closest("form[phx-submit='add_member']")
+  if (!form) return
+  const st = agentTrustState()
+  if (!st || st.acked === "true" || st.agentAccess !== "true") return
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  openAgentTrustConfirm({
+    control: form,
+    held: null,
+    proceed: () =>
+      withTrustConfirmed(form, () => {
+        agentTrustBypass = true
+        form.dispatchEvent(new Event("submit", {bubbles: true, cancelable: true}))
+        agentTrustBypass = false
+      }),
+    cancel: null,
+  })
+}, true)
 
 // Client-instant transfer-ownership confirm (UX_GUARDRAILS 6.5, like the
 // delete confirms): the dialog's content is client-known, so it opens at the
@@ -6148,7 +6384,23 @@ Hooks.CollaboratorDrag = {
     if (this.pid !== undefined && e.pointerId !== this.pid) return
     if (this.dragging) {
       this.suppressClick()
-      if (this.target) this.optimisticAdd(this.target.dataset.railInitiativeId)
+      if (this.target) {
+        const entry = this.target
+        // m03.04 2.4.2 (§6.5, decide-at-drop): the entry's render-known
+        // trust state gates the drop exactly like the menu path — the confirm
+        // opens client-side with no round trip, the pending chip waits for
+        // Proceed, and Cancel drops nothing and pushes nothing.
+        if (entry.dataset.trustConfirm === "true") {
+          openAgentTrustConfirm({
+            control: this.el,
+            held: null,
+            proceed: () => this.optimisticAdd(entry.dataset.railInitiativeId, true),
+            cancel: null,
+          })
+        } else {
+          this.optimisticAdd(entry.dataset.railInitiativeId)
+        }
+      }
     }
     this.cleanup()
   },
@@ -6159,7 +6411,7 @@ Hooks.CollaboratorDrag = {
   // refresh now carries the real avatar), failure pulls it + bonks (MUST NOT
   // LIE). An 8s safety timer self-heals a dropped reply. The chip data rides
   // this collaborator <li>'s data attributes (mirrors the rendered avatar).
-  optimisticAdd(iid) {
+  optimisticAdd(iid, trustConfirmed) {
     const uid = this.userId
     const d = this.el.dataset
     const echoId = "ra" + Date.now() + "-" + Math.random().toString(36).slice(2, 8)
@@ -6185,7 +6437,10 @@ Hooks.CollaboratorDrag = {
     }
     // Dropped reply → release the hold + pull the chip (server authoritative).
     const timer = setTimeout(clear, 8000)
-    this.pushEvent("add_collaborator_to", {"user-id": uid, "initiative-id": iid}, (reply) => {
+    const params = {"user-id": uid, "initiative-id": iid}
+    // Proof-carrying (2.16): set only by the trust confirm's Proceed path.
+    if (trustConfirmed) params["trust_confirmed"] = "true"
+    this.pushEvent("add_collaborator_to", params, (reply) => {
       clear()
       if (reply && reply.ok === false && window.DoitBonk) window.DoitBonk()
     })
@@ -6723,9 +6978,10 @@ const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute
 const liveSocket = new LiveSocket("/live", Socket, {
   // Cold/first connects (especially after a dev recompile, when HEEx templates
   // JIT-warm and a mount can take ~3s) trip a tight WS budget and fall back to
-  // LongPoll — which then STICKS via sessionStorage["phx:fallback:LongPoll"].
-  // WS is proven working here (heartbeat replies ~900ms warm, upgrades ~7s), so
-  // give the primary transport real room to win the race before falling back.
+  // LongPoll, which Phoenix memorizes in sessionStorage["phx:fallback:LongPoll"]
+  // for the tab's life. Two defences: give the primary transport real room to
+  // win the race here, and — at connect time below — re-probe the websocket
+  // whenever that flag is set, clearing it if the socket opens (O&C 6.11).
   longPollFallbackMs: 6000,
   // Halve the default 30s heartbeat so a SILENT drop that fires no browser
   // "offline" event (a server-side / half-open socket) is still detected — and
@@ -6893,8 +7149,17 @@ window.addEventListener("phx:page-loading-stop", e => {
   if (e.detail && e.detail.kind === "initial") { connEverLive = true; setConnStatus(null) }
 })
 
-// connect if there are any LiveViews on the page
-liveSocket.connect()
+// connect if there are any LiveViews on the page. A tab Phoenix pinned to
+// long-poll (sessionStorage["phx:fallback:LongPoll"]) first probes a throwaway
+// websocket (~2s budget) and drops the pin if it opens, so the LiveSocket
+// connects over the websocket again; unpinned tabs connect at once, no probe.
+connectAfterReprobe(
+  window.sessionStorage,
+  () => probeWebSocket(probeUrl(window.location, csrfToken), window.WebSocket),
+  () => liveSocket.connect()
+).then(cleared => {
+  if (cleared) console.debug("[transport] websocket probe opened; cleared memorized long-poll fallback")
+})
 
 // expose liveSocket on window for web console debug logs and latency simulation:
 // >> liveSocket.enableDebug()

@@ -11,9 +11,11 @@ defmodule DoItWeb.Endpoint do
     same_site: "Lax"
   ]
 
+  # `:uri` (m03.04 6.1) lets a mount halted for lack of a session recover the
+  # path the browser asked for, so login can return the user to it.
   socket "/live", Phoenix.LiveView.Socket,
-    websocket: [connect_info: [session: @session_options]],
-    longpoll: [connect_info: [session: @session_options]]
+    websocket: [connect_info: [:uri, session: @session_options]],
+    longpoll: [connect_info: [:uri, session: @session_options]]
 
   # Serve at "/" the static files from "priv/static" directory.
   #

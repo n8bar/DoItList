@@ -73,7 +73,9 @@ defmodule DoItWeb.Api.OperationsTest do
     viewer = user("viewer")
     stranger = user("stranger")
 
-    {:ok, ini} = Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"})
+    {:ok, ini} =
+      Initiatives.create_initiative(owner, %{"name" => "Q3 Launch"}, agent_access: true)
+
     {:ok, _} = Initiatives.add_member(ini.id, editor.id, "editor")
     {:ok, _} = Initiatives.add_member(ini.id, viewer.id, "viewer")
 
@@ -580,6 +582,8 @@ defmodule DoItWeb.Api.OperationsTest do
       assert Initiatives.get_role(ini_id, ctx.owner.id) == "owner"
     end
 
+    # AI-KNOBS-PARKED (m03.04): ai_knobs off the API write set; revive with @initiative_content_fields.
+    @tag :skip
     test "initiative: update sets ai_knobs (edit-gated) and echoes it in the result", ctx do
       knobs = "deploy_day: friday\nlocale: en"
 
@@ -1073,7 +1077,9 @@ defmodule DoItWeb.Api.OperationsTest do
     test "add task with a foreign parent_id is rejected and mutates nothing", ctx do
       # Attacker is owner of their OWN Initiative but has no role on ctx.ini.
       attacker = user("attacker")
-      {:ok, attacker_ini} = Initiatives.create_initiative(attacker, %{"name" => "Attacker Land"})
+
+      {:ok, attacker_ini} =
+        Initiatives.create_initiative(attacker, %{"name" => "Attacker Land"}, agent_access: true)
 
       # A DONE task in the victim Initiative — the exploit would flip it open via
       # reconcile_after_create's unscoped ancestor walk.

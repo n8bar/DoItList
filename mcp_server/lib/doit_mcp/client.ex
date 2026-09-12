@@ -5,6 +5,8 @@ defmodule DoitMcp.Client do
   the public API (Arc 1, `/api/v1`), never a shortcut into the Elixir contexts.
   """
 
+  alias DoitMcp.TokenRecovery
+
   @doc """
   POST an ordered batch of operations to `/api/v1/operations`.
 
@@ -31,11 +33,17 @@ defmodule DoitMcp.Client do
     request(:get, path, params: params)
   end
 
+  @doc "POST a JSON `body` to a path under `/api/v1`."
+  @spec post(String.t(), map()) :: {:ok, term()} | {:error, map()}
+  def post(path, body) when is_map(body) do
+    request(:post, path, json: body)
+  end
+
   defp request(method, path, opts) do
-    req =
+    attempt = fn token ->
       [
         base_url: base_url(),
-        auth: {:bearer, token()},
+        auth: {:bearer, token},
         method: method,
         url: path,
         # A tool call is a synchronous round trip for whoever is waiting on the
@@ -43,17 +51,86 @@ defmodule DoitMcp.Client do
         # the caller decide whether to retry, instead of Req's default silent
         # multi-second backoff-and-retry on a transient error.
         retry: false,
-        # A cushion over the server's fixed worst case (a cap-sized batch is
-        # bounded by the 15s transaction timeout; m03.04 item 2.8.3), not a
-        # mask for a slow server — Req's ~15s default sat exactly ON that
-        # bound and turned drive 4's 14.6s batch into a spurious timeout.
-        receive_timeout: 30_000
+        # A cushion ABOVE the server's deliberate worst case (a cap-sized batch
+        # is bounded by the 60s transaction timeout; m03.04 items 3.8.3 + 2.17),
+        # not a mask for a slow server — the client must never give up while the
+        # server is still legitimately working, so this stays above that bound.
+        receive_timeout: 90_000
       ]
       |> Keyword.merge(Application.get_env(:doit_mcp, :req_options, []))
       |> Req.new()
       |> Req.merge(opts)
+      |> Req.request()
+    end
 
-    case Req.request(req) do
+    dispatch(attempt)
+  end
+
+  # The credential is the session's in-memory override when a 401 recovery
+  # installed one, else the bearer header this request arrived with
+  # (installed per request task by DoitMcp.Server.handle_request/2) — never a
+  # VM-wide token, which would hand one session another's identity (m03.04
+  # item 23.2). A rejected or absent credential runs the per-session recovery
+  # ladder (TokenRecovery.Http, m03.04 2.2.1.3) HERE, on the one path every
+  # tool and resource shares: the form goes out over THAT session's own
+  # stream and the call returns at once with actionable guidance (m03.04
+  # 2.3.3); a pasted token's first use is its proof — all of it in the
+  # standard error envelope, so ToolResult/ResourceResult render it with
+  # zero per-tool code.
+  defp dispatch(attempt) do
+    case TokenRecovery.Http.credential() do
+      {:ok, token} ->
+        case attempt.(token) do
+          {:ok, %Req.Response{status: 401}} -> recover_unauthorized(attempt)
+          other -> translate(other)
+        end
+
+      {:unverified, token} ->
+        # A paste landed on this session; this call proves it.
+        verify(attempt, token)
+
+      :absent ->
+        # No credential at all — same ladder, minus the doomed round trip.
+        recover_unauthorized(attempt)
+    end
+  end
+
+  defp recover_unauthorized(attempt) do
+    case TokenRecovery.Http.recover() do
+      # A paste landed while this call's attempt was out (the join, m03.04
+      # 2.3.2) — prove it here rather than raise a second form.
+      {:ok, fresh_token} -> verify(attempt, fresh_token)
+      {:error, message} -> unauthorized_error(message)
+    end
+  end
+
+  # One attempt with a pasted token: a 401 latches the session (no elicit
+  # loop on a bad paste); any HTTP answer short of that proves it for the
+  # rest of the session. A transport error proves nothing — the next call
+  # tries again.
+  defp verify(attempt, token) do
+    case attempt.(token) do
+      {:ok, %Req.Response{status: 401}} ->
+        unauthorized_error(TokenRecovery.Http.refreshed_token_rejected())
+
+      {:ok, %Req.Response{}} = answered ->
+        TokenRecovery.Http.refreshed_token_verified()
+        translate(answered)
+
+      transport_error ->
+        translate(transport_error)
+    end
+  end
+
+  # Same envelope shape the API's own errors use, so the shared result
+  # translators render the actionable message as the tool/resource error.
+  defp unauthorized_error(message) do
+    {:error,
+     %{status: 401, body: %{"error" => %{"code" => "unauthorized", "message" => message}}}}
+  end
+
+  defp translate(result) do
+    case result do
       {:ok, %Req.Response{status: status, body: %{"data" => data}}} when status in 200..299 ->
         {:ok, data}
 
@@ -68,9 +145,9 @@ defmodule DoitMcp.Client do
     end
   end
 
-  # The MCP client's process env — set once by whatever launches this adapter
-  # (`claude mcp add`, a generic stdio config block, …). Never read from a
-  # config file: a token is a per-user secret, not a build-time setting.
+  # The base URL is the adapter's process env, set once by the compose service
+  # that runs it — the one piece of API config that is the SERVICE's, not a
+  # session's. The credential is never here: it rides each session's own
+  # request (see dispatch/1).
   defp base_url, do: System.get_env("DOITLIST_API_URL", "http://localhost:4000")
-  defp token, do: System.fetch_env!("DOITLIST_API_TOKEN")
 end

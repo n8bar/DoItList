@@ -2,10 +2,17 @@ defmodule DoItWeb.AccountLive do
   use DoItWeb, :live_view
 
   alias DoIt.Accounts
+  alias DoIt.Initiatives
+  alias DoItWeb.AgentConnect
 
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns.current_user
+
+    # Repo-marker panel (m03.04 2.1.1.4): names + ids only, loaded at mount,
+    # reloadable from the panel. Which one is selected is ephemeral UI state —
+    # assign-only.
+    marker_initiatives = Initiatives.list_agent_accessible_initiatives(user)
 
     {:ok,
      socket
@@ -17,7 +24,25 @@ defmodule DoItWeb.AccountLive do
      |> assign(:api_token_form, new_api_token_form())
      # The just-minted plaintext, shown ONCE then dismissed. Never re-derivable.
      |> assign(:new_api_token, nil)
-     |> assign(:api_tokens, Accounts.list_api_tokens(user))}
+     |> assign(:api_tokens, Accounts.list_api_tokens(user))
+     |> assign(:marker_initiatives, marker_initiatives)
+     |> assign(:marker_initiative_id, marker_default_id(marker_initiatives))
+     # Instance-level, so read once: the connect pastes' URL when it's one
+     # clients refuse (m03.04 6.17), otherwise nil.
+     |> assign(:refused_paste_url, AgentConnect.refused_paste_url())
+     # Likewise: the MCP address when it's composed onto an origin nothing
+     # promises to answer (m03.04 6.20), otherwise nil.
+     |> assign(:unreachable_mcp_url, AgentConnect.unreachable_mcp_url())}
+  end
+
+  defp marker_default_id([%{id: id} | _]), do: id
+  defp marker_default_id([]), do: nil
+
+  # The selected entry for the snippet; falls back to the first when the
+  # assign doesn't match (e.g. nothing selected yet). Callers guarantee a
+  # non-empty list.
+  defp marker_selected(initiatives, id) do
+    Enum.find(initiatives, hd(initiatives), &(&1.id == id))
   end
 
   defp new_api_token_form, do: to_form(%{"label" => ""}, as: :api_token)
@@ -85,8 +110,12 @@ defmodule DoItWeb.AccountLive do
   def handle_event("save_password", %{"user" => params}, socket) do
     case Accounts.update_password(socket.assigns.current_user, params) do
       {:ok, user} ->
+        # A successful change cures the condition the forced-change redirect's
+        # sticky error flash describes — clear it so it can't outlive (and
+        # contradict) the 4s success toast.
         {:noreply,
          socket
+         |> clear_flash()
          |> assign(:current_user, user)
          |> assign(:password_form, to_form(Accounts.change_password(user)))
          |> put_flash(:info, "Password updated.")}
@@ -130,6 +159,12 @@ defmodule DoItWeb.AccountLive do
   end
 
   # --- API tokens (m03.01 worklist 1.2) --------------------------------------
+
+  # Tracks the typed label server-side; without this the post-mint form reset
+  # never diffs against the client's typed value, so the textbox kept its text.
+  def handle_event("validate_api_token", %{"api_token" => params}, socket) do
+    {:noreply, assign(socket, :api_token_form, to_form(params, as: :api_token))}
+  end
 
   def handle_event("mint_api_token", %{"api_token" => %{"label" => label}}, socket) do
     user = socket.assigns.current_user
@@ -180,6 +215,35 @@ defmodule DoItWeb.AccountLive do
   # Dismiss the one-time plaintext reveal so it can't be screen-scraped later.
   def handle_event("dismiss_api_token", _params, socket) do
     {:noreply, assign(socket, :new_api_token, nil)}
+  end
+
+  # Repo-marker select (m03.04 2.1.1.4): a name+URL swap on an already-loaded
+  # list — no work proportional to any tree.
+  def handle_event("select_marker_initiative", %{"initiative_id" => id}, socket) do
+    id = String.to_integer(id)
+
+    if Enum.any?(socket.assigns.marker_initiatives, &(&1.id == id)) do
+      {:noreply, assign(socket, :marker_initiative_id, id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Repo-marker reload: the mount-time list goes stale when an Initiative is
+  # created or AI-enabled after page load. Selection survives when its
+  # Initiative is still listed.
+  def handle_event("reload_marker_initiatives", _params, socket) do
+    initiatives = Initiatives.list_agent_accessible_initiatives(socket.assigns.current_user)
+
+    id =
+      if Enum.any?(initiatives, &(&1.id == socket.assigns.marker_initiative_id)),
+        do: socket.assigns.marker_initiative_id,
+        else: marker_default_id(initiatives)
+
+    {:noreply,
+     socket
+     |> assign(:marker_initiatives, initiatives)
+     |> assign(:marker_initiative_id, id)}
   end
 
   @impl true
@@ -604,8 +668,8 @@ defmodule DoItWeb.AccountLive do
                   <button
                     type="button"
                     id="api-token-copy"
-                    phx-hook=".CopyToken"
-                    data-token-target="api-token-value"
+                    phx-hook=".CopyText"
+                    data-copy-target="api-token-value"
                     class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
                   >
                     Copy
@@ -619,19 +683,131 @@ defmodule DoItWeb.AccountLive do
                     Done
                   </button>
                 </div>
+
+                <%!-- Connect panel (m03.04 2.1.1.2/24.3): per-client pastes
+                   composed server-side from the endpoint URL and the token just
+                   minted — self-contained, runnable as pasted. Lives inside the
+                   one-time reveal because the plaintext exists only here;
+                   dismissing the token dismisses the panel with it. Both shell
+                   variants render (25.1); the toggle flips visibility
+                   client-side. --%>
+                <div
+                  id="agent-connect-panel"
+                  class="mt-3 pt-3 border-t border-emerald-200 dark:border-emerald-900 space-y-3"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="text-sm text-emerald-800 dark:text-emerald-300">
+                      Connect an agent — one paste per client:
+                    </p>
+                    <div
+                      id="connect-shell-toggle"
+                      phx-hook=".ShellToggle"
+                      role="tablist"
+                      aria-label="Shell"
+                      class="inline-flex shrink-0 rounded border border-emerald-300 dark:border-emerald-800 overflow-hidden"
+                    >
+                      <button
+                        type="button"
+                        id="connect-shell-posix"
+                        role="tab"
+                        data-shell="posix"
+                        aria-selected="true"
+                        aria-controls="connect-pastes-posix"
+                        class="px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 aria-selected:bg-emerald-600 aria-selected:text-white dark:aria-selected:bg-emerald-700 dark:aria-selected:text-white"
+                      >
+                        bash / zsh
+                      </button>
+                      <button
+                        type="button"
+                        id="connect-shell-powershell"
+                        role="tab"
+                        data-shell="powershell"
+                        aria-selected="false"
+                        aria-controls="connect-pastes-powershell"
+                        class="px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 aria-selected:bg-emerald-600 aria-selected:text-white dark:aria-selected:bg-emerald-700 dark:aria-selected:text-white"
+                      >
+                        PowerShell
+                      </button>
+                    </div>
+                  </div>
+                  <%!-- m03.04 6.17: every client refuses plain http off loopback,
+                     so pastes composed from a LAN http URL cannot connect. Say
+                     so here rather than let them fail in the user's shell. --%>
+                  <p
+                    :if={@refused_paste_url}
+                    id="connect-url-warning"
+                    class="rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs text-amber-900 dark:text-amber-200"
+                  >
+                    These pastes carry <span class="font-mono">{@refused_paste_url}</span>, which agent clients refuse — plain http works only on localhost. Set this instance's public URL (PUBLIC_SCHEME, PUBLIC_HOST, PUBLIC_PORT) to the https address you reach it at.
+                  </p>
+                  <%!-- m03.04 6.20: with no MCP_PUBLIC_URL the MCP address is
+                     composed from this instance's public host plus the agent
+                     port. Where that port isn't part of the public address —
+                     a reverse proxy fronting only the web app — nothing
+                     answers it, and the scheme check above passes anyway. --%>
+                  <p
+                    :if={@unreachable_mcp_url}
+                    id="connect-mcp-url-warning"
+                    class="rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs text-amber-900 dark:text-amber-200"
+                  >
+                    The MCP pastes carry <span class="font-mono">{@unreachable_mcp_url}</span>, which is not the address serving this page. If a reverse proxy fronts this instance, nothing answers there — set MCP_PUBLIC_URL to the address the agent endpoint is actually reachable at.
+                  </p>
+                  <%= for {shell, shell_slug, suffix} <- [{:posix, "posix", ""}, {:powershell, "powershell", "-ps"}] do %>
+                    <div
+                      id={"connect-pastes-#{shell_slug}"}
+                      role="tabpanel"
+                      class={["space-y-3", shell == :powershell && "hidden"]}
+                    >
+                      <%= for {slug, name, paste} <- AgentConnect.client_pastes(@new_api_token, shell) do %>
+                        <div id={"connect-client-#{slug}#{suffix}"}>
+                          <h4 class="text-xs font-medium text-zinc-700 dark:text-zinc-200 mb-1">
+                            {name}
+                          </h4>
+                          <div class="flex items-start gap-2">
+                            <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-emerald-300 dark:border-emerald-800 bg-white dark:bg-zinc-900 px-2 py-1.5"><code
+                              id={"connect-cmd-#{slug}#{suffix}"}
+                              class="font-mono text-xs text-zinc-800 dark:text-zinc-100"
+                            >{paste}</code></pre>
+                            <button
+                              type="button"
+                              id={"connect-copy-#{slug}#{suffix}"}
+                              phx-hook=".CopyText"
+                              data-copy-target={"connect-cmd-#{slug}#{suffix}"}
+                              class="shrink-0 px-3 py-1.5 rounded border border-emerald-300 dark:border-emerald-800 text-sm font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                        </div>
+                      <% end %>
+                    </div>
+                  <% end %>
+                </div>
               </div>
             <% end %>
 
-            <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyToken">
+            <%!-- One copy hook for the token input and every connect paste:
+               data-copy-target names the element; inputs copy .value, code/pre
+               blocks copy .textContent. --%>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".CopyText">
               export default {
                 mounted() {
                   this.el.addEventListener("click", async () => {
-                    const target = document.getElementById(this.el.dataset.tokenTarget)
+                    const target = document.getElementById(this.el.dataset.copyTarget)
                     if (!target) return
+                    const text = target.value !== undefined ? target.value : target.textContent
                     try {
-                      await navigator.clipboard.writeText(target.value)
+                      await navigator.clipboard.writeText(text)
                     } catch (_e) {
-                      target.select()
+                      if (typeof target.select === "function") {
+                        target.select()
+                      } else {
+                        const range = document.createRange()
+                        range.selectNodeContents(target)
+                        const sel = window.getSelection()
+                        sel.removeAllRanges()
+                        sel.addRange(range)
+                      }
                       document.execCommand("copy")
                     }
                     const original = this.el.textContent
@@ -642,18 +818,48 @@ defmodule DoItWeb.AccountLive do
               }
             </script>
 
+            <%!-- Shell toggle (25.1): ephemeral client-side state — flips which
+               shell's pastes show, instantly, no server round-trip. A patch
+               re-renders the POSIX default; updated() re-applies the
+               user's selection. --%>
+            <script :type={Phoenix.LiveView.ColocatedHook} name=".ShellToggle">
+              export default {
+                mounted() {
+                  this.shell = "posix"
+                  this.el.querySelectorAll("[data-shell]").forEach(btn => {
+                    btn.addEventListener("click", () => {
+                      this.shell = btn.dataset.shell
+                      this.apply()
+                    })
+                  })
+                },
+                updated() { this.apply() },
+                apply() {
+                  this.el.querySelectorAll("[data-shell]").forEach(btn => {
+                    btn.setAttribute("aria-selected", btn.dataset.shell === this.shell ? "true" : "false")
+                  })
+                  for (const shell of ["posix", "powershell"]) {
+                    const pane = document.getElementById("connect-pastes-" + shell)
+                    if (pane) pane.classList.toggle("hidden", shell !== this.shell)
+                  }
+                }
+              }
+            </script>
+
             <.form
               for={@api_token_form}
               id="api-token-form"
+              phx-change="validate_api_token"
               phx-submit="mint_api_token"
               class="space-y-2"
             >
               <.input
                 field={@api_token_form[:label]}
                 type="text"
-                label="Label (optional)"
+                label="Label"
                 placeholder="e.g. Claude Code, laptop CLI"
                 autocomplete="off"
+                required
               />
               <p class="text-xs text-zinc-500 dark:text-zinc-400">
                 A name to recognize this token later.
@@ -662,6 +868,77 @@ defmodule DoItWeb.AccountLive do
                 <.button type="submit" data-latch="Minting…">Mint token</.button>
               </div>
             </.form>
+
+            <%!-- Repo marker (m03.04 2.1.1.4), the second paste: a few lines
+               for the repo's agent-instruction file naming the Initiative and
+               its URL, so a connected agent works the tree instead of starting
+               a TODO.md. Holds no secret, so it renders always — never locked
+               inside the one-time reveal. --%>
+            <div
+              id="repo-marker-panel"
+              class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-2"
+            >
+              <p class="text-sm text-zinc-600 dark:text-zinc-300">
+                Repo marker — paste into the repo's agent-instruction file (CLAUDE.md, AGENTS.md):
+              </p>
+              <div class="flex items-center gap-2">
+                <%= if @marker_initiatives == [] do %>
+                  <p id="repo-marker-empty" class="flex-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    Turn on AI access for an Initiative (Initiative settings) to compose this.
+                  </p>
+                <% else %>
+                  <form
+                    id="repo-marker-form"
+                    phx-change="select_marker_initiative"
+                    class="flex-1 min-w-0"
+                  >
+                    <select
+                      id="repo-marker-initiative"
+                      name="initiative_id"
+                      aria-label="Initiative"
+                      class="w-full select select-bordered select-sm"
+                    >
+                      <option
+                        :for={i <- @marker_initiatives}
+                        value={i.id}
+                        selected={i.id == @marker_initiative_id}
+                      >
+                        {i.name}
+                      </option>
+                    </select>
+                  </form>
+                <% end %>
+                <%!-- Reload (server-gated, so the icon spins in flight — §6.7):
+                   brings in Initiatives created or AI-enabled after page load. --%>
+                <button
+                  type="button"
+                  id="repo-marker-reload"
+                  phx-click="reload_marker_initiatives"
+                  aria-label="Reload Initiative list"
+                  title="Reload Initiative list"
+                  class="shrink-0 p-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                >
+                  <.icon name="hero-arrow-path" class="w-4 h-4 phx-click-loading:animate-spin" />
+                </button>
+              </div>
+              <%= if @marker_initiatives != [] do %>
+                <div class="flex items-start gap-2">
+                  <pre class="flex-1 min-w-0 overflow-x-auto rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 px-2 py-1.5"><code
+                    id="repo-marker-snippet"
+                    class="font-mono text-xs text-zinc-800 dark:text-zinc-100"
+                  >{AgentConnect.repo_marker(marker_selected(@marker_initiatives, @marker_initiative_id))}</code></pre>
+                  <button
+                    type="button"
+                    id="repo-marker-copy"
+                    phx-hook=".CopyText"
+                    data-copy-target="repo-marker-snippet"
+                    class="shrink-0 px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm font-medium text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                  >
+                    Copy
+                  </button>
+                </div>
+              <% end %>
+            </div>
 
             <div class="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
               <h3 class="text-sm font-medium text-zinc-700 dark:text-zinc-200 mb-2">

@@ -43,6 +43,7 @@ defmodule DoItWeb.Api do
   | 401  | `unauthorized`         | Missing / malformed / invalid / revoked token   |
   | 403  | `forbidden`            | Authenticated but the role check denies the op  |
   | 404  | `not_found`            | The resource doesn't exist (or isn't visible)   |
+  | 409  | `conflict`             | A stale `expected_version` — the record changed since the caller's read (operations batch only) |
   | 422  | `unprocessable_entity` | The request body failed validation              |
   | 429  | `rate_limited`         | Per-token rate limit exceeded (see `Retry-After`)|
 

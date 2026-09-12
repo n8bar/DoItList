@@ -1,304 +1,58 @@
 defmodule DoitMcp.Tools.ApplyOperations do
   @moduledoc """
-  Apply a raw, ordered batch of operations atomically (all-or-nothing) —
-  a direct mirror of `POST /api/v1/operations`.
+  Atomically apply up to 150 ordered operations. Always use this tool for multi-operation passes and `lid` references; every other tool submits one operation against a real id.
 
-  This is the ONLY tool that supports `lid` (client-assigned local ids for
-  forward references within the same batch — e.g. bootstrapping a new
-  Initiative and its first task in one call) and multi-op batches; every
-  other tool in this MCP server builds exactly one op against a real id.
+  Always batch the whole pass, including bulk completions, comments, and edits. Never loop per-operation tools. If the pass exceeds 150 operations, split it into batches filled toward the cap. Reply with `index` and `title`, never ids.
 
-  A batch is capped at **150 operations**; a larger batch is rejected up front
-  with a `422` (naming the count and the limit) before any of it is applied.
+  ## Wire format
 
-  Before applying a bulk ingest or edit batch: if the doitlist skill is
-  loaded, run its Ingest Checkpoint now — this is the moment of action. And
-  batch the WHOLE pass — bulk completions, comments, and edits belong in
-  batches too, not looped single-op calls to the per-op tools (that is the
-  failure mode). Past the cap, split into chunks filled toward it; sub-cap
-  chunking is fine — but lids resolve within one batch only, so reference
-  across chunks by real id.
+  Each operation is a JSON object with these fields:
 
-  Each element of `operations` must be a JSON object matching the wire
-  format:
-
-      %{
-        "op" => "add" | "update" | "remove",
-        "type" => "task" | "initiative" | "comment" | "member" | "notification" | "link",
-        "id" => <int, for update/remove targeting a real resource>,
-        "lid" => <string, for add — a batch-local reference other later ops
-                  in the SAME call can point back to>,
-        "data" => <op-specific fields, matching whichever domain tool
-                   documents for that op/type>
+      {
+        "op": "add" | "update" | "remove",
+        "type": "task" | "initiative" | "comment" | "link",
+        "id": <real id for updating or removing an existing resource>,
+        "lid": <batch-local id assigned by an add or used by a later same-batch update/remove to target that add>,
+        "data": <fields documented by the corresponding domain tool>
       }
 
-  ## Referencing a `lid` from a later op — the forward-reference mechanism
+  ## Batch-local references — `lid`
 
-  Registering a `lid` on an `add` (above) is only half of it — here's how a
-  LATER op in the same batch points back to it:
+  Assign a unique `lid` to an add when later operations in the same batch must reference it.
 
-    * To target the created resource itself (an `update`/`remove` on it):
-      put the same string in that op's own top-level `"lid"` field instead
-      of `"id"` — e.g. `%{"op" => "update", "type" => "task", "lid" => "t1",
-      "data" => %{"manual_progress" => 50}}`.
-    * To reference it as a RELATIONSHIP inside another op's `data`: use a
-      `<field>_lid` key instead of `<field>_id` — e.g. `"parent_lid" =>
-      "t1"` instead of `"parent_id"` (a task's parent), `"initiative_lid" =>
-      "i"` (a task's Initiative), `"source_lid"`/`"target_lid"` (a link's
-      endpoints), `"task_lid"` (a comment's task).
+    * To update or remove an earlier add, put its `lid` in the later operation's top-level `"lid"` instead of `"id"`.
+    * To use an earlier add in a relationship, replace `<field>_id` with `<field>_lid`, such as `parent_lid`, `initiative_lid`, `task_lid`, `source_lid`, or `target_lid`.
+    * For references between tasks added in the same batch, always add both tasks before their link operations, then use `source_lid` and `target_lid`. For mutual references, add one link per direction.
 
-  A lid only resolves to an EARLIER op's `add` of the matching `type` —
-  never a later or wrong-type one. Worked example — bootstrap an Initiative
-  and its first task, then mark it done, in one call:
+  A `lid` always resolves to an earlier add of the required type. Never reference a later add, reuse a `lid`, or carry one across batches. Across batches, always use the returned real ids.
 
-      [
-        %{"op" => "add", "type" => "initiative", "lid" => "i", "data" => %{"name" => "New project"}},
-        %{"op" => "add", "type" => "task", "lid" => "t1", "data" => %{"initiative_lid" => "i", "title" => "First task"}},
-        %{"op" => "update", "type" => "task", "lid" => "t1", "data" => %{"done" => true}}
-      ]
+  A `lid` never replaces the numeric id inside a `%<task_id>` text reference. When new task text must reference another new task, add the tasks first and update the text after their real ids return.
 
-  This tool is a pure pass-through — the caller is responsible for building
-  each op object correctly per the wire format above; no reshaping happens
-  here.
+  ## Completion — `done`
+
+  Always set `done` in the task's add or update that performs the completion. Never add a task and complete it with a second operation.
+
+  ## Conditional updates — `expected_version`
+
+  For every task or Initiative update, always pass the latest read's `version` as `expected_version` unless overwriting any intervening change is acceptable. A stale version rolls back the entire batch and returns the current record under `current`; always reconcile that record before retrying.
 
   ## Safe retries — `idempotency_key`
 
-  Pass an optional `idempotency_key` (any client-chosen string) to make a retry
-  safe: it is forwarded as the `Idempotency-Key` header, so if a first attempt
-  already committed but its response was lost (e.g. a timeout), a retry with the
-  same key replays that stored response instead of re-applying the batch.
-
-  ## Import gate — big import into a knob-less Initiative
-
-  The gate is armed by default (`DOITLIST_IMPORT_GATE=off` opts out) and its
-  trigger is CUMULATIVE per Initiative across the session: chunking a big
-  import under the cap doesn't slip past it — every applied batch's task-adds
-  are recorded per target (`DoitMcp.ImportGate.Counter`), and the session
-  total including the current batch is what crosses the 30-task threshold.
-
-  When the total crosses it for an Initiative whose `ai_knobs` is still
-  empty (created in this same batch, or fetched and found blank), the batch
-  is held for the operator when your client supports elicitation. Without a
-  `readback` it is rejected unapplied — re-call with `readback` (your
-  one-paragraph statement of the import shape you're about to build),
-  `assumptions` (your assumption-tagged decisions, one string each), and
-  `settled` (dimensions already settled by the operator's own ask — an
-  explicit depth, a "summarize" instruction — or by existing knobs, one
-  string each; operator-instructed dimensions go in `settled`, never
-  `assumptions`, and are displayed so the operator can veto a misclaimed
-  tag). The operator answers with one of three decisions: **apply** applies
-  the batch normally and settles that Initiative for the rest of the
-  session; **correct** (or any corrections text) comes back as the tool
-  result with NOTHING applied — revise the batch to match and record the
-  settled answers in the Initiative's `ai_knobs`, which stops this gate
-  firing again for that project in any session; **hold** means the operator
-  wants to be interviewed first — ask your remaining questions, settle the
-  answers in `ai_knobs`, then re-apply. No answer within 5 minutes → nothing
-  applied; retry when the operator is available. Clients without elicitation
-  support skip the gate entirely.
+  When a batch may be retried after a timeout or lost response, always give it a unique `idempotency_key`. Retry only the unchanged batch with the same key; the server replays a committed response instead of applying it again. Never reuse the key for a different batch.
   """
 
   use Anubis.Server.Component, type: :tool
 
-  alias Anubis.Server.Response
-  alias DoitMcp.{Client, Elicitation, ImportGate, ToolResult}
-  alias DoitMcp.ImportGate.Counter
-
-  # A human is reading the readback — give them a generous window.
-  @confirm_timeout to_timeout(minute: 5)
-
-  @confirm_schema %{
-    "type" => "object",
-    "properties" => %{
-      "decision" => %{
-        "type" => "string",
-        "enum" => ["apply", "correct", "hold"],
-        "description" =>
-          "apply = apply the import as read back; correct = don't apply, my corrections " <>
-            "say what to change; hold = don't apply, I want the agent to ask me more " <>
-            "questions first"
-      },
-      "corrections" => %{
-        "type" => "string",
-        "description" => "What to change instead — leaves the batch unapplied"
-      }
-    },
-    "required" => ["decision"]
-  }
-
-  @knobs_note "Import confirmed by the operator. Record the now-settled answers " <>
-                "(the readback and assumptions as confirmed) in this Initiative's " <>
-                "ai_knobs so this gate never fires again for this project."
+  alias DoitMcp.{Client, ToolResult}
 
   schema do
     field(:operations, {:list, :map}, required: true)
     field(:idempotency_key, :string, required: false)
-    field(:readback, :string, required: false)
-    field(:assumptions, {:list, :string}, required: false)
-    field(:settled, {:list, :string}, required: false)
   end
 
   def execute(params, frame) do
-    gate =
-      ImportGate.evaluate(params.operations,
-        elicitation?: &Elicitation.client_supports_elicitation?/0,
-        fetch_initiative: fn id -> Client.get("/api/v1/initiatives/#{id}") end,
-        cumulative: &Counter.cumulative/1,
-        confirmed?: &Counter.confirmed?/1
-      )
-
-    case gate do
-      :pass -> apply_batch(params, frame)
-      {:gate, info} -> hold_for_confirmation(params, info, frame)
-    end
+    params.operations
+    |> Client.operations(idempotency_key: Map.get(params, :idempotency_key))
+    |> then(&ToolResult.reply_batch(frame, &1))
   end
-
-  defp apply_batch(params, frame, opts \\ []) do
-    result =
-      Client.operations(params.operations, idempotency_key: Map.get(params, :idempotency_key))
-
-    # The counter is the gate's session memory: every batch that actually
-    # applied feeds the cumulative trigger, so sub-threshold chunks add up.
-    with {:ok, _} <- result do
-      Counter.record(ImportGate.count_by_target(params.operations))
-    end
-
-    {:reply, response, frame} = ToolResult.reply_batch(frame, result)
-
-    response =
-      case {result, opts[:note]} do
-        {{:ok, _}, note} when is_binary(note) -> Response.text(response, note)
-        _ -> response
-      end
-
-    {:reply, response, frame}
-  end
-
-  defp hold_for_confirmation(params, info, frame) do
-    case presence(Map.get(params, :readback)) do
-      nil ->
-        {:reply, Response.error(Response.tool(), readback_required_message(info)), frame}
-
-      readback ->
-        confirm_with_operator(params, readback, info, frame)
-    end
-  end
-
-  defp confirm_with_operator(params, readback, info, frame) do
-    message =
-      confirmation_message(
-        readback,
-        Map.get(params, :assumptions) || [],
-        Map.get(params, :settled) || []
-      )
-
-    case Elicitation.request(message, @confirm_schema, confirm_timeout()) do
-      {:ok, %{"action" => "accept", "content" => content}} when is_map(content) ->
-        handle_answer(params, content, info, frame)
-
-      {:ok, %{"action" => "decline"}} ->
-        not_applied(frame, %{
-          message:
-            "Operator declined the import — batch NOT applied. Ask what to change, " <>
-              "settle the answers in the Initiative's ai_knobs, then re-apply."
-        })
-
-      _timeout_cancel_or_error ->
-        not_applied(frame, %{
-          message: "Operator did not respond; batch not applied — retry when they're available."
-        })
-    end
-  end
-
-  defp handle_answer(params, content, info, frame) do
-    corrections = presence(content["corrections"])
-    decision = content["decision"]
-
-    cond do
-      decision == "apply" and is_nil(corrections) ->
-        # The operator's confirm settles this Initiative for the rest of the
-        # session — later chunks must not re-ask, even before the agent has
-        # recorded ai_knobs (marked before the apply so a failed apply's
-        # retry doesn't re-elicit an already-granted confirmation).
-        Counter.mark_confirmed(info.target)
-        apply_batch(params, frame, note: @knobs_note)
-
-      is_binary(corrections) ->
-        not_applied(frame, %{
-          corrections: corrections,
-          message:
-            "Operator supplied corrections — batch NOT applied. Revise the batch to " <>
-              "match and record the settled answers in the Initiative's ai_knobs, then re-apply."
-        })
-
-      decision == "hold" ->
-        not_applied(frame, %{
-          message:
-            "Operator chose hold — batch NOT applied. They want to be interviewed before " <>
-              "this import: ask your remaining questions now (the question budget), settle " <>
-              "the answers in the Initiative's ai_knobs, then re-apply."
-        })
-
-      true ->
-        not_applied(frame, %{
-          message:
-            "Operator did not choose apply and supplied no corrections — batch NOT applied. " <>
-              "Ask what to change, update the Initiative's ai_knobs, then re-apply."
-        })
-    end
-  end
-
-  defp not_applied(frame, extra) do
-    payload = Map.merge(%{ok: false, applied: false, gate: "import_readback_confirm"}, extra)
-    response = Response.json(Response.tool(), payload)
-    {:reply, %{response | isError: true}, frame}
-  end
-
-  defp readback_required_message(%{task_adds: task_adds, cumulative: cumulative}) do
-    "Import gate: this batch adds #{task_adds} tasks (#{cumulative} this session, " <>
-      "chunks included) to an Initiative whose ai_knobs is still empty, so the operator " <>
-      "must confirm it before it applies. Nothing was " <>
-      "applied. Re-call apply_operations with the same operations plus `readback` — " <>
-      "your one-paragraph statement of the import shape you're about to build — " <>
-      "`assumptions` — your assumption-tagged decisions, one string each — and " <>
-      "`settled` — dimensions the operator's own ask or existing knobs already settled, " <>
-      "one string each. The operator " <>
-      "will confirm or correct them; record the settled answers in the Initiative's ai_knobs."
-  end
-
-  defp confirmation_message(readback, assumptions, settled) do
-    assumptions_block =
-      case assumptions do
-        [] -> "Assumptions: none stated."
-        list -> "Assumptions:\n" <> Enum.map_join(list, "\n", &("- " <> &1))
-      end
-
-    settled_block =
-      case settled do
-        [] ->
-          nil
-
-        list ->
-          "Settled (operator-instructed or knobs):\n" <> Enum.map_join(list, "\n", &("- " <> &1))
-      end
-
-    closing =
-      "Decide: apply — apply this import as read back; correct — don't apply, " <>
-        "your corrections say what to change; hold — don't apply, have the agent " <>
-        "ask you more questions first."
-
-    [readback, settled_block, assumptions_block, closing]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join("\n\n")
-  end
-
-  defp confirm_timeout do
-    Application.get_env(:doit_mcp, :import_gate_confirm_timeout, @confirm_timeout)
-  end
-
-  defp presence(value) when is_binary(value) do
-    if String.trim(value) == "", do: nil, else: value
-  end
-
-  defp presence(_), do: nil
 end

@@ -1,23 +1,38 @@
 defmodule DoitMcp.Tools.DeleteTask do
   @moduledoc """
-  Soft-delete a task and its subtree. This does not permanently destroy
-  data; it is reversible — but only through the app's Undo, and only while
-  the deletion stays within the Initiative's undo history.
+  Soft-delete one task and its entire subtree; never delete included descendants separately. Recovery is only through the app's Undo, while the deletion remains in the Initiative's undo history.
 
-  Deleting more than a couple of tasks in one pass → use `apply_operations`
-  as one batch instead of looping this tool.
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool
 
+  alias DoitMcp.Tools.ExpectedVersion
   alias DoitMcp.{Client, ToolResult}
+
+  @expected_version_doc ExpectedVersion.description()
 
   schema do
     field(:task_id, :integer, required: true)
+
+    field(:expected_version, :integer,
+      required: false,
+      description: @expected_version_doc
+    )
   end
 
   def execute(params, frame) do
-    [%{"op" => "remove", "type" => "task", "id" => params.task_id}]
+    op = %{"op" => "remove", "type" => "task", "id" => params.task_id}
+
+    # `remove` carries no payload of its own; `data` appears only to guard the
+    # delete with a version.
+    op =
+      case ExpectedVersion.put(%{}, params) do
+        data when map_size(data) == 0 -> op
+        data -> Map.put(op, "data", data)
+      end
+
+    [op]
     |> Client.operations()
     |> then(&ToolResult.reply(frame, &1))
   end

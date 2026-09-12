@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+filter_interactive_shell_noise() {
+  local line
+  while IFS= read -r line; do
+    case "${line}" in
+      "bash: cannot set terminal process group "*|"bash: no job control in this shell") ;;
+      *) printf '%s\n' "${line}" >&2 ;;
+    esac
+  done
+}
+
+if [[ -z "${DOITLIST_API_TOKEN:-}" && -z "${DOITLIST_API_ENV_RETRY:-}" ]]; then
+  exec env DOITLIST_API_ENV_RETRY=1 bash -ic 'exec python3 "$@"' \
+    doitlist-api "${script_dir}/doitlist_api.py" "$@" \
+    2> >(filter_interactive_shell_noise)
+fi
+
+if [[ -z "${DOITLIST_API_TOKEN:-}" ]]; then
+  printf '%s\n' 'DOITLIST_API_TOKEN is not set.' >&2
+  exit 2
+fi
+
+exec python3 "${script_dir}/doitlist_api.py" "$@"

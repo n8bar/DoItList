@@ -33,6 +33,7 @@ defmodule DoIt.Accounts.ApiToken do
     token
     |> cast(attrs, [:label])
     |> update_change(:label, &normalize_label/1)
+    |> validate_required(:label)
     |> validate_length(:label, max: 100)
   end
 

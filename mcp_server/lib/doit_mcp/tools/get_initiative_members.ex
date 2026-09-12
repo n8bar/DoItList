@@ -1,9 +1,6 @@
 defmodule DoitMcp.Tools.GetInitiativeMembers do
   @moduledoc """
-  Read one Initiative's members and roles — mirrors
-  `GET /api/v1/initiatives/:id/members`. Tool twin of
-  `DoitMcp.Resources.InitiativeMembers`, for agents that only look for reads
-  in `tools/list`.
+  Read one Initiative's members and roles.
   """
 
   use Anubis.Server.Component, type: :tool

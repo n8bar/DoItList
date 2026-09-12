@@ -11,6 +11,17 @@ defmodule DoIt.Accounts.User do
     field :current_password, :string, virtual: true, redact: true
     field :theme, :string
 
+    # Set true to force a change-password redirect after login (e.g. an
+    # admin-issued temp password). Programmatic only — no changeset ever
+    # casts it from user params.
+    field :password_change_required, :boolean, default: false
+
+    # Execution provenance (m03.04 2.10.1): how this actor is acting right
+    # now. Nil = browser session (the default); the API token resolver stamps
+    # `%{kind: "api_token", token_id: id, token_label: label}` so event
+    # recording can say which actor performed a write. Never persisted.
+    field :provenance, :map, virtual: true
+
     timestamps(type: :utc_datetime)
   end
 

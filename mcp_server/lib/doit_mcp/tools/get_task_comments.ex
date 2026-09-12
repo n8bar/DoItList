@@ -1,18 +1,12 @@
 defmodule DoitMcp.Tools.GetTaskComments do
   @moduledoc """
-  Read one task's comments, including soft-delete tombstones — mirrors
-  `GET /api/v1/initiatives/:id/tasks/:task_id/comments`. Tool twin of
-  `DoitMcp.Resources.TaskComments`, for agents that only look for reads in
-  `tools/list`.
-
-  The Initiative's own thread is its root task's comments: to read it, pass
-  `task_id` = the Initiative payload's `root_task_id`.
+  Read one task's comments, including soft-delete tombstones. To read the Initiative's thread, use its `root_task_id` as `task_id`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool
 
-  alias DoitMcp.Client
   alias Anubis.Server.Response
+  alias DoitMcp.{Client, ToolResult}
 
   schema do
     field(:initiative_id, :integer, required: true)
@@ -24,7 +18,7 @@ defmodule DoitMcp.Tools.GetTaskComments do
 
     case Client.get(path) do
       {:ok, data} ->
-        {:reply, Response.json(Response.tool(), data), frame}
+        {:reply, Response.json(ToolResult.user_content(), data), frame}
 
       {:error, %{status: status, body: %{"error" => error}}} ->
         {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}

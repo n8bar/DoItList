@@ -4,6 +4,8 @@
 // three text shapes we deal with:
 //
 //   * user-typed text : prose + `%path` refs + `\`-escapes + literal `%`
+//     (a `path` is a dotted index label in ANY style — `1.2`, `I.A.2`, `III`,
+//     `B`, `iv` — resolved against the live tree, so unknown paths stay literal)
 //   * stored text     : prose + `%<id>` resolved tokens + `\`-escapes
 //   * edit-box text    : rehydrated stored text (tokens shown as `%path`)
 //
@@ -22,12 +24,28 @@
 const OPEN = "<";
 const CLOSE = ">";
 
-// A dotted-decimal reference path: `\d+(?:\.\d+)*`, anchored at `pos`.
+// One index-label segment. Covers every style `DoIt.Tasks.Index` emits:
+// numeric (`12`), roman upper/lower (`IV`, `iv`) and spreadsheet letters
+// upper/lower (`B`, `AA`, `b`). Roman numerals ARE letter runs, so a separate
+// `[IVXLCDM]+` alternative would accept exactly the same language as `[A-Z]+`
+// while giving every segment two ways to match; these three classes are
+// disjoint, so each segment matches one way and the grammar reads plainly.
+const SEGMENT = "\\d+|[A-Z]+|[a-z]+";
+
+// A dotted reference path — segments joined by single dots, ending at a
+// boundary (not followed by a letter, digit or underscore) so a word after `%`
+// is never wholly a candidate: `%1.2`, `%I.A.2`, `%III`, `%B` and `%iv` match,
+// while `%Important` and `%1st` do not. A path glued to junk (`%I.A.2x`) can
+// still match a shorter prefix that ends at a dot, exactly as the numeric
+// grammar did. Matching is only CANDIDACY; callers resolve each path through
+// the live label map and leave anything unknown (`%plan`, `%TODO`) literal.
+const PATH = new RegExp(`(?:${SEGMENT})(?:\\.(?:${SEGMENT}))*(?![A-Za-z0-9_])`, "y");
+
+// A reference path anchored at `pos`.
 // Returns the matched path string, or null if there is no path at `pos`.
 function matchPathAt(text, pos) {
-  const re = /\d+(?:\.\d+)*/y;
-  re.lastIndex = pos;
-  const m = re.exec(text);
+  PATH.lastIndex = pos;
+  const m = PATH.exec(text);
   return m ? m[0] : null;
 }
 

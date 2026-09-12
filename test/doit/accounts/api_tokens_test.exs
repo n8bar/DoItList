@@ -43,9 +43,9 @@ defmodule DoIt.Accounts.ApiTokensTest do
              ) == 0
     end
 
-    test "blank label is normalized to nil" do
-      {:ok, {_pt, token}} = Accounts.mint_api_token(user(), "   ")
-      assert token.label == nil
+    test "a blank label is rejected — the label is required" do
+      assert {:error, changeset} = Accounts.mint_api_token(user(), "   ")
+      assert %{label: [_ | _]} = errors_on(changeset)
     end
 
     test "an over-long label is rejected" do

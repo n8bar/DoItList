@@ -20,6 +20,11 @@ defmodule DoIt.Tasks.Task do
     field :sort_order, :integer, default: 0
     field :sort_mode, :string
     field :sort_reverse, :boolean, default: false
+    # Conditional writes (m03.04 2.7.4): integer revision counter, bumped
+    # DB-side (version = version + 1) on every intent-bearing write — never
+    # cast from params, and never bumped by derived computed_progress
+    # recomputes. Callers may send expected_version to refuse a stale write.
+    field :version, :integer, default: 1
     # Soft-delete (m02.06): a deleted task keeps its row (id, comments,
     # co-assignees, events all preserved) so undo / Trash can restore it. Set
     # programmatically — never cast from user params. Reads filter it out.
@@ -80,6 +85,9 @@ defmodule DoIt.Tasks.Task do
     ])
     |> validate_required([:title, :initiative_id, :created_by_id])
     |> validate_length(:title, min: 1, max: 200)
+    # The 8000 cap is stated in the MCP adapter's apply_operations tool words
+    # (m03.04 2.5.2) and pinned by its description guardrail test — a
+    # retune here (both changesets) must update both.
     |> validate_length(:description, max: 8000)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)
@@ -104,6 +112,7 @@ defmodule DoIt.Tasks.Task do
     ])
     |> validate_required([:title])
     |> validate_length(:title, min: 1, max: 200)
+    # Keep-in-sync: see create_changeset's description-cap note.
     |> validate_length(:description, max: 8000)
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)

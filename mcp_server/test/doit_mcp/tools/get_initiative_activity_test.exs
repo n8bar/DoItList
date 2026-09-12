@@ -1,6 +1,10 @@
 defmodule DoitMcp.Tools.GetInitiativeActivityTest do
   use ExUnit.Case, async: true
 
+  # m03.04 3.5.1 — the user-content marker opens every reply carrying titles,
+  # descriptions, or comments.
+  @user_content DoitMcp.ToolResult.user_content_line()
+
   alias DoitMcp.Tools.GetInitiativeActivity
   alias Anubis.Server.Response
 
@@ -21,8 +25,95 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == %{"activity" => []}
+  end
+
+  # Execution provenance (m03.04 2.10.1) rides the API payload through
+  # untouched — the MCP read serves whatever the activity endpoint says.
+  test "passes provenance fields through untouched" do
+    event = %{
+      "id" => 555,
+      "kind" => "created",
+      "task_id" => 101,
+      "actor_kind" => "api_token",
+      "api_token_id" => 3,
+      "api_token_label" => "planning agent"
+    }
+
+    legacy = %{"id" => 554, "kind" => "created", "task_id" => 100, "actor_kind" => nil}
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      Req.Test.json(conn, %{"data" => [event, legacy]})
+    end)
+
+    frame = %{test: true}
+    assert {:reply, response, ^frame} = GetInitiativeActivity.execute(%{initiative_id: 7}, frame)
+
+    protocol = Response.to_protocol(response)
+    assert protocol["isError"] == false
+
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
+    assert Jason.decode!(text) == [event, legacy]
+  end
+
+  # Deletion ids (m03.04 2.10.2) likewise ride the API payload through
+  # untouched — `deleted_task_id`/`deleted_ids` reach the MCP client as served.
+  test "passes deletion id fields through untouched" do
+    event = %{
+      "id" => 556,
+      "kind" => "child_deleted",
+      "task_id" => 101,
+      "data" => %{"title" => "Branch"},
+      "deleted_task_id" => 102,
+      "deleted_ids" => [102, 103, 104]
+    }
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      Req.Test.json(conn, %{"data" => [event]})
+    end)
+
+    frame = %{test: true}
+    assert {:reply, response, ^frame} = GetInitiativeActivity.execute(%{initiative_id: 7}, frame)
+
+    protocol = Response.to_protocol(response)
+    assert protocol["isError"] == false
+
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
+    assert Jason.decode!(text) == [event]
+  end
+
+  # Cascade exposure (m03.04 2.10.3) likewise rides the API payload through
+  # untouched — `cascaded_ids` reaches the MCP client as served.
+  test "passes cascade id fields through untouched" do
+    event = %{
+      "id" => 557,
+      "kind" => "status_changed",
+      "task_id" => 101,
+      "data" => %{"from" => "open", "to" => "done"},
+      "cascaded_ids" => [100, 42]
+    }
+
+    Req.Test.stub(DoitMcp.Client, fn conn ->
+      Req.Test.json(conn, %{"data" => [event]})
+    end)
+
+    frame = %{test: true}
+    assert {:reply, response, ^frame} = GetInitiativeActivity.execute(%{initiative_id: 7}, frame)
+
+    protocol = Response.to_protocol(response)
+    assert protocol["isError"] == false
+
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
+    assert Jason.decode!(text) == [event]
   end
 
   test "omits the query entirely when no optional filters are given" do
@@ -37,7 +128,9 @@ defmodule DoitMcp.Tools.GetInitiativeActivityTest do
     protocol = Response.to_protocol(response)
     assert protocol["isError"] == false
 
-    assert [%{"type" => "text", "text" => text}] = protocol["content"]
+    assert [%{"text" => @user_content}, %{"type" => "text", "text" => text}] =
+             protocol["content"]
+
     assert Jason.decode!(text) == %{"activity" => []}
   end
 end

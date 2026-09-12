@@ -1,21 +1,12 @@
 defmodule DoitMcp.Tools.GetInitiativeActivity do
   @moduledoc """
-  Read one Initiative's paginated activity rollup, optionally scoped to a
-  task's subtree — mirrors `GET /api/v1/initiatives/:id/activity`.
-
-  The equivalent resource (`DoitMcp.Resources.InitiativeActivity`) can only
-  ever return the unfiltered first page: MCP resources carry no structured
-  arguments, only a bare URI, and this server's URI-template support (RFC 6570
-  Levels 1-2 only) can't carry an optional query tail. A tool gets a real
-  input schema, so this is the only way a client can actually drive
-  `task_id`/`limit`/`offset`. Read-only; it's a tool rather than a mutation
-  only because that's the sole way this filtered read is reachable.
+  Read one Initiative's activity. `task_id` scopes it to that task's subtree; `limit` and `offset` paginate — use this tool whenever either is needed. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool
 
-  alias DoitMcp.Client
   alias Anubis.Server.Response
+  alias DoitMcp.{Client, ToolResult}
 
   schema do
     field(:initiative_id, :integer, required: true)
@@ -31,7 +22,7 @@ defmodule DoitMcp.Tools.GetInitiativeActivity do
 
     case Client.get("/api/v1/initiatives/#{params.initiative_id}/activity", query) do
       {:ok, data} ->
-        {:reply, Response.json(Response.tool(), data), frame}
+        {:reply, Response.json(ToolResult.user_content(), data), frame}
 
       {:error, %{status: status, body: %{"error" => error}}} ->
         {:reply, Response.error(Response.tool(), "(#{status}) #{error["message"]}"), frame}

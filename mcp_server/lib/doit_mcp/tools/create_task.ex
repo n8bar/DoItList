@@ -1,9 +1,8 @@
 defmodule DoitMcp.Tools.CreateTask do
   @moduledoc """
-  Create a task. Give `parent_id` to nest under an existing task, or
-  `initiative_id` alone to create it top-level (parented to that Initiative's
-  root task) — mirrors `add task` in the Arc 1 op table. `title` and
-  `description` accept `%<task_id>` cross-reference tokens.
+  Create one task. `parent_id` nests it under an existing task; `initiative_id` alone places it at the Initiative's top level. `title` and `description` accept `%<task_id>` cross-reference tokens.
+
+  Never loop this tool; batch multiple operations with `apply_operations`. Reply with `index` and `title`, never ids.
   """
 
   use Anubis.Server.Component, type: :tool
@@ -19,6 +18,7 @@ defmodule DoitMcp.Tools.CreateTask do
     field(:assignee_id, :integer, required: false)
     field(:manual_progress, :integer, required: false)
     field(:position, :integer, required: false)
+    field(:done, :boolean, required: false)
   end
 
   def execute(params, frame) do
@@ -32,7 +32,8 @@ defmodule DoitMcp.Tools.CreateTask do
         :priority,
         :assignee_id,
         :manual_progress,
-        :position
+        :position,
+        :done
       ])
       |> Map.reject(fn {_k, v} -> is_nil(v) end)
 

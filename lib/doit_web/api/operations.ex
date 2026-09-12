@@ -56,8 +56,8 @@ defmodule DoItWeb.Api.Operations do
 
   | op       | type           | `data` / discriminator                         | context fn                              | capability        |
   |----------|----------------|------------------------------------------------|-----------------------------------------|-------------------|
-  | `add`    | `task`         | `initiative_id`/`initiative_lid`, `parent_id`/`parent_lid`, `title`, `priority`, `assignee_id`, `manual_progress`, `position` | `Tasks.create_task/2`                   | edit              |
-  | `update` | `task`         | field edits: `title`/`description`/`priority`/`assignee_id`/`manual_progress` | `Tasks.update_task/3`                    | edit              |
+  | `add`    | `task`         | `initiative_id`/`initiative_lid`, `parent_id`/`parent_lid`, `title`, `priority`, `assignee_id`, `manual_progress`, `position`, `numbered_title` | `Tasks.create_task/2`                   | edit              |
+  | `update` | `task`         | field edits: `title`/`description`/`priority`/`assignee_id`/`manual_progress`, `numbered_title` | `Tasks.update_task/3`                    | edit              |
   | `update` | `task`         | `done: true`/`false`                           | `Tasks.cascade_complete/2` / `…incomplete/2` | edit         |
   | `update` | `task`         | `parent_id`/`parent_lid` and/or `position`/`reorder` | `Tasks.move_task/3`                | edit              |
   | `update` | `task`         | `co_assignee_ids: [..]`                         | `Tasks.add/remove/reorder_co_assignee(s)` | edit            |
@@ -118,6 +118,12 @@ defmodule DoItWeb.Api.Operations do
   ever touch the caller's own membership row); a notification op authorizes by
   ownership. A single unauthorized op fails the **whole** batch.
 
+  **Agent access** (m03.04 2.4.1.2): every per-op authorize runs through
+  `Authz.fetch_initiative/3`, so an op targeting an Initiative with agent access
+  **off** fails `not_found` before any work — masked to the op's own target
+  shape (a task/comment inside it reads as "no such task/comment"), so the
+  response never confirms a flagged-off Initiative or its contents exist.
+
   ## Irreversible ops — rejected
 
   Permanent delete / empty-Trash, transfer of ownership, and account
@@ -164,7 +170,22 @@ defmodule DoItWeb.Api.Operations do
   rejection), `forbidden` (authz / author-only), `not_found` (a target or
   referenced resource is missing), `bad_reference` (a bad/forward/foreign/
   duplicate lid), `unsupported_op` (unknown verb/type/combination),
-  `irreversible_op` (a rejected irreversible op).
+  `irreversible_op` (a rejected irreversible op), `conflict` (a stale
+  `expected_version` — see below).
+
+  ## Conditional writes (m03.04 2.7.4)
+
+  Task and Initiative reads carry an integer `version` — a revision counter
+  bumped on every intent-bearing write to the record, never by derived
+  roll-up recomputes. An `update task`, `update initiative`, or `remove task`
+  op may carry `expected_version` in its `data`: on mismatch nothing applies
+  (the batch rolls back, HTTP **409**), and the per-op `conflict` error
+  carries the serialized **current** record under `current` so the caller
+  re-reads from the response, reconciles, and retries with the fresh version.
+  The compare runs under a row lock inside the batch transaction
+  (`Tasks.check_version/2` / `Initiatives.check_version/2`), so a match can't
+  be invalidated before the write commits. An omitted `expected_version` is
+  exactly today's unconditional write.
   """
 
   import Ecto.Query, only: [from: 2]
@@ -173,24 +194,33 @@ defmodule DoItWeb.Api.Operations do
   alias DoIt.Accounts.User
   alias DoIt.Initiatives.Initiative
   alias DoIt.Notifications.Notification
-  alias DoIt.Tasks.{Comment, Task}
+  alias DoIt.Tasks.{Comment, Index, Task}
   alias DoItWeb.Api.Authz
 
   @types ~w(task initiative comment member notification link)
   @verbs ~w(add update remove)
 
   # Hard cap on ops per batch, enforced before any DB work (see apply_batch/2).
-  # The whole batch runs in one synchronous Repo.transaction, which is bound by
-  # the 15 s transaction timeout — breach it and the entire batch fails. A
-  # cascade-heavy benchmark (dev-over-docker) ran roughly linear at ~40-55 ms/op;
-  # 250 ops took ~11 s and 200 breached 15 s once under added load. 150 ops
-  # (~6-8 s in that pessimistic env, far less in prod) keeps ~2x headroom while
-  # staying a useful atomic batch.
+  # A cascade-heavy benchmark (dev-over-docker) ran roughly linear at ~40-55 ms/op;
+  # 250 ops took ~11 s and 200 breached the old 15 s default once under load.
+  # 150 ops (~6-8 s in that pessimistic env, far less in prod) stays a useful
+  # atomic batch, well inside the deliberate transaction bound below.
   @max_batch_size 150
+
+  # The whole batch runs in ONE synchronous Repo.transaction (m03.04 2.7.2).
+  # The timeout is DELIBERATE — a generous cushion over the worst-case cap batch
+  # on a grown tree (~15-20 s observed on a thrashing shared host), not the
+  # driver's tight 15 s default, which a legit batch breaches under load and
+  # dies spuriously. The adapter's HTTP receive timeout sits ABOVE this
+  # (DoitMcp.Client, 90 s) so the client never gives up while the server is
+  # still legitimately working.
+  @batch_transaction_timeout 60_000
 
   # Initiative-content fields an `update initiative` may set (owner_id and any
   # other column are intentionally excluded — see "Irreversible ops").
-  @initiative_content_fields ~w(name description progress_calc index_style ai_knobs auto_promote_co_assignees viewer_plus)
+  # AI-KNOBS-PARKED (m03.04): `ai_knobs` removed from the writable set so the API
+  # won't accept it pending the skill rebuild; column retained. Revive: re-add it.
+  @initiative_content_fields ~w(name description progress_calc index_style auto_promote_co_assignees viewer_plus)
 
   # The `data` keys each wired {verb, type} accepts, derived from every dispatch
   # path. Drives validate_data_keys/3 — the fail-fast targeted-hint check that
@@ -200,12 +230,13 @@ defmodule DoItWeb.Api.Operations do
   # notification, update link) so its own error is never preempted.
   @accepted_data_keys %{
     {"add", "task"} =>
-      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status),
+      ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done numbered_title),
     {"update", "task"} =>
-      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress),
-    {"remove", "task"} => [],
+      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version numbered_title),
+    {"remove", "task"} => ~w(expected_version),
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
-    {"update", "initiative"} => @initiative_content_fields ++ ~w(subtitle state owner_id),
+    {"update", "initiative"} =>
+      @initiative_content_fields ++ ~w(subtitle state owner_id expected_version),
     {"add", "comment"} => ~w(task_id task_lid task body),
     {"update", "comment"} => ~w(body),
     {"remove", "comment"} => [],
@@ -217,12 +248,18 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target)
   }
 
-  @typedoc "A per-op error carries the wire code, message, an optional field pointer, and the batch HTTP status it implies."
+  @typedoc """
+  A per-op error carries the wire code, message, an optional field pointer, and
+  the batch HTTP status it implies. A version conflict (m03.04 2.7.4) also
+  carries `current` — the serialized current record, so the caller can re-read
+  from the response.
+  """
   @type op_error :: %{
+          optional(:current) => map(),
           code: String.t(),
           message: String.t(),
           pointer: String.t() | nil,
-          http: 403 | 422
+          http: 403 | 409 | 422
         }
 
   @doc """
@@ -262,6 +299,16 @@ defmodule DoItWeb.Api.Operations do
 
   def apply_batch(_user, _operations), do: {:error, :invalid_request}
 
+  @doc """
+  The hard cap on operations per batch — the size a caller must chunk to.
+
+  Public because `DoItWeb.Api.Imports` (m03.04 2.3.4) splits a parsed document
+  into cap-sized batches, one transaction each; the cap and its rationale stay
+  owned here.
+  """
+  @spec max_batch_size() :: pos_integer()
+  def max_batch_size, do: @max_batch_size
+
   defp apply_within_cap(%User{} = user, operations, count) do
     # Drop any broadcast residue a PRIOR raised request left queued on THIS
     # process. DoIt.Broadcast queues in the process dictionary, and Bandit
@@ -284,9 +331,29 @@ defmodule DoItWeb.Api.Operations do
           run_op(user, op, index, changes)
         end)
       end)
+      # Batch-end roll-up (m03.04 2.7.5.3): each op deferred its ancestor
+      # recompute into the batch scope below; reconcile every touched branch
+      # ONCE here — the batch's final step, still inside the transaction, so
+      # committed rows and queued broadcasts carry final values. Per-op
+      # results are unaffected: they echo only the op's own row, which each
+      # op wrote synchronously.
+      |> Ecto.Multi.run(:rollup, fn _repo, _changes ->
+        {:ok, Tasks.flush_deferred_rollup()}
+      end)
 
     try do
-      result = Repo.transaction(multi)
+      # Two batch scopes in the with_resort_batching pattern (m03.04 2.7.5.2/.3),
+      # both torn down in their own `after`: the read memo (Initiative rows,
+      # member roles, user preferences, resolved sort chains — busted by any
+      # same-batch write to the entity) and the roll-up deferral the :rollup
+      # step flushes. Single-op paths never enter either scope.
+      result =
+        DoIt.BatchMemo.with_scope(fn ->
+          Tasks.with_deferred_rollup(fn ->
+            Repo.transaction(multi, timeout: @batch_transaction_timeout)
+          end)
+        end)
+
       # Every PubSub message queued by a context fn during the batch (task,
       # member, AND notification broadcasts all route through DoIt.Broadcast)
       # fires now on commit, or is dropped on rollback — the all-or-nothing
@@ -352,7 +419,10 @@ defmodule DoItWeb.Api.Operations do
 
   defp wire_error(%{code: code, message: message} = err) do
     base = %{code: code, message: message}
-    if err[:pointer], do: Map.put(base, :pointer, err[:pointer]), else: base
+    base = if err[:pointer], do: Map.put(base, :pointer, err[:pointer]), else: base
+    # A version conflict carries the CURRENT record (m03.04 2.7.4) so the
+    # caller can re-read straight from the response.
+    if err[:current], do: Map.put(base, :current, err[:current]), else: base
   end
 
   defp maybe_put_lid(map, nil), do: map
@@ -423,7 +493,7 @@ defmodule DoItWeb.Api.Operations do
 
   # Build the targeted per-op error for the first unrecognized `data` key. The
   # message names the bad field and then either lists the op's accepted keys
-  # (sorted) or, for an op that takes no data (remove task/comment), says so.
+  # (sorted) or, for an op that takes no data (remove comment), says so.
   # Pointer = key.
   defp unknown_field_error(verb, type, key, accepted) do
     message =
@@ -438,6 +508,28 @@ defmodule DoItWeb.Api.Operations do
 
     err(:unprocessable_entity, message, 422, key)
   end
+
+  # `done` on an add is the completion word (m03.04 2.5.4) — one word across
+  # add and update, so a completed source item is one op, not an add plus a
+  # flip. It becomes the create path's `status: "done"` — which rolls up and
+  # reconciles ancestors exactly like a post-create flip — with progress
+  # snapped to 100 the way `Tasks.maybe_set_done_progress/2` snaps a flip;
+  # `false` is the open default. Non-boolean: the update op's own 422.
+  defp add_done_to_status(%{"done" => done} = data) do
+    case done do
+      true ->
+        {:ok,
+         data |> Map.delete("done") |> Map.merge(%{"status" => "done", "manual_progress" => 100})}
+
+      false ->
+        {:ok, Map.delete(data, "done")}
+
+      _ ->
+        {:error, err(:unprocessable_entity, "\"done\" must be true or false.", 422, "done")}
+    end
+  end
+
+  defp add_done_to_status(data), do: {:ok, data}
 
   defp fetch_verb(%{"op" => verb}) when verb in @verbs, do: {:ok, verb}
 
@@ -458,13 +550,13 @@ defmodule DoItWeb.Api.Operations do
   # ---- task -----------------------------------------------------------------
 
   defp dispatch(user, "add", "task", op, changes) do
-    data = data(op)
-
     with {:ok, lid} <- register_lid(op, changes),
-         {:ok, initiative_id, parent_id} <- resolve_task_parentage(data, changes),
-         {:ok, %Task{} = parent} <- load_task(parent_id),
+         {:ok, data} <- add_done_to_status(data(op)),
+         {:ok, initiative_id, parent_id, parent_ref} <- resolve_task_parentage(data, changes),
+         {:ok, %Task{} = parent} <- load_parent(parent_id, parent_ref),
          :ok <- parent_in_initiative(parent, initiative_id),
          {:ok, initiative} <- authorize(user, initiative_id, :edit),
+         :ok <- check_title_numbering(initiative, data),
          :ok <- validate_assignee_membership(initiative.id, data) do
       attrs =
         data
@@ -480,15 +572,29 @@ defmodule DoItWeb.Api.Operations do
   end
 
   defp dispatch(user, "update", "task", op, changes) do
+    data = data(op)
+
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit) do
-      update_task_by_concern(user, task, data(op), changes)
+         {:ok, initiative} <-
+           authorize(user, task.initiative_id, :edit, task_not_found(task.id)),
+         {:ok, expected} <- fetch_expected_version(data),
+         :ok <- check_task_version(task, expected),
+         :ok <- check_title_numbering(initiative, data) do
+      update_task_by_concern(
+        user,
+        task,
+        Map.drop(data, ~w(expected_version numbered_title)),
+        changes
+      )
     end
   end
 
   defp dispatch(user, "remove", "task", op, changes) do
     with {:ok, %Task{} = task} <- fetch_task_target(op, changes),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit) do
+         {:ok, _initiative} <-
+           authorize(user, task.initiative_id, :edit, task_not_found(task.id)),
+         {:ok, expected} <- fetch_expected_version(data(op)),
+         :ok <- check_task_version(task, expected) do
       case Tasks.delete_task(task, user) do
         {:ok, deleted} ->
           ok(nil, deleted.id, "task", Map.put(task_result(deleted), :deleted, true))
@@ -507,7 +613,10 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, lid} <- register_lid(op, changes) do
       attrs = take(data, @initiative_content_fields)
 
-      case Initiatives.create_initiative(user, attrs) do
+      # API/MCP-created Initiatives are agent-accessible from birth (m03.04
+      # m03.04 2.4.1.1) — granted server-side by the context, never cast from the
+      # op's data (agent_access isn't an accepted key above).
+      case Initiatives.create_initiative(user, attrs, agent_access: true) do
         {:ok, initiative} ->
           with :ok <- maybe_set_subtitle(initiative, data) do
             ok(lid, initiative.id, "initiative", initiative_result(initiative))
@@ -541,10 +650,20 @@ defmodule DoItWeb.Api.Operations do
          )}
 
       Map.has_key?(data, "state") ->
-        update_initiative_state(user, op, data["state"], changes)
+        with {:ok, expected} <- fetch_expected_version(data) do
+          update_initiative_state(user, op, data["state"], expected, changes)
+        end
 
       true ->
-        update_initiative_content(user, op, data, changes)
+        with {:ok, expected} <- fetch_expected_version(data) do
+          update_initiative_content(
+            user,
+            op,
+            Map.delete(data, "expected_version"),
+            expected,
+            changes
+          )
+        end
     end
   end
 
@@ -556,7 +675,7 @@ defmodule DoItWeb.Api.Operations do
     with {:ok, lid} <- register_lid(op, changes),
          {:ok, task_id} <- resolve_ref_field(data, "task", changes, "task", required: true),
          {:ok, %Task{} = task} <- load_task(task_id),
-         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit) do
+         {:ok, _initiative} <- authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
       case Tasks.add_comment(task, user, data["body"]) do
         {:ok, comment} -> ok(lid, comment.id, "comment", comment_result(comment))
         {:error, reason} -> {:error, context_error(reason)}
@@ -705,7 +824,8 @@ defmodule DoItWeb.Api.Operations do
 
     with {:ok, lid} <- register_lid(op, changes),
          {:ok, source} <- resolve_link_endpoint(data, "source", changes),
-         {:ok, _initiative} <- authorize(user, source.initiative_id, :edit),
+         {:ok, _initiative} <-
+           authorize(user, source.initiative_id, :edit, task_not_found(source.id)),
          {:ok, target} <- resolve_link_endpoint(data, "target", changes),
          :ok <- distinct_link_endpoints(source, target),
          :ok <- same_initiative_link(source, target) do
@@ -720,7 +840,8 @@ defmodule DoItWeb.Api.Operations do
     data = data(op)
 
     with {:ok, source} <- resolve_link_endpoint_any(data, "source", changes),
-         {:ok, _initiative} <- authorize(user, source.initiative_id, :edit),
+         {:ok, _initiative} <-
+           authorize(user, source.initiative_id, :edit, task_not_found(source.id)),
          {:ok, target} <- resolve_link_endpoint_any(data, "target", changes) do
       case Tasks.remove_link(source, target) do
         {:ok, link} ->
@@ -798,6 +919,27 @@ defmodule DoItWeb.Api.Operations do
        )}
 
   # --- task update: dispatch by concern --------------------------------------
+
+  # --- positional numbering in titles (m03.04 6.4) ---------------------------
+  #
+  # An Initiative with an index supplies each Task's number; a title that opens
+  # with its own (`1.`, `2.3`, `4)`, `I.`, `A)`) would show it twice. Refuse it
+  # unless the caller passes `numbered_title: true` — the override for when the
+  # user asked for the prefix. The flag never reaches the changeset: `take`
+  # (add) and `Map.drop` (update) strip it.
+  @numbering_message "Titles carry no positional numbering; the Initiative's index supplies it. " <>
+                       "Retry without the prefix, or pass `numbered_title: true` if the user asked for it."
+
+  defp check_title_numbering(%Initiative{index_style: style}, %{"title" => title} = data)
+       when is_binary(title) and style not in [nil, "none"] do
+    if data["numbered_title"] == true or not Index.positional_prefix?(title) do
+      :ok
+    else
+      {:error, err(:unprocessable_entity, @numbering_message, 422, "title")}
+    end
+  end
+
+  defp check_title_numbering(_initiative, _data), do: :ok
 
   defp update_task_by_concern(user, task, data, changes) do
     structural? = Enum.any?(~w(parent_id parent_lid position reorder), &Map.has_key?(data, &1))
@@ -938,7 +1080,7 @@ defmodule DoItWeb.Api.Operations do
 
   # --- initiative update helpers ---------------------------------------------
 
-  defp update_initiative_state(user, op, state, changes) do
+  defp update_initiative_state(user, op, state, expected, changes) do
     {capability, fun} =
       case state do
         "archived" -> {:view, &Initiatives.archive_initiative/2}
@@ -960,7 +1102,8 @@ defmodule DoItWeb.Api.Operations do
        )}
     else
       with {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
-           {:ok, initiative} <- authorize(user, initiative_id, capability) do
+           {:ok, initiative} <- authorize(user, initiative_id, capability),
+           :ok <- check_initiative_version(initiative, expected) do
         case fun.(user, initiative) do
           {:ok, _} ->
             ok(nil, initiative.id, "initiative", %{
@@ -981,9 +1124,10 @@ defmodule DoItWeb.Api.Operations do
   defp trash(_user, initiative), do: Initiatives.trash_initiative(initiative)
   defp restore(_user, initiative), do: Initiatives.restore_initiative(initiative)
 
-  defp update_initiative_content(user, op, data, changes) do
+  defp update_initiative_content(user, op, data, expected, changes) do
     with {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
-         {:ok, initiative} <- authorize(user, initiative_id, :edit) do
+         {:ok, initiative} <- authorize(user, initiative_id, :edit),
+         :ok <- check_initiative_version(initiative, expected) do
       attrs = take(data, @initiative_content_fields)
 
       with {:ok, initiative} <- maybe_update_initiative(initiative, attrs),
@@ -1010,6 +1154,85 @@ defmodule DoItWeb.Api.Operations do
   defp maybe_set_subtitle(_initiative, _data), do: :ok
 
   defp reload_initiative(%Initiative{id: id}), do: Initiatives.get_initiative(id)
+
+  # --- conditional writes (m03.04 2.7.4) -----------------------------------
+  #
+  # An update op (and `remove task`) may carry `expected_version` — the
+  # `version` from the caller's last read. The compare runs in the domain
+  # contexts under a row lock (`Tasks.check_version/2` /
+  # `Initiatives.check_version/2`), inside the batch's transaction, so a match
+  # can't be invalidated before the write commits. On mismatch the per-op
+  # `conflict` error (batch HTTP 409) carries the CURRENT record so the caller
+  # re-reads from the response. Omitted = exactly the unconditional write.
+
+  defp fetch_expected_version(data) do
+    case Map.get(data, "expected_version") do
+      nil ->
+        {:ok, nil}
+
+      n when is_integer(n) ->
+        {:ok, n}
+
+      other ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "expected_version must be an integer version from a read (got #{inspect(other)}).",
+           422,
+           "expected_version"
+         )}
+    end
+  end
+
+  defp check_task_version(_task, nil), do: :ok
+
+  defp check_task_version(task, expected) do
+    case Tasks.check_version(task, expected) do
+      :ok ->
+        :ok
+
+      {:error, {:version_conflict, current}} ->
+        {:error,
+         version_conflict_error("Task", current.id, current.version, task_result(current))}
+
+      {:error, :not_found} ->
+        {:error, task_not_found(task.id)}
+    end
+  end
+
+  defp check_initiative_version(_initiative, nil), do: :ok
+
+  defp check_initiative_version(initiative, expected) do
+    case Initiatives.check_version(initiative, expected) do
+      :ok ->
+        :ok
+
+      {:error, {:version_conflict, current}} ->
+        {:error,
+         version_conflict_error(
+           "Initiative",
+           current.id,
+           current.version,
+           initiative_result(current)
+         )}
+
+      {:error, :not_found} ->
+        {:error, err(:not_found, "No such Initiative with id #{initiative.id}.", 422)}
+    end
+  end
+
+  defp version_conflict_error(noun, id, current_version, current) do
+    %{
+      code: "conflict",
+      message:
+        "#{noun} #{id} is at version #{current_version} — it changed since your read. " <>
+          "Nothing was applied. Re-read from this error's `current` record, reconcile your " <>
+          "change with it, then retry with the fresh expected_version.",
+      pointer: "expected_version",
+      http: 409,
+      current: current
+    }
+  end
 
   # --- reference / lid resolution --------------------------------------------
 
@@ -1118,7 +1341,8 @@ defmodule DoItWeb.Api.Operations do
   # or derived from the resolved parent task.
   defp resolve_task_parentage(data, changes) do
     with {:ok, parent_id} <- resolve_ref_field(data, "parent", changes, "task", required: false),
-         {:ok, initiative_id} <- resolve_initiative_for_create(data, changes, parent_id) do
+         {:ok, initiative_id, loaded_parent} <-
+           resolve_initiative_for_create(data, changes, parent_id) do
       cond do
         is_nil(initiative_id) ->
           {:error,
@@ -1140,11 +1364,13 @@ defmodule DoItWeb.Api.Operations do
         # still apply to the root parent unchanged.
         is_nil(parent_id) ->
           with {:ok, root_id} <- initiative_root_task_id(initiative_id) do
-            {:ok, initiative_id, root_id}
+            {:ok, initiative_id, root_id, :derived}
           end
 
         true ->
-          {:ok, initiative_id, parent_id}
+          # When the Initiative was derived FROM the parent, that load is
+          # threaded through so load_parent/2 doesn't repeat it (m03.04 2.7.5).
+          {:ok, initiative_id, parent_id, loaded_parent || :explicit}
       end
     end
   end
@@ -1172,20 +1398,26 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  # Returns {:ok, initiative_id, loaded_parent}: when the Initiative is derived
+  # from the parent task, the loaded (and agent-access-masked) parent rides
+  # along so the create path doesn't load it a second time.
   defp resolve_initiative_for_create(data, changes, parent_id) do
     cond do
       is_binary(data["initiative_lid"]) or Map.has_key?(data, "initiative_id") or
           Map.has_key?(data, "initiative") ->
-        resolve_ref_field(data, "initiative", changes, "initiative", required: false)
+        with {:ok, initiative_id} <-
+               resolve_ref_field(data, "initiative", changes, "initiative", required: false) do
+          {:ok, initiative_id, nil}
+        end
 
       not is_nil(parent_id) ->
         case load_task(parent_id) do
-          {:ok, %Task{initiative_id: id}} -> {:ok, id}
+          {:ok, %Task{initiative_id: id} = parent} -> {:ok, id, parent}
           error -> error
         end
 
       true ->
-        {:ok, nil}
+        {:ok, nil, nil}
     end
   end
 
@@ -1307,11 +1539,29 @@ defmodule DoItWeb.Api.Operations do
 
   # --- loaders & authz -------------------------------------------------------
 
+  # An explicitly named parent is a caller reference — mask a flagged-off target
+  # as no-such-task (load_task). A DERIVED root parent (the caller named only the
+  # Initiative, so its root became the parent) loads unmasked: authorize then
+  # masks it to the Initiative shape the caller actually referenced, keeping the
+  # flagged-off error indistinguishable from a nonexistent Initiative here. A
+  # parent that resolve_initiative_for_create/3 already loaded (and masked) is
+  # reused, not re-fetched (m03.04 2.7.5).
+  defp load_parent(_id, %Task{} = loaded), do: {:ok, loaded}
+
+  defp load_parent(id, :explicit), do: load_task(id)
+
+  defp load_parent(id, :derived) do
+    case Tasks.get_task(id) do
+      %Task{deleted_at: nil} = task -> {:ok, task}
+      _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
+    end
+  end
+
   defp load_task(nil), do: {:error, err(:not_found, "No such task.", 422)}
 
   defp load_task(id) do
     case Tasks.get_task(id) do
-      %Task{deleted_at: nil} = task -> {:ok, task}
+      %Task{deleted_at: nil} = task -> mask_agent_access(task, id)
       _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
     end
   end
@@ -1322,8 +1572,23 @@ defmodule DoItWeb.Api.Operations do
 
   defp load_task_any(id) do
     case Tasks.get_task(id) do
-      %Task{} = task -> {:ok, task}
+      %Task{} = task -> mask_agent_access(task, id)
       nil -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
+    end
+  end
+
+  # A task inside an agent-access-off Initiative reads as nonexistent (m03.04
+  # m03.04 2.4.1.2). Masking lives at the task-resolution funnel — not behind each
+  # op's authorize override — so EVERY path that reaches a task (a `parent_id`,
+  # a link endpoint, a target ref) inherits the no-existence-leak guarantee by
+  # default, and a future op path can't reintroduce the leak by forgetting an
+  # override. The masked error is byte-identical to a nonexistent id, and never
+  # names the foreign Initiative. Role-based denial on an *accessible*
+  # Initiative is unaffected — that still 403s at authorize downstream.
+  defp mask_agent_access(%Task{} = task, id) do
+    case Initiatives.get_initiative(task.initiative_id) do
+      %Initiative{agent_access: true} -> {:ok, task}
+      _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
     end
   end
 
@@ -1341,14 +1606,22 @@ defmodule DoItWeb.Api.Operations do
 
   # Resolve the Initiative and run the capability check through the SAME role
   # predicates the LiveView uses. fetch_initiative returns :not_found (unknown
-  # id) or :forbidden (role denies); map both onto per-op errors.
-  defp authorize(%User{} = user, initiative_id, capability) do
+  # id, or agent access off — m03.04 2.4.1.2) or :forbidden (role denies);
+  # map both onto per-op errors. `not_found_override` masks the not-found for
+  # task/comment-targeted ops: a target inside a flagged-off Initiative must
+  # fail EXACTLY like a nonexistent target (same code + message as load_task /
+  # fetch_comment_target), never confirming it exists or naming its Initiative.
+  defp authorize(user, initiative_id, capability, not_found_override \\ nil)
+
+  defp authorize(%User{} = user, initiative_id, capability, not_found_override) do
     case Authz.fetch_initiative(user, initiative_id, capability) do
       {:ok, %Initiative{} = initiative} ->
         {:ok, initiative}
 
       {:error, :not_found} ->
-        {:error, err(:not_found, "No such Initiative with id #{initiative_id}.", 422)}
+        {:error,
+         not_found_override ||
+           err(:not_found, "No such Initiative with id #{initiative_id}.", 422)}
 
       {:error, :forbidden} ->
         {:error,
@@ -1360,6 +1633,9 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  defp task_not_found(id), do: err(:not_found, "No such task with id #{id}.", 422)
+  defp comment_not_found(id), do: err(:not_found, "No such comment with id #{id}.", 422)
+
   defp authorize_comment(%User{} = user, %Comment{} = comment, capability) do
     query = from(t in Task, where: t.id == ^comment.task_id, select: t.initiative_id)
 
@@ -1369,7 +1645,7 @@ defmodule DoItWeb.Api.Operations do
          err(:not_found, "The comment's task (id #{comment.task_id}) no longer exists.", 422)}
 
       initiative_id ->
-        authorize(user, initiative_id, capability)
+        authorize(user, initiative_id, capability, comment_not_found(comment.id))
     end
   end
 
@@ -1459,11 +1735,15 @@ defmodule DoItWeb.Api.Operations do
       progress: task.computed_progress,
       manual_progress: task.manual_progress,
       priority: task.priority,
-      assignee_id: task.assignee_id
+      assignee_id: task.assignee_id,
+      version: task.version
     }
   end
 
-  defp initiative_result(%Initiative{} = initiative) do
+  # Public so the imports endpoint's stale-preview reply carries the same
+  # `current` record a conflicting op does (m03.04 6.7.2).
+  @doc false
+  def initiative_result(%Initiative{} = initiative) do
     %{
       id: initiative.id,
       type: "initiative",
@@ -1471,7 +1751,10 @@ defmodule DoItWeb.Api.Operations do
       root_task_id: initiative.root_task_id,
       progress_calc: initiative.progress_calc,
       index_style: initiative.index_style,
-      ai_knobs: initiative.ai_knobs
+      version: initiative.version
+      # AI-KNOBS-PARKED (m03.04): not echoed to agents pending the skill rebuild;
+      # column retained. Revive: re-add the trailing comma above + this line.
+      # ai_knobs: initiative.ai_knobs
     }
   end
 
@@ -1552,14 +1835,31 @@ defmodule DoItWeb.Api.Operations do
   defp first_changeset_error(changeset) do
     changeset
     |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
+      interpolated =
+        Regex.replace(~r"%{(\w+)}", msg, fn _, key ->
+          opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+        end)
+
+      {interpolated, opts}
     end)
-    |> Enum.find_value({"is invalid", nil}, fn {field, [first | _]} ->
-      {"#{field} #{first}", to_string(field)}
+    |> Enum.find_value({"is invalid", nil}, fn {field, [{first, opts} | _]} ->
+      {error_message(field, first, opts), to_string(field)}
     end)
   end
+
+  # The description-length 422 carries the overflow doctrine (m03.04 fix 22),
+  # read at the exact moment an agent would otherwise invent continuation
+  # tasks. Matched on field + validation, not message text.
+  defp error_message(:description, message, opts) do
+    if opts[:validation] == :length and opts[:kind] == :max do
+      "description #{message} — trim the prose and cite the source doc path in the " <>
+        "provenance comment; do not split the remainder into continuation tasks."
+    else
+      "description #{message}"
+    end
+  end
+
+  defp error_message(field, message, _opts), do: "#{field} #{message}"
 
   defp humanize(reason), do: reason |> to_string() |> String.replace("_", " ")
 end

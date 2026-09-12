@@ -17,6 +17,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   alias DoIt.Tasks.Progress
   alias DoIt.Tasks.Tree
   alias DoItWeb.AssignedActions
+  alias DoItWeb.CollaboratorAdd
 
   # Sort modes the index understands. `nil` = the server's default order
   # (owner-first, recently-updated); "manual" = the user's drag order, stored
@@ -246,6 +247,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:role, role)
     |> assign(:can_edit, Initiatives.can_edit?(role))
     |> assign(:can_admin, Initiatives.can_admin?(role))
+    # m03.04 2.4.1.4: whether THIS admin already acknowledged the
+    # agent-trust confirm here — the client reads it (via #agent-trust-state)
+    # to decide at click whether the confirm opens. Per (admin, Initiative),
+    # so it survives sessions and never re-shows once true.
+    |> assign(:agent_trust_acked, Initiatives.agent_trust_acked?(user.id, initiative.id))
     |> assign(:members, Initiatives.list_members(initiative.id))
     |> assign(:selected_task_id, nil)
     |> assign(:selected_task, nil)
@@ -325,6 +331,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     |> assign(:role, nil)
     |> assign(:can_edit, false)
     |> assign(:can_admin, false)
+    |> assign(:agent_trust_acked, false)
     |> assign(:members, [])
     |> assign(:selected_task_id, nil)
     |> assign(:selected_task, nil)
@@ -882,11 +889,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   defp tree_path(_node, _target_id), do: nil
 
-  defp progress_calc_mode(socket) do
-    if socket.assigns.initiative.progress_calc == "single_level",
-      do: :single_level,
-      else: :leaf_average
-  end
+  defp progress_calc_mode(socket), do: Progress.mode(socket.assigns.initiative.progress_calc)
 
   # A sort change on the system root re-resolves every inheriting branch.
   defp maybe_refresh_root_sort(socket, %{id: root_id}, root_id),
@@ -1307,25 +1310,33 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  # m03.04 item 2.4: the per-Initiative AI-knobs store — plain text the product
+  # m03.04 item 3.4: the per-Initiative AI-knobs store — plain text the product
   # stores but never interprets, so nothing else re-renders on a change. The
   # typed text is already visible client-side; the debounced save is acked with
-  # the same pulsed "Saved" tick as the subtitle (§6.7).
+  # the same pulsed "Saved" tick as the subtitle (§6.7). Usable only while
+  # agent access is on (m03.04 2.4.1.3) — the control renders disabled when off;
+  # this guard is the server-side backstop for a stale client.
   def handle_event("set_ai_knobs", %{"ai_knobs" => value}, socket) do
-    if not socket.assigns.can_edit do
-      {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
-    else
-      case Initiatives.update_initiative(socket.assigns.initiative, %{"ai_knobs" => value}) do
-        {:ok, updated} ->
-          {:noreply,
-           socket
-           |> assign(:initiative, updated)
-           |> push_event("ai-knobs-saved", %{})}
+    cond do
+      not socket.assigns.can_edit ->
+        {:noreply, socket |> put_flash(:error, "You don't have permission.") |> bonk()}
 
-        {:error, cs} ->
-          {:noreply,
-           put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
-      end
+      not socket.assigns.initiative.agent_access ->
+        {:noreply,
+         socket |> put_flash(:error, "Turn on AI access to use the AI knobs.") |> bonk()}
+
+      true ->
+        case Initiatives.update_initiative(socket.assigns.initiative, %{"ai_knobs" => value}) do
+          {:ok, updated} ->
+            {:noreply,
+             socket
+             |> assign(:initiative, updated)
+             |> push_event("ai-knobs-saved", %{})}
+
+          {:error, cs} ->
+            {:noreply,
+             put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+        end
     end
   end
 
@@ -1356,6 +1367,58 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         {:error, cs} ->
           {:noreply,
            put_flash(socket, :error, "Couldn't change setting: #{summarize_errors(cs)}.")}
+      end
+    end
+  end
+
+  # m03.04 2.4.1.3: the owner's AI-access switch. The checkbox flips
+  # client-side at click (instant optimistic ack, §6; app.js holds the flip
+  # behind the client-opened trust confirm when enabling over existing
+  # members) and settles on the "agent-access-saved" push_event — saved tick
+  # on success, honest revert of the box on refusal/failure (§6, must not
+  # lie). Enabling over existing members records the one-time agent-trust
+  # acknowledgement (m03.04 2.4.1.4): the client showed the confirm for exactly
+  # that predicate, so the commit is the acceptance.
+  def handle_event("set_agent_access", params, socket) do
+    if not socket.assigns.can_admin do
+      # A stale demoted admin may still show the flipped box — push the honest
+      # revert (same contract as the error branch), don't just flash.
+      {:noreply,
+       socket
+       |> put_flash(:error, "Only the owner can change AI access.")
+       |> push_event("agent-access-saved", %{
+         on: socket.assigns.initiative.agent_access,
+         ok: false
+       })
+       |> bonk()}
+    else
+      user = socket.assigns.current_user
+      initiative = socket.assigns.initiative
+      on = params["agent_access"] in ["true", "on"]
+
+      # Proof-carrying ack: `trust_confirmed` is injected ONLY by the trust
+      # dialog's Proceed handler, so the ack records only when the human
+      # actually saw and accepted the confirm — never from an ungated push,
+      # even one that happens to match the trigger predicate.
+      ack? =
+        params["trust_confirmed"] == "true" and on and
+          Initiatives.agent_trust_confirm_required?(user, initiative, :enable_agent_access)
+
+      case Initiatives.set_agent_access(initiative, on) do
+        {:ok, updated} ->
+          if ack?, do: Initiatives.record_agent_trust_ack(user, updated)
+
+          {:noreply,
+           socket
+           |> assign(:initiative, updated)
+           |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or ack?)
+           |> push_event("agent-access-saved", %{on: updated.agent_access, ok: true})}
+
+        {:error, _cs} ->
+          {:noreply,
+           socket
+           |> put_flash(:error, "Couldn't change AI access.")
+           |> push_event("agent-access-saved", %{on: initiative.agent_access, ok: false})}
       end
     end
   end
@@ -2054,18 +2117,34 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  def handle_event("update_member_role", %{"user_id" => uid, "role" => role}, socket) do
+  def handle_event("update_member_role", %{"user_id" => uid, "role" => role} = params, socket) do
     initiative = socket.assigns.initiative
     uid = parse_id(uid)
 
     if not is_nil(uid) and socket.assigns.can_admin and uid != initiative.owner_id and
          role in ~w(editor viewer) do
-      {:ok, _} =
-        Initiatives.update_member_role(initiative.id, uid, role, socket.assigns.current_user)
+      actor = socket.assigns.current_user
+
+      # m03.04 2.4.1.4: a promotion on an agent-accessible Initiative is
+      # gated by the client-opened trust confirm. Proof-carrying: the ack
+      # records only when Proceed injected `trust_confirmed` — never from an
+      # ungated push that merely matches the trigger predicate.
+      ack? =
+        params["trust_confirmed"] == "true" and
+          Initiatives.agent_trust_confirm_required?(
+            actor,
+            initiative,
+            {:promote_member, Initiatives.get_role(initiative.id, uid), role}
+          )
+
+      {:ok, _} = Initiatives.update_member_role(initiative.id, uid, role, actor)
+
+      if ack?, do: Initiatives.record_agent_trust_ack(actor, initiative)
 
       {:noreply,
        socket
        |> assign(:members, Initiatives.list_members(initiative.id))
+       |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or ack?)
        |> refresh_rail_initiatives()
        |> put_flash(:info, "Role updated.")}
     else
@@ -2073,7 +2152,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  def handle_event("add_member", %{"member" => member, "role" => role}, socket) do
+  def handle_event("add_member", %{"member" => member, "role" => role} = params, socket) do
     if not socket.assigns.can_admin do
       {:noreply, put_flash(socket, :error, "Only the owner can add members.")}
     else
@@ -2087,8 +2166,23 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           {:noreply, put_flash(socket, :error, "No user with that email or username.")}
 
         user ->
+          # m03.04 2.4.1.4: a member add on an agent-accessible Initiative
+          # is gated by the client-opened trust confirm. Proof-carrying: the
+          # ack records only when Proceed injected `trust_confirmed`, never from
+          # an ungated push matching the trigger predicate.
+          ack? =
+            params["trust_confirmed"] == "true" and
+              Initiatives.agent_trust_confirm_required?(
+                socket.assigns.current_user,
+                initiative,
+                {:add_member, role}
+              )
+
           case Initiatives.add_member(initiative.id, user.id, role, socket.assigns.current_user) do
             {:ok, _} ->
+              if ack?,
+                do: Initiatives.record_agent_trust_ack(socket.assigns.current_user, initiative)
+
               # Close the add-member form on success (it opened client-side via a
               # data-keep="open" <details>); close-details collapses it AND evicts
               # its preserved open-state so the preserve path can't re-open it on
@@ -2098,6 +2192,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                socket
                |> put_flash(:info, "Added #{user.name}.")
                |> assign(:members, Initiatives.list_members(initiative.id))
+               |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or ack?)
                |> refresh_rail_initiatives()
                |> push_event("close-details", %{id: "members-desktop-form"})
                |> push_event("close-details", %{id: "members-mobile-form"})}
@@ -2115,15 +2210,24 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # landed on. Both route through the same permission-checked context call; the
   # role is bumped afterward in that Initiative's Members panel. Removal reuses
   # "remove_member" (with its hand-off flow).
-  def handle_event("add_collaborator_to", %{"user-id" => uid, "initiative-id" => iid}, socket) do
+  def handle_event(
+        "add_collaborator_to",
+        %{"user-id" => uid, "initiative-id" => iid} = params,
+        socket
+      ) do
     user = socket.assigns.current_user
 
     # Both ids are client-supplied; a malformed either-side no-ops with ok:false so
     # the optimistic rail chip is pulled (MUST NOT LIE) rather than crashing.
     case {parse_id(iid), parse_id(uid)} do
-      {nil, _} -> {:reply, %{ok: false}, socket}
-      {_, nil} -> {:reply, %{ok: false}, socket}
-      {iid, uid} -> do_add_collaborator_to(socket, user, iid, uid)
+      {nil, _} ->
+        {:reply, %{ok: false}, socket}
+
+      {_, nil} ->
+        {:reply, %{ok: false}, socket}
+
+      {iid, uid} ->
+        do_add_collaborator_to(socket, user, iid, uid, params["trust_confirmed"] == "true")
     end
   end
 
@@ -2255,24 +2359,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
     end
   end
 
-  defp do_add_collaborator_to(socket, user, iid, uid) do
-    {ok?, socket} =
-      case Initiatives.add_collaborator_as_viewer(user, iid, uid) do
-        {:ok, added} ->
-          {true, put_flash(socket, :info, "Added #{added.name} as a viewer.")}
-
-        # Already a member → the real row is already present; treat the optimistic
-        # chip as not-needed (ok:false pulls the dimmed stand-in; the flash is
-        # informational, no lie left behind).
-        {:error, :already_member} ->
-          {false, put_flash(socket, :info, "They're already a member there.")}
-
-        {:error, :forbidden} ->
-          {false, put_flash(socket, :error, "Only that Initiative's owner can add members.")}
-
-        {:error, :failed} ->
-          {false, put_flash(socket, :error, "Couldn't add them.")}
-      end
+  defp do_add_collaborator_to(socket, user, iid, uid, trust_confirmed?) do
+    # Core shared with /assigned (m03.04 2.4.3) — DoItWeb.CollaboratorAdd owns
+    # the proof-carrying ack rules (2.16).
+    {ok?, ack?, socket} = CollaboratorAdd.add_as_viewer(socket, user, iid, uid, trust_confirmed?)
 
     # Refresh the collaborators pane AND the rail initiatives (their member-
     # avatar rows) so the server render carries the real avatar after the add —
@@ -2285,11 +2375,17 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       |> refresh_rail_initiatives()
 
     # Only refresh members when the add landed on the currently-open Initiative
-    # (detail mode). In list mode @initiative is nil, so guard it.
+    # (detail mode). In list mode @initiative is nil, so guard it. A committed
+    # ack also flips the settings pane's #agent-trust-state here (2.16 shares
+    # the once-per-(admin, Initiative) acknowledgement with the 2.12.4 paths).
     socket =
-      if socket.assigns.initiative && iid == socket.assigns.initiative.id,
-        do: assign(socket, :members, Initiatives.list_members(iid)),
-        else: socket
+      if socket.assigns.initiative && iid == socket.assigns.initiative.id do
+        socket
+        |> assign(:members, Initiatives.list_members(iid))
+        |> assign(:agent_trust_acked, socket.assigns.agent_trust_acked or (ok? and ack?))
+      else
+        socket
+      end
 
     {:reply, %{ok: ok?}, socket}
   end
@@ -2953,6 +3049,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         </script>
       </div>
 
+      <%!-- Agent-trust confirm (items 2.12.4 + 2.16) — ONE instance serving
+           both modes: the detail settings paths (enable / add / promote,
+           can_admin) and the rail's collaborator add (menu + drag, either
+           mode), which triggers off any administered rail entry still
+           carrying data-trust-confirm=true. --%>
+      <Layouts.agent_trust_confirm :if={
+        @can_admin or Enum.any?(@initiatives, & &1.trust_confirm_required)
+      } />
+
       <%= if @live_action == :show do %>
         <div id={"initiative-detail-#{@initiative.id}"}>
           <div
@@ -3030,6 +3135,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   });
                   this.handleEvent("ai-knobs-saved", () => {
                     if (window.DoitSavedTick) window.DoitSavedTick("ai-knobs-saved-tick");
+                  });
+                  // AI-access settle (m03.04 2.4.1.3): the checkbox flipped
+                  // client-side at click; the server replies with the persisted
+                  // state — re-assert it (the honest revert when refused) and
+                  // tick Saved only on a real success (never lie).
+                  this.handleEvent("agent-access-saved", ({on, ok}) => {
+                    const box = document.getElementById("agent-access-toggle");
+                    if (box) box.checked = !!on;
+                    if (ok && window.DoitSavedTick) window.DoitSavedTick("agent-access-saved-tick");
                   });
                   // Comment-edit save (WL3 3.3, §6.5): the editor's open/close is
                   // client-owned (DoitState.commentEditId), but SAVE is server-gated.
@@ -3571,6 +3685,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   initiative={@initiative}
                   subtitle={@subtitle}
                   initiative_progress={@initiative_progress}
+                  unit_count={Progress.unit_count(@tree, Progress.mode(@initiative.progress_calc))}
                   can_edit={@can_edit}
                 />
 
@@ -4232,6 +4347,20 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           <.leave_confirm :if={@current_user.id != @initiative.owner_id} />
           <.archive_confirm />
           <.remove_member_confirm :if={@can_admin} />
+          <%!-- m03.04 2.4.1.4: render-known state the client reads at click
+               time to decide whether the agent-trust confirm must open (fresh
+               DOM, no round trip — UX_GUARDRAILS 6.5). Lives OUTSIDE the
+               ignored dialog below so it patches as the flag / members / the
+               ack change. --%>
+          <div
+            :if={@can_admin}
+            id="agent-trust-state"
+            hidden
+            data-acked={to_string(@agent_trust_acked)}
+            data-agent-access={to_string(@initiative.agent_access)}
+            data-other-members={to_string(Enum.any?(@members, &(&1.user_id != @current_user.id)))}
+          >
+          </div>
           <%!-- Member-removal assignment hand-off (m02.05 item 13.5). --%>
           <div
             :if={@pending_handoff}
@@ -5425,11 +5554,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   attr :initiative, :map, required: true
   attr :subtitle, :string, required: true
   attr :initiative_progress, :integer, required: true
+  # The system root's branch unit count (m03.04 6.5) — computed at the call site
+  # from the in-memory @tree, so it moves with every tree patch, like the rows.
+  attr :unit_count, :integer, required: true
   attr :can_edit, :boolean, required: true
 
   @doc """
-  The initiative header — grove icon + name, subtitle/description, roll-up
-  progress bar, and the desktop "New List" button (m02.07 item 1.2). On the
+  The initiative header — grove icon + name, unit-count badge, subtitle/
+  description, roll-up progress bar, and the desktop "New List" button
+  (m02.07 item 1.2). On the
   shell it's the center column's flex-none top: a fixed sibling above the
   tree's scroll box (never sticky inside it), so the tree scrolls beneath while
   the header stays put.
@@ -5472,6 +5605,22 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </h1>
           </span>
         <% end %>
+
+        <%!-- The Initiative's unit count — the system root's branch badge, same
+             markup and title as the rows' chevron badge (m03.04 6.5). Outside
+             the edit affordance so it never reads as part of the name. --%>
+        <span
+          :if={@unit_count > 0}
+          id="initiative-unit-count"
+          title={branch_unit_title(@initiative.progress_calc)}
+          class="flex-none relative top-[-0.4em] mt-2 inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400"
+        >
+          <.botanical_icon
+            kind={badge_icon(@initiative.progress_calc)}
+            class={badge_icon_class(@initiative.progress_calc)}
+          />
+          {@unit_count}
+        </span>
         <button
           :if={@can_edit}
           type="button"
@@ -6036,7 +6185,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
       <%= cond do %>
         <% Tasks.comment_deleted?(@comment) -> %>
-          <%!-- Tombstone (item 2.3): the row survives so thread shape +
+          <%!-- Tombstone (m03.04 2.5.1): the row survives so thread shape +
                references hold, shown as deleted. --%>
           <div class="italic text-zinc-400 dark:text-zinc-500">comment deleted</div>
         <% true -> %>
@@ -6083,7 +6232,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               <% end %>
             </div>
           </div>
-          <%!-- Inline editor (item 2.2) — author-only, rendered hidden;
+          <%!-- Inline editor (m03.04 2.2.3) — author-only, rendered hidden;
                the "comment-edit" applier reveals it when this comment is
                the client-owned commentEditId. Save stays server-owned; the
                context re-checks authorship. The Edit button seeds + focuses
@@ -6124,7 +6273,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           </form>
       <% end %>
 
-      <%!-- Prior-versions popup (item 2.2): a minimal inline panel listing
+      <%!-- Prior-versions popup (m03.04 2.2.3): a minimal inline panel listing
            earlier bodies, NEWEST FIRST (the `versions` preload is ordered
            desc in list_comments/1). Open/close is CLIENT-OWNED (m02.09 WL3
            3.3, §6.5): rendered statically + hidden, carries
@@ -6504,11 +6653,50 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </form>
           </div>
 
-          <%!-- m03.04 item 2.4: per-Initiative constants store for AI agents —
+          <%!-- m03.04 2.4.1.3: per-Initiative AI access, owner-only, off by
+               default. The checkbox flips client-side at click (§6 optimistic
+               ack; app.js holds the flip behind the client-opened trust confirm
+               when enabling over existing members) and settles on the
+               "agent-access-saved" reply — saved tick on success, honest revert
+               on failure. Server-enforced: off = the /api/v1 surface reads this
+               Initiative as not-found. --%>
+          <div :if={@can_admin}>
+            <form phx-change="set_agent_access">
+              <label class="flex items-center gap-2 text-xs text-zinc-600 dark:text-zinc-300 select-none">
+                <input
+                  type="checkbox"
+                  id="agent-access-toggle"
+                  name="agent_access"
+                  value="true"
+                  checked={@initiative.agent_access}
+                  class="checkbox checkbox-sm"
+                /> AI access — agents may read and work this initiative
+                <span
+                  id="agent-access-saved-tick"
+                  hidden
+                  class="inline-flex items-center gap-0.5 text-[11px] font-medium text-emerald-600 dark:text-emerald-400"
+                >
+                  <.icon name="hero-check" class="w-3 h-3" /> Saved
+                </span>
+              </label>
+              <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
+                Off: AI agents can't see this initiative at all. On: agents acting
+                for any member read everything members write here.
+              </p>
+            </form>
+          </div>
+
+          <%!-- m03.04 item 3.4: per-Initiative constants store for AI agents —
                plain text the product stores but never interprets. Debounced
                save-on-blur; the "Saved" tick pulsed on "ai-knobs-saved" is the
-               ack for the otherwise-invisible write (§6.7, same as subtitle). --%>
-          <div>
+               ack for the otherwise-invisible write (§6.7, same as subtitle).
+               Usable only while AI access is on (m03.04 2.4.1.3): the derived
+               state reads in the control itself — disabled textarea + swapped
+               copy — not a separate badge. --%>
+          <%!-- AI-KNOBS-PARKED (m03.04): temporarily off the UI so knobs don't
+               inform agents pending the skill rebuild; the column + handler are
+               retained. Revive by removing the :if={false} on the wrapper. --%>
+          <div :if={false}>
             <div class="flex items-center gap-2">
               <label for="ai-knobs" class="text-xs text-zinc-500 dark:text-zinc-400">
                 AI knobs
@@ -6528,14 +6716,23 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 name="ai_knobs"
                 value={@initiative.ai_knobs}
                 rows="4"
-                placeholder="plain-text notes and settings for AI agents"
-                disabled={not @can_edit}
+                placeholder={
+                  if @initiative.agent_access,
+                    do: "plain-text notes and settings for AI agents",
+                    else: "off — AI access is off for this initiative"
+                }
+                disabled={not @can_edit or not @initiative.agent_access}
                 phx-debounce="blur"
               />
             </form>
             <p class="mt-0.5 text-[11px] text-zinc-400 dark:text-zinc-500">
-              A settings store for AI agents working this initiative — stored as
-              plain text, never interpreted by the app.
+              <%= if @initiative.agent_access do %>
+                A settings store for AI agents working this initiative — stored as
+                plain text, never interpreted by the app.
+              <% else %>
+                AI access is off, so agents can't see this initiative — the knobs
+                unlock when the owner turns AI access on.
+              <% end %>
             </p>
           </div>
 
@@ -7303,8 +7500,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
         <p data-async-loading hidden class="text-xs text-zinc-400 dark:text-zinc-500 italic">
           Loading…
         </p>
+        <%!-- status_changed shows since m03.04 2.10.3: it's been one atomic
+             event per flip since m02.06 item 14 (the per-task spam the old
+             filter hid is long gone) and no-op flips no longer record. --%>
         <ul data-async-list class="space-y-1 text-xs text-zinc-600 dark:text-zinc-300">
-          <li :for={e <- @activity} :if={e.kind != "status_changed"}>
+          <li :for={e <- @activity}>
             <span class="text-zinc-500 dark:text-zinc-400">
               <.local_time value={e.inserted_at} format="%b %-d %H:%M" />
             </span>
@@ -7317,12 +7517,28 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                 class="w-4 h-4 text-[8px]"
               />{(e.user && e.user.name) || "system"}
             </span>
+            <%!-- Execution provenance (m03.04 2.10.1): a token-borne write
+                 was performed by an agent, not typed by the user — badge it
+                 with the token's label (ids are plumbing, never shown). --%>
+            <span
+              :if={e.actor_kind == "api_token"}
+              data-agent-event
+              class="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+            >
+              via {e.api_token_label || "agent"}
+            </span>
             · {event_label(e, @members)}
             <span
-              :if={Map.get(e.data, "from") || Map.get(e.data, "to")}
+              :if={(Map.get(e.data, "from") || Map.get(e.data, "to")) && e.kind != "status_changed"}
               class="text-zinc-500 dark:text-zinc-400"
             >
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
+            </span>
+            <%!-- Cascade exposure (m03.04 2.10.3): a completion/reopen that
+                 carried other tasks along says so — count only, ids are
+                 plumbing. --%>
+            <span :if={cascaded_count(e) > 0} data-cascade class="text-zinc-500 dark:text-zinc-400">
+              +{cascaded_count(e)} cascaded
             </span>
           </li>
         </ul>
@@ -7417,7 +7633,22 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # Undo / redo feed entries (m02.06 item 8) — labeled, never hiding the round-trip.
   defp event_label(%{kind: "undid", data: d}, _members), do: "undid #{d["of"] || "a change"}"
   defp event_label(%{kind: "redid", data: d}, _members), do: "redid #{d["of"] || "a change"}"
+
+  # Status flips read as their outcome (m03.04 2.10.3) — the label carries
+  # the transition, so the generic (from → to) span skips this kind.
+  defp event_label(%{kind: "status_changed", data: %{"to" => "done"}}, _members), do: "completed"
+  defp event_label(%{kind: "status_changed", data: %{"to" => "open"}}, _members), do: "reopened"
+  defp event_label(%{kind: "status_changed"}, _members), do: "changed status"
   defp event_label(%{kind: kind}, _members), do: kind
+
+  # How many other tasks a status_changed's cascade flipped (m03.04 2.10.3);
+  # 0 for every other kind or a legacy payload, which renders no marker.
+  defp cascaded_count(event) do
+    case Tasks.cascaded_ids(event) do
+      nil -> 0
+      ids -> length(ids)
+    end
+  end
 
   defp event_username(%{"user_id" => uid}, members) do
     case Enum.find(members, &(&1.user_id == uid)) do
@@ -7482,13 +7713,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   defp assignee_title(_task, _member_ids), do: "Unassigned"
 
-  defp leaf_count(%{children: []}), do: 1
-  defp leaf_count(%{children: children}), do: Enum.sum(Enum.map(children, &leaf_count/1))
-
   # The chevron badge counts what the progress mode counts: every descendant
   # leaf (leaf_average), or each direct child as one unit (single_level).
-  defp branch_unit_count(task, "single_level"), do: length(task.children)
-  defp branch_unit_count(task, _calc), do: leaf_count(task)
+  defp branch_unit_count(task, calc), do: Progress.unit_count(task, Progress.mode(calc))
 
   defp branch_unit_title("single_level"), do: "Direct children — each counts equally"
   defp branch_unit_title(_calc), do: "Leaves in this branch"

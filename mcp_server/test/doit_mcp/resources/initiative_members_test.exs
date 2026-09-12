@@ -19,5 +19,8 @@ defmodule DoitMcp.Resources.InitiativeMembersTest do
              InitiativeMembers.read(%{"params" => %{"id" => "42"}}, frame)
 
     assert Jason.decode!(response.contents["text"]) == members
+
+    # Names only — no user-content marker (m03.04 3.5.1).
+    refute response.contents["text"] =~ DoitMcp.ToolResult.user_content_line()
   end
 end
