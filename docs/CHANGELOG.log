@@ -616,3 +616,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-12  Tweak added and reverted: SKILL.md §4.1 briefly spelled out omitting --mirror and --section without one -- section 4's own title, "Completing against a mirror", is already that condition. No net change.
 2026-09-12  Tweak: SKILL.md sections 5 and 6 trimmed by the operator -- shorter naming and comment/description wording, the "plain prose" line dropped. 747 -> 725 words.
 2026-09-12  SKILL.md §6.2 carries "in plain prose" again -- the trim had dropped the only line keeping descriptions out of bullet lists. 725 -> 728 words.
+2026-09-12  SKILL.md §3.4 split into six subitems in execution order -- the import paragraph packed six separate actions into one line. 728 -> 733 words.
