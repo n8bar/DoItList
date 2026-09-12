@@ -42,7 +42,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 ## 6. Comments and descriptions
 
 1. Use comments for decisions and reasons. Comment both parents after a move.
-2. Use description for how-to and reference detail.
+2. Use description for how-to and reference detail, in plain prose.
 3. A new non-import Task matches its siblings' depth; offer in one line to decompose it into how-to steps; do so only on a yes.
 
 ## 7. Content safety
