@@ -915,7 +915,9 @@ defmodule DoIt.Imports.ParserTest do
 
     test "an annotated document parses exactly as its unannotated self" do
       plain = "# Plan\n\n- [x] Ship it\n  - Draft it\n- Tell everyone\n"
-      annotated = "# Plan %<100>\n\n- [x] Ship it %<111>\n  - Draft it %<112>\n- Tell everyone %<113>\n"
+
+      annotated =
+        "# Plan %<100>\n\n- [x] Ship it %<111>\n  - Draft it %<112>\n- Tell everyone %<113>\n"
 
       assert parse!(annotated) == parse!(plain)
     end

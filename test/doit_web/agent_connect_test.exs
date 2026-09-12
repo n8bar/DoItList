@@ -106,6 +106,69 @@ defmodule DoItWeb.AgentConnectTest do
     end
   end
 
+  describe "unreachable_mcp_url/0 (m03.04 6.20)" do
+    # The composed lane takes the endpoint's own host, so today only the port
+    # can differ — the host comparison states the rule rather than guarding a
+    # reachable case.
+    test "names a composed MCP address that lands off the page's origin" do
+      Application.delete_env(:doit, :mcp_public_url)
+      Application.put_env(:doit, :mcp_public_port, 4004)
+      put_public_url(scheme: "https", host: "doitlist.example.com", port: 443)
+
+      assert AgentConnect.unreachable_mcp_url() == "https://doitlist.example.com:4004/"
+    end
+
+    test "an empty-string override reads as composed, same as unset" do
+      Application.put_env(:doit, :mcp_public_url, "")
+      Application.put_env(:doit, :mcp_public_port, 4004)
+      put_public_url(scheme: "https", host: "doitlist.example.com", port: 443)
+
+      assert AgentConnect.unreachable_mcp_url() == "https://doitlist.example.com:4004/"
+    end
+
+    test "nil when :mcp_public_url is set — the operator stated the address" do
+      Application.put_env(:doit, :mcp_public_url, "https://doitlist.example.com/mcp")
+      Application.put_env(:doit, :mcp_public_port, 4004)
+      put_public_url(scheme: "https", host: "doitlist.example.com", port: 443)
+
+      assert AgentConnect.unreachable_mcp_url() == nil
+    end
+
+    test "nil for an override on another origin — stated is stated" do
+      Application.put_env(:doit, :mcp_public_url, "https://mcp.example.com:4004")
+      put_public_url(scheme: "https", host: "doitlist.example.com", port: 443)
+
+      assert AgentConnect.unreachable_mcp_url() == nil
+    end
+
+    test "nil on loopback, where the composed port is reachable from the box" do
+      Application.delete_env(:doit, :mcp_public_url)
+      Application.put_env(:doit, :mcp_public_port, 4004)
+      put_public_url(scheme: "http", host: "localhost", port: 4000)
+
+      assert AgentConnect.unreachable_mcp_url() == nil
+    end
+
+    test "nil when the composed address shares the page's origin" do
+      Application.delete_env(:doit, :mcp_public_url)
+      Application.put_env(:doit, :mcp_public_port, 4004)
+      put_public_url(scheme: "https", host: "doitlist.example.com", port: 4004)
+
+      assert AgentConnect.unreachable_mcp_url() == nil
+    end
+
+    # The two checks are independent: 6.17's passes on an https address that
+    # this one still refuses to vouch for, and a LAN http instance trips both.
+    test "independent of refused_paste_url/0: https off-origin trips only this one" do
+      Application.delete_env(:doit, :mcp_public_url)
+      Application.put_env(:doit, :mcp_public_port, 4004)
+      put_public_url(scheme: "https", host: "doitlist.example.com", port: 443)
+
+      assert AgentConnect.refused_paste_url() == nil
+      assert AgentConnect.unreachable_mcp_url() == "https://doitlist.example.com:4004/"
+    end
+  end
+
   describe "config/dev.exs public URL (m03.04 6.17)" do
     test "PUBLIC_HOST and WEB_PORT alone compose what they always did" do
       assert dev_public_url(%{"PUBLIC_HOST" => "192.168.68.31", "WEB_PORT" => "4040"}) ==

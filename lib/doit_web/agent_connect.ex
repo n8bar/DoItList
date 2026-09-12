@@ -53,6 +53,36 @@ defmodule DoItWeb.AgentConnect do
   end
 
   @doc """
+  The MCP address the pastes carry when it cannot be assumed reachable, or
+  `nil` when it can (m03.04 6.20): composed rather than stated
+  (`:mcp_public_url` unset or empty) AND landing on an origin other than the
+  one serving the page. A reverse proxy fronting only the web app answers
+  nothing on the composed port, so the three MCP pastes hand out a dead
+  address that `refused_paste_url/0` passes — its scheme is right.
+
+  Silent when `:mcp_public_url` is set: the operator has stated the address.
+  Silent on loopback, where a developer on the box reaches the composed port
+  directly.
+  """
+  def unreachable_mcp_url do
+    composed? = Application.get_env(:doit, :mcp_public_url) in [nil, ""]
+    url = mcp_url()
+
+    if composed? and offsite_origin?(url), do: url
+  end
+
+  # Off the origin serving the page: a different host, or a different port.
+  # The composed scheme is the endpoint's own, so only these two can differ.
+  defp offsite_origin?(url) do
+    mcp = URI.parse(url)
+    web = DoItWeb.Endpoint.struct_url()
+    host = String.downcase(to_string(mcp.host))
+
+    host not in @loopback_hosts and
+      {host, mcp.port} != {String.downcase(to_string(web.host)), web.port}
+  end
+
+  @doc """
   All connect pastes for the panel: `{dom_slug, client_name, paste}` per
   client, in display order. `shell` picks the wording (m03.04 2.1.2.1):
   `:posix` (default) or `:powershell`.

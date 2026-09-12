@@ -29,7 +29,10 @@ defmodule DoItWeb.AccountLive do
      |> assign(:marker_initiative_id, marker_default_id(marker_initiatives))
      # Instance-level, so read once: the connect pastes' URL when it's one
      # clients refuse (m03.04 6.17), otherwise nil.
-     |> assign(:refused_paste_url, AgentConnect.refused_paste_url())}
+     |> assign(:refused_paste_url, AgentConnect.refused_paste_url())
+     # Likewise: the MCP address when it's composed onto an origin nothing
+     # promises to answer (m03.04 6.20), otherwise nil.
+     |> assign(:unreachable_mcp_url, AgentConnect.unreachable_mcp_url())}
   end
 
   defp marker_default_id([%{id: id} | _]), do: id
@@ -736,6 +739,18 @@ defmodule DoItWeb.AccountLive do
                     class="rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs text-amber-900 dark:text-amber-200"
                   >
                     These pastes carry <span class="font-mono">{@refused_paste_url}</span>, which agent clients refuse — plain http works only on localhost. Set this instance's public URL (PUBLIC_SCHEME, PUBLIC_HOST, PUBLIC_PORT) to the https address you reach it at.
+                  </p>
+                  <%!-- m03.04 6.20: with no MCP_PUBLIC_URL the MCP address is
+                     composed from this instance's public host plus the agent
+                     port. Where that port isn't part of the public address —
+                     a reverse proxy fronting only the web app — nothing
+                     answers it, and the scheme check above passes anyway. --%>
+                  <p
+                    :if={@unreachable_mcp_url}
+                    id="connect-mcp-url-warning"
+                    class="rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs text-amber-900 dark:text-amber-200"
+                  >
+                    The MCP pastes carry <span class="font-mono">{@unreachable_mcp_url}</span>, which is not the address serving this page. If a reverse proxy fronts this instance, nothing answers there — set MCP_PUBLIC_URL to the address the agent endpoint is actually reachable at.
                   </p>
                   <%= for {shell, shell_slug, suffix} <- [{:posix, "posix", ""}, {:powershell, "powershell", "-ps"}] do %>
                     <div
