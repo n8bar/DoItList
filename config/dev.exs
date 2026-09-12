@@ -10,6 +10,25 @@ config :doit, DoIt.Repo,
   show_sensitive_data_on_connection_error: true,
   pool_size: 10
 
+# Compose passes "" for a var left unset in .env; treat that as unset
+# (runtime.exs does the same for MCP_PUBLIC_URL).
+public_env = fn name, default ->
+  case System.get_env(name) do
+    value when value in [nil, ""] -> default
+    value -> value
+  end
+end
+
+# Public URL: the scheme, host, and port other machines use to reach this box,
+# so composed URLs (API links, agent connect pastes) don't say "localhost" on a
+# LAN, and an instance reached through an https proxy can say https without
+# moving the port the container binds. PUBLIC_PORT defaults to WEB_PORT, the
+# port compose publishes, so setting only PUBLIC_HOST and WEB_PORT composes
+# exactly what it always did. Behind TLS: PUBLIC_SCHEME=https, PUBLIC_PORT=443.
+public_scheme = public_env.("PUBLIC_SCHEME", "http")
+public_host = public_env.("PUBLIC_HOST", "localhost")
+public_port = public_env.("PUBLIC_PORT", public_env.("WEB_PORT", "4000"))
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #
@@ -21,11 +40,10 @@ config :doit, DoItWeb.Endpoint,
   # This makes make the service accessible from any network interface.
   # Change to `ip: {127, 0, 0, 1}` to allow access only from the server machine.
   http: [ip: {0, 0, 0, 0}, port: String.to_integer(System.get_env("PORT", "4000"))],
-  # Public URL: the host/port other machines use to reach this box, so
-  # composed URLs (API links, agent connect) don't say "localhost" on a LAN.
   url: [
-    host: System.get_env("PUBLIC_HOST", "localhost"),
-    port: String.to_integer(System.get_env("WEB_PORT", "4000"))
+    scheme: public_scheme,
+    host: public_host,
+    port: String.to_integer(public_port)
   ],
   check_origin: false,
   code_reloader: true,

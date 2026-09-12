@@ -26,7 +26,10 @@ defmodule DoItWeb.AccountLive do
      |> assign(:new_api_token, nil)
      |> assign(:api_tokens, Accounts.list_api_tokens(user))
      |> assign(:marker_initiatives, marker_initiatives)
-     |> assign(:marker_initiative_id, marker_default_id(marker_initiatives))}
+     |> assign(:marker_initiative_id, marker_default_id(marker_initiatives))
+     # Instance-level, so read once: the connect pastes' URL when it's one
+     # clients refuse (m03.04 6.17), otherwise nil.
+     |> assign(:refused_paste_url, AgentConnect.refused_paste_url())}
   end
 
   defp marker_default_id([%{id: id} | _]), do: id
@@ -724,6 +727,16 @@ defmodule DoItWeb.AccountLive do
                       </button>
                     </div>
                   </div>
+                  <%!-- m03.04 6.17: every client refuses plain http off loopback,
+                     so pastes composed from a LAN http URL cannot connect. Say
+                     so here rather than let them fail in the user's shell. --%>
+                  <p
+                    :if={@refused_paste_url}
+                    id="connect-url-warning"
+                    class="rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 px-2 py-1.5 text-xs text-amber-900 dark:text-amber-200"
+                  >
+                    These pastes carry <span class="font-mono">{@refused_paste_url}</span>, which agent clients refuse — plain http works only on localhost. Set this instance's public URL (PUBLIC_SCHEME, PUBLIC_HOST, PUBLIC_PORT) to the https address you reach it at.
+                  </p>
                   <%= for {shell, shell_slug, suffix} <- [{:posix, "posix", ""}, {:powershell, "powershell", "-ps"}] do %>
                     <div
                       id={"connect-pastes-#{shell_slug}"}

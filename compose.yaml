@@ -25,6 +25,8 @@ services:
       PHX_SERVER: "true"
       PORT: "4000"
       PUBLIC_HOST: ${PUBLIC_HOST:-localhost}
+      PUBLIC_SCHEME: ${PUBLIC_SCHEME:-http}
+      PUBLIC_PORT: ${PUBLIC_PORT:-}
       WEB_PORT: ${WEB_PORT:-4000}
       MCP_PORT: ${MCP_PORT:-4004}
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-}

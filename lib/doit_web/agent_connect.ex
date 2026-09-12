@@ -12,23 +12,44 @@ defmodule DoItWeb.AgentConnect do
 
   @server_name "doitlist"
 
+  # Every client refuses plain http off loopback: the scripted client's
+  # `validate_base_url` (skills/doitlist/scripts/doitlist.py) and the MCP
+  # clients hold the same rule.
+  @loopback_hosts ~w(localhost 127.0.0.1 ::1 [::1])
+
   @doc """
   The public URL agents connect to, with exactly one trailing slash.
 
   `:mcp_public_url` (full override, for scheme/port differences like hosted
-  TLS) wins; otherwise the web endpoint's public host plus `:mcp_public_port`
-  compose it.
+  TLS) wins; otherwise the web endpoint's public scheme and host plus
+  `:mcp_public_port` compose it. The scheme is the endpoint's own (m03.04
+  6.17): an instance published as https composes https, rather than handing
+  out an http URL every client then refuses.
   """
   def mcp_url do
     case Application.get_env(:doit, :mcp_public_url) do
       v when v in [nil, ""] ->
-        host = DoItWeb.Endpoint.struct_url().host
+        %URI{scheme: scheme, host: host} = DoItWeb.Endpoint.struct_url()
         port = Application.get_env(:doit, :mcp_public_port, 4004)
-        "http://#{host}:#{port}/"
+        "#{scheme}://#{host}:#{port}/"
 
       url ->
         String.trim_trailing(url, "/") <> "/"
     end
+  end
+
+  @doc """
+  The first URL these pastes would carry that clients refuse — plain http on a
+  non-loopback host — or `nil` when both are fine (m03.04 6.17). The panel
+  warns on it instead of handing out a paste that cannot connect.
+  """
+  def refused_paste_url do
+    Enum.find([api_url(), mcp_url()], &refused_url?/1)
+  end
+
+  defp refused_url?(url) do
+    uri = URI.parse(url)
+    uri.scheme != "https" and String.downcase(to_string(uri.host)) not in @loopback_hosts
   end
 
   @doc """
@@ -65,11 +86,11 @@ defmodule DoItWeb.AgentConnect do
   who stops there must already be persisted.
 
   PowerShell (2.1.2.2): `$env:` sets the live session; `setx` writes the
-  registry, which only shells opened fresh from the OS pick up — shells
-  spawned by an already-running host (a terminal app, an editor) inherit
-  the host's snapshot and never see it — so the paste also appends the
-  `$env:` line to `$PROFILE` (creating its folder if missing; UTF-8, the
-  Hermes paste's pattern), which every new session sources.
+  registry, which shells opened fresh from the OS pick up. Shells spawned by
+  an already-running host (a terminal app, an editor) inherit the host's
+  snapshot, so the `setx` line says to restart that host. No `$PROFILE`
+  append (m03.04 6.15): Windows blocks script execution out of the box, so a
+  profile the paste writes errors on every new shell instead of loading.
   """
   def codex_paste(token, shell \\ :posix)
 
@@ -88,9 +109,8 @@ defmodule DoItWeb.AgentConnect do
     Enum.join(
       [
         "$env:DOITLIST_API_TOKEN = '#{token}'",
-        "setx DOITLIST_API_TOKEN '#{token}'",
-        "New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null; " <>
-          "Add-Content -Path $PROFILE -Value '$env:DOITLIST_API_TOKEN = ''#{token}''' -Encoding utf8",
+        "setx DOITLIST_API_TOKEN '#{token}'   " <>
+          "# persists it for new shells; restart a running terminal or editor so its shells see it",
         "codex mcp add #{@server_name} --url #{mcp_url()} --bearer-token-env-var DOITLIST_API_TOKEN"
       ],
       "\n"
@@ -135,11 +155,12 @@ defmodule DoItWeb.AgentConnect do
   line that says whether the script will run at all.
 
   POSIX (4.5.1) runs it with `python3`. PowerShell (4.5.2) runs the same script
-  with `py -3` (or `python`) and uses the Codex paste's persistence idiom:
-  `setx` for the registry, plus the `$PROFILE` append that shells spawned by an
-  already-running host actually pick up. Persistence comes before the check in
-  both, so a reader who stops at the line that reads as success is already
-  configured (2.1.5).
+  with `py -3` and uses the Codex paste's persistence idiom: `setx` for the
+  registry, no `$PROFILE` append (m03.04 6.15). The check names the installer
+  rather than a `python` fallback, which on a stock Windows box is a Microsoft
+  Store stub (m03.04 6.16). Persistence comes before the check in both, so a
+  reader who stops at the line that reads as success is already configured
+  (2.1.5).
   """
   def cli_paste(token, shell \\ :posix)
 
@@ -167,10 +188,7 @@ defmodule DoItWeb.AgentConnect do
         "$env:DOITLIST_API_TOKEN = '#{token}'",
         "setx DOITLIST_API_URL '#{url}'",
         "setx DOITLIST_API_TOKEN '#{token}'",
-        "New-Item -ItemType Directory -Force (Split-Path $PROFILE) | Out-Null; " <>
-          "Add-Content -Path $PROFILE -Value '$env:DOITLIST_API_URL = ''#{url}''' -Encoding utf8",
-        "Add-Content -Path $PROFILE -Value '$env:DOITLIST_API_TOKEN = ''#{token}''' -Encoding utf8",
-        "py -3 --version   # or: python --version"
+        "py -3 --version   # if missing: winget install --id Python.Python.3.13 -e"
       ],
       "\n"
     )
