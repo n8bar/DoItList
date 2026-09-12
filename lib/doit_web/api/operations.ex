@@ -282,25 +282,11 @@ defmodule DoItWeb.Api.Operations do
       %{
         op: verb,
         type: type,
-        data_keys: Enum.sort(keys),
-        errors: doc_errors(verb, type, keys)
+        data_keys: Enum.sort(keys)
       }
     end)
     |> Enum.sort_by(fn %{op: op, type: type} -> {type_rank[type], verb_rank[op]} end)
   end
-
-  defp doc_errors(verb, type, keys) do
-    ["unprocessable_entity"]
-    |> add_unless(verb == "add" and type == "initiative", ["not_found", "forbidden"])
-    |> add_unless(verb == "update" and type == "notification", ["bad_reference"])
-    |> add_if("expected_version" in keys, ["conflict"])
-    |> add_if("owner_id" in keys or (type == "member" and "role" in keys), ["irreversible_op"])
-  end
-
-  defp add_if(codes, true, extra), do: codes ++ extra
-  defp add_if(codes, false, _extra), do: codes
-
-  defp add_unless(codes, condition, extra), do: add_if(codes, not condition, extra)
 
   @typedoc """
   A per-op error carries the wire code, message, an optional field pointer, and

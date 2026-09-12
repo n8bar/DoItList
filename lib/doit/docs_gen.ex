@@ -12,6 +12,7 @@ defmodule DoIt.DocsGen do
   or unbalanced.
   """
 
+  alias DoItWeb.AgentConnect
   alias DoItWeb.Api.{Operations, Serializer}
 
   defmodule FenceError do
@@ -28,7 +29,8 @@ defmodule DoIt.DocsGen do
     "DoItWeb.Api.Operations",
     "DoItWeb.Api.Serializer",
     "DoitMcp.Server",
-    "scripts/doitlist.py"
+    "scripts/doitlist.py",
+    "DoItWeb.AgentConnect"
   ]
 
   @doc "Absolute path to the generated doc, rooted at the current project."
@@ -51,6 +53,7 @@ defmodule DoIt.DocsGen do
     |> replace_block("DoItWeb.Api.Serializer", fn -> serializer_table() end)
     |> replace_block("DoitMcp.Server", fn -> mcp_table() end)
     |> replace_block("scripts/doitlist.py", fn -> cli_table() end)
+    |> replace_block("DoItWeb.AgentConnect", fn -> setup_blocks() end)
   end
 
   # --- fence validation -------------------------------------------------------
@@ -109,13 +112,43 @@ defmodule DoIt.DocsGen do
 
   # --- DoItWeb.Api.Operations --------------------------------------------------
 
+  # The connect pastes the account page hands out, with the instance's own
+  # address and the reader's token replaced by placeholders so the block is
+  # the same in every environment.
+  @placeholder_token "doit_pat_YOUR_TOKEN"
+
+  defp setup_blocks do
+    posix = AgentConnect.client_pastes(@placeholder_token, :posix)
+    powershell = AgentConnect.client_pastes(@placeholder_token, :powershell)
+
+    Enum.zip(posix, powershell)
+    |> Enum.map_join("\n\n", fn {{_slug, label, sh}, {_ps_slug, _ps_label, ps}} ->
+      "#### #{label}\n\n" <> shells(mask_urls(sh), mask_urls(ps))
+    end)
+  end
+
+  # A paste that reads the same in both shells is printed once.
+  defp shells(same, same), do: "```sh\n#{same}\n```"
+
+  defp shells(posix, powershell) do
+    "```sh\n#{posix}\n```\n\n```powershell\n#{powershell}\n```"
+  end
+
+  defp mask_urls(text) do
+    mcp = AgentConnect.mcp_url()
+
+    Regex.replace(~r{https?://[^\s'"]+}, text, fn url ->
+      if url == mcp, do: "https://doitlist.app/mcp/", else: "https://doitlist.app"
+    end)
+  end
+
   defp operations_table do
     rows =
       Enum.map(Operations.__doc_rows__(), fn r ->
-        [r.op, r.type, Enum.join(r.data_keys, ", "), Enum.join(r.errors, ", ")]
+        [r.op, r.type, Enum.join(r.data_keys, ", ")]
       end)
 
-    build_table(["Op", "Type", "Data keys", "Errors"], rows)
+    build_table(["Op", "Type", "Data keys"], rows)
   end
 
   # --- DoItWeb.Api.Serializer ---------------------------------------------------

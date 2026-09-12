@@ -26,7 +26,6 @@ defmodule Mix.Tasks.Doit.Docs.Gen do
 
   @impl Mix.Task
   def run(args) do
-    Mix.Task.run("compile")
     {opts, _rest} = OptionParser.parse!(args, strict: [check: :boolean])
     check? = Keyword.get(opts, :check, false)
 
@@ -34,11 +33,13 @@ defmodule Mix.Tasks.Doit.Docs.Gen do
     original = File.read!(path)
 
     updated =
-      try do
-        DoIt.DocsGen.regenerate(original)
-      rescue
-        e in DoIt.DocsGen.FenceError -> Mix.raise(e.message)
-      end
+      with_endpoint(fn ->
+        try do
+          DoIt.DocsGen.regenerate(original)
+        rescue
+          e in DoIt.DocsGen.FenceError -> Mix.raise(e.message)
+        end
+      end)
 
     cond do
       updated == original ->
@@ -52,6 +53,33 @@ defmodule Mix.Tasks.Doit.Docs.Gen do
       true ->
         File.write!(path, updated)
         Mix.shell().info("Regenerated docs/specs/agent_integration.md.")
+    end
+  end
+
+  # The connect pastes read the endpoint's public URL, which lives in a
+  # persistent term written when the endpoint starts — so compiling isn't
+  # enough. Start it with `server: false` (no port bound, so a running server
+  # keeps 4000), then stop it again: `mix precommit` runs this task before
+  # `mix test`, and an endpoint left running makes the app's own start fail.
+  defp with_endpoint(fun) do
+    Mix.Task.run("app.config")
+    {:ok, _} = Application.ensure_all_started(:telemetry)
+
+    previous = Application.get_env(:doit, DoItWeb.Endpoint, [])
+    Application.put_env(:doit, DoItWeb.Endpoint, Keyword.put(previous, :server, false))
+
+    case DoItWeb.Endpoint.start_link() do
+      {:ok, pid} ->
+        try do
+          fun.()
+        after
+          Supervisor.stop(pid)
+          Application.put_env(:doit, DoItWeb.Endpoint, previous)
+        end
+
+      {:error, {:already_started, _pid}} ->
+        Application.put_env(:doit, DoItWeb.Endpoint, previous)
+        fun.()
     end
   end
 end

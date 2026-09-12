@@ -77,6 +77,7 @@ A Worklist is an actionable, checkable parent. Its checkbox records whether the 
    - `[Human]` — the operator only.
    - `[Guided]` — Claude and the operator together.
 5.2 The tag prefixes the subitem text. Define them only here — don't repeat the key in arc docs.
+5.3 An arc that adds an endpoint, op, field, or tool carries a Testing subitem confirming its prose entry landed in [`specs/agent_integration.md`](specs/agent_integration.md).
 
 ### 6. Omissions & Corrections
 6.1 An arc doc may carry an `## Omissions & Corrections` section for bigger-than-tweak gaps whose home arc has closed — bugs and accidental omissions from earlier arcs. Any arc may pick such work up; the section is where the work gets documented first.

@@ -50,27 +50,47 @@ Task completion with an explicitly designated Markdown mirror shall update both 
 
 ### Authentication
 
+Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page. The server keeps only a hash, so a lost token is replaced, never recovered.
+
 ### Errors
+
+| Code | Means | What to do |
+|---|---|---|
+| 401 | no usable token | issue a new one |
+| 403 | role too low for this action | ask the Initiative's owner |
+| 404 | missing, or invisible to you | check agent access |
+| 429 | over 120 requests a minute | wait, then retry |
+
+An [Initiative with agent access off](#safety-and-authorization) reads as not found, never forbidden. The API does not confirm that a record you cannot reach exists.
 
 ### The operations envelope
 
+`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` that later operations in the same batch point at; a lid used before it is defined fails the request. Resending with the same `Idempotency-Key` replays the stored result instead of applying twice.
+
+```json
+{"operations": [
+  {"op": "add", "type": "task", "lid": "epic", "data": {"initiative_id": 12, "title": "Ship the parser"}},
+  {"op": "add", "type": "task", "data": {"parent_lid": "epic", "title": "Write the lexer"}}
+]}
+```
+
 <!-- generated: DoItWeb.Api.Operations -->
-| Op | Type | Data keys | Errors |
-|---|---|---|---|
-| add | task | assignee_id, description, done, initiative, initiative_id, initiative_lid, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, status, title | unprocessable_entity, not_found, forbidden, bad_reference |
-| update | task | assignee_id, co_assignee_ids, description, done, expected_version, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, reorder, title | unprocessable_entity, not_found, forbidden, bad_reference, conflict |
-| remove | task | expected_version | unprocessable_entity, not_found, forbidden, bad_reference, conflict |
-| add | initiative | auto_promote_co_assignees, description, index_style, name, progress_calc, subtitle, viewer_plus | unprocessable_entity, bad_reference |
-| update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, owner_id, progress_calc, state, subtitle, viewer_plus | unprocessable_entity, not_found, forbidden, bad_reference, conflict, irreversible_op |
-| add | comment | body, task, task_id, task_lid | unprocessable_entity, not_found, forbidden, bad_reference |
-| update | comment | body | unprocessable_entity, not_found, forbidden, bad_reference |
-| remove | comment | — | unprocessable_entity, not_found, forbidden, bad_reference |
-| add | member | initiative, initiative_id, initiative_lid, role, user_id | unprocessable_entity, not_found, forbidden, bad_reference, irreversible_op |
-| update | member | initiative, initiative_id, initiative_lid, role, user_id | unprocessable_entity, not_found, forbidden, bad_reference, irreversible_op |
-| remove | member | initiative, initiative_id, initiative_lid, user_id | unprocessable_entity, not_found, forbidden, bad_reference |
-| update | notification | all, read | unprocessable_entity, not_found, forbidden |
-| add | link | source, source_id, source_lid, target, target_id, target_lid | unprocessable_entity, not_found, forbidden, bad_reference |
-| remove | link | source, source_id, source_lid, target, target_id, target_lid | unprocessable_entity, not_found, forbidden, bad_reference |
+| Op | Type | Data keys |
+|---|---|---|
+| add | task | assignee_id, description, done, initiative, initiative_id, initiative_lid, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, status, title |
+| update | task | assignee_id, co_assignee_ids, description, done, expected_version, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, reorder, title |
+| remove | task | expected_version |
+| add | initiative | auto_promote_co_assignees, description, index_style, name, progress_calc, subtitle, viewer_plus |
+| update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, owner_id, progress_calc, state, subtitle, viewer_plus |
+| add | comment | body, task, task_id, task_lid |
+| update | comment | body |
+| remove | comment | — |
+| add | member | initiative, initiative_id, initiative_lid, role, user_id |
+| update | member | initiative, initiative_id, initiative_lid, role, user_id |
+| remove | member | initiative, initiative_id, initiative_lid, user_id |
+| update | notification | all, read |
+| add | link | source, source_id, source_lid, target, target_id, target_lid |
+| remove | link | source, source_id, source_lid, target, target_id, target_lid |
 <!-- /generated: DoItWeb.Api.Operations -->
 
 <!-- generated: DoItWeb.Api.Serializer -->
@@ -86,6 +106,8 @@ Task completion with an explicitly designated Markdown mirror shall update both 
 <!-- /generated: DoItWeb.Api.Serializer -->
 
 ### Read-only and writable fields
+
+`progress` is the rolled-up number the server maintains, and it is read-only. Write `manual_progress`, and only on a leaf; a parent's progress comes from its children.
 
 ## MCP server
 
@@ -117,9 +139,73 @@ Task completion with an explicitly designated Markdown mirror shall update both 
 
 ### Tools and the endpoints behind them
 
+Every write tool is one operation in a batch of one, posted to the operations endpoint; `apply_operations` passes a whole batch through. Read tools map to the read endpoints one for one. Anything the tools do not cover, the API still does.
+
 ### Setup
 
+Paste the block for your client. The account page shows it with your token.
+
+<!-- generated: DoItWeb.AgentConnect -->
+#### Claude Code
+
+```sh
+claude mcp add --transport http doitlist https://doitlist.app/mcp/ --header "Authorization: Bearer doit_pat_YOUR_TOKEN"
+```
+
+#### Codex
+
+```sh
+export DOITLIST_API_TOKEN='doit_pat_YOUR_TOKEN'
+echo "export DOITLIST_API_TOKEN='doit_pat_YOUR_TOKEN'" >> ~/.bashrc   # or your shell's profile
+codex mcp add doitlist --url https://doitlist.app/mcp/ --bearer-token-env-var DOITLIST_API_TOKEN
+```
+
+```powershell
+$env:DOITLIST_API_TOKEN = 'doit_pat_YOUR_TOKEN'
+setx DOITLIST_API_TOKEN 'doit_pat_YOUR_TOKEN'   # persists it for new shells; restart a running terminal or editor so its shells see it
+codex mcp add doitlist --url https://doitlist.app/mcp/ --bearer-token-env-var DOITLIST_API_TOKEN
+```
+
+#### Hermes Agent
+
+```sh
+hermes mcp add doitlist --url https://doitlist.app/mcp/ --auth header
+echo "MCP_DOITLIST_API_KEY=doit_pat_YOUR_TOKEN" >> ~/.hermes/.env
+```
+
+```powershell
+hermes mcp add doitlist --url https://doitlist.app/mcp/ --auth header
+Add-Content -Path ~/.hermes/.env -Value 'MCP_DOITLIST_API_KEY=doit_pat_YOUR_TOKEN' -Encoding utf8
+```
+
+#### Scripted client (doitlist.py)
+
+```sh
+export DOITLIST_API_URL='https://doitlist.app'
+export DOITLIST_API_TOKEN='doit_pat_YOUR_TOKEN'
+echo "export DOITLIST_API_URL='https://doitlist.app'" >> ~/.bashrc   # or your shell's profile
+echo "export DOITLIST_API_TOKEN='doit_pat_YOUR_TOKEN'" >> ~/.bashrc   # or your shell's profile
+python3 --version   # 3.8 or newer
+```
+
+```powershell
+$env:DOITLIST_API_URL = 'https://doitlist.app'
+$env:DOITLIST_API_TOKEN = 'doit_pat_YOUR_TOKEN'
+setx DOITLIST_API_URL 'https://doitlist.app'
+setx DOITLIST_API_TOKEN 'doit_pat_YOUR_TOKEN'
+py -3 --version   # if missing: winget install --id Python.Python.3.13 -e
+```
+<!-- /generated: DoItWeb.AgentConnect -->
+
 ### Walkthrough
+
+Import a plan, tick a Task against it, read the tree back.
+
+```sh
+doitlist.py import PLAN.md --as "Q3 plan" --preview   # then apply by the preview's id
+doitlist.py done %<412> --mirror PLAN.md --section "Parser"
+doitlist.py tree 12 --depth 2
+```
 
 ## Scripted client
 
@@ -145,6 +231,12 @@ Task completion with an explicitly designated Markdown mirror shall update both 
 
 ### The mirror workflow
 
+A mirror is a [Markdown file standing in for an Initiative](#shared-work). Its import writes each Task's `%<id>` onto the source line, so [completions](#completion-mirroring) read the file, not the tree. Live reads are for writes and drift.
+
 ### Import format
 
+Headings are branches. List items are Tasks, nested by indent. A ticked box imports done. [Order and wording stay as written](#import-fidelity); a trailing `%<id>` is stripped.
+
 ### Recovery
+
+A write whose outcome is unknown prints the command that settles it. Run it first; the same key replays rather than reapplying.
