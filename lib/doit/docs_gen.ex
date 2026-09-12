@@ -303,7 +303,40 @@ defmodule DoIt.DocsGen do
         nil -> paragraph
       end
 
-    sentence |> String.replace(~r/\s+/, " ") |> String.trim()
+    sentence
+    |> String.replace(~r/\s+/, " ")
+    |> cell_phrase()
+  end
+
+  # A cell is a phrase, not a sentence (m03.05 6.4). The clause after an em
+  # dash is the sentence explaining itself, a doc reference like
+  # "(m03.04 2.1.3)" is an action list leaking into a spec, and the trailing
+  # period is the last thing making a cell read as prose. A parenthetical
+  # that names an endpoint stays — that is the row's other half.
+  defp cell_phrase(sentence) do
+    sentence
+    |> String.replace(~r/\s*\(m?\d+\.\d+[^)]*\)/, "")
+    |> String.split(" — ", parts: 2)
+    |> List.first()
+    |> String.trim()
+    |> String.trim_trailing(".")
+    |> String.trim()
+  end
+
+  @doc """
+  The file's hand-written word count: everything outside the generated
+  fences, code fences and table rows. The prose half is the half a person
+  maintains, so it is the half with a budget (m03.05 6.3).
+  """
+  def prose_word_count(text) when is_binary(text) do
+    text
+    |> String.replace(~r/<!-- generated:.*?<!-- \/generated:.*?-->/s, "")
+    |> String.replace(~r/```.*?```/s, "")
+    |> String.split("\n")
+    |> Enum.reject(&String.starts_with?(String.trim_leading(&1), "|"))
+    |> Enum.join(" ")
+    |> String.split()
+    |> length()
   end
 
   defp build_table(header, rows) do

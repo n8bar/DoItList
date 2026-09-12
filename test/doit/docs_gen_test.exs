@@ -25,6 +25,15 @@ defmodule DoIt.DocsGenTest do
     end
   end
 
+  test "the hand-written prose stays under its cap" do
+    words =
+      DoIt.DocsGen.doc_path()
+      |> File.read!()
+      |> DoIt.DocsGen.prose_word_count()
+
+    assert words < 800, "prose is #{words} words; the cap is 800 (m03.05 6.3)"
+  end
+
   test "refuses to write when a fence is missing, naming the file" do
     text = """
     <!-- generated: DoItWeb.Api.Operations -->

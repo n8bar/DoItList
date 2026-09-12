@@ -96,13 +96,13 @@ An [Initiative with agent access off](#safety-and-authorization) reads as not fo
 <!-- generated: DoItWeb.Api.Serializer -->
 | Shape | Purpose |
 |---|---|
-| initiative_summary | An Initiative list item (`GET /api/v1/initiatives`). |
-| initiative_tree | The whole-Initiative tree response body (`GET /api/v1/initiatives/:id`). |
-| initiative_url | The Initiative's web URL — the operator-facing handle (m03.04 2.1.3) — composed from the endpoint's public URL config via verified routes. |
-| task_ref | The task → Initiative resolver body (`GET /api/v1/tasks/:id`). |
-| activity_event | One activity event (`GET /api/v1/initiatives/:id/activity`). |
-| member | One Initiative member with their role (`GET /api/v1/initiatives/:id/members`). |
-| comment | One comment, including the tombstone form for a soft-deleted comment. |
+| initiative_summary | An Initiative list item (`GET /api/v1/initiatives`) |
+| initiative_tree | The whole-Initiative tree response body (`GET /api/v1/initiatives/:id`) |
+| initiative_url | The Initiative's web URL |
+| task_ref | The task → Initiative resolver body (`GET /api/v1/tasks/:id`) |
+| activity_event | One activity event (`GET /api/v1/initiatives/:id/activity`) |
+| member | One Initiative member with their role (`GET /api/v1/initiatives/:id/members`) |
+| comment | One comment, including the tombstone form for a soft-deleted comment |
 <!-- /generated: DoItWeb.Api.Serializer -->
 
 ### Read-only and writable fields
@@ -114,27 +114,27 @@ An [Initiative with agent access off](#safety-and-authorization) reads as not fo
 <!-- generated: DoitMcp.Server -->
 | Tool | Purpose |
 |---|---|
-| add_comment | Add one comment to a task. |
-| add_link | Add one directed task-to-task cross-reference link. |
-| apply_operations | Atomically apply up to 150 ordered operations. |
-| complete_task | Mark one task done or not done. |
-| create_initiative | Create one Initiative — the top-level container that owns a task tree. |
-| create_task | Create one task. |
-| delete_comment | Delete one comment. |
-| delete_task | Soft-delete one task and its entire subtree; never delete included descendants separately. |
-| edit_comment | Edit one comment's body. |
-| get_initiative_activity | Read one Initiative's activity. |
-| get_initiative_members | Read one Initiative's members and roles. |
-| get_initiative_tree | Read one Initiative's full task tree with live index labels. |
-| get_me | Read the acting user's identity and account details. |
-| get_task_comments | Read one task's comments, including soft-delete tombstones. |
-| import_text | Import one document into a Task tree. |
-| list_initiatives | List the acting user's Initiatives. |
-| move_task | Move one task to a new parent and/or sibling position — reorder, reparent, promote, and demote are all this tool. |
-| remove_link | Remove one directed task-to-task cross-reference link, identified by its exact `source_task_id` and `target_task_id` pair. |
-| set_initiative_state | Change one Initiative's lifecycle state. |
-| update_initiative | Update one Initiative's name, description, subtitle, progress calculation, task numbering, co-assignee auto-promotion, or viewer+ access. |
-| update_task | Update one task's title, description, priority, assignee, or manual progress. |
+| add_comment | Add one comment to a task |
+| add_link | Add one directed task-to-task cross-reference link |
+| apply_operations | Atomically apply up to 150 ordered operations |
+| complete_task | Mark one task done or not done |
+| create_initiative | Create one Initiative |
+| create_task | Create one task |
+| delete_comment | Delete one comment |
+| delete_task | Soft-delete one task and its entire subtree; never delete included descendants separately |
+| edit_comment | Edit one comment's body |
+| get_initiative_activity | Read one Initiative's activity |
+| get_initiative_members | Read one Initiative's members and roles |
+| get_initiative_tree | Read one Initiative's full task tree with live index labels |
+| get_me | Read the acting user's identity and account details |
+| get_task_comments | Read one task's comments, including soft-delete tombstones |
+| import_text | Import one document into a Task tree |
+| list_initiatives | List the acting user's Initiatives |
+| move_task | Move one task to a new parent and/or sibling position |
+| remove_link | Remove one directed task-to-task cross-reference link, identified by its exact `source_task_id` and `target_task_id` pair |
+| set_initiative_state | Change one Initiative's lifecycle state |
+| update_initiative | Update one Initiative's name, description, subtitle, progress calculation, task numbering, co-assignee auto-promotion, or viewer+ access |
+| update_task | Update one task's title, description, priority, assignee, or manual progress |
 <!-- /generated: DoitMcp.Server -->
 
 ### Tools and the endpoints behind them
