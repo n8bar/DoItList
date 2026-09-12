@@ -1,5 +1,5 @@
 # M03-API-MCP
-_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 complete · Arc 5 draft stub · Target: TBD_
+_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 complete · Arc 5 scoped, pending approval · Target: TBD_
 
 > Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
 
