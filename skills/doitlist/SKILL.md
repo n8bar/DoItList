@@ -27,9 +27,9 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 3. When a write reports `outcome unknown`, run the recovery it prints (`doitlist.py retry <key>`; for `import`, the same command again) before any other command.
 4. Importing a mirror:
 	1. Preview first.
-	2. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document.
-	3. Give an unindexed target an index style first.
-	4. Flag titles over 200 characters; suggest shortening them.
+	2. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, without editing the document.
+	3. An unindexed target imports unnumbered; suggest a style.
+	4. Flag titles over 200 characters; suggest shortening them and using descriptions and subtasks as appropriate.
 	5. Flag note-bullets that would import as Tasks; suggest rewriting them as prose, which imports as the description.
 	6. State the top ranks, get a yes, then apply the preview by its id; the apply lands each created Task's `%<id>` on its source line.
 5. Ask before deleting content you cannot identify; it is usually the user's.
