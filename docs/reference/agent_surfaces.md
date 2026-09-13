@@ -67,6 +67,42 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 `progress` is the rolled-up number the server maintains, and it is read-only. Write `manual_progress`, and only on a leaf; a parent's progress comes from its children.
 
+
+## Scripted client
+
+<!-- generated: scripts/doitlist.py -->
+| Verb | Args | Options | Purpose |
+|---|---|---|---|
+| list | — | — | list the Initiatives you can reach |
+| tree | initiative | --under, --depth | print an Initiative's outline |
+| comments | task | — | print a Task's comments |
+| activity | initiative | --task, --limit | print an Initiative's activity |
+| add | parent title | --out, --numbered | add a Task under a parent |
+| done | task | --out, --reopen, --mirror, --section, --initiative | complete a Task |
+| progress | task percent | --out | set a Task's Progress |
+| move | task parent [position] | --out | reparent or reorder a Task |
+| comment | task text | --out | comment on a Task |
+| retitle | task title | --out, --numbered | change a Task's title |
+| describe | task text | --out | set a Task's description |
+| delete | task | --out | delete a Task (and its subtree) |
+| import | file | --out, --into, --under, --section, --as, --preview, --no-ids | import a document as a Task tree |
+| diff | file initiative | --out, --under | compare a document with an existing Initiative |
+| retry | [key] | --out | resend writes whose outcome is unknown |
+<!-- /generated: scripts/doitlist.py -->
+
+### The mirror workflow
+
+A mirror is a [Markdown file standing in for an Initiative](../specs/agent_integration.md#shared-work). Its import writes each Task's `%<id>` onto the source line, so [completions](../specs/agent_integration.md#completion-mirroring) read the file, not the tree. Live reads are for writes and drift.
+
+### Import format
+
+Headings are branches. List items are Tasks, nested by indent. A ticked box imports done. [Order and wording stay as written](../specs/agent_integration.md#import-fidelity); a trailing `%<id>` is stripped.
+
+### Recovery
+
+A write whose outcome is unknown prints the command that settles it. Run it first; the same key replays rather than reapplying.
+
+
 ## MCP server
 
 <!-- generated: DoitMcp.Server -->
@@ -164,37 +200,3 @@ doitlist.py import PLAN.md --as "Q3 plan" --preview   # then apply by the previe
 doitlist.py done %<412> --mirror PLAN.md --section "Parser"
 doitlist.py tree 12 --depth 2
 ```
-
-## Scripted client
-
-<!-- generated: scripts/doitlist.py -->
-| Verb | Args | Options | Purpose |
-|---|---|---|---|
-| list | — | — | list the Initiatives you can reach |
-| tree | initiative | --under, --depth | print an Initiative's outline |
-| comments | task | — | print a Task's comments |
-| activity | initiative | --task, --limit | print an Initiative's activity |
-| add | parent title | --out, --numbered | add a Task under a parent |
-| done | task | --out, --reopen, --mirror, --section, --initiative | complete a Task |
-| progress | task percent | --out | set a Task's Progress |
-| move | task parent [position] | --out | reparent or reorder a Task |
-| comment | task text | --out | comment on a Task |
-| retitle | task title | --out, --numbered | change a Task's title |
-| describe | task text | --out | set a Task's description |
-| delete | task | --out | delete a Task (and its subtree) |
-| import | file | --out, --into, --under, --section, --as, --preview, --no-ids | import a document as a Task tree |
-| diff | file initiative | --out, --under | compare a document with an existing Initiative |
-| retry | [key] | --out | resend writes whose outcome is unknown |
-<!-- /generated: scripts/doitlist.py -->
-
-### The mirror workflow
-
-A mirror is a [Markdown file standing in for an Initiative](../specs/agent_integration.md#shared-work). Its import writes each Task's `%<id>` onto the source line, so [completions](../specs/agent_integration.md#completion-mirroring) read the file, not the tree. Live reads are for writes and drift.
-
-### Import format
-
-Headings are branches. List items are Tasks, nested by indent. A ticked box imports done. [Order and wording stay as written](../specs/agent_integration.md#import-fidelity); a trailing `%<id>` is stripped.
-
-### Recovery
-
-A write whose outcome is unknown prints the command that settles it. Run it first; the same key replays rather than reapplying.
