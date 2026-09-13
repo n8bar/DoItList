@@ -17,6 +17,7 @@ defmodule DoItWeb.Api.ImportController do
 
   alias DoItWeb.Api.Imports
 
+  @doc "Import a source document as a Task tree, or preview it."
   def create(conn, params) do
     {_, status, body} = Imports.run(conn.assigns.current_user, conn.assigns.api_token_id, params)
     conn |> put_status(status) |> json(body)

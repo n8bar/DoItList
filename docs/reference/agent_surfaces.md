@@ -10,6 +10,23 @@ Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` ar
 
 Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page. The server keeps only a hash, so a lost token is replaced, never recovered.
 
+### Endpoints
+
+<!-- generated: DoItWeb.Router -->
+| Method | Path | Purpose |
+|---|---|---|
+| GET | /api/v1/me | Who the token belongs to |
+| GET | /api/v1/initiatives | List the Initiatives the acting user belongs to |
+| GET | /api/v1/initiatives/:id | The whole nested Initiative tree in one response |
+| GET | /api/v1/initiatives/:id/activity | One Initiative's activity, newest first |
+| GET | /api/v1/initiatives/:id/members | The Initiative's members with their roles |
+| GET | /api/v1/initiatives/:id/task_count | How many Tasks an Initiative has |
+| GET | /api/v1/initiatives/:id/tasks/:task_id/comments | A task's comments, including tombstones for soft-deleted ones |
+| GET | /api/v1/tasks/:id | Which Initiative a bare task id belongs to |
+| POST | /api/v1/operations | Apply an ordered batch of write operations, all or nothing |
+| POST | /api/v1/imports | Import a source document as a Task tree, or preview it |
+<!-- /generated: DoItWeb.Router -->
+
 ### Errors
 
 | Code | Means | What to do |
@@ -17,7 +34,8 @@ Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued an
 | 401 | no usable token | issue a new one |
 | 403 | role too low for this action | ask the Initiative's owner |
 | 404 | missing, or invisible to you | check agent access |
-| 429 | over 120 requests a minute | wait, then retry |
+| 422 | the batch was rejected | read `results` for the failing index |
+| 429 | over 120 requests a minute | wait the `Retry-After` seconds |
 
 An [Initiative with agent access off](../specs/agent_integration.md#safety-and-authorization) reads as not found, never forbidden. The API does not confirm that a record you cannot reach exists.
 
@@ -31,6 +49,8 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
   {"op": "add", "type": "task", "data": {"parent_lid": "epic", "title": "Write the lexer"}}
 ]}
 ```
+
+A response carries `results`, one entry per operation, in order. Each names a `status` — `ok`, `error`, or `not_applied` — and a failure's `pointer` names the field at fault. One failure rolls the whole batch back, so every other entry reads `not_applied`.
 
 <!-- generated: DoItWeb.Api.Operations -->
 | Op | Type | Data keys |
@@ -60,12 +80,12 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 | task_ref | The task → Initiative resolver body (`GET /api/v1/tasks/:id`) |
 | activity_event | One activity event (`GET /api/v1/initiatives/:id/activity`) |
 | member | One Initiative member with their role (`GET /api/v1/initiatives/:id/members`) |
-| comment | One comment, including the tombstone form for a soft-deleted comment |
+| comment | One comment, tombstoned when soft-deleted (`GET /api/v1/initiatives/:id/tasks/:task_id/comments`) |
 <!-- /generated: DoItWeb.Api.Serializer -->
 
 ### Read-only and writable fields
 
-`progress` is the rolled-up number the server maintains, and it is read-only. Write `manual_progress`, and only on a leaf; a parent's progress comes from its children.
+`progress` is the rolled-up number the server maintains; writing it is refused. Leaves take `manual_progress`; branches don't — a branch's progress comes from its children.
 
 
 ## Scripted client

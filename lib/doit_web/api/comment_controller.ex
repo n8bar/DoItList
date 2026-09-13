@@ -25,6 +25,7 @@ defmodule DoItWeb.Api.CommentController do
 
   action_fallback DoItWeb.Api.FallbackController
 
+  @doc "A task's comments, including tombstones for soft-deleted ones."
   def index(conn, %{"id" => id, "task_id" => task_id}) do
     user = conn.assigns.current_user
 

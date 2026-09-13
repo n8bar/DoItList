@@ -5,6 +5,7 @@ defmodule Mix.Tasks.Doit.Docs.Gen do
   Rewrites the fenced generated blocks in `docs/reference/agent_surfaces.md`
   from the live code (m03.05 worklist 2):
 
+    * the endpoint list, from `DoItWeb.Router`
     * the op table, from `DoItWeb.Api.Operations`
     * the response shapes, from `DoItWeb.Api.Serializer`
     * the MCP tool list, from `DoitMcp.Server`

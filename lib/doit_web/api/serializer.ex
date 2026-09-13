@@ -470,7 +470,7 @@ defmodule DoItWeb.Api.Serializer do
     }
   end
 
-  @doc "One comment, including the tombstone form for a soft-deleted comment."
+  @doc "One comment, tombstoned when soft-deleted (`GET /api/v1/initiatives/:id/tasks/:task_id/comments`)."
   def comment(%Comment{} = comment) do
     deleted? = Tasks.comment_deleted?(comment)
 

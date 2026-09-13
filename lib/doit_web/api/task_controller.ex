@@ -26,6 +26,7 @@ defmodule DoItWeb.Api.TaskController do
 
   action_fallback DoItWeb.Api.FallbackController
 
+  @doc "Which Initiative a bare task id belongs to."
   def show(conn, %{"id" => id}) do
     user = conn.assigns.current_user
 

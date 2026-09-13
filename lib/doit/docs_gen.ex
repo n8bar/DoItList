@@ -1,10 +1,10 @@
 defmodule DoIt.DocsGen do
   @moduledoc """
   Generates the fenced blocks in `docs/reference/agent_surfaces.md` from the
-  live code (m03.05 worklist 2) — the op table, the response shapes, the MCP
-  tool list, and the scripted client's verbs and options. Anything mechanical
-  lives here so it can't drift from the code it describes; the surrounding
-  prose is untouched.
+  live code (m03.05 worklist 2) — the endpoint list, the op table, the response
+  shapes, the MCP tool list, and the scripted client's verbs and options.
+  Anything mechanical lives here so it can't drift from the code it describes;
+  the surrounding prose is untouched.
 
   `regenerate/1` is the one entry point, used by both `mix doit.docs.gen`
   (which writes the result) and the gate test (which only compares it). It
@@ -14,6 +14,7 @@ defmodule DoIt.DocsGen do
 
   alias DoItWeb.AgentConnect
   alias DoItWeb.Api.{Operations, Serializer}
+  alias DoItWeb.Router
 
   defmodule FenceError do
     defexception [:message]
@@ -26,6 +27,7 @@ defmodule DoIt.DocsGen do
   # The sources every fence in the file must name — checked for presence and
   # balance regardless of which block a given regenerate/1 call touches.
   @sources [
+    "DoItWeb.Router",
     "DoItWeb.Api.Operations",
     "DoItWeb.Api.Serializer",
     "DoitMcp.Server",
@@ -49,6 +51,7 @@ defmodule DoIt.DocsGen do
     check_fences!(text)
 
     text
+    |> replace_block("DoItWeb.Router", fn -> router_table() end)
     |> replace_block("DoItWeb.Api.Operations", fn -> operations_table() end)
     |> replace_block("DoItWeb.Api.Serializer", fn -> serializer_table() end)
     |> replace_block("DoitMcp.Server", fn -> mcp_table() end)
@@ -108,6 +111,38 @@ defmodule DoIt.DocsGen do
     Regex.replace(regex, text, fn _whole, head, _mid, tail ->
       head <> "\n" <> body <> "\n" <> tail
     end)
+  end
+
+  # --- DoItWeb.Router -----------------------------------------------------------
+
+  # Every `/api/v1` route the router actually defines, in router order — the
+  # list can't be hand-maintained, so a new endpoint documents itself.
+  defp router_table do
+    rows =
+      for route <- Router.__routes__(), String.starts_with?(route.path, "/api/v1") do
+        [route.verb |> Atom.to_string() |> String.upcase(), route.path, action_purpose(route)]
+      end
+
+    build_table(["Method", "Path", "Purpose"], rows)
+  end
+
+  # The purpose is the controller action's own `@doc`, read the way
+  # serializer_table/0 reads the shapes. An undocumented action fails the run
+  # rather than emitting an empty cell.
+  defp action_purpose(%{plug: controller, plug_opts: action}) do
+    {:docs_v1, _anno, _lang, _format, _moduledoc, _meta, docs} = Code.fetch_docs(controller)
+
+    purpose =
+      Enum.find_value(docs, fn
+        {{:function, ^action, 2}, _anno, _sig, doc, _meta} when doc not in [:none, :hidden] ->
+          first_sentence(doc_text(doc))
+
+        _other ->
+          nil
+      end)
+
+    purpose ||
+      raise "#{inspect(controller)}.#{action}/2 has no @doc — every /api/v1 action needs one."
   end
 
   # --- DoItWeb.Api.Operations --------------------------------------------------
