@@ -220,7 +220,7 @@ defmodule DoIt.Imports.FixturesTest do
       milestones = find(manifest.items, "Milestones")
       assert milestones.children == []
       assert milestones.description =~ "| Status | ID | Milestone |"
-      assert milestones.description =~ "| [ ] | M03 | API & MCP |"
+      assert milestones.description =~ ~r/\| \[ \] \| M\d\d \| /
 
       completed = find(manifest.items, "Completed Milestones")
       assert completed.description =~ "| [x] | M01 | BaseApp |"

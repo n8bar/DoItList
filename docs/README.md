@@ -59,6 +59,7 @@ A Worklist is an actionable, checkable parent. Its checkbox records whether the 
    - Worklist: `docs/milestones/m##-<slug>/m##.NN.NN-<slug>.md`
 2.4 If breakouts get crowded, introduce arc subfolders: `docs/milestones/m##-<slug>/m##.NN-<slug>/...`.
 2.5 Subordinate specs are content-named (not milestone-named) and live at `docs/specs/<topic>.md`.
+2.6 Reference docs — how a surface works today, rather than what must stay true — live at `docs/reference/<topic>.md`.
 
 ### 3. Specs vs. Action lists
 3.1 Specs describe behavior and invariants; action lists describe how/when work happens.
@@ -77,6 +78,7 @@ A Worklist is an actionable, checkable parent. Its checkbox records whether the 
    - `[Human]` — the operator only.
    - `[Guided]` — Claude and the operator together.
 5.2 The tag prefixes the subitem text. Define them only here — don't repeat the key in arc docs.
+5.3 An arc that adds an endpoint, op, field, or tool carries a Testing subitem confirming its prose entry landed in [`reference/agent_surfaces.md`](reference/agent_surfaces.md).
 
 ### 6. Omissions & Corrections
 6.1 An arc doc may carry an `## Omissions & Corrections` section for bigger-than-tweak gaps whose home arc has closed — bugs and accidental omissions from earlier arcs. Any arc may pick such work up; the section is where the work gets documented first.

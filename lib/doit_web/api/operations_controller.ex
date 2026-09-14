@@ -43,6 +43,7 @@ defmodule DoItWeb.Api.OperationsController do
   alias DoIt.Api.Idempotency
   alias DoItWeb.Api.{Errors, Operations}
 
+  @doc "Apply an ordered batch of write operations, all or nothing."
   def create(conn, %{"operations" => operations}) do
     user = conn.assigns.current_user
 

@@ -248,6 +248,51 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target)
   }
 
+  # --- doc generation (m03.05 worklist 2) ------------------------------------
+  #
+  # `mix doit.docs.gen` reads this to render the op table in
+  # docs/reference/agent_surfaces.md. Rows come straight from
+  # @accepted_data_keys — the same map validate_data_keys/3 enforces at
+  # runtime — so a newly wired {verb, type} appears in the doc the next time
+  # it's regenerated, with no second list to keep in sync.
+  #
+  # The `errors` column can't be read off any single attribute; it's derived
+  # from what each dispatch clause actually does, encoded as three small
+  # rules below rather than hand-typed per row:
+  #   * every row can fail `unprocessable_entity` (validation, or an unknown
+  #     `data` key rejected before dispatch);
+  #   * every row can fail `not_found` and `forbidden` EXCEPT `add
+  #     initiative`, the one op with no target to resolve and no capability
+  #     check (any authed user may create one);
+  #   * every row can fail `bad_reference` (a bad/forward/foreign/duplicate
+  #     lid) EXCEPT `update notification`, whose target is always a literal
+  #     id, never a lid;
+  #   * `conflict` appears only where `expected_version` is an accepted key;
+  #   * `irreversible_op` appears only where `owner_id` (ownership transfer)
+  #     or a member `role` (which could name "owner") is accepted.
+  # `unsupported_op` is deliberately never listed per row — it's the fallback
+  # for a {verb, type} NOT in this table, and belongs in prose, once.
+  # Keys accepted only so their own op can answer with a specific error rather
+  # than a generic unknown-field one. They never succeed, so the generated doc
+  # table must not advertise them (m03.05 9.8).
+  @never_succeeds_data_keys %{{"update", "initiative"} => ~w(owner_id)}
+
+  @doc false
+  def __doc_rows__ do
+    type_rank = @types |> Enum.with_index() |> Map.new()
+    verb_rank = @verbs |> Enum.with_index() |> Map.new()
+
+    @accepted_data_keys
+    |> Enum.map(fn {{verb, type}, keys} ->
+      %{
+        op: verb,
+        type: type,
+        data_keys: Enum.sort(keys -- Map.get(@never_succeeds_data_keys, {verb, type}, []))
+      }
+    end)
+    |> Enum.sort_by(fn %{op: op, type: type} -> {type_rank[type], verb_rank[op]} end)
+  end
+
   @typedoc """
   A per-op error carries the wire code, message, an optional field pointer, and
   the batch HTTP status it implies. A version conflict (m03.04 2.7.4) also

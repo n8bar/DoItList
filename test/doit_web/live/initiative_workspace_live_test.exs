@@ -252,4 +252,29 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
 
     assert has_element?(view, "#workspace-root")
   end
+
+  test "the Tree tools menu shows on an open Initiative, not on the list (m04)",
+       %{conn: conn, alpha: alpha} do
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
+    assert has_element?(view, "#tree-tools-menu")
+
+    for {slug, label} <- [
+          {"expand-all", "Expand all"},
+          {"collapse-all", "Collapse all"},
+          {"collapse-completed", "Collapse completed branches"},
+          {"expand-incomplete", "Expand incomplete branches"},
+          {"expand-subtree", "Expand selected subtree"},
+          {"collapse-subtree", "Collapse selected subtree"}
+        ] do
+      assert has_element?(view, "#tree-tools-#{slug}", label)
+      assert has_element?(view, "#mobile-tree-tools-#{slug}", label)
+    end
+
+    # Nothing is selected on mount, so the subtree items start disabled.
+    assert has_element?(view, "#tree-tools-expand-subtree[aria-disabled=true]")
+    assert has_element?(view, "#tree-tools-collapse-subtree[aria-disabled=true]")
+
+    {:ok, list_view, _html} = live(conn, ~p"/initiatives")
+    refute has_element?(list_view, "#tree-tools-menu")
+  end
 end

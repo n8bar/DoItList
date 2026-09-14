@@ -1,7 +1,7 @@
 # M03-API-MCP
-_Status: Arc 1 complete · Arc 2 complete · Arc 3 complete · Arc 4 complete · Arc 5 draft stub · Target: TBD_
+_Status: Complete 2026-09-13 · all five arcs complete · Target: not set_
 
-> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria once it's scoped; per-arc detail will live in arc files linked below.
+> Canonical product behavior, vocabulary, and the roll-up formula live in [`ProductSpec.md`](../../ProductSpec.md). Universal UX/a11y baseline lives in [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md). This milestone doc owns M03 scope and acceptance criteria; per-arc detail lives in the arc files linked below.
 
 ## Goal
 
@@ -42,11 +42,11 @@ _Per-decision rationale (transport, versioning, auth, rate limiting, bulk, the p
 | 2 — Roll-up progress & completion | [`m03.02-rollup-progress.md`](m03.02-rollup-progress.md) | Backend lazy computation · Live collaborator updates · Client-side prediction · Testing | complete |
 | 3 — MCP server | [`m03.03-mcp-server.md`](m03.03-mcp-server.md) | MCP server · Batch reliability · Task cross-reference UI · Omissions & Corrections · Testing and Verification | complete |
 | 4 — MCP, scripted client & companion skill | [`m03.04-mcp+scripted-client+skill.md`](m03.04-mcp+scripted-client+skill.md) · first pass: [archived record](archive/m03.04-companion-skill+mcp-refinement.md) | Ceremony off · Import parser · Chat lane · Scripted client · Skill rewrite · Omissions & Corrections · Testing and Verification | complete |
-| 5 — Documentation & maintenance | [`m03.05-documentation+maintenance.md`](m03.05-documentation+maintenance.md) | API reference · MCP reference · Maintenance plan · Testing | draft (stub) |
+| 5 — Documentation & maintenance | [`m03.05-documentation+maintenance.md`](m03.05-documentation+maintenance.md) | Structure · Generator & gate · API section · MCP section · Scripted client section · Keeping it synced · Reference split · Testing and Verification · Drive findings | complete |
 
 ## Status
 
-Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is complete — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashed under a realistic batch and caused lock contention between concurrent collaborators; the fix moved to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is complete — runtime (on `anubis_mcp`, the maintained fork of `hermes_mcp`), tools/resources, batch reliability, and the `%`-reference UI all landed and eye-passed; the transport it shipped on (a stdio process per connection) was retired in Arc 4 for a resident HTTP service. Arc 4 (MCP, scripted client & companion skill) is complete — the redo shipped both lanes: a deterministic import parser, an MCP chat lane, and a scripted client whose import annotates each source line with the Task it created, so a completion takes its id from the file the agent already reads. That last mechanism is what met the north-star efficiency claim on the costs that scale with tree size. The closing Windows pass exposed three defects in the connect pastes — a startup file the OS refuses to run, a Python hint that opens an app store, and a public address every client rejects — all fixed within the arc. Its first pass, four skill drives and six skill-less iterations, built the resident transport, the connect panel, conditional writes, and an import ceremony that could catch contradiction but never fidelity; the direction changed to two lanes and that pass is archived as the record. Arc 5 (Documentation & maintenance) remains a draft stub, unscoped.
+Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.3) is done. Arc 2 (Roll-up progress & completion) is complete — a real MCP test-drive found that eager, server-side, whole-tree roll-up recomputation crashed under a realistic batch and caused lock contention between concurrent collaborators; the fix moved to lazy on-read computation plus instant client-side prediction for the acting user's own edit. Arc 3 (MCP server) is complete — runtime (on `anubis_mcp`, the maintained fork of `hermes_mcp`), tools/resources, batch reliability, and the `%`-reference UI all landed and eye-passed; the transport it shipped on (a stdio process per connection) was retired in Arc 4 for a resident HTTP service. Arc 4 (MCP, scripted client & companion skill) is complete — the redo shipped both lanes: a deterministic import parser, an MCP chat lane, and a scripted client whose import annotates each source line with the Task it created, so a completion takes its id from the file the agent already reads. That last mechanism is what met the north-star efficiency claim on the costs that scale with tree size. The closing Windows pass exposed three defects in the connect pastes — a startup file the OS refuses to run, a Python hint that opens an app store, and a public address every client rejects — all fixed within the arc. Its first pass, four skill drives and six skill-less iterations, built the resident transport, the connect panel, conditional writes, and an import ceremony that could catch contradiction but never fidelity; the direction changed to two lanes and that pass is archived as the record. Arc 5 (Documentation & maintenance) is complete — the reference moved out of the spec into [`agent_surfaces.md`](../../reference/agent_surfaces.md), where the mechanical half is generated from the code and a gate test in `mix precommit` fails the suite when the committed text drifts. Driving a live Initiative from that file alone found nothing it documented wrong and a dozen things it didn't document at all — the 422 every envelope rejection returns, the per-op result shape, four endpoints with no path written down, and where a record's id goes on an update. All were closed in the arc, along with four connect-paste defects the same pass exposed: a token written after the command that reads it, a Windows path nothing read, an op table advertising a key that always refuses, and a shell default whose failure was silent rather than loud. The generator and its gate are what carry past the milestone; the arc's own worklists are done.
 
 ## Preconditions
 
@@ -62,7 +62,13 @@ Arc 1 (HTTP API) is complete — built, and the operator's manual API pass (WL5.
 
 ## Acceptance Criteria
 
-_(TBD once scoped into arcs.)_
+- Initiatives, Tasks, membership, and cross-references are all reachable over an authenticated HTTP API, with one atomic operations endpoint for writes.
+- The MCP server consumes that public API over HTTP and keeps no shortcut into the Elixir contexts.
+- Roll-up progress survives a realistic agent batch — no whole-tree recomputation on write, no lock contention between concurrent collaborators.
+- Both lanes work end to end: a chat client drives an Initiative through MCP tools, and a coding agent drives one through the scripted client.
+- The north-star claim holds on the costs that scale with tree size — driving a tree through the script lane is at least as cheap as editing the markdown it replaces.
+- Every endpoint, op, field, and tool is documented in [`agent_surfaces.md`](../../reference/agent_surfaces.md), with the mechanical half generated and a gate test that fails on drift.
+- An agent given only that file and a token can build a tree without the skill and without the MCP tools.
 
 ## Branch
 

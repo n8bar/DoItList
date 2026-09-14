@@ -16,7 +16,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 2. Reading
 
-1. Read and discuss from the file the user or repo instructions designate as the Initiative's mirror; no live verification needed.
+1. If a file mirror is maintained, read and discuss from the file the user or repo instructions designated as the Initiative's mirror; no live verification needed.
 2. Read live before any write, when the mirror lacks the data, the user asks, or the tree has drifted; a mirrored completion needs none.
 3. Never filter completed Tasks out of a tree view.
 
@@ -25,8 +25,14 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 1. Pass the source verbatim. The API parses it and sets the grain; never summarize, reorder, or reformat first.
 2. When the source, the destination Initiative or parent, or the extent — whole document or one section — stays ambiguous after checking the mirror, the repo's instructions, and the conversation, ask the user before acting. Do not guess.
 3. When a write reports `outcome unknown`, run the recovery it prints (`doitlist.py retry <key>`; for `import`, the same command again) before any other command.
-4. Importing a mirror: preview first. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, never edit the document. State the top ranks, get a yes, then apply the preview by its id; the apply lands each created Task's `%<id>` on its source line. Give an unindexed target an index style first. Flag titles over 200 characters and note-bullets that would import as Tasks; suggest shortening them and rewriting the bullets as prose, which imports as the description.
-5. Ask before deleting content you cannot identify; it is usually the user's.
+4. Importing a mirror:
+	1. Preview first.
+	2. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, without editing the document.
+	3. An unindexed target imports unnumbered; suggest a style.
+	4. Flag titles over 200 characters; suggest shortening them and using descriptions and subtasks as appropriate.
+	5. Flag note-bullets that would import as Tasks; suggest rewriting them as prose, which imports as the description.
+	6. State the top ranks, get a yes, then apply the preview by its id; the apply lands each created Task's `%<id>` on its source line.
+5. Ask before deleting content you cannot identify; it's usually the user's.
 
 ## 4. Completing against a mirror
 
@@ -36,15 +42,14 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 ## 5. Naming
 
-1. Give the user an Initiative's URL or name, a Task's index and title — its title alone when it has no index. Never a bare numeric id: the mirror's `%<id>` annotations are file plumbing, never said to the user.
-2. Reference other Tasks within a Task's fields by its stored token followed by its title, e.g. `%<272> Ship the parser`. The brackets are literal. Never remove an existing one; edit around it.
+1. Give the user an Initiative's URL or name, a Task's index, if available, and title. Never a bare numeric id: the mirror's `%<id>` annotations are file plumbing, never said to the user.
+2. Reference other Tasks within a Task's fields by its stored token followed by its title, e.g. `%<1234> Ship the parser`. The brackets are literal. Maintain existing ones.
 
 ## 6. Comments and descriptions
 
-1. Put a decision and its reason in a comment. After a move, comment both parents.
-2. Put how-to and reference detail in the description.
+1. Use comments for decisions and reasons. Comment both parents after a move.
+2. Use description for how-to and reference detail, in plain prose.
 3. A new non-import Task matches its siblings' depth; offer in one line to decompose it into how-to steps; do so only on a yes.
-4. Write both as plain prose.
 
 ## 7. Content safety
 

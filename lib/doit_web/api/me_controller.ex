@@ -10,6 +10,7 @@ defmodule DoItWeb.Api.MeController do
 
   action_fallback DoItWeb.Api.FallbackController
 
+  @doc "Who the token belongs to."
   def show(conn, _params) do
     user = conn.assigns.current_user
 

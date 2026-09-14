@@ -25,8 +25,8 @@ defmodule DoItWeb.Api.InitiativeController do
   action_fallback DoItWeb.Api.FallbackController
 
   @doc """
-  List the Initiatives the acting user belongs to (no per-Initiative authz: the
-  query is already scoped to their memberships). Filtered to agent-accessible
+  List the Initiatives the acting user belongs to. No per-Initiative authz: the
+  query is already scoped to their memberships. Filtered to agent-accessible
   Initiatives (m03.04 2.4.1.2) — a flagged-off one never appears, matching
   the 404 its direct reads return.
   """
@@ -80,8 +80,8 @@ defmodule DoItWeb.Api.InitiativeController do
   end
 
   @doc """
-  The Initiative- (or subtree-) level activity rollup, reverse-chronological and
-  paginated. `?task_id=` scopes to that task's subtree; `?limit=` / `?offset=`
+  One Initiative's activity, newest first. Paginated, and `?task_id=` scopes to
+  that task's subtree; `?limit=` / `?offset=`
   page (limit clamped 1..200, default 50). A foreign/unknown `task_id` → 404.
   """
   def activity(conn, %{"id" => id} = params) do
@@ -122,10 +122,13 @@ defmodule DoItWeb.Api.InitiativeController do
     end
   end
 
-  # Live task counts (root excluded), optionally scoped to tasks created at or
-  # after `?created_at=<ISO8601>` — dumb facts for a caller sizing up a tree:
-  # `count` and `done_count` in that scope, `live_count` for the whole live
-  # tree, plus the Initiative's creation instant, name, and `index_style`.
+  @doc """
+  How many Tasks an Initiative has. Dumb facts for a caller sizing up a tree,
+  alongside its name, creation instant, and index style (the system root
+  excluded): `?created_at=<ISO8601>` scopes `count` and `done_count` to tasks
+  created at or after that instant, while `live_count` always covers the whole
+  live tree.
+  """
   def task_count(conn, %{"id" => id} = params) do
     user = conn.assigns.current_user
 

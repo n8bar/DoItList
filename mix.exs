@@ -95,7 +95,13 @@ defmodule DoIt.MixProject do
         "esbuild doit --minify",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      precommit: [
+        "compile --warnings-as-errors",
+        "doit.docs.gen --check",
+        "deps.unlock --unused",
+        "format",
+        "test"
+      ]
     ]
   end
 end
