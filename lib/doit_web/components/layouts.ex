@@ -144,6 +144,23 @@ defmodule DoItWeb.Layouts do
               >
                 Assigned to Me
               </.link>
+              <%!-- Tree tools: whole-tree operations, only with an Initiative open.
+                   Pure client-side (app.js [data-tree-tool] listener); data-menu
+                   gives the outside-click / Escape dismiss. --%>
+              <details :if={@rail_current_id} id="tree-tools-menu" class="relative" data-menu>
+                <summary
+                  aria-haspopup="menu"
+                  class="inline-flex items-center gap-1 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:text-emerald-700 dark:text-zinc-200 dark:hover:text-emerald-400"
+                >
+                  Tree tools <.icon name="hero-chevron-down" class="w-3 h-3" />
+                </summary>
+                <ul
+                  role="menu"
+                  class="absolute left-0 mt-2 w-64 space-y-1 rounded-lg border border-zinc-200 bg-white p-2 text-sm shadow-lg z-50 dark:border-zinc-700 dark:bg-zinc-900"
+                >
+                  <.tree_tools_items id_prefix="tree-tools" />
+                </ul>
+              </details>
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
               <.theme_toggle variant={:group} current_user={@current_user} />
             </div>
@@ -263,6 +280,25 @@ defmodule DoItWeb.Layouts do
                   >
                     Assigned to Me
                   </.link>
+                </li>
+                <li
+                  :if={@rail_current_id}
+                  role="separator"
+                  class="my-1 border-t border-zinc-200 dark:border-zinc-700"
+                >
+                </li>
+                <li
+                  :if={@rail_current_id}
+                  class="px-2 pt-1 text-xs font-medium text-zinc-500 dark:text-zinc-400"
+                >
+                  Tree tools
+                </li>
+                <.tree_tools_items :if={@rail_current_id} id_prefix="mobile-tree-tools" />
+                <li
+                  :if={@rail_current_id}
+                  role="separator"
+                  class="my-1 border-t border-zinc-200 dark:border-zinc-700"
+                >
                 </li>
                 <li class="flex items-center justify-between px-2 py-1.5">
                   <span class="text-zinc-600 dark:text-zinc-300">Theme</span>
@@ -892,6 +928,80 @@ defmodule DoItWeb.Layouts do
   # a11y label for the rail member-avatar row — avatars aren't the only signal.
   defp member_count_label(1), do: "1 member"
   defp member_count_label(n), do: "#{n} members"
+
+  @doc """
+  Tree tools menu items (desktop dropdown + mobile hamburger). Pure client-side:
+  app.js's `[data-tree-tool]` listener does the expand/collapse. The subtree
+  items render aria-disabled (nothing selected yet) and app.js recomputes it
+  when the menu opens; aria-disabled, not `disabled`, so the title still shows.
+  """
+  attr :id_prefix, :string, required: true
+
+  def tree_tools_items(assigns) do
+    ~H"""
+    <li
+      :for={{slug, label} <- [{"expand-all", "Expand all"}, {"collapse-all", "Collapse all"}]}
+      role="none"
+    >
+      <.tree_tool_button id_prefix={@id_prefix} slug={slug} label={label} />
+    </li>
+    <li role="none">
+      <.tree_tool_button
+        id_prefix={@id_prefix}
+        slug="collapse-completed"
+        label="Collapse completed branches"
+      />
+    </li>
+    <li role="none">
+      <.tree_tool_button
+        id_prefix={@id_prefix}
+        slug="expand-incomplete"
+        label="Expand incomplete branches"
+      />
+    </li>
+    <li role="separator" class="my-1 border-t border-zinc-200 dark:border-zinc-700"></li>
+    <li role="none">
+      <.tree_tool_button
+        id_prefix={@id_prefix}
+        slug="expand-subtree"
+        label="Expand selected subtree"
+        title="Opens the selected task and everything under it."
+        disabled
+      />
+    </li>
+    <li role="none">
+      <.tree_tool_button
+        id_prefix={@id_prefix}
+        slug="collapse-subtree"
+        label="Collapse selected subtree"
+        title="Closes everything under the selected task, but leaves that task open."
+        disabled
+      />
+    </li>
+    """
+  end
+
+  attr :id_prefix, :string, required: true
+  attr :slug, :any, required: true
+  attr :label, :string, required: true
+  attr :title, :string, default: nil
+  attr :disabled, :boolean, default: false
+
+  defp tree_tool_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      role="menuitem"
+      id={"#{@id_prefix}-#{@slug}"}
+      data-tree-tool={@slug}
+      title={@title}
+      aria-disabled={if(@disabled, do: "true")}
+      class="block w-full text-left rounded px-2 py-1.5 text-zinc-700 hover:bg-zinc-100 focus-visible:bg-zinc-100 dark:text-zinc-200 dark:hover:bg-zinc-800 dark:focus-visible:bg-zinc-800 aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent dark:aria-disabled:hover:bg-transparent"
+    >
+      {@label}
+    </button>
+    """
+  end
 
   @doc """
   Three-state theme toggle (System / Light / Dark). Each button dispatches

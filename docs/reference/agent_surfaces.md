@@ -46,7 +46,8 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 ```json
 {"operations": [
   {"op": "add", "type": "task", "lid": "epic", "data": {"initiative_id": 12, "title": "Ship the parser"}},
-  {"op": "add", "type": "task", "data": {"parent_lid": "epic", "title": "Write the lexer"}}
+  {"op": "add", "type": "task", "data": {"parent_lid": "epic", "title": "Write the lexer"}},
+  {"op": "update", "type": "task", "id": 412, "data": {"manual_progress": 50}}
 ]}
 ```
 
@@ -59,7 +60,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | update | task | assignee_id, co_assignee_ids, description, done, expected_version, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, reorder, title |
 | remove | task | expected_version |
 | add | initiative | auto_promote_co_assignees, description, index_style, name, progress_calc, subtitle, viewer_plus |
-| update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, owner_id, progress_calc, state, subtitle, viewer_plus |
+| update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, progress_calc, state, subtitle, viewer_plus |
 | add | comment | body, task, task_id, task_lid |
 | update | comment | body |
 | remove | comment | — |
@@ -110,9 +111,19 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | retry | [key] | --out | resend writes whose outcome is unknown |
 <!-- /generated: scripts/doitlist.py -->
 
+### Walkthrough
+
+Import a plan, tick a Task against it, read the tree back.
+
+```sh
+doitlist.py import PLAN.md --as "Q3 plan" --preview   # then re-run without --preview to apply
+doitlist.py done %<412> --mirror PLAN.md --section "Parser" --initiative 12
+doitlist.py tree 12 --depth 2
+```
+
 ### The mirror workflow
 
-A mirror is a [Markdown file standing in for an Initiative](../specs/agent_integration.md#shared-work). Its import writes each Task's `%<id>` onto the source line, so [completions](../specs/agent_integration.md#completion-mirroring) read the file, not the tree. Live reads are for writes and drift.
+A mirror is a [Markdown file standing in for an Initiative](../specs/agent_integration.md#shared-work). Its import writes each Task's `%<id>` onto the source line, so [completions](../specs/agent_integration.md#completion-mirroring) read the file, not the tree. It writes nothing else, so name the Initiative with `--initiative` unless the file already links it. Live reads are for writes and drift.
 
 ### Import format
 
@@ -157,7 +168,7 @@ Every write tool is one operation in a batch of one, posted to the operations en
 
 ### Setup
 
-Paste the block for your client. The account page shows it with your token.
+Paste the block for your client, in the variant for your shell. Immediately after minting only, the account page shows it with your token.
 
 <!-- generated: DoItWeb.AgentConnect -->
 #### Claude Code
@@ -183,13 +194,13 @@ codex mcp add doitlist --url https://doitlist.app/mcp/ --bearer-token-env-var DO
 #### Hermes Agent
 
 ```sh
-hermes mcp add doitlist --url https://doitlist.app/mcp/ --auth header
 echo "MCP_DOITLIST_API_KEY=doit_pat_YOUR_TOKEN" >> ~/.hermes/.env
+hermes mcp add doitlist --url https://doitlist.app/mcp/ --auth header
 ```
 
 ```powershell
+Add-Content -Path "$env:LOCALAPPDATA\hermes\.env" -Value 'MCP_DOITLIST_API_KEY=doit_pat_YOUR_TOKEN' -Encoding utf8
 hermes mcp add doitlist --url https://doitlist.app/mcp/ --auth header
-Add-Content -Path ~/.hermes/.env -Value 'MCP_DOITLIST_API_KEY=doit_pat_YOUR_TOKEN' -Encoding utf8
 ```
 
 #### Scripted client (doitlist.py)
@@ -213,10 +224,11 @@ py -3 --version   # if missing: winget install --id Python.Python.3.13 -e
 
 ### Walkthrough
 
-Import a plan, tick a Task against it, read the tree back.
+Ask your agent for these in its own chat; the tools it reaches for are named beside each.
 
-```sh
-doitlist.py import PLAN.md --as "Q3 plan" --preview   # then apply by the preview's id
-doitlist.py done %<412> --mirror PLAN.md --section "Parser"
-doitlist.py tree 12 --depth 2
-```
+1. Confirm the connection — `get_me`. It answers only with a working token.
+2. Import a plan into a new Initiative — `import_text`.
+3. Mark one Task done — `get_initiative_tree` to find it, then `complete_task`.
+4. Read the tree back — `get_initiative_tree`.
+
+Nothing here runs the scripted client; an MCP agent calls tools, never `doitlist.py`.

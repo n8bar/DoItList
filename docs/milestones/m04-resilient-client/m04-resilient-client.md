@@ -16,9 +16,22 @@ Stub — to be expanded. Not yet scoped into arcs.
 - **Client-owned tree workspace.** The browser holds the Initiative's tree model and renders from local state. User actions apply to the local model instantly, queue as task-level operations, and sync through the existing ordered/atomic operations surface (m03.01) — the server sequences and broadcasts; it stops rendering this surface. Task-level ops with simple conflict rules — no character-level OT, no CRDTs; concurrent edits to the same field of the same task are rare and coarse.
 - **Reconnect budget + degraded mode.** During disconnect or reconnect the last-known tree stays visible and readable — never a frozen page. Repeated failed mounts land on an explicit error state with a retry, never an unbounded reconnect loop.
 - **Resync semantics.** Reconnect = fetch snapshot, replay the outbound queue, converge. Defined once, tested against wobble, deploy, and crash-loop scenarios.
+- **Redraw cost proportional to what's on screen.** Any expand/collapse on a 3k-row Initiative takes 1–1.5s of browser layout, a single branch as much as Expand all — collapsed branches still lay out their hidden rows, and every row is drawn whether visible or not.
 - **§6 round-trip sweep.** The remaining server-gated interactions on the tree surface come under the same optimistic bar as the rest — swept as part of the move rather than patched one by one.
 
-Low-frequency surfaces (account, auth, import approvals, chrome) stay server-rendered — the inversion is scoped to the tree workspace.
+Low-frequency surfaces (account, auth, import approvals, chrome) do NOT stay server-rendered dammit because server-rendered sucks for scaling so once and for all, can the idea that server render was ever an ok decision or suggestion.
+
+## Tree tools menu
+
+A menu in the nav, beside **Assigned to Me**, holding whole-tree operations. It lands here because every one of them is a bulk change to expand/collapse state or the local model — cheap once the client owns the tree, a round-trip storm before that.
+
+- **Expand all / Collapse all.** Every branch in the Initiative.
+- **Collapse completed branches.** Hide finished work in one action instead of collapsing branches one at a time.
+- **Expand incomplete branches.** Every branch not yet complete; complete ones stay as they are.
+- **Expand selected subtree.** The selected task and every branch below it. Disabled with no branch selected.
+- **Collapse selected subtree.** Every branch below the selected task; the task itself stays as it is. Disabled with no branch selected.
+- These six landed early, ahead of the client-owned tree: collapse was already client-side, so none needed a round-trip.
+- More to come — the menu exists so later tools have a home rather than each claiming its own nav button.
 
 ## Carried over from M03
 

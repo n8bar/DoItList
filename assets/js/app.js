@@ -2234,6 +2234,74 @@ function expandRefAncestors(id) {
   }
 }
 
+// Tree tools menu: whole-tree expand/collapse, pure client-side. Each branch gets
+// the same incantation as a CollapseToggle click (localStorage + collapsed-peek +
+// aria-expanded), so it survives reloads and the collapse-guard pass, and the
+// class change is what TreeWidth / the scroll-edge observers already watch.
+function setBranchCollapsed(btn, collapsed) {
+  const id = btn.dataset.taskId
+  const ul = document.getElementById("children-" + id)
+  if (!ul) return
+  localStorage.setItem(`phx:collapse:${btn.dataset.initiativeId}:${id}`, collapsed ? "1" : "0")
+  ul.classList.toggle("collapsed-peek", collapsed)
+  btn.setAttribute("aria-expanded", String(!collapsed))
+}
+
+const TREE_BRANCH_BTN = 'button[id^="collapse-"][data-task-id]'
+
+// The selected task's <li> when it is a branch (has a collapse button), else null.
+function selectedBranchLi() {
+  const li = window.DoitSelection && window.DoitSelection.li()
+  return li && document.getElementById("collapse-" + li.dataset.taskId) ? li : null
+}
+
+// Complete = data-done, or rolled up to 100 (status can lag the recompute).
+function branchComplete(btn) {
+  const row = document.querySelector(`#task-${btn.dataset.taskId} > [data-task-row]`)
+  return !!row && (row.hasAttribute("data-done") || Number(row.dataset.taskProgress) >= 100)
+}
+
+const TREE_TOOLS = {
+  "expand-all": () => document.querySelectorAll(TREE_BRANCH_BTN).forEach((b) => setBranchCollapsed(b, false)),
+  "collapse-all": () => document.querySelectorAll(TREE_BRANCH_BTN).forEach((b) => setBranchCollapsed(b, true)),
+  "collapse-completed": () =>
+    document.querySelectorAll(TREE_BRANCH_BTN).forEach((b) => { if (branchComplete(b)) setBranchCollapsed(b, true) }),
+  "expand-incomplete": () =>
+    document.querySelectorAll(TREE_BRANCH_BTN).forEach((b) => { if (!branchComplete(b)) setBranchCollapsed(b, false) }),
+  // The selected task and every branch below it.
+  "expand-subtree": (li) => li.querySelectorAll(TREE_BRANCH_BTN).forEach((b) => setBranchCollapsed(b, false)),
+  // Every branch below the selected task; the task itself stays as it is.
+  "collapse-subtree": (li) =>
+    li.querySelectorAll(TREE_BRANCH_BTN).forEach((b) => {
+      if (b.dataset.taskId !== li.dataset.taskId) setBranchCollapsed(b, true)
+    }),
+}
+
+// Subtree items read disabled unless a branch is selected. Recomputed when a
+// menu holding them opens and again at click, so a stale state never acts.
+function syncTreeTools() {
+  const off = String(!selectedBranchLi())
+  document.querySelectorAll('[data-tree-tool$="-subtree"]').forEach((el) => {
+    if (el.getAttribute("aria-disabled") !== off) el.setAttribute("aria-disabled", off)
+  })
+}
+
+document.addEventListener("toggle", (e) => {
+  const d = e.target
+  if (d.matches && d.matches("details[open]") && d.querySelector("[data-tree-tool]")) syncTreeTools()
+}, true)
+
+document.addEventListener("click", (e) => {
+  const tool = e.target.closest("[data-tree-tool]")
+  const run = tool && TREE_TOOLS[tool.dataset.treeTool]
+  if (!run) return
+  syncTreeTools()
+  if (tool.getAttribute("aria-disabled") === "true") return
+  run(selectedBranchLi())
+  const menu = tool.closest("details[open]")
+  if (menu) menu.removeAttribute("open")
+})
+
 // Click a %-reference: select + scroll to the referenced task, expanding any
 // collapsed ancestors first. The row-click selection handler already ignores
 // clicks on <a>, so this never double-fires with row selection; dead refs are a

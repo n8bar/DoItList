@@ -711,7 +711,7 @@ defmodule DoItWeb.AccountLive do
                         id="connect-shell-posix"
                         role="tab"
                         data-shell="posix"
-                        aria-selected="true"
+                        aria-selected="false"
                         aria-controls="connect-pastes-posix"
                         class="px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 aria-selected:bg-emerald-600 aria-selected:text-white dark:aria-selected:bg-emerald-700 dark:aria-selected:text-white"
                       >
@@ -722,7 +722,7 @@ defmodule DoItWeb.AccountLive do
                         id="connect-shell-powershell"
                         role="tab"
                         data-shell="powershell"
-                        aria-selected="false"
+                        aria-selected="true"
                         aria-controls="connect-pastes-powershell"
                         class="px-2.5 py-1 text-xs font-medium text-emerald-800 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 aria-selected:bg-emerald-600 aria-selected:text-white dark:aria-selected:bg-emerald-700 dark:aria-selected:text-white"
                       >
@@ -730,6 +730,12 @@ defmodule DoItWeb.AccountLive do
                       </button>
                     </div>
                   </div>
+                  <%!-- m03.05 9.13: PowerShell is the default tab. The failure
+                     modes are not symmetric — PowerShell aliases `echo` and
+                     runs the POSIX line, then writes UTF-16 and fails
+                     silently, while bash rejects `Add-Content` outright and
+                     sends the reader looking for the tabs. Loud beats silent.
+                     --%>
                   <%!-- m03.04 6.17: every client refuses plain http off loopback,
                      so pastes composed from a LAN http URL cannot connect. Say
                      so here rather than let them fail in the user's shell. --%>
@@ -756,7 +762,7 @@ defmodule DoItWeb.AccountLive do
                     <div
                       id={"connect-pastes-#{shell_slug}"}
                       role="tabpanel"
-                      class={["space-y-3", shell == :powershell && "hidden"]}
+                      class={["space-y-3", shell == :posix && "hidden"]}
                     >
                       <%= for {slug, name, paste} <- AgentConnect.client_pastes(@new_api_token, shell) do %>
                         <div id={"connect-client-#{slug}#{suffix}"}>
@@ -820,12 +826,12 @@ defmodule DoItWeb.AccountLive do
 
             <%!-- Shell toggle (25.1): ephemeral client-side state — flips which
                shell's pastes show, instantly, no server round-trip. A patch
-               re-renders the POSIX default; updated() re-applies the
+               re-renders the PowerShell default; updated() re-applies the
                user's selection. --%>
             <script :type={Phoenix.LiveView.ColocatedHook} name=".ShellToggle">
               export default {
                 mounted() {
-                  this.shell = "posix"
+                  this.shell = "powershell"
                   this.el.querySelectorAll("[data-shell]").forEach(btn => {
                     btn.addEventListener("click", () => {
                       this.shell = btn.dataset.shell

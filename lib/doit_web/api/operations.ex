@@ -272,6 +272,11 @@ defmodule DoItWeb.Api.Operations do
   #     or a member `role` (which could name "owner") is accepted.
   # `unsupported_op` is deliberately never listed per row — it's the fallback
   # for a {verb, type} NOT in this table, and belongs in prose, once.
+  # Keys accepted only so their own op can answer with a specific error rather
+  # than a generic unknown-field one. They never succeed, so the generated doc
+  # table must not advertise them (m03.05 9.8).
+  @never_succeeds_data_keys %{{"update", "initiative"} => ~w(owner_id)}
+
   @doc false
   def __doc_rows__ do
     type_rank = @types |> Enum.with_index() |> Map.new()
@@ -282,7 +287,7 @@ defmodule DoItWeb.Api.Operations do
       %{
         op: verb,
         type: type,
-        data_keys: Enum.sort(keys)
+        data_keys: Enum.sort(keys -- Map.get(@never_succeeds_data_keys, {verb, type}, []))
       }
     end)
     |> Enum.sort_by(fn %{op: op, type: type} -> {type_rank[type], verb_rank[op]} end)

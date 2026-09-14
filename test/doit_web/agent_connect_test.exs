@@ -250,14 +250,16 @@ defmodule DoItWeb.AgentConnectTest do
       assert add_line =~ "codex mcp add doitlist"
     end
 
-    test "hermes_paste/1 appends the bare token under MCP_DOITLIST_API_KEY" do
+    test "hermes_paste/1 writes the bare token before the command that reads it" do
       paste = AgentConnect.hermes_paste(@paste_token)
 
+      # m03.05 9.11: `hermes mcp add` connects and reads the env file at once,
+      # so a token written after it is one the running process never sees.
       assert paste ==
-               "hermes mcp add doitlist --url #{@paste_url} --auth header\n" <>
-                 ~s(echo "MCP_DOITLIST_API_KEY=#{@paste_token}" >> ~/.hermes/.env)
+               ~s(echo "MCP_DOITLIST_API_KEY=#{@paste_token}" >> ~/.hermes/.env) <>
+                 "\nhermes mcp add doitlist --url #{@paste_url} --auth header"
 
-      [_add_line, env_line] = String.split(paste, "\n")
+      [env_line, _add_line] = String.split(paste, "\n")
       assert env_line =~ "MCP_DOITLIST_API_KEY=#{@paste_token}"
       # Bare token: Hermes prepends the scheme itself, so no Bearer prefix here.
       refute env_line =~ "Bearer "
@@ -342,14 +344,17 @@ defmodule DoItWeb.AgentConnectTest do
       assert setx_line =~ "# persists it for new shells; restart"
     end
 
-    test "hermes_paste/2 :powershell appends UTF-8 via Add-Content, not >>" do
+    test "hermes_paste/2 :powershell appends UTF-8 to the Windows path, not >>" do
       paste = AgentConnect.hermes_paste(@paste_token, :powershell)
 
+      # m03.05 9.12: Hermes on Windows reads %LOCALAPPDATA%\\hermes\\.env, so the
+      # POSIX path put a good token where nothing read it. Write precedes add.
       assert paste ==
-               "hermes mcp add doitlist --url #{@paste_url} --auth header\n" <>
-                 "Add-Content -Path ~/.hermes/.env " <>
-                 "-Value 'MCP_DOITLIST_API_KEY=#{@paste_token}' -Encoding utf8"
+               ~s(Add-Content -Path "$env:LOCALAPPDATA\\hermes\\.env" ) <>
+                 "-Value 'MCP_DOITLIST_API_KEY=#{@paste_token}' -Encoding utf8\n" <>
+                 "hermes mcp add doitlist --url #{@paste_url} --auth header"
 
+      refute paste =~ "~/.hermes"
       # 25.3: `>>` writes UTF-16 on Windows PowerShell 5.1.
       refute paste =~ ">>"
     end

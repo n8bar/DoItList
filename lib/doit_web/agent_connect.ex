@@ -151,7 +151,11 @@ defmodule DoItWeb.AgentConnect do
   Hermes Agent reads the bare token (no `Bearer ` prefix) from
   `~/.hermes/.env` under the `MCP_<SERVER>_API_KEY` name — for server
   `doitlist` that's `MCP_DOITLIST_API_KEY`. The append rides the same
-  paste (24.3). PowerShell (25.3): `>>` writes UTF-16 on Windows
+  paste (24.3) and comes FIRST: `hermes mcp add` connects immediately and
+  reads the file, so a token written after it is a token the running
+  process never sees (m03.05 9.9). The file is `~/.hermes/.env` on POSIX
+  but `%LOCALAPPDATA%\hermes\.env` on Windows — the PowerShell variant
+  wrote the POSIX path and Hermes never read it (m03.05 9.10). PowerShell (25.3): `>>` writes UTF-16 on Windows
   PowerShell 5.1, so the variant appends via `Add-Content -Encoding utf8`,
   which lands UTF-8 on both 5.1 and 7.
   """
@@ -160,8 +164,8 @@ defmodule DoItWeb.AgentConnect do
   def hermes_paste(token, :posix) when is_binary(token) do
     Enum.join(
       [
-        "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
-        ~s(echo "MCP_DOITLIST_API_KEY=#{token}" >> ~/.hermes/.env)
+        ~s(echo "MCP_DOITLIST_API_KEY=#{token}" >> ~/.hermes/.env),
+        "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header"
       ],
       "\n"
     )
@@ -170,8 +174,8 @@ defmodule DoItWeb.AgentConnect do
   def hermes_paste(token, :powershell) when is_binary(token) do
     Enum.join(
       [
-        "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header",
-        "Add-Content -Path ~/.hermes/.env -Value 'MCP_DOITLIST_API_KEY=#{token}' -Encoding utf8"
+        ~s(Add-Content -Path "$env:LOCALAPPDATA\\hermes\\.env" -Value 'MCP_DOITLIST_API_KEY=#{token}' -Encoding utf8),
+        "hermes mcp add #{@server_name} --url #{mcp_url()} --auth header"
       ],
       "\n"
     )
