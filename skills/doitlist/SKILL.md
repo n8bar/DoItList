@@ -31,7 +31,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 	3. An unindexed target imports unnumbered; suggest a style.
 	4. Flag titles over 200 characters; suggest shortening them and using descriptions and subtasks as appropriate.
 	5. Flag note-bullets that would import as Tasks; suggest rewriting them as prose, which imports as the description.
-	6. State the top ranks, get a yes, then apply the preview by its id; the apply lands each created Task's `%<id>` on its source line.
+	6. State the top ranks, get a yes, then run the same import without `--preview`; it lands each created Task's `%<id>` on its source line.
 5. Ask before deleting content you cannot identify; it's usually the user's.
 
 ## 4. Completing against a mirror
