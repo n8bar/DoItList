@@ -635,3 +635,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-13  Doc (m04): redraw cost proportional to what's on screen -- measured on a 2,960-row Initiative, any expand/collapse costs 1-1.5s of browser layout with ~5ms of script and no server traffic, so the fix is rendering, not the tree tools.
 2026-09-14  Tweak (skill): lane 1.3 says multiple CLI changes can run as one shell call -- an agent went looking for a batch apply verb; chaining already gives the token savings.
 2026-09-14  Tweak (skill): 3.4.6 applies a mirror import by re-running it without --preview -- the CLI preview prints no id, so "apply the preview by its id" left agents stuck.
+2026-09-14  Tweak (skill): 3.4.3 forbids source numbers in titles under any index style, --numbered included -- the Initiative's index already supplies the number.

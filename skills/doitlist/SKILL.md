@@ -28,7 +28,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 4. Importing a mirror:
 	1. Preview first.
 	2. The preview's top-level numbering must match the document's own; a mismatch stops the import — narrow with `--section`, without editing the document.
-	3. An unindexed target imports unnumbered; suggest a style.
+	3. An unindexed target imports unnumbered; suggest a style. Under any other style, never put source numbers in titles, `--numbered` included.
 	4. Flag titles over 200 characters; suggest shortening them and using descriptions and subtasks as appropriate.
 	5. Flag note-bullets that would import as Tasks; suggest rewriting them as prose, which imports as the description.
 	6. State the top ranks, get a yes, then run the same import without `--preview`; it lands each created Task's `%<id>` on its source line.
