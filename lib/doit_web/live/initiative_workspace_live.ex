@@ -3686,6 +3686,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
                   subtitle={@subtitle}
                   initiative_progress={@initiative_progress}
                   unit_count={Progress.unit_count(@tree, Progress.mode(@initiative.progress_calc))}
+                  done_count={
+                    Progress.done_unit_count(@tree, Progress.mode(@initiative.progress_calc))
+                  }
                   can_edit={@can_edit}
                 />
 
@@ -5557,6 +5560,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   # The system root's branch unit count (m03.04 6.5) — computed at the call site
   # from the in-memory @tree, so it moves with every tree patch, like the rows.
   attr :unit_count, :integer, required: true
+  attr :done_count, :integer, required: true
   attr :can_edit, :boolean, required: true
 
   @doc """
@@ -5619,7 +5623,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             kind={badge_icon(@initiative.progress_calc)}
             class={badge_icon_class(@initiative.progress_calc)}
           />
-          {@unit_count}
+          <span class="inline-flex flex-col items-center leading-none">
+            <span id="initiative-done-count" class="text-[0.7em] opacity-50">
+              {@done_count}
+            </span>
+            <span>{@unit_count}</span>
+          </span>
         </span>
         <button
           :if={@can_edit}

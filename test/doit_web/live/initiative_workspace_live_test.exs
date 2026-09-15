@@ -56,10 +56,11 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     parent = new_task(owner, alpha, %{"title" => "Parent"})
     _ = new_task(owner, alpha, %{"title" => "Kid 1", "parent_id" => parent.id})
     _ = new_task(owner, alpha, %{"title" => "Kid 2", "parent_id" => parent.id})
-    _ = new_task(owner, alpha, %{"title" => "Lone"})
+    _ = new_task(owner, alpha, %{"title" => "Lone", "status" => "done"})
 
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
     assert has_element?(view, "#initiative-unit-count", "3")
+    assert has_element?(view, "#initiative-done-count", "1")
     assert has_element?(view, "#initiative-unit-count[title='Leaves in this branch']")
 
     # A collaborator's add lands in the header without a reload.

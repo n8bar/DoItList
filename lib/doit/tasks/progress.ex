@@ -132,6 +132,20 @@ defmodule DoIt.Tasks.Progress do
   def unit_count(nodes, :leaf_average) when is_list(nodes),
     do: nodes |> Enum.map(&leaf_count/1) |> Enum.sum()
 
+  @doc """
+  How many of `unit_count/2`'s units are complete (value 100) — the faded
+  number above the Initiative header's count.
+  """
+  @spec done_unit_count(%{children: [map()]} | [map()], :leaf_average | :single_level) ::
+          non_neg_integer()
+  def done_unit_count(%{children: kids}, mode) when is_list(kids), do: done_unit_count(kids, mode)
+
+  def done_unit_count(nodes, :single_level) when is_list(nodes),
+    do: Enum.count(nodes, &(single_level_value(&1) == 100))
+
+  def done_unit_count(nodes, :leaf_average) when is_list(nodes),
+    do: nodes |> Enum.flat_map(&leaf_values/1) |> Enum.count(&(&1 == 100))
+
   defp leaf_count(%{children: []}), do: 1
 
   defp leaf_count(%{children: kids}) when is_list(kids),
