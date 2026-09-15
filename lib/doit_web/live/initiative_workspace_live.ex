@@ -5624,7 +5624,11 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             class={badge_icon_class(@initiative.progress_calc)}
           />
           <span class="inline-flex flex-col items-center leading-none">
-            <span id="initiative-done-count" class="text-[0.7em] opacity-50">
+            <span
+              :if={@done_count > 0 && @done_count < @unit_count}
+              id="initiative-done-count"
+              class="text-[0.7em] opacity-50"
+            >
               {@done_count}
             </span>
             <span>{@unit_count}</span>
@@ -6030,7 +6034,25 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
               kind={badge_icon(@progress_calc)}
               class={badge_icon_class(@progress_calc)}
             />
-            {branch_unit_count(@task, @progress_calc)}
+            <%!-- Lists (depth 0) stack their completed count above, faded. --%>
+            <%= if @depth == 0 do %>
+              <span
+                :for={
+                  {done, total} <- [
+                    {Progress.done_unit_count(@task, Progress.mode(@progress_calc)),
+                     branch_unit_count(@task, @progress_calc)}
+                  ]
+                }
+                class="inline-flex flex-col items-center leading-none"
+              >
+                <span :if={done > 0 && done < total} data-done-count class="text-[0.7em] opacity-50">
+                  {done}
+                </span>
+                <span>{total}</span>
+              </span>
+            <% else %>
+              {branch_unit_count(@task, @progress_calc)}
+            <% end %>
           </span>
 
           <%!-- No phx-click: app.js owns the click (.03.07.22) — it flips the

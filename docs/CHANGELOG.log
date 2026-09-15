@@ -638,3 +638,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-14  Tweak (skill): 3.4.3 forbids source numbers in titles under any index style, --numbered included -- the Initiative's index already supplies the number.
 2026-09-14  Tweak (skill): 3.4.3's numbering rule reads "unless the style is none" and carries an example -- "any other style" was unclear.
 2026-09-15  Tweak (header): the Initiative's leaf count shows its completed count above it, faded.
+2026-09-15  Tweak (tree): top-level Lists show their completed count above the leaf count, faded; both counts hide at zero or when all are done.
