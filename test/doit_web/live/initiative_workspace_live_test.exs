@@ -56,10 +56,11 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     parent = new_task(owner, alpha, %{"title" => "Parent"})
     _ = new_task(owner, alpha, %{"title" => "Kid 1", "parent_id" => parent.id})
     _ = new_task(owner, alpha, %{"title" => "Kid 2", "parent_id" => parent.id})
-    _ = new_task(owner, alpha, %{"title" => "Lone"})
+    _ = new_task(owner, alpha, %{"title" => "Lone", "status" => "done"})
 
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
     assert has_element?(view, "#initiative-unit-count", "3")
+    assert has_element?(view, "#initiative-done-count", "1")
     assert has_element?(view, "#initiative-unit-count[title='Leaves in this branch']")
 
     # A collaborator's add lands in the header without a reload.
@@ -75,6 +76,23 @@ defmodule DoItWeb.InitiativeWorkspaceLiveTest do
     # No Tasks, no badge.
     {:ok, view, _html} = live(conn, ~p"/initiatives/#{beta.id}")
     refute has_element?(view, "#initiative-unit-count")
+  end
+
+  test "Lists show a completed count above their leaf count; deeper branches don't",
+       %{conn: conn, owner: owner, alpha: alpha} do
+    list = new_task(owner, alpha, %{"title" => "List"})
+    sub = new_task(owner, alpha, %{"title" => "Sub", "parent_id" => list.id})
+    _ = new_task(owner, alpha, %{"title" => "Done", "parent_id" => sub.id, "status" => "done"})
+    _ = new_task(owner, alpha, %{"title" => "Open", "parent_id" => sub.id})
+    other = new_task(owner, alpha, %{"title" => "Other"})
+    _ = new_task(owner, alpha, %{"title" => "Open 2", "parent_id" => other.id})
+    all = new_task(owner, alpha, %{"title" => "All"})
+    _ = new_task(owner, alpha, %{"title" => "Done 2", "parent_id" => all.id, "status" => "done"})
+
+    {:ok, view, _html} = live(conn, ~p"/initiatives/#{alpha.id}")
+    # Only List's badge carries one: Sub is too deep, Other has none done,
+    # All has every one done.
+    assert view |> element("[data-done-count]") |> render() =~ "1"
   end
 
   test "list mode renders the index with the always-present shell hook", %{conn: conn} do
