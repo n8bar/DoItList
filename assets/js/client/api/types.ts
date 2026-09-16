@@ -5,12 +5,30 @@
 // thing to keep in step, not two. Only the fields the client actually reads are
 // declared; the serializer is free to send more.
 //
-// Arc 2 owns the task tree proper. `TaskNode` is declared here because the tree
-// endpoint returns it, but nothing in this arc renders past the header.
+// Arc 2 renders these: `TaskNode` carries every field the tree draws, and
+// `tree/model.ts` flattens the nested read into the client's own model.
 
 export type Role = "owner" | "editor" | "viewer";
 export type ProgressCalc = "leaf_average" | "single_level";
 export type TaskStatus = "open" | "in_progress" | "done";
+export type Priority = "high" | "normal" | "low";
+
+/** A sibling-ordering rule (`DoIt.Tasks.Sort`). `null` on a task means inherit. */
+export type SortMode = "manual" | "alphabetical" | "completion" | "priority" | "created" | "updated";
+
+/** One end of a `%<id>` cross-reference, resolved to the live label. */
+export interface CrossReference {
+  target_id: number;
+  target_index: string;
+  target_title: string;
+}
+
+/** The other end: a task that points at this one. */
+export interface ReferencedBy {
+  source_id: number;
+  source_index: string;
+  source_title: string;
+}
 
 /** A row of `GET /app/api/initiatives`. */
 export interface InitiativeSummary {
@@ -28,7 +46,7 @@ export interface InitiativeSummary {
   updated_at: string;
 }
 
-/** A node of the nested tree. Arc 2 renders these; this arc only carries them. */
+/** A node of the nested tree. */
 export interface TaskNode {
   id: number;
   title: string;
@@ -42,6 +60,20 @@ export interface TaskNode {
   status: TaskStatus;
   done: boolean;
   leaf: boolean;
+  priority: Priority;
+  assignee_id: number | null;
+  co_assignee_ids: number[];
+  comment_count: number;
+  cross_references: CrossReference[];
+  referenced_by: ReferencedBy[];
+  /**
+   * The branch's own sibling-ordering rule, or `null` to inherit it from the
+   * nearest ancestor that set one. The serializer starts sending this pair with
+   * the tree read that follows this arc's model; a read that predates it is
+   * read as `null` / `false`, which is what inheriting from the root means.
+   */
+  sort_mode: SortMode | null;
+  sort_reverse: boolean;
   version: number;
   children: TaskNode[];
 }
