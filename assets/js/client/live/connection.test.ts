@@ -13,18 +13,37 @@ function harness(overrides: Partial<ConnectionDeps> = {}) {
   const clock = fakeTimers();
   const statuses: ConnectionStatus[] = [];
   const changes: ChangedEvent[] = [];
+  const revoked: number[] = [];
 
   const connection = createConnection({
     transport: socket.factory,
     onStatus: (status) => statuses.push(status),
     onChanged: (event) => changes.push(event),
+    onAccessRevoked: (id) => revoked.push(id),
+    // Mid-jitter, so the delays a test reads back are the scheduled ones.
+    random: () => 0.5,
     timers: clock.timers,
     leaveGraceMs: 5_000,
     ...overrides,
   });
 
-  return { connection, socket, clock, statuses, changes };
+  return { connection, socket, clock, statuses, changes, revoked };
 }
+
+/** A connection that is up, with the socket open. */
+function live(overrides: Partial<ConnectionDeps> = {}) {
+  const h = harness(overrides);
+  h.connection.connect();
+  h.socket.get().open();
+  return h;
+}
+
+const bareDeps = (socket: ReturnType<typeof fakeTransport>): ConnectionDeps => ({
+  transport: socket.factory,
+  onStatus: () => {},
+  onChanged: () => {},
+  onAccessRevoked: () => {},
+});
 
 beforeEach(() => {
   resetConnection();
@@ -143,22 +162,30 @@ describe("connection status", () => {
   });
 
   it("shows reconnecting while the socket retries", () => {
-    const { connection, socket } = harness();
-    connection.connect();
-    socket.get().open();
-    socket.get().close();
+    const { connection, socket } = live();
+    socket.get().fail();
 
     assert.equal(connection.status(), "reconnecting");
     assert.equal(socket.get().disconnects, 0, "Phoenix is still retrying on its own");
   });
 
-  it("gives up after the budget, stops the retry loop, and can be resumed", () => {
-    const { connection, socket, statuses } = harness();
-    connection.connect();
-    socket.get().open();
-    for (let i = 0; i < RECONNECT_BUDGET; i += 1) socket.get().close();
+  it("spends ONE attempt on one failed connect, not two", () => {
+    // A failed attempt fires `onerror` AND `onclose`; the fake emits both, in
+    // Phoenix's order, so a budget counted off callbacks fails here.
+    const { connection, socket } = live();
+    for (let i = 0; i < RECONNECT_BUDGET; i += 1) socket.get().fail();
+
+    assert.equal(socket.get().tries, RECONNECT_BUDGET);
+    assert.equal(connection.status(), "reconnecting", "the budget was spent twice as fast");
+  });
+
+  it("gives up once the budget runs out, stops the retry loop, and can be resumed", () => {
+    const { connection, socket, clock, statuses } = live();
+    for (let i = 0; i <= RECONNECT_BUDGET; i += 1) socket.get().fail();
 
     assert.equal(connection.status(), "offline");
+    assert.equal(socket.get().disconnects, 0, "not from inside the scheduling hook");
+    clock.flush();
     assert.equal(socket.get().disconnects, 1, "the client must stop the retry loop it gave up on");
 
     connection.retry();
@@ -170,20 +197,35 @@ describe("connection status", () => {
     assert.deepEqual(statuses, ["live", "reconnecting", "offline", "connecting", "live"]);
   });
 
-  it("an error is a drop like any other", () => {
-    const { connection, socket } = harness();
-    connection.connect();
-    socket.get().open();
-    socket.get().fail();
+  it("does not resurrect itself on a route change after giving up", () => {
+    const { connection, socket } = live();
+    for (let i = 0; i <= RECONNECT_BUDGET; i += 1) socket.get().fail();
+    assert.equal(connection.status(), "offline");
+
+    connection.subscribeInitiative(12);
+    assert.equal(socket.get().connects, 1, "only the user's retry may reconnect");
+    assert.equal(connection.status(), "offline");
+  });
+
+  it("a close with no error still counts its one attempt", () => {
+    const { connection, socket } = live();
+    socket.get().close();
     assert.equal(connection.status(), "reconnecting");
+    assert.equal(socket.get().tries, 1);
   });
 
   it("retry does nothing while the connection is fine", () => {
-    const { connection, socket } = harness();
-    connection.connect();
-    socket.get().open();
+    const { connection, socket } = live();
     connection.retry();
     assert.equal(socket.get().connects, 1);
+  });
+
+  it("asks for a jittered, bounded delay on every attempt", () => {
+    const { socket } = live({ random: () => 1 - Number.EPSILON });
+    for (let i = 0; i < RECONNECT_BUDGET; i += 1) socket.get().fail();
+
+    assert.equal(socket.get().delays.length, RECONNECT_BUDGET);
+    for (const delay of socket.get().delays) assert.ok(delay > 0 && delay <= 5_000);
   });
 
   it("caps its own backoff", () => {
@@ -193,15 +235,35 @@ describe("connection status", () => {
   });
 });
 
+describe("losing access mid-session", () => {
+  it("drops the channel and tells the app", () => {
+    const { connection, socket, revoked } = live();
+    connection.subscribeInitiative(12);
+    socket.get().channels[0]?.emit("access_revoked", { initiative_id: 12 });
+
+    assert.deepEqual(revoked, [12]);
+    assert.deepEqual(connection.joined(), [], "the channel must not be left joined");
+    assert.deepEqual(connection.subscriptions(), []);
+    assert.equal(socket.get().channels[0]?.leaves, 1);
+  });
+
+  it("keeps the rest of the session", () => {
+    const { connection, socket, revoked } = live();
+    connection.subscribeInitiative(12);
+    connection.subscribeInitiative(13);
+    socket.get().channels[0]?.emit("access_revoked", { initiative_id: 12 });
+
+    assert.deepEqual(revoked, [12]);
+    assert.deepEqual(connection.subscriptions(), [13]);
+    assert.equal(connection.status(), "live");
+  });
+});
+
 describe("the tab's one connection (item 3.7)", () => {
   it("hands every caller the same object", () => {
     const { connection } = harness();
     const socket = fakeTransport();
-    const built = initConnection({
-      transport: socket.factory,
-      onStatus: () => {},
-      onChanged: () => {},
-    });
+    const built = initConnection(bareDeps(socket));
     assert.equal(built, getConnection());
     assert.equal(getConnection(), getConnection());
     assert.notEqual(built, connection);
@@ -219,12 +281,7 @@ describe("the tab's one connection (item 3.7)", () => {
     // every navigation (guardrail §7.4).
     const socket = fakeTransport();
     const clock = fakeTimers();
-    initConnection({
-      transport: socket.factory,
-      onStatus: () => {},
-      onChanged: () => {},
-      timers: clock.timers,
-    });
+    initConnection({ ...bareDeps(socket), timers: clock.timers });
     getConnection().connect();
     socket.get().open();
 
@@ -267,9 +324,7 @@ describe("the tab's one connection (item 3.7)", () => {
   });
 
   it("counts a reconnect, so the continuity assertion is not vacuous", () => {
-    const { connection, socket } = harness();
-    connection.connect();
-    socket.get().open();
+    const { connection, socket } = live();
     assert.equal(connection.connectCount(), 1);
     assert.equal(connection.status(), "live");
 
@@ -285,7 +340,7 @@ describe("the tab's one connection (item 3.7)", () => {
 
   it("only a new tab gets a new connection", () => {
     const socket = fakeTransport();
-    const deps = { transport: socket.factory, onStatus: () => {}, onChanged: () => {} };
+    const deps = bareDeps(socket);
     const before = initConnection(deps).id;
     resetConnection();
     assert.notEqual(initConnection(deps).id, before);

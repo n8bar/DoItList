@@ -14,8 +14,14 @@ defmodule DoItWeb.InitiativeChannel do
   `:members_changed` on), so Phoenix's own channel subscription delivers those
   messages here — subscribing again would only duplicate every event.
 
-  Every change collapses to ONE client event, `"changed"`, carrying the kind and
-  the id that moved. There is no tree payload: Arc 3 defines the delta envelope,
+  A membership change is also where access can be **taken away**, so it is
+  re-authorized rather than forwarded blind: a user who can no longer view the
+  Initiative is told once (`"access_revoked"`) and the channel stops. Without
+  that, the broadcast that evicted them would be delivered to them, and every
+  change after it.
+
+  Every other change collapses to ONE client event, `"changed"`, carrying the
+  kind and the id that moved. There is no tree payload: Arc 3 defines the delta envelope,
   and until it does the honest thing is to tell the client *that* something
   changed and let it refetch. Messages this arc has no client story for
   (`:initiative_updated`, presence, chat) are ignored rather than guessed at.
@@ -28,9 +34,9 @@ defmodule DoItWeb.InitiativeChannel do
 
   @impl true
   def join("initiative:" <> id, _params, socket) do
-    user = socket.assigns.current_user
-
-    case Authz.fetch_initiative(user, id, :view, require_agent_access: false) do
+    case Authz.fetch_initiative(socket.assigns.current_user, id, :view,
+           require_agent_access: false
+         ) do
       {:ok, initiative} ->
         {:ok, %{initiative_id: initiative.id}, assign(socket, :initiative_id, initiative.id)}
 
@@ -43,10 +49,33 @@ defmodule DoItWeb.InitiativeChannel do
   end
 
   @impl true
+  def handle_info({:members_changed, id}, socket) do
+    case authorize(socket) do
+      {:ok, _initiative} ->
+        push(socket, "changed", %{kind: "members_changed", id: id})
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        push(socket, "access_revoked", %{initiative_id: socket.assigns.initiative_id})
+        {:stop, :normal, socket}
+    end
+  end
+
   def handle_info({kind, id}, socket) when kind in @kinds do
     push(socket, "changed", %{kind: Atom.to_string(kind), id: id})
     {:noreply, socket}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  # The join check, re-run. Role lookups hit the database, so this reflects the
+  # membership as it stands now, not as it stood when the socket was opened.
+  defp authorize(socket) do
+    Authz.fetch_initiative(
+      socket.assigns.current_user,
+      socket.assigns.initiative_id,
+      :view,
+      require_agent_access: false
+    )
+  end
 end

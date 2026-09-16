@@ -156,6 +156,47 @@ defmodule DoItWeb.InitiativeChannelTest do
     end
   end
 
+  describe "losing access mid-session" do
+    setup %{owner: owner, stranger: stranger, initiative: initiative} do
+      {:ok, _} = Initiatives.add_member(initiative.id, stranger.id, "viewer", owner)
+      {:ok, socket} = connect_as(stranger)
+
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, InitiativeChannel, "initiative:#{initiative.id}")
+
+      %{channel: channel}
+    end
+
+    test "a removed member is told once and the channel stops", %{
+      owner: owner,
+      stranger: stranger,
+      initiative: initiative,
+      channel: channel
+    } do
+      ref = Process.monitor(channel.channel_pid)
+
+      {n, _} = Initiatives.remove_member(initiative.id, stranger.id, owner)
+      assert n == 1
+
+      assert_push "access_revoked", %{initiative_id: id}
+      assert id == initiative.id
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
+      refute_push "changed", %{}, 100
+    end
+
+    test "a membership change that leaves access alone is just a change", %{
+      owner: owner,
+      initiative: initiative,
+      channel: channel
+    } do
+      other = user("other")
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "viewer", owner)
+
+      assert_push "changed", %{kind: "members_changed"}
+      assert Process.alive?(channel.channel_pid)
+    end
+  end
+
   describe "logging out" do
     test "drops the user's live sockets", %{owner: owner} do
       DoItWeb.Endpoint.subscribe("user_socket:#{owner.id}")

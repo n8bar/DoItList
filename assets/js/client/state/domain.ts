@@ -45,6 +45,26 @@ export function putInitiativeTree(store: DomainStore, tree: InitiativeTree): voi
   }));
 }
 
+/**
+ * Forgets everything the client holds about one Initiative — the loaded tree
+ * and its row in the index. Used when the server says the user may no longer
+ * see it (m04.01 1.5): access that has been taken away must not leave a copy
+ * of the data on the glass.
+ */
+export function forgetInitiative(store: DomainStore, id: number): void {
+  store.set((state) => {
+    const initiativeTrees = { ...state.initiativeTrees };
+    delete initiativeTrees[id];
+    const summaries = state.initiativeSummaries;
+    return {
+      ...state,
+      initiativeTrees,
+      initiativeSummaries:
+        summaries === null ? null : summaries.filter((summary) => summary.id !== id),
+    };
+  });
+}
+
 /** The loaded tree for `id`, or `undefined` if it has not been read yet. */
 export function initiativeTree(state: DomainState, id: number): InitiativeTree | undefined {
   return state.initiativeTrees[id];

@@ -18,7 +18,7 @@ import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
 import { initConnection } from "./live/connection.ts";
 import { phoenixTransport } from "./live/phoenix_transport.ts";
-import { createChangedHandler } from "./live/refresh.ts";
+import { createChangedHandler, createRevokedHandler } from "./live/refresh.ts";
 import { Link } from "./router/link.tsx";
 import type { Route } from "./router/route.ts";
 import { matchRoute } from "./router/route.ts";
@@ -141,6 +141,11 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       transport: (options) => phoenixTransport(options, () => api.csrfToken()),
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
       onChanged: createChangedHandler({ api, domain: stores.domain }),
+      onAccessRevoked: createRevokedHandler({
+        domain: stores.domain,
+        ui: stores.ui,
+        onForbidden: () => setState({ kind: "forbidden" }),
+      }),
     }),
   );
 

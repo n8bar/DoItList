@@ -18,9 +18,20 @@ export interface FakeTransport extends LiveTransport {
   disconnects: number;
   readonly channels: FakeChannel[];
   readonly options: TransportOptions;
+  /** Scheduled reconnect attempts so far, i.e. Phoenix's `tries`. */
+  tries: number;
+  /** The delays the socket asked for, in order. */
+  readonly delays: number[];
   open(): void;
-  close(): void;
+  /**
+   * One failed connect attempt, in Phoenix's real order: `onerror`, then the
+   * retry is scheduled (`reconnectAfterMs`), then `onclose`. Both callbacks
+   * fire for ONE attempt — a fake that fires them separately hides a budget
+   * that is spent twice as fast as it reads.
+   */
   fail(): void;
+  /** A close with no preceding error (a server hanging up mid-session). */
+  close(): void;
 }
 
 export function fakeTransport(): { factory: (o: TransportOptions) => LiveTransport; get(): FakeTransport } {
@@ -73,9 +84,23 @@ export function fakeTransport(): { factory: (o: TransportOptions) => LiveTranspo
         channels.push(channel);
         return channel;
       },
-      open: () => handlers.open.forEach((callback) => callback()),
-      close: () => handlers.close.forEach((callback) => callback()),
-      fail: () => handlers.error.forEach((callback) => callback()),
+      tries: 0,
+      delays: [],
+      open: () => {
+        transport.tries = 0;
+        handlers.open.forEach((callback) => callback());
+      },
+      fail: () => {
+        handlers.error.forEach((callback) => callback());
+        transport.tries += 1;
+        transport.delays.push(options.reconnectAfterMs(transport.tries));
+        handlers.close.forEach((callback) => callback());
+      },
+      close: () => {
+        transport.tries += 1;
+        transport.delays.push(options.reconnectAfterMs(transport.tries));
+        handlers.close.forEach((callback) => callback());
+      },
     };
 
     built = transport;

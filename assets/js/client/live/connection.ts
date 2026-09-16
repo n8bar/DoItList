@@ -46,6 +46,14 @@ export interface ConnectionDeps {
   onStatus(status: ConnectionStatus): void;
   /** Called for every `changed` push on a joined Initiative. */
   onChanged(event: ChangedEvent): void;
+  /**
+   * Called when the server says this user may no longer see an Initiative they
+   * were watching. The channel is already gone by then — this is the client's
+   * cue to stop showing what it has.
+   */
+  onAccessRevoked(initiativeId: number): void;
+  /** Injected in tests so the backoff jitter is assertable. */
+  random?: () => number;
   /** How long a released subscription is kept joined. */
   leaveGraceMs?: number;
   timers?: Timers;
@@ -112,7 +120,10 @@ export function createConnection(deps: ConnectionDeps): Connection {
   const subscriptions = new Map<number, Subscription>();
   let link: LinkState = initialLinkState;
   let connects = 0;
-  let open = false;
+  // Set when the retry budget runs out. Only `retry()` clears it: a route
+  // change must not quietly resurrect a connection the client has told the
+  // user it gave up on.
+  let gaveUp = false;
 
   const report = (next: LinkState) => {
     const before = link.status;
@@ -121,30 +132,42 @@ export function createConnection(deps: ConnectionDeps): Connection {
   };
 
   const transport = deps.transport({
-    reconnectAfterMs: (tries) => reconnectDelayMs(tries),
+    // Phoenix calls this once per scheduled attempt, which is the only honest
+    // attempt counter the socket offers: a single failed attempt fires both
+    // `onerror` and `onclose`, so counting those would spend the budget twice
+    // as fast as it looks.
+    reconnectAfterMs: (tries) => {
+      const before = link;
+      report(nextLinkState(before, { kind: "attempt", tries }));
+      if (link.exhausted && !before.exhausted) {
+        gaveUp = true;
+        // Stop Phoenix's retry loop rather than let it spin behind a screen
+        // that says we have stopped — but not from inside this hook, which
+        // runs *while* the next attempt is being scheduled and would have its
+        // teardown undone by the scheduling that follows.
+        timers.setTimeout(() => transport.disconnect(), 0);
+      }
+      return reconnectDelayMs(tries, deps.random);
+    },
   });
 
   transport.onOpen(() => {
-    open = true;
     report(nextLinkState(link, { kind: "open" }));
   });
 
+  // Says only "not live". The counting lives in `reconnectAfterMs` above.
   const dropped = () => {
-    open = false;
-    const before = link;
-    const next = nextLinkState(before, { kind: "drop" });
-    report(next);
-    // The budget is spent: stop Phoenix's own retry loop rather than let it
-    // spin behind a screen that says we have stopped.
-    if (next.exhausted && !before.exhausted) transport.disconnect();
+    report(nextLinkState(link, { kind: "drop" }));
   };
 
   transport.onClose(dropped);
   transport.onError(dropped);
 
   // Idempotent: only a connection that is actually down is stood back up, so
-  // navigating (which subscribes) can never cost a reconnect.
+  // navigating (which subscribes) can never cost a reconnect — and a client
+  // that gave up stays given up until the user says otherwise.
   const connect = () => {
+    if (gaveUp) return;
     if (connects > 0 && link.status !== "offline") return;
     if (link.status === "offline") report(nextLinkState(link, { kind: "retry" }));
     connects += 1;
@@ -156,6 +179,13 @@ export function createConnection(deps: ConnectionDeps): Connection {
     channel.on("changed", (payload) => {
       const event = parseChanged(initiativeId, payload);
       if (event !== null) deps.onChanged(event);
+    });
+    channel.on("access_revoked", () => {
+      // The server has already stopped the channel; drop our side of it and
+      // tell the app, which owns what the user sees.
+      const entry = subscriptions.get(initiativeId);
+      if (entry) leave(initiativeId, entry);
+      deps.onAccessRevoked(initiativeId);
     });
     channel.join(() => {
       // Arc 3 owns what a refused or timed-out join tells the user; today the
@@ -217,7 +247,6 @@ export function createConnection(deps: ConnectionDeps): Connection {
       for (const [initiativeId, entry] of [...subscriptions.entries()]) {
         leave(initiativeId, entry);
       }
-      open = false;
       report(nextLinkState(link, { kind: "down" }));
       transport.disconnect();
     },
@@ -226,6 +255,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
     // resuming is the user's call and it is one click (spec §7).
     retry() {
       if (link.status !== "offline") return;
+      gaveUp = false;
       connect();
     },
 
