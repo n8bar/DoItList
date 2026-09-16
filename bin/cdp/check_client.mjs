@@ -620,43 +620,47 @@ export async function checkDialogFocusReturn(ctx) {
     { timeoutMs: 10_000, what: "the client's local cache to open" },
   );
 
-  const seed = await evaluate(
-    session,
-    `
-    return (async () => {
-    const dbs = await indexedDB.databases();
-    const found = dbs.find((d) => /^doit:v\\d+:\\d+$/.test(d.name ?? ""));
-    if (found === undefined) return { ok: false, why: "this tab has no client cache to seed" };
-    const db = await new Promise((resolve, reject) => {
-      // No version: open whatever is there. An upgrade here would be this
-      // harness rewriting the operator's cache, which it has no business doing.
-      const req = indexedDB.open(found.name);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => reject(req.error);
-    });
-    if (!db.objectStoreNames.contains("pending_ops")) {
-      db.close();
-      return { ok: false, why: "the cache has no pending_ops store" };
-    }
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction("pending_ops", "readwrite");
-      tx.objectStore("pending_ops").put({
-        key: ${JSON.stringify("cdp-focus-return-check")},
-        initiativeId: 0,
-        createdAt: Date.now(),
-        payload: { op: "harness_probe" },
-      });
-      tx.oncomplete = () => resolve(true);
-      tx.onerror = () => reject(tx.error);
-    });
-    db.close();
-    return { ok: true, db: found.name };
-    })();
-  `,
-  );
-  if (!seed.ok) throw new Error(seed.why);
-
   try {
+    // Seeded inside the try: once this has run, the cache carries a queued op
+    // and cleanup (the `finally` below) must run whatever happens next —
+    // including a throw from the seed itself — or the residue check fails and
+    // the operator's next real tab inherits a fake pending write.
+    const seed = await evaluate(
+      session,
+      `
+      return (async () => {
+      const dbs = await indexedDB.databases();
+      const found = dbs.find((d) => /^doit:v\\d+:\\d+$/.test(d.name ?? ""));
+      if (found === undefined) return { ok: false, why: "this tab has no client cache to seed" };
+      const db = await new Promise((resolve, reject) => {
+        // No version: open whatever is there. An upgrade here would be this
+        // harness rewriting the operator's cache, which it has no business doing.
+        const req = indexedDB.open(found.name);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!db.objectStoreNames.contains("pending_ops")) {
+        db.close();
+        return { ok: false, why: "the cache has no pending_ops store" };
+      }
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("pending_ops", "readwrite");
+        tx.objectStore("pending_ops").put({
+          key: ${JSON.stringify("cdp-focus-return-check")},
+          initiativeId: 0,
+          createdAt: Date.now(),
+          payload: { op: "harness_probe" },
+        });
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => reject(tx.error);
+      });
+      db.close();
+      return { ok: true, db: found.name };
+      })();
+    `,
+    );
+    if (!seed.ok) throw new Error(seed.why);
+
     await session.send("Page.navigate", { url: `${APP_URL}/app/initiatives` });
     await waitFor(session, "return window.__doit_client_ready === true;", {
       timeoutMs: READY_TIMEOUT_MS,
