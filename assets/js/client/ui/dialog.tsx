@@ -72,6 +72,19 @@ export function Dialog({ id, open, title, onCancel, actions, children }: DialogP
     }
   }, [open]);
 
+  // Unmounted while open — the menu it lived in went away, or the route
+  // changed — nobody else will hand focus back, and the browser drops it on
+  // <body>. `opener` is non-null only while the dialog is open, so this is a
+  // no-op in every other case.
+  useEffect(
+    () => () => {
+      if (opener.current === null) return;
+      restoreFocus(opener.current);
+      opener.current = null;
+    },
+    [],
+  );
+
   // Escape closes a native dialog by itself. We stop it and hand the decision
   // to the caller instead, so the DOM and `open` can never disagree.
   const onCancelEvent = (event: SyntheticEvent<HTMLDialogElement>) => {

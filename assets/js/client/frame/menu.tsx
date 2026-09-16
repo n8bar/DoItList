@@ -44,7 +44,12 @@ export function NavMenu({ stores, route }: { stores: Stores; route: Route }) {
     if (!state.open) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") dispatch({ kind: "close", reason: "escape" });
+      if (event.key !== "Escape") return;
+      // An open dialog owns Escape. The Sign out confirm lives inside this
+      // panel, and closing the menu out from under it would hide the very
+      // control the dialog has to hand focus back to (§3.1).
+      if (document.querySelector("dialog[open]") !== null) return;
+      dispatch({ kind: "close", reason: "escape" });
     };
     // Capture, so a press on something the menu covers closes it before that
     // something reacts.

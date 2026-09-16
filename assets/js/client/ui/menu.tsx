@@ -108,7 +108,23 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
   };
 
   return (
-    <div className={`relative${className === undefined ? "" : ` ${className}`}`}>
+    <div
+      className={`relative${className === undefined ? "" : ` ${className}`}`}
+      // Escape on the WRAPPER, not the panel: focus is on the trigger the
+      // moment the menu opens by click, and Escape has to shut it from there
+      // too (§3.3). The reducer hands focus back to the trigger.
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !state.open) return;
+        // An open dialog owns Escape. One of this menu's items opens a confirm
+        // that lives inside the panel, and answering it must not also shut the
+        // menu out from under the control the dialog has to hand focus back to.
+        if (event.target instanceof Element && event.target.closest("dialog[open]") !== null) {
+          return;
+        }
+        event.stopPropagation();
+        dispatch({ kind: "close", reason: "escape" });
+      }}
+    >
       <button
         type="button"
         id={`${id}-button`}
@@ -131,11 +147,7 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
         hidden={!state.open}
         className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
         onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            event.stopPropagation();
-            dispatch({ kind: "close", reason: "escape" });
-            return;
-          }
+          // Escape is the wrapper's; it bubbles there from here.
           const next = nextFocusIndex(items, focused, event.key);
           if (next === null) return;
           event.preventDefault();
