@@ -245,3 +245,10 @@ export async function clickElement(session, selector) {
   await session.send("Input.dispatchMouseEvent", { type: "mouseReleased", ...base });
   return hit;
 }
+
+/** Presses one key (a "raw" down/up pair), e.g. `pressKey(session, "Escape")`. */
+export async function pressKey(session, key, { code = key, windowsVirtualKeyCode = 0 } = {}) {
+  const base = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode };
+  await session.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  await session.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+}

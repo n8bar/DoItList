@@ -14,8 +14,11 @@
 // Node 22+ (or Node 20 with --experimental-websocket) — it needs global WebSocket.
 //
 // Every check is one exported async function taking the shared context, listed
-// in CHECKS below. Worklist 4 adds the narrow-viewport hamburger check by
-// writing a function here and adding one line to CHECKS — see the marker.
+// in CHECKS below. Add a check by writing an `export async function checkX(ctx)`
+// and adding one line to CHECKS — nothing else in this file needs to change.
+//
+// Order matters in one place only: the narrow-viewport check changes the
+// emulated viewport, so it runs last.
 
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -29,12 +32,14 @@ import {
   evaluate,
   listTargets,
   openTarget,
+  pressKey,
   waitFor,
 } from "./cdp.mjs";
 
 const CDP_URL = (process.env.CDP_URL ?? "http://localhost:9222").replace(/\/$/, "");
 const APP_URL = (process.env.APP_URL ?? "http://localhost:4000").replace(/\/$/, "");
 const VIEWPORT = { width: 1280, height: 800 };
+const NARROW_VIEWPORT = { width: 390, height: 844 };
 const READY_TIMEOUT_MS = 15_000;
 const SHOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../tmp/cdp");
 
@@ -56,18 +61,27 @@ export async function checkClientReady(ctx) {
   const chrome = await evaluate(
     session,
     `
-    const ids = ["client-header", "client-nav-initiatives", "client-nav-assigned", "client-nav-account"];
+    const ids = [
+      "client-header", "client-nav-initiatives", "client-nav-assigned", "client-nav-account",
+      "client-rail", "client-rail-nav-initiatives", "client-main", "client-menu-button",
+      "client-skip-link", "client-sign-out", "client-theme-toggle",
+    ];
     const missing = ids.filter((id) => document.getElementById(id) === null);
     const heading = document.getElementById("route-heading");
+    const shown = (el) => el !== null && el.getBoundingClientRect().width > 0;
     return {
       missing,
       path: location.pathname,
       heading: heading === null ? null : heading.textContent.trim(),
+      railVisible: shown(document.getElementById("client-rail")),
+      narrowNavVisible: shown(document.getElementById("client-menu-button")),
     };
   `,
   );
 
   if (chrome.missing.length > 0) throw new Error(`chrome missing: #${chrome.missing.join(", #")}`);
+  if (!chrome.railVisible) throw new Error("the left rail is not in the layout at 1280px");
+  if (chrome.narrowNavVisible) throw new Error("the hamburger is showing at 1280px");
   if (chrome.path !== "/app/initiatives") throw new Error(`path is ${chrome.path}`);
   if (chrome.heading !== "Initiatives") throw new Error(`heading is ${chrome.heading}`);
 
@@ -89,12 +103,12 @@ export async function checkNoLayoutShift(ctx) {
   const settled = await waitFor(
     session,
     `
-    const main = document.getElementById("client-main");
-    if (main === null) return null;
-    if (main.querySelector('[role="status"]') !== null) return null;
-    if (main.querySelector("#initiatives-list li") !== null) return "rows";
-    if (main.querySelector("#screen-error") !== null) return "error";
-    if (main.querySelector("section p") !== null) return "empty";
+    const section = document.querySelector("#client-main section");
+    if (section === null) return null;
+    if (section.querySelector('[role="status"]') !== null) return null;
+    if (section.querySelector("#initiatives-list li") !== null) return "rows";
+    if (section.querySelector("#screen-error") !== null) return "error";
+    if (section.querySelector("p") !== null) return "empty";
     return null;
   `,
     { timeoutMs: READY_TIMEOUT_MS, what: "the Initiatives list to settle" },
@@ -109,7 +123,7 @@ export async function checkNoLayoutShift(ctx) {
     session,
     `return document.querySelectorAll("#initiatives-list li").length;`,
   );
-  return `${settled} (${rows} rows), header and nav did not move`;
+  return `${settled} (${rows} rows), header, nav and rail did not move`;
 }
 
 /** ONE real interaction: click the Account nav link like a person would. */
@@ -139,14 +153,116 @@ export async function checkNavClickToAccount(ctx) {
   return `clicked at (${at.x},${at.y}) → ${landed.path}, focus on the heading`;
 }
 
-// WORKLIST 4 ADDS ITS CHECKS HERE (narrow-viewport hamburger, rail layout
-// stability). Write an `export async function checkX(ctx)` above and add it to
-// CHECKS below — nothing else in this file needs to change.
+/**
+ * Changing route must not move the frame either (item 4.6). The baseline here
+ * is the Account route the previous check landed on; we go back to Initiatives
+ * and the header, nav, rail and main column must all be exactly where they were.
+ */
+export async function checkNoShiftAcrossRoutes(ctx) {
+  const { session } = ctx;
+
+  const before = await measureChrome(session);
+  await clickElement(session, "#client-nav-initiatives");
+  await waitFor(
+    session,
+    `
+    const heading = document.getElementById("route-heading");
+    if (location.pathname !== "/app/initiatives") return null;
+    return heading !== null && heading.textContent.trim() === "Initiatives";
+  `,
+    { timeoutMs: 5_000, what: "the Initiatives route" },
+  );
+
+  const moved = shifted(before, await measureChrome(session));
+  if (moved.length > 0) throw new Error(`the frame moved on a route change: ${moved.join("; ")}`);
+  return "header, nav, rail and main column all held their place";
+}
+
+/**
+ * Narrow viewport (item 4.1): the inline nav and the rail step aside, one menu
+ * control takes over, and it opens and closes the way a keyboard user expects —
+ * Escape closes it and hands focus back to the trigger (UX_GUARDRAILS §3).
+ * Opening it must not move the header (item 4.6).
+ */
+export async function checkNarrowMenu(ctx) {
+  const { session } = ctx;
+
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    ...NARROW_VIEWPORT,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+
+  const collapsed = await waitFor(
+    session,
+    `
+    const shown = (el) => el !== null && el.getBoundingClientRect().width > 0;
+    const trigger = document.getElementById("client-menu-button");
+    if (!shown(trigger)) return null;
+    if (shown(document.getElementById("client-nav"))) return null;
+    if (shown(document.getElementById("client-rail"))) return null;
+    const r = trigger.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height) };
+  `,
+    { timeoutMs: 5_000, what: "the nav to collapse behind the menu control" },
+  );
+
+  // UX_GUARDRAILS §5: the touch target is at least 44px on the short side.
+  if (collapsed.h < 44) throw new Error(`the menu control is only ${collapsed.h}px tall`);
+
+  const before = await measureChrome(session);
+  await clickElement(session, "#client-menu-button");
+
+  const opened = await waitFor(
+    session,
+    `
+    const panel = document.getElementById("client-menu");
+    const trigger = document.getElementById("client-menu-button");
+    if (panel === null) return null;
+    if (trigger.getAttribute("aria-expanded") !== "true") return null;
+    const items = [...panel.querySelectorAll("a, button")];
+    const short = items.filter((el) => Math.round(el.getBoundingClientRect().height) < 44);
+    return { items: items.length, short: short.map((el) => el.id || el.textContent.trim()) };
+  `,
+    { timeoutMs: 5_000, what: "the menu to open" },
+  );
+
+  if (opened.short.length > 0) {
+    throw new Error(`menu items under the 44px touch target: ${opened.short.join(", ")}`);
+  }
+  const moved = shifted(before, await measureChrome(session));
+  if (moved.length > 0) throw new Error(`opening the menu moved the frame: ${moved.join("; ")}`);
+
+  await pressKey(session, "Escape", { windowsVirtualKeyCode: 27 });
+  const closed = await waitFor(
+    session,
+    `
+    if (document.getElementById("client-menu") !== null) return null;
+    const trigger = document.getElementById("client-menu-button");
+    if (trigger.getAttribute("aria-expanded") !== "false") return null;
+    return { focused: document.activeElement === null ? null : document.activeElement.id };
+  `,
+    { timeoutMs: 5_000, what: "Escape to close the menu" },
+  );
+
+  if (closed.focused !== "client-menu-button") {
+    throw new Error(`focus went to "${closed.focused ?? "(none)"}", not back to the trigger`);
+  }
+
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    ...VIEWPORT,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  return `${opened.items} menu items, all >=44px; Escape closed it and returned focus`;
+}
 
 const CHECKS = [
   ["client ready", checkClientReady],
   ["no layout shift", checkNoLayoutShift],
-  ["nav click → Account", checkNavClickToAccount],
+  ["nav click \u2192 Account", checkNavClickToAccount],
+  ["no shift across routes", checkNoShiftAcrossRoutes],
+  ["narrow viewport menu", checkNarrowMenu],
 ];
 
 // ---------------------------------------------------------------------------
@@ -162,9 +278,18 @@ async function measureChrome(session) {
       const r = el.getBoundingClientRect();
       return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
     };
+    // The main column is SUPPOSED to get taller as content lands; what must not
+    // change is where it starts and how wide it is. So it is measured without
+    // its height.
+    const column = (el) => {
+      const b = box(el);
+      return b === null ? null : { x: b.x, y: b.y, w: b.w };
+    };
     return {
       header: box(document.getElementById("client-header")),
-      nav: box(document.querySelector("#client-header nav")),
+      nav: box(document.getElementById("client-nav")),
+      rail: box(document.getElementById("client-rail")),
+      main: column(document.getElementById("client-main")),
     };
   `,
   );

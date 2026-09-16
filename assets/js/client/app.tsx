@@ -1,4 +1,4 @@
-// The client shell (m04.01 worklists 2–3).
+// The client shell (m04.01 worklists 2–4).
 //
 // Everything here is interactive the instant it paints: the nav, the theme
 // toggle and the router are all local, and the session read runs in an effect
@@ -9,6 +9,10 @@
 // The stores, the API client and the live connection are built once, outside
 // the render, and handed down by context — a route change remounts screens, not
 // infrastructure (guardrail §7.4).
+//
+// This module owns the whole-app STATES (signed out, forbidden, failed to
+// start) and the services behind them. The frame — header, nav, rail, main,
+// pane — is `frame/app_frame.tsx`, rendered once outside the route switch.
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -19,98 +23,25 @@ import { createApiClient } from "./api/client.ts";
 import { initConnection } from "./live/connection.ts";
 import { phoenixTransport } from "./live/phoenix_transport.ts";
 import { createInitiativeSync } from "./live/refresh.ts";
-import { Link } from "./router/link.tsx";
-import type { Route } from "./router/route.ts";
+import { AppFrame } from "./frame/app_frame.tsx";
 import { matchRoute } from "./router/route.ts";
-import { RouterProvider, useRoute } from "./router/router.tsx";
+import { RouterProvider } from "./router/router.tsx";
 import { RouteView } from "./screens/route_view.tsx";
 import { createStores } from "./state/stores.ts";
-import { setThemePreference } from "./state/preferences.ts";
 import type { RecoveryState } from "./state/recovery.ts";
 import { setConnectionStatus, setSnapshotMeta, setStorageHealth } from "./state/recovery.ts";
-import { useStore, useStoreValue } from "./state/use_store.ts";
+import { useStoreValue } from "./state/use_store.ts";
 import type { Stores } from "./state/stores.ts";
 import { ServicesProvider } from "./services.tsx";
 import { openClientCache } from "./storage/client_cache.ts";
 import { browserIdb } from "./storage/idb.ts";
 import { browserKeyValueStore } from "./storage/last_user.ts";
-import type { ThemePreference } from "./lib/theme.ts";
-import { browserThemeEnv, currentPreference, nextPreference, setTheme } from "./lib/theme.ts";
-
-const THEME_LABEL: Record<ThemePreference, string> = {
-  system: "System",
-  light: "Light",
-  dark: "Dark",
-};
+import { browserThemeEnv, currentPreference } from "./lib/theme.ts";
 
 const CARD =
   "max-w-md w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm";
-const BUTTON =
-  "inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-800";
 const PRIMARY =
   "inline-flex items-center rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white";
-
-function ThemeToggle({ stores }: { stores: Stores }) {
-  const { theme } = useStore(stores.preferences);
-
-  return (
-    <button
-      type="button"
-      id="client-theme-toggle"
-      aria-label="Switch theme"
-      title={`Theme: ${THEME_LABEL[theme]}`}
-      className={BUTTON}
-      onClick={() => {
-        const next = nextPreference(theme);
-        setTheme(next, browserThemeEnv());
-        setThemePreference(stores.preferences, next);
-      }}
-    >
-      {THEME_LABEL[theme]}
-    </button>
-  );
-}
-
-/** True when this nav entry is the route currently showing. */
-function current(route: Route, kind: Route["kind"]): boolean {
-  if (route.kind === kind) return true;
-  // A single Initiative still belongs under Initiatives.
-  return kind === "initiatives" && route.kind === "initiative";
-}
-
-function Header({ stores }: { stores: Stores }) {
-  const route = useRoute();
-
-  const tab = (kind: Route["kind"], to: string, label: string) => (
-    <Link
-      id={`client-nav-${kind}`}
-      to={to}
-      aria-current={current(route, kind) ? "page" : undefined}
-      className={[
-        BUTTON,
-        current(route, kind) ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100" : "",
-      ].join(" ")}
-    >
-      {label}
-    </Link>
-  );
-
-  return (
-    <header
-      id="client-header"
-      className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800"
-    >
-      <span className="mr-2 text-sm font-semibold tracking-tight">Do It List</span>
-      <nav aria-label="Sections" className="flex items-center gap-1">
-        {tab("initiatives", "/app/initiatives", "Initiatives")}
-        {tab("assigned", "/app/assigned", "Assigned")}
-        {tab("account", "/app/account", "Account")}
-      </nav>
-      <span className="flex-1" />
-      <ThemeToggle stores={stores} />
-    </header>
-  );
-}
 
 const selectStorage = (state: RecoveryState) => ({
   health: state.storage,
@@ -136,7 +67,7 @@ function StorageNote({ stores }: { stores: Stores }) {
     <p
       id="client-storage-note"
       role="status"
-      className="shrink-0 border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
+      className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
     >
       {headline}
       {note !== null && <span className="ml-1 text-zinc-500 dark:text-zinc-500">({note})</span>}
@@ -204,8 +135,11 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     });
   });
 
-  const mainRef = useRef<HTMLElement | null>(null);
-  const scrollContainer = useCallback(() => mainRef.current, []);
+  // The frame's scrolling region, handed to the router so back/forward can put
+  // the user back where they were. It is the frame's, not a screen's: a route
+  // change must not swap the element the scroll memory is keyed to.
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const scrollContainer = useCallback(() => scrollRef.current, []);
 
   /**
    * Only "your session ended" and "you can't see this" belong to the shell: a
@@ -312,26 +246,26 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   return (
     <ServicesProvider value={services}>
       <RouterProvider stores={stores} scrollContainer={scrollContainer}>
-        <div className="flex h-dvh flex-col">
-          <Header stores={stores} />
-          <StorageNote stores={stores} />
-          {sessionNote !== null && (
-            <p
-              id="client-session-note"
-              role="status"
-              className="shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
-            >
-              {sessionNote}
-            </p>
-          )}
-          <main
-            id="client-main"
-            ref={mainRef}
-            className="flex-1 overflow-y-auto p-6 text-zinc-700 dark:text-zinc-300"
-          >
-            <RouteView />
-          </main>
-        </div>
+        <AppFrame
+          stores={stores}
+          scrollRef={scrollRef}
+          notices={
+            <>
+              <StorageNote stores={stores} />
+              {sessionNote !== null && (
+                <p
+                  id="client-session-note"
+                  role="status"
+                  className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
+                >
+                  {sessionNote}
+                </p>
+              )}
+            </>
+          }
+        >
+          <RouteView />
+        </AppFrame>
       </RouterProvider>
     </ServicesProvider>
   );

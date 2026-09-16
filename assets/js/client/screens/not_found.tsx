@@ -4,6 +4,7 @@
 // is the client's to answer. It says so plainly and offers the way back rather
 // than leaving the user on an empty frame.
 
+import { controlClass } from "../frame/button_styles.ts";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import { Heading } from "./chrome.tsx";
@@ -18,7 +19,7 @@ export function NotFoundScreen({ path }: { path: string }) {
       <Link
         id="not-found-home"
         to="/app/initiatives"
-        className="mt-5 inline-flex items-center rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white"
+        className={`${controlClass()} mt-5`}
       >
         Go to Initiatives
       </Link>
