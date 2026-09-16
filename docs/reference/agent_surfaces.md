@@ -10,7 +10,7 @@ Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` ar
 
 Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page. The server keeps only a hash, so a lost token is replaced, never recovered.
 
-The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read, and carries a `user:<id>` channel — joinable only as yourself — whose `notification` event is one of the user's own notifications, already worded and linked. That surface also answers `GET /app/api/notifications` with the user's recent notifications and unread count; marking them read is the ordinary `update notification` operation, not a second write path. It is not an agent surface — agents use the endpoints below.
+The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read, and carries a `user:<id>` channel — joinable only as yourself — whose `notification` event is one of the user's own notifications, already worded and linked. That surface also answers `GET /app/api/notifications` with the user's recent notifications and unread count; marking them read is the ordinary `update notification` operation, not a second write path. It answers two more Initiative reads: `/members`, with roles, and `/history`, what this user can undo and redo right now, each a label or null. Its `initiative:<id>` channel carries selection presence too — a client sends `select` with a task id or null, and gets `presence_state` on join and `presence_diff` after, on the same topic the web workspace uses, so each route sees the other's people. It is not an agent surface — agents use the endpoints below.
 
 ### Endpoints
 
@@ -53,6 +53,8 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 ]}
 ```
 
+`add history` reverses the Initiative's newest reversible action: `data` takes the `initiative_id` and an `action` of `undo` or `redo`. The stack is shared by everyone in the Initiative, and reversing is role-gated like the original write, so an action you may not reverse reads as nothing to undo. The result names the event kind it reversed and carries the change as a delta: `upserts` for the tasks still live, `removed` for the ones that are not.
+
 A response carries `results`, one entry per operation, in order. Each names a `status` — `ok`, `error`, or `not_applied` — and a failure's `pointer` names the field at fault. One failure rolls the whole batch back, so every other entry reads `not_applied`.
 
 <!-- generated: DoItWeb.Api.Operations -->
@@ -72,6 +74,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | update | notification | all, read |
 | add | link | source, source_id, source_lid, target, target_id, target_lid |
 | remove | link | source, source_id, source_lid, target, target_id, target_lid |
+| add | history | action, initiative_id |
 <!-- /generated: DoItWeb.Api.Operations -->
 
 <!-- generated: DoItWeb.Api.Serializer -->
