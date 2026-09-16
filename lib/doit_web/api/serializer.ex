@@ -117,6 +117,8 @@ defmodule DoItWeb.Api.Serializer do
         "referenced_by": [
           {"source_id": 140, "source_index": "1.3", "source_title": "Plan the launch"}
         ],
+        "sort_mode": "alphabetical",
+        "sort_reverse": false,
         "version": 5,
         "children": [ <task node>, ... ]
       }
@@ -161,6 +163,10 @@ defmodule DoItWeb.Api.Serializer do
     cross-reference this one, each with the `source_id` / `source_index` /
     `source_title`. `[]` when nothing points here. Same single link query feeds
     both directions (no extra round-trip).
+  * `sort_mode` — how this branch orders its own children (`manual` |
+    `alphabetical` | `completion` | `priority` | `created` | `updated`), or
+    `null` to inherit the nearest ancestor's rule (the root's default is
+    `manual`). `sort_reverse` flips that order; it means nothing under `manual`.
   * `version` — the record's revision counter (m03.04 2.7.4): bumped on every
     intent-bearing write to the record itself, never by derived roll-up
     recomputes. Pass it back as `expected_version` on an update to refuse a
@@ -373,6 +379,8 @@ defmodule DoItWeb.Api.Serializer do
         comment_count: Map.get(ctx.comment_counts, task.id, 0),
         cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
         referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
+        sort_mode: task.sort_mode,
+        sort_reverse: task.sort_reverse,
         version: task.version,
         children: task_nodes(task.children, ctx, positions, depth + 1)
       }

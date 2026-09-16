@@ -141,6 +141,29 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["index"] =~ ~r/^\d+\.\d+$/
     end
 
+    test "task nodes carry the branch's own sort rule, null meaning inherit", ctx do
+      # Phase 1 orders its children alphabetically, reversed; Phase 2 sets nothing.
+      {:ok, _} = Tasks.set_sort(ctx.phase1, ctx.owner, "alphabetical", true)
+
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => %{"tasks" => tasks}} = json_response(conn, 200)
+
+      phase1 = find_node(tasks, "Phase 1")
+      assert phase1["sort_mode"] == "alphabetical"
+      assert phase1["sort_reverse"] == true
+
+      phase2 = find_node(tasks, "Phase 2")
+      assert phase2["sort_mode"] == nil
+      assert phase2["sort_reverse"] == false
+
+      # Nested nodes carry the pair too, not just the top level.
+      build = find_node(tasks, "Build API")
+      assert build["sort_mode"] == nil
+      assert build["sort_reverse"] == false
+    end
+
     test "the tree root carries unit_count under both calc modes (m03.04 6.5)", ctx do
       # Phase 1's two leaves + Phase 2 = 3 leaves; 2 top-level tasks.
       conn =

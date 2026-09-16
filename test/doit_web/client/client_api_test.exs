@@ -75,6 +75,36 @@ defmodule DoItWeb.Client.ClientApiTest do
       assert is_binary(csrf) and csrf != ""
     end
 
+    test "carries the account's four row-display preferences", %{conn: conn, owner: owner} do
+      conn = conn |> sign_in(owner) |> get(~p"/app/api/session")
+
+      # Defaults: every row attribute shown, exactly as the LiveView renders it.
+      assert %{"data" => %{"preferences" => prefs}} = json_response(conn, 200)
+
+      assert prefs == %{
+               "show_task_priority" => true,
+               "show_task_assignee" => true,
+               "show_task_progress" => true,
+               "show_task_count" => true
+             }
+    end
+
+    test "row preferences follow what the account saved", %{conn: conn, owner: owner} do
+      {:ok, _} =
+        DoIt.Accounts.update_preferences(owner, %{
+          "show_task_priority" => false,
+          "show_task_count" => false
+        })
+
+      conn = conn |> sign_in(owner) |> get(~p"/app/api/session")
+
+      assert %{"data" => %{"preferences" => prefs}} = json_response(conn, 200)
+      assert prefs["show_task_priority"] == false
+      assert prefs["show_task_count"] == false
+      assert prefs["show_task_assignee"] == true
+      assert prefs["show_task_progress"] == true
+    end
+
     test "signed out is a JSON 401, never an HTML redirect", %{conn: conn} do
       conn = get(conn, ~p"/app/api/session")
 
