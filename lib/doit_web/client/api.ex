@@ -56,8 +56,8 @@ defmodule DoItWeb.Client.Api do
   |------|------------------------|-------------------------------------------------------------|
   | 401  | `unauthorized`         | No signed-in session (a bearer token alone does not count)  |
   | 403  | `stale_session`        | Missing / stale CSRF token — re-read `GET /app/api/session` and retry |
-  | 403  | `forbidden`            | Signed in, but the role check denies it                     |
-  | 404  | `not_found`            | No such resource, or not visible to this user               |
+  | 403  | `forbidden`            | Signed in, but the role check denies it — including a resource not visible to this user |
+  | 404  | `not_found`            | No such resource                                             |
   | 409  | `conflict`             | Stale `expected_version` — the record changed since the read |
   | 422  | `unprocessable_entity` | Validation failure; a batch also carries per-op `results`   |
 
