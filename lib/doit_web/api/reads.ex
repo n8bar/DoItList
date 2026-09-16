@@ -38,6 +38,46 @@ defmodule DoItWeb.Api.Reads do
   end
 
   @doc """
+  One Initiative's members with their roles, as `Serializer.member/1` maps.
+
+  View-gated like the tree read: `{:error, :not_found}` / `{:error,
+  :forbidden}` come straight from `Authz.fetch_initiative/4`.
+  """
+  @spec initiative_members(User.t(), term(), keyword()) ::
+          {:ok, [map()]} | {:error, :not_found | :forbidden}
+  def initiative_members(%User{} = user, id, opts \\ []) do
+    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view, opts) do
+      {:ok, initiative.id |> Initiatives.list_members() |> Enum.map(&Serializer.member/1)}
+    end
+  end
+
+  @doc """
+  What `user` could undo and redo on this Initiative right now, each a
+  `%{label: "Undo move"}` map or `nil`.
+
+  The labels are the ones the workspace's toolbar shows — `Tasks.
+  describe_event/1` prefixed with the direction — so both routes name the same
+  action the same way. Per-user: the candidates are role-gated inside
+  `Tasks.undo_candidate/2` / `Tasks.redo_candidate/2`.
+  """
+  @spec initiative_history(User.t(), term(), keyword()) ::
+          {:ok, map()} | {:error, :not_found | :forbidden}
+  def initiative_history(%User{} = user, id, opts \\ []) do
+    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view, opts) do
+      {:ok,
+       %{
+         undo: history_entry(Tasks.undo_candidate(user, initiative.id), "Undo"),
+         redo: history_entry(Tasks.redo_candidate(user, initiative.id), "Redo")
+       }}
+    end
+  end
+
+  defp history_entry(nil, _direction), do: nil
+
+  defp history_entry(event, direction),
+    do: %{label: "#{direction} #{Tasks.describe_event(event)}"}
+
+  @doc """
   The whole nested Initiative tree, view-gated.
 
   Returns `{:ok, payload}`, or the `{:error, :not_found}` / `{:error,

@@ -17,7 +17,7 @@ defmodule DoItWeb.Api.InitiativeController do
   """
   use DoItWeb, :controller
 
-  alias DoIt.{Initiatives, Tasks}
+  alias DoIt.Tasks
   alias DoIt.Tasks.Task
   alias DoItWeb.Api
   alias DoItWeb.Api.{Authz, Errors, Reads, Serializer}
@@ -77,10 +77,7 @@ defmodule DoItWeb.Api.InitiativeController do
 
   @doc "The Initiative's members with their roles."
   def members(conn, %{"id" => id}) do
-    user = conn.assigns.current_user
-
-    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
-      members = initiative.id |> Initiatives.list_members() |> Enum.map(&Serializer.member/1)
+    with {:ok, members} <- Reads.initiative_members(conn.assigns.current_user, id) do
       json(conn, Api.data(members))
     end
   end

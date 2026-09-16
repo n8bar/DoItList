@@ -4,8 +4,10 @@ defmodule DoItWeb.Client.InitiativeController do
 
     * `GET /app/api/initiatives` — the index list.
     * `GET /app/api/initiatives/:id` — the whole nested tree.
+    * `GET /app/api/initiatives/:id/members` — members with their roles.
+    * `GET /app/api/initiatives/:id/history` — what this user can undo / redo.
 
-  Both are one call into `DoItWeb.Api.Reads`, which the `/api/v1` controller
+  Each is one call into `DoItWeb.Api.Reads`, which the `/api/v1` controller
   calls too — same contexts, same `DoItWeb.Api.Authz` gate (unknown id → 404,
   can't view → 403), same `DoItWeb.Api.Serializer` shapes. The single
   difference is the agent-access flag: this surface passes
@@ -29,6 +31,27 @@ defmodule DoItWeb.Client.InitiativeController do
     user = conn.assigns.current_user
 
     with {:ok, payload} <- Reads.initiative_tree(user, id, require_agent_access: false) do
+      json(conn, Api.data(payload))
+    end
+  end
+
+  @doc "The Initiative's members with their roles — who the client draws avatars for."
+  def members(conn, %{"id" => id}) do
+    user = conn.assigns.current_user
+
+    with {:ok, members} <- Reads.initiative_members(user, id, require_agent_access: false) do
+      json(conn, Api.data(members))
+    end
+  end
+
+  @doc """
+  What the signed-in user can undo and redo here, each `%{"label" => …}` or
+  `null` — the toolbar's two buttons, per-user and session-only.
+  """
+  def history(conn, %{"id" => id}) do
+    user = conn.assigns.current_user
+
+    with {:ok, payload} <- Reads.initiative_history(user, id, require_agent_access: false) do
       json(conn, Api.data(payload))
     end
   end

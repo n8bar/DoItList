@@ -108,6 +108,8 @@ defmodule DoItWeb.Router do
     get "/session", SessionController, :show
     get "/initiatives", InitiativeController, :index
     get "/initiatives/:id", InitiativeController, :show
+    get "/initiatives/:id/members", InitiativeController, :members
+    get "/initiatives/:id/history", InitiativeController, :history
     get "/notifications", NotificationController, :index
     post "/operations", OperationsController, :create
   end

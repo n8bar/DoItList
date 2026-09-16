@@ -139,6 +139,102 @@ defmodule DoItWeb.Client.ClientApiTest do
     end
   end
 
+  describe "GET /app/api/initiatives/:id/members" do
+    test "a member sees everyone's role, as the bearer API serialises them", ctx do
+      {:ok, _} = Initiatives.add_member(ctx.ini.id, ctx.stranger.id, "viewer")
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/members")
+
+      assert %{"data" => members} = json_response(conn, 200)
+      roles = Map.new(members, &{&1["user_id"], &1["role"]})
+      assert roles[ctx.owner.id] == "owner"
+      assert roles[ctx.stranger.id] == "viewer"
+
+      owner_row = Enum.find(members, &(&1["user_id"] == ctx.owner.id))
+      assert owner_row["name"] == ctx.owner.name
+      assert owner_row["username"] == ctx.owner.username
+      assert owner_row["email"] == ctx.owner.email
+    end
+
+    test "a non-member is forbidden and an unknown id is not found", ctx do
+      forbidden =
+        ctx.conn |> sign_in(ctx.stranger) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/members")
+
+      assert %{"error" => %{"status" => 403, "code" => "forbidden"}} =
+               json_response(forbidden, 403)
+
+      missing =
+        build_conn() |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/98765432/members")
+
+      assert %{"error" => %{"status" => 404, "code" => "not_found"}} =
+               json_response(missing, 404)
+    end
+
+    test "a bearer token alone is a JSON 401", ctx do
+      conn =
+        ctx.conn
+        |> put_req_header("authorization", "Bearer #{token(ctx.owner)}")
+        |> get(~p"/app/api/initiatives/#{ctx.ini.id}/members")
+
+      assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
+               json_response(conn, 401)
+    end
+  end
+
+  describe "GET /app/api/initiatives/:id/history" do
+    test "reports nothing to undo or redo on an untouched stack", ctx do
+      {:ok, fresh} = Initiatives.create_initiative(ctx.owner, %{"name" => "Fresh"})
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/#{fresh.id}/history")
+
+      assert %{"data" => %{"undo" => nil, "redo" => nil}} = json_response(conn, 200)
+    end
+
+    test "labels the next undo, then the redo it leaves behind", ctx do
+      {:ok, _} = Tasks.update_task(ctx.phase1, ctx.owner, %{"title" => "Phase one"})
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/history")
+
+      assert %{"data" => %{"undo" => %{"label" => "Undo rename"}, "redo" => nil}} =
+               json_response(conn, 200)
+
+      {:ok, _} = Tasks.undo(ctx.owner, ctx.ini.id)
+
+      after_undo =
+        build_conn() |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/history")
+
+      assert %{"data" => %{"undo" => undo, "redo" => %{"label" => "Redo rename"}}} =
+               json_response(after_undo, 200)
+
+      assert is_nil(undo) or is_binary(undo["label"])
+    end
+
+    test "a plain viewer has nothing to undo", ctx do
+      {:ok, _} = Initiatives.add_member(ctx.ini.id, ctx.stranger.id, "viewer")
+      {:ok, _} = Tasks.update_task(ctx.phase1, ctx.owner, %{"title" => "Phase one"})
+
+      conn =
+        ctx.conn |> sign_in(ctx.stranger) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/history")
+
+      assert %{"data" => %{"undo" => nil, "redo" => nil}} = json_response(conn, 200)
+    end
+
+    test "a non-member is forbidden and a bearer token alone is a 401", ctx do
+      forbidden =
+        ctx.conn |> sign_in(ctx.stranger) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/history")
+
+      assert %{"error" => %{"status" => 403}} = json_response(forbidden, 403)
+
+      bearer =
+        build_conn()
+        |> put_req_header("authorization", "Bearer #{token(ctx.owner)}")
+        |> get(~p"/app/api/initiatives/#{ctx.ini.id}/history")
+
+      assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
+               json_response(bearer, 401)
+    end
+  end
+
   describe "GET /app/api/notifications" do
     test "returns the user's recent notifications, serialised, with the unread count", ctx do
       {:ok, _} =
