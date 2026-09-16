@@ -76,7 +76,6 @@ defmodule DoItWeb.Router do
     # DoItWeb.Api.Authz (unknown id → 404, can't-view → 403).
     get "/initiatives", InitiativeController, :index
     get "/initiatives/:id", InitiativeController, :show
-    get "/notifications", NotificationController, :index
     get "/initiatives/:id/activity", InitiativeController, :activity
     get "/initiatives/:id/members", InitiativeController, :members
     get "/initiatives/:id/task_count", InitiativeController, :task_count
