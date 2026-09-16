@@ -24,7 +24,9 @@ defmodule DoItWeb.Client.NotificationOpsTest do
 
   # The engine's envelope: `op` is the verb, `type` is the entity, everything
   # else rides in `data`.
-  @mark_all_read %{"operations" => [%{"op" => "update", "type" => "notification", "data" => %{"all" => true}}]}
+  @mark_all_read %{
+    "operations" => [%{"op" => "update", "type" => "notification", "data" => %{"all" => true}}]
+  }
 
   defp user do
     n = System.unique_integer([:positive])
