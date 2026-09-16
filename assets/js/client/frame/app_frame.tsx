@@ -112,11 +112,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
           id="client-header"
           className="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900"
         >
-          {/* `relative`: the connection summary centres itself in this band
-              from `lg:` up, exactly as the LiveView signifier does. */}
-          <div
-            className={`${CONTAINER} relative flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}
-          >
+          <div className={`${CONTAINER} flex items-center gap-3 px-4 py-3 sm:px-6`}>
             <Link
               id="client-wordmark"
               to={HOME_PATH}
@@ -126,13 +122,23 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
               Do It List
             </Link>
 
+            {/* The summary's own slot. Below `lg:` it is a fixed badge in the
+                bottom-left corner and this wrapper is not a box at all
+                (`display: contents`); from `lg:` up it is a flex item between
+                the wordmark and the controls, so the three share the band by
+                measurement rather than by luck. Nothing here can cover Retry,
+                and Retry cannot cover the nav.
+
+                The slot has a FIXED height and the badge floats inside it: the
+                summary has six states and a second line it can grow, and none
+                of them may make the header taller (item 4.6). */}
+            <div className="contents lg:relative lg:block lg:h-9 lg:min-w-0 lg:flex-1 lg:px-3">
+              {summary}
+            </div>
+
             {/* Nav and controls are ONE right-hand group, as the LiveView
-                header has them. That is not only for the look: the connection
-                summary is centred in this band, and a nav spread across the
-                middle would sit under it. `relative z-10` is the belt to that
-                braces — at narrow `lg:` widths the two can still meet, and when
-                they do the opaque controls win rather than printing over it. */}
-            <div className="relative z-10 flex flex-none items-center gap-2">
+                header has them. */}
+            <div className="flex flex-none items-center gap-2">
               <nav id="client-nav" aria-label="Primary" className="hidden items-center gap-2 sm:flex">
                 {NAV_ITEMS.map((item) => (
                   <NavButton
@@ -158,8 +164,6 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
               {user === null ? null : <AccountMenu user={user} className="hidden sm:block" />}
               <NavMenu stores={stores} route={route} />
             </div>
-
-            {summary}
           </div>
         </header>
 

@@ -68,10 +68,15 @@ export function ConnectionSummary() {
       data-conn-state={shown.state}
       className={[
         "pointer-events-none fixed bottom-4 left-4 z-50 flex max-w-[calc(100vw-2rem)] flex-col items-start gap-1",
-        // In the header band it sits BEHIND the header's own controls: the two
-        // can meet at narrow desktop widths, and the badge must not print over a
-        // nav button when they do.
-        "lg:absolute lg:bottom-auto lg:left-1/2 lg:top-1/2 lg:z-0 lg:max-w-sm lg:-translate-x-1/2 lg:-translate-y-1/2",
+        // From `lg:` up it stops floating and takes its OWN slot in the header
+        // band, between the wordmark and the controls (see `AppFrame`). Out of
+        // flow it was centred over a band whose contents grow, and it ended up
+        // on top of the nav — where it both hid buttons and swallowed their
+        // clicks. This summary holds Retry and Reload: it is the only way back
+        // from offline, and it can never be the thing that is covered, nor the
+        // thing doing the covering.
+        "lg:absolute lg:inset-x-0 lg:bottom-auto lg:left-0 lg:top-1/2 lg:z-auto",
+        "lg:max-w-full lg:-translate-y-1/2 lg:items-center",
       ].join(" ")}
     >
       <div
