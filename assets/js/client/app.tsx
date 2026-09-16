@@ -28,11 +28,17 @@ import { matchRoute } from "./router/route.ts";
 import { RouterProvider } from "./router/router.tsx";
 import { RouteView } from "./screens/route_view.tsx";
 import { createStores } from "./state/stores.ts";
-import type { RecoveryState } from "./state/recovery.ts";
-import { setConnectionStatus, setSnapshotMeta, setStorageHealth } from "./state/recovery.ts";
-import { useStoreValue } from "./state/use_store.ts";
+import {
+  setConnectionStatus,
+  setFatalError,
+  setSnapshotMeta,
+  setStorageHealth,
+} from "./state/recovery.ts";
+import { pushNotice } from "./state/ui.ts";
 import type { Stores } from "./state/stores.ts";
 import { ServicesProvider } from "./services.tsx";
+import { ConnectionSummary } from "./ui/connection_summary.tsx";
+import { Notices } from "./ui/notices.tsx";
 import { openClientCache } from "./storage/client_cache.ts";
 import { browserIdb } from "./storage/idb.ts";
 import { browserKeyValueStore } from "./storage/last_user.ts";
@@ -42,38 +48,6 @@ const CARD =
   "max-w-md w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm";
 const PRIMARY =
   "inline-flex items-center rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white";
-
-const selectStorage = (state: RecoveryState) => ({
-  health: state.storage,
-  note: state.storageNote,
-});
-
-/**
- * What the user is owed when the local cache is not what it should be: one
- * sentence, in place, never a takeover. Task 7's connection summary absorbs
- * this; until then the client saying nothing would be the client knowing
- * something the user doesn't.
- */
-function StorageNote({ stores }: { stores: Stores }) {
-  const { health, note } = useStoreValue(stores.recovery, selectStorage);
-  if (health === "opening" || health === "ready") return null;
-
-  const headline =
-    health === "unavailable"
-      ? "This browser isn’t saving a local copy, so a reload starts from the server."
-      : "Some of the local copy couldn’t be kept.";
-
-  return (
-    <p
-      id="client-storage-note"
-      role="status"
-      className="mb-4 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
-    >
-      {headline}
-      {note !== null && <span className="ml-1 text-zinc-500 dark:text-zinc-500">({note})</span>}
-    </p>
-  );
-}
 
 function Screen({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -88,7 +62,6 @@ function Screen({ title, children }: { title: string; children: ReactNode }) {
 
 export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   const [state, setState] = useState<ClientState>(() => initialState({ ok: true, bootstrap }));
-  const [sessionNote, setSessionNote] = useState<string | null>(null);
 
   // Built once. `useState`'s initialiser, not `useMemo`, because these must not
   // be rebuilt even if React decides to discard a memo.
@@ -166,6 +139,34 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     [api, stores, connection, cache, escalate],
   );
 
+  // Errors that escape everything else, once the client is up. Before it is up
+  // the startup guard owns them (it paints the recovery screen and drops these
+  // listeners); after it is up, React's boundary catches render failures but
+  // nothing catches a throw in an event handler or a rejected promise. Silence
+  // there is the worst option: the tab is broken and looks fine. So the
+  // connection summary says so, and offers Reload — the content on screen stays
+  // readable meanwhile (spec §7).
+  useEffect(() => {
+    const report = (error: unknown) => {
+      if (window.__doit_client_ready !== true) return;
+      setFatalError(
+        stores.recovery,
+        error instanceof Error && error.message !== ""
+          ? error.message
+          : "Something in the app stopped working.",
+      );
+    };
+    const onError = (event: ErrorEvent) => report(event.error ?? event.message);
+    const onRejection = (event: PromiseRejectionEvent) => report(event.reason);
+
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [stores.recovery]);
+
   const started = useRef(false);
 
   useEffect(() => {
@@ -180,7 +181,6 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       if (!live) return;
       if (result.ok) {
         stores.domain.set((domain) => ({ ...domain, user: result.data.user }));
-        setSessionNote(null);
         // The session belongs to somebody else — a re-login in another tab,
         // say. Their cache is not ours to read: the old one goes before this
         // one is opened (spec §12).
@@ -191,9 +191,14 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       // A failed session check is not a reason to tear the app down: the
       // bootstrap already told us who we are. It is a reason to say so, though —
       // silently carrying on would be the client knowing something the user
-      // doesn't. Task 7 replaces this line with the real connection summary.
+      // doesn't.
       if (next !== null && next.kind !== "start-failed") setState(next);
-      else setSessionNote("Couldn’t reach the server to confirm your session.");
+      else {
+        pushNotice(stores.ui, {
+          kind: "info",
+          message: "Couldn’t reach the server to confirm your session.",
+        });
+      }
     });
 
     return () => {
@@ -246,26 +251,10 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   return (
     <ServicesProvider value={services}>
       <RouterProvider stores={stores} scrollContainer={scrollContainer}>
-        <AppFrame
-          stores={stores}
-          scrollRef={scrollRef}
-          notices={
-            <>
-              <StorageNote stores={stores} />
-              {sessionNote !== null && (
-                <p
-                  id="client-session-note"
-                  role="status"
-                  className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
-                >
-                  {sessionNote}
-                </p>
-              )}
-            </>
-          }
-        >
+        <AppFrame stores={stores} scrollRef={scrollRef} summary={<ConnectionSummary />}>
           <RouteView />
         </AppFrame>
+        <Notices />
       </RouterProvider>
     </ServicesProvider>
   );

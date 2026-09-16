@@ -16,8 +16,10 @@
 //   rail        — the same nav as a desktop column (here)
 //   main        — the route outlet, with the `<h1>` focus contract (Task 4)
 //   pane        — right-hand slot routes fill; Arc 2's Details pane (pane.tsx)
-//   notices     — one line of shell-level state; Task 7's connection summary
-//                 replaces it and owns dialogs, toasts and menus beyond this.
+//   summary     — the connection summary (ui/connection_summary.tsx), in the
+//                 header band where the LiveView's connecting signifier sits.
+//                 It is positioned OUT OF FLOW, so it can change from "Live" to
+//                 "Offline — 3 changes waiting" without moving anything (4.6).
 
 import type { ReactNode, RefObject } from "react";
 import { useCallback, useMemo, useState } from "react";
@@ -46,12 +48,15 @@ export interface AppFrameProps {
   stores: Stores;
   /** The scrolling region. The router remembers and restores its position. */
   scrollRef: RefObject<HTMLElement | null>;
-  /** Shell-level lines (storage, session). Inside `<main>`: they must not move the rail. */
-  notices?: ReactNode;
+  /**
+   * The connection summary. Rendered inside the header's positioning context
+   * and out of flow, so its six states cannot resize the header band.
+   */
+  summary?: ReactNode;
   children: ReactNode;
 }
 
-export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps) {
+export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps) {
   const route = useRoute();
   // How many routes are filling the pane, and the element they portal into. The
   // frame learns nothing about WHAT is in the pane, so a tenant re-rendering its
@@ -98,7 +103,11 @@ export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps
           id="client-header"
           className="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900"
         >
-          <div className={`${CONTAINER} flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}>
+          {/* `relative`: the connection summary centres itself in this band
+              from `lg:` up, exactly as the LiveView signifier does. */}
+          <div
+            className={`${CONTAINER} relative flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}
+          >
             <Link
               id="client-wordmark"
               to={HOME_PATH}
@@ -125,6 +134,8 @@ export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps
               <SignOut idPrefix="client" className="hidden sm:block" />
               <NavMenu stores={stores} route={route} />
             </div>
+
+            {summary}
           </div>
         </header>
 
@@ -159,7 +170,6 @@ export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps
               </aside>
 
               <main id="client-main" tabIndex={-1} className="min-w-0 outline-none">
-                {notices}
                 {children}
               </main>
 

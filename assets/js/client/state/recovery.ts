@@ -56,6 +56,13 @@ export interface RecoveryState {
   readonly snapshotAt: number | null;
   /** The last moment the server confirmed we were current (ms since the epoch). */
   readonly lastSyncedAt: number | null;
+  /**
+   * An unrecoverable client-side failure the user must reload out of, in one
+   * plain sentence, or `null` (spec §7). It is deliberately NOT a takeover:
+   * the tree on screen is still readable, so the client says what happened and
+   * offers the way out rather than replacing the page.
+   */
+  readonly fatalError: string | null;
 }
 
 export const initialRecoveryState: RecoveryState = {
@@ -67,6 +74,7 @@ export const initialRecoveryState: RecoveryState = {
   snapshotVersion: null,
   snapshotAt: null,
   lastSyncedAt: null,
+  fatalError: null,
 };
 
 export type RecoveryStore = Store<RecoveryState>;
@@ -89,6 +97,14 @@ export function setStorageHealth(
       ? state
       : { ...state, storage, storageNote },
   );
+}
+
+/**
+ * Records an unrecoverable client failure. The FIRST one wins: what broke first
+ * is the useful thing to say, and everything after it is likely fallout.
+ */
+export function setFatalError(store: RecoveryStore, message: string): void {
+  store.set((state) => (state.fatalError === null ? { ...state, fatalError: message } : state));
 }
 
 /** Records the newest snapshot this device holds, or that it holds none. */
