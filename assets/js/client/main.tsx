@@ -1,27 +1,37 @@
 // Entry point for the React client served at /app (m04.01 worklist 2).
 //
-// Startup is guarded end to end: a bad bootstrap payload, a throw during
-// mount, or an error/rejection before the first paint all land on the same
-// plain-DOM recovery screen instead of leaving the server's spinner turning
-// forever. Once the client paints, it tells the document's watchdog to stand
-// down by setting `window.__doit_client_ready`.
+// Startup is guarded end to end. A bad bootstrap payload, a throw before mount,
+// an error or rejection while starting, and a throw *inside* the React tree all
+// land on the same plain-DOM recovery screen instead of leaving the server's
+// spinner turning or an empty #app behind. "The client is up" is signalled from
+// inside the committed tree (ReadyBeacon), never from here — React's render work
+// is scheduled, so returning from `render()` proves nothing.
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./app.tsx";
+import { ReadyBeacon, RootBoundary } from "./root_boundary.tsx";
 import { parseBootstrap } from "./boot.ts";
-import { failureMessage, showRecovery } from "./lib/recovery.ts";
+import { showRecovery } from "./lib/recovery.ts";
+import { createStartupGuard } from "./lib/startup.ts";
 
 const START_FAILED_TITLE = "Do It List couldn’t start";
 
-function fail(error: unknown): void {
-  if (window.__doit_client_ready) return;
-  window.__doit_boot_failed = true;
-  showRecovery(START_FAILED_TITLE, failureMessage(error));
-}
+const onError = (event: ErrorEvent) => guard.fail(event.error ?? event.message);
+const onRejection = (event: PromiseRejectionEvent) => guard.fail(event.reason);
 
-const onError = (event: ErrorEvent) => fail(event.error ?? event.message);
-const onRejection = (event: PromiseRejectionEvent) => fail(event.reason);
+const guard = createStartupGuard({
+  onFail: (message) => {
+    window.__doit_boot_failed = true;
+    showRecovery(START_FAILED_TITLE, message);
+  },
+  onReady: () => {
+    // Only now is the document's watchdog allowed to stand down.
+    window.__doit_client_ready = true;
+    window.removeEventListener("error", onError);
+    window.removeEventListener("unhandledrejection", onRejection);
+  },
+});
 
 window.addEventListener("error", onError);
 window.addEventListener("unhandledrejection", onRejection);
@@ -35,13 +45,12 @@ try {
 
   createRoot(container).render(
     <StrictMode>
-      <App bootstrap={result.bootstrap} />
+      <RootBoundary onError={(error) => guard.crash(error)}>
+        <App bootstrap={result.bootstrap} />
+        <ReadyBeacon onReady={() => guard.markReady()} />
+      </RootBoundary>
     </StrictMode>,
   );
-
-  window.__doit_client_ready = true;
-  window.removeEventListener("error", onError);
-  window.removeEventListener("unhandledrejection", onRejection);
 } catch (error) {
-  fail(error);
+  guard.fail(error);
 }

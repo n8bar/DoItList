@@ -18,8 +18,13 @@ defmodule DoItWeb.Router do
   # LiveView root layout: signed out is a 200 with `user: null`, and the client
   # paints its own "Signed out" screen. No live flash either — nothing on this
   # document is server-rendered product chrome.
+  # "json" is accepted alongside "html" so a `fetch()` that misses the JSON
+  # scope above — `Accept: application/json` on an unknown /app/api path —
+  # reaches the controller and gets the API's JSON 404 instead of a 406 from
+  # content negotiation. The document itself always renders HTML regardless of
+  # what was asked for (`put_format(:html)` in the controller).
   pipeline :client_browser do
-    plug :accepts, ["html"]
+    plug :accepts, ["html", "json"]
     plug :fetch_session
     plug :protect_from_forgery
     plug :put_secure_browser_headers

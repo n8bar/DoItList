@@ -92,9 +92,16 @@ defmodule DoItWeb.ClientControllerTest do
     test "server-renders no product-shaped controls", %{conn: conn} do
       html = conn |> sign_in(user()) |> get(~p"/app") |> html_response(200)
 
-      refute html =~ "phx-"
+      # The client paints the product. The server ships the loading state, the
+      # noscript message, and the recovery card's Reload — nothing else.
       refute html =~ "Initiative"
       refute html =~ ~s(<form)
+      refute html =~ ~s(<input)
+      refute html =~ "phx-click"
+      refute html =~ "phx-submit"
+      refute html =~ "phx-hook"
+      refute html =~ "data-phx-main"
+      assert html |> String.split("<button") |> length() == 2
     end
 
     test "serves the same document for any path under /app", %{conn: conn} do
@@ -106,9 +113,28 @@ defmodule DoItWeb.ClientControllerTest do
     end
 
     test "answers an unknown /app/api path with JSON, not the document", %{conn: conn} do
-      conn = conn |> sign_in(user()) |> get("/app/api/nope")
+      # As a fetch() actually asks for it: the pipeline must not 406 before the
+      # controller runs.
+      conn =
+        conn
+        |> sign_in(user())
+        |> put_req_header("accept", "application/json")
+        |> get("/app/api/nope")
 
       assert json_response(conn, 404)["error"]["code"] == "not_found"
+    end
+
+    test "still serves the document when a navigation asks for anything" do
+      for accept <- ["application/json", "text/html", "*/*"] do
+        html =
+          build_conn()
+          |> sign_in(user())
+          |> put_req_header("accept", accept)
+          |> get(~p"/app")
+          |> html_response(200)
+
+        assert html =~ "Loading Do It List"
+      end
     end
   end
 

@@ -53,6 +53,9 @@ defmodule DoItWeb.ClientController do
     conn
     |> put_root_layout(false)
     |> put_layout(false)
+    # The pipeline also accepts JSON (so an unknown /app/api fetch can reach the
+    # clause above); the document itself is always HTML.
+    |> put_format(:html)
     |> assign(:current_user, user)
     |> assign(:bootstrap_json, Jason.encode!(bootstrap, escape: :html_safe))
     |> render(:index)

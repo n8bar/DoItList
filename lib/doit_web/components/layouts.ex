@@ -11,8 +11,9 @@ defmodule DoItWeb.Layouts do
 
   @doc """
   Returns the value to use for `<html data-theme=...>` based on the current
-  user's saved preference. Returns nil for "system" / no user — the boot
-  script in root.html.heex then resolves the OS preference to an explicit
+  user's saved preference. Returns nil for "system" / no user — the shared
+  `theme_script/1` partial (rendered by both the root layout and the React
+  client's bootstrap document) then resolves the OS preference to an explicit
   light/dark before first paint.
   """
   def theme_attr(assigns) do
