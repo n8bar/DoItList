@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
 import type { ThemeEnv } from "./theme.ts";
-import { currentPreference, nextPreference, resolveTheme, setTheme, THEME_KEY } from "./theme.ts";
+import { currentPreference, resolveTheme, setTheme, THEME_KEY } from "./theme.ts";
 
 function fakeEnv(saved: string | null = null, prefersDark = false) {
   const store = new Map<string, string>();
@@ -56,10 +56,4 @@ test("setTheme stores system as absence and resolves against the OS", () => {
   assert.equal(store.has(THEME_KEY), false);
   assert.equal(attributes.get("data-theme"), "dark");
   assert.equal(flags.get("data-theme-system"), true);
-});
-
-test("nextPreference cycles system → light → dark → system", () => {
-  assert.equal(nextPreference("system"), "light");
-  assert.equal(nextPreference("light"), "dark");
-  assert.equal(nextPreference("dark"), "system");
 });

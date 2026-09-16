@@ -46,17 +46,6 @@ export function setTheme(theme: ThemePreference, env: ThemeEnv): ResolvedTheme {
   return resolved;
 }
 
-/** System → Light → Dark → System, the same order as the LiveView toggle. */
-export function nextPreference(theme: ThemePreference): ThemePreference {
-  switch (theme) {
-    case "system":
-      return "light";
-    case "light":
-      return "dark";
-    default:
-      return "system";
-  }
-}
 
 /** The real browser environment. Touches globals only when called. */
 export function browserThemeEnv(): ThemeEnv {

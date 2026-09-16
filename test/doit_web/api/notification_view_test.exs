@@ -21,10 +21,28 @@ defmodule DoItWeb.Api.NotificationViewTest do
 
   describe "line/1" do
     test "says who did what, in one line, for every kind we generate" do
+      # Pinned whole, not by prefix: these are the words a user reads, and the
+      # LiveView header says exactly the same ones. Adding a kind fails here
+      # until it has a sentence written for it.
+      expected = %{
+        "member_added" => "Dana added you to an Initiative",
+        "member_removed" => "Dana removed you from an Initiative",
+        "role_changed" => "Dana changed your role to editor in an Initiative",
+        "assigned" => "Dana assigned you “Ship it”",
+        "unassigned" => "Dana unassigned you from “Ship it”",
+        "co_assigned" => "Dana added you as a co-assignee on “Ship it”",
+        "co_unassigned" => "Dana removed you as a co-assignee from “Ship it”"
+      }
+
+      assert Enum.sort(Map.keys(expected)) == Enum.sort(Notifications.kinds())
+
       for kind <- Notifications.kinds() do
-        line = NotificationView.line(notif(kind, %{"actor_name" => "Dana", "role" => "editor"}))
-        assert is_binary(line) and String.trim(line) != ""
-        assert String.starts_with?(line, "Dana")
+        line =
+          NotificationView.line(
+            notif(kind, %{"actor_name" => "Dana", "role" => "editor", "task_title" => "Ship it"})
+          )
+
+        assert line == expected[kind]
       end
     end
 
