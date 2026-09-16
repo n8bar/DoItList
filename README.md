@@ -96,6 +96,25 @@ Browser-level behavior is verified by hand — each milestone arc carries
 `[Human]` action items in its testing section instead of automated browser
 tests.
 
+### Browser harness (opt-in)
+
+`bin/cdp/check_client.mjs` drives a real Chrome/Brave over the DevTools
+Protocol: it opens its own tab, loads `/app/initiatives`, waits for the client
+to report ready, checks that the header and nav don't shift when the list
+lands, and performs one real mouse click on the **Account** nav link (hit-tested
+first, so a covered or inert control can't pass).
+
+Run it from the **host** (the container can't reach the DevTools bridge), with
+a browser listening on `CDP_URL` (default `http://localhost:9222`) and the app
+origin in `APP_URL` (default `http://localhost:4000`); `CDP_OPTIONAL=1` makes a
+missing endpoint a skip instead of a failure. It is deliberately outside
+`mix test` and `mix precommit`.
+
+```bash
+APP_URL=http://localhost:4000 node bin/cdp/check_client.mjs   # Node 22+; add --experimental-websocket on Node 20
+docker compose exec -T web node --test bin/cdp/cdp.test.mjs   # the client's unit tests
+```
+
 ## Terminology
 
 Canonical definitions live in [`docs/ProductSpec.md`](docs/ProductSpec.md). Quick reference:

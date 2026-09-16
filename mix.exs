@@ -88,6 +88,11 @@ defmodule DoIt.MixProject do
       "test.api": [
         "test test/doit_web/api test/doit/api test/doit/imports test/doit/accounts/api_tokens_test.exs"
       ],
+      # Opt-in browser harness: drives a real Brave/Chrome over the DevTools
+      # Protocol against a signed-in session. Deliberately NOT in `test` or
+      # `precommit` — it needs a browser and a session the suite doesn't have.
+      # Runs from the HOST (the container can't reach the DevTools bridge).
+      "client.cdp": ["cmd node bin/cdp/check_client.mjs"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       # Type-checks the client tree (assets/js/client). esbuild strips types
       # without checking them, so this is the only thing that fails a bad type.
