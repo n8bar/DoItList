@@ -204,6 +204,25 @@ async function screenshot(session, name) {
 // never touched unless CDP_REUSE_TAB says so explicitly.
 // ---------------------------------------------------------------------------
 
+/**
+ * Get a target AND a live session on it, as one step that cannot leak.
+ *
+ * Opening a tab and attaching to it are two operations against a REAL browser:
+ * if the attach fails (handshake refused, timeout), the tab we just opened is
+ * still sitting in the operator's window. So the failure path closes it. The
+ * browser calls are injected so the leak rule is unit-testable — see
+ * `check_client.test.mjs`.
+ */
+export async function acquireSession({ acquire, attach, release }) {
+  const target = await acquire();
+  try {
+    return { target, session: await attach(target.webSocketDebuggerUrl) };
+  } catch (error) {
+    if (target.ours) await release(target.id).catch(() => {});
+    throw error;
+  }
+}
+
 async function acquireTarget() {
   try {
     const target = await openTarget(CDP_URL, "about:blank");
@@ -239,8 +258,11 @@ async function main() {
   process.stdout.write(`cdp   ${CDP_URL} → ${version.Browser}\n`);
   process.stdout.write(`app   ${APP_URL}\n`);
 
-  const target = await acquireTarget();
-  const session = await connect(target.webSocketDebuggerUrl);
+  const { target, session } = await acquireSession({
+    acquire: acquireTarget,
+    attach: (wsUrl) => connect(wsUrl),
+    release: (id) => closeTarget(CDP_URL, id),
+  });
   const ctx = { session, appUrl: APP_URL };
   const results = [];
   let failed = false;
@@ -285,7 +307,17 @@ async function main() {
   process.exit(failed ? 1 : 0);
 }
 
-main().catch((error) => {
-  process.stderr.write(`harness error: ${error.message}\n`);
-  process.exit(2);
-});
+// Only when run as the script. Importing this file (the unit tests do) must not
+// reach for a browser — and neither must `node --test bin/cdp/`, which runs
+// every file in the directory, this one included.
+const runAsScript =
+  process.env.NODE_TEST_CONTEXT === undefined &&
+  process.argv[1] !== undefined &&
+  resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (runAsScript) {
+  main().catch((error) => {
+    process.stderr.write(`harness error: ${error.message}\n`);
+    process.exit(2);
+  });
+}

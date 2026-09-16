@@ -2,7 +2,7 @@
 // 1.4). No browser and no server: `createSession` takes an injected socket, so
 // the ordering rules that are easy to get wrong are asserted, not assumed.
 //
-//   docker compose exec -T web node --test bin/cdp/cdp.test.mjs
+//   docker compose exec -T web node --test "bin/cdp/*.test.mjs"
 
 import assert from "node:assert/strict";
 import { test } from "node:test";

@@ -107,12 +107,14 @@ first, so a covered or inert control can't pass).
 Run it from the **host** (the container can't reach the DevTools bridge), with
 a browser listening on `CDP_URL` (default `http://localhost:9222`) and the app
 origin in `APP_URL` (default `http://localhost:4000`); `CDP_OPTIONAL=1` makes a
-missing endpoint a skip instead of a failure. It is deliberately outside
+missing endpoint a skip instead of a failure. `CDP_REUSE_TAB=1` lets it fall
+back to driving an existing tab when it can't open its own — off by default,
+because that navigates a tab you are using. It is deliberately outside
 `mix test` and `mix precommit`.
 
 ```bash
 APP_URL=http://localhost:4000 node bin/cdp/check_client.mjs   # Node 22+; add --experimental-websocket on Node 20
-docker compose exec -T web node --test bin/cdp/cdp.test.mjs   # the client's unit tests
+docker compose exec -T web node --test "bin/cdp/*.test.mjs"   # the harness's own unit tests
 ```
 
 ## Terminology
