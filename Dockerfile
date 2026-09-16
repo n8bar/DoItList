@@ -20,7 +20,8 @@ RUN apk add --no-cache \
       bash \
       postgresql-client \
       python3 \
-      nodejs
+      nodejs \
+      npm
 
 WORKDIR /app
 
@@ -34,6 +35,12 @@ RUN mix deps.get && mix deps.compile
 
 # Tailwind/esbuild binaries.
 RUN mix assets.setup
+
+# Client (React/TypeScript) dependencies, cached separately from the source
+# tree so editing JS/TSX doesn't reinstall them. `npm ci` installs exactly the
+# committed lockfile.
+COPY assets/package.json assets/package-lock.json assets/
+RUN npm ci --prefix assets
 
 # Timezone database so the container honors $TZ (Elixir local-time logs + `date`).
 RUN apk add --no-cache tzdata

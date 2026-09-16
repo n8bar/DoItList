@@ -89,6 +89,9 @@ defmodule DoIt.MixProject do
         "test test/doit_web/api test/doit/api test/doit/imports test/doit/accounts/api_tokens_test.exs"
       ],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
+      # Type-checks the client tree (assets/js/client). esbuild strips types
+      # without checking them, so this is the only thing that fails a bad type.
+      "assets.typecheck": ["cmd assets/node_modules/.bin/tsc -p assets/tsconfig.json"],
       "assets.build": ["compile", "tailwind doit", "esbuild doit"],
       "assets.deploy": [
         "tailwind doit --minify",
@@ -97,6 +100,7 @@ defmodule DoIt.MixProject do
       ],
       precommit: [
         "compile --warnings-as-errors",
+        "assets.typecheck",
         "doit.docs.gen --check",
         "deps.unlock --unused",
         "format",

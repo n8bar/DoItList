@@ -27,8 +27,11 @@ config :doit, DoItWeb.Endpoint,
 config :esbuild,
   version: "0.25.4",
   doit: [
+    # Two bundles from one profile: the LiveView bundle (app.js) and the React
+    # client (client.js, entry js/client/main.tsx). The `out=in` entry syntax
+    # pins each output name so the client tree's nesting stays out of the URL.
     args:
-      ~w(js/app.js --bundle --target=es2022 --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
+      ~w(app=js/app.js client=js/client/main.tsx --bundle --target=es2022 --jsx=automatic --outdir=../priv/static/assets/js --external:/fonts/* --external:/images/* --alias:@=.),
     cd: Path.expand("../assets", __DIR__),
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]

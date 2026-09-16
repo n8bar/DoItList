@@ -1,0 +1,16 @@
+{
+  "name": "doit-client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Client-side dependencies for the Do It List React client (assets/js/client).",
+  "dependencies": {
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.0"
+  }
+}

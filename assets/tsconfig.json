@@ -1,32 +1,38 @@
-// This file is needed on most editors to enable the intelligent autocompletion
-// of LiveView's JavaScript API methods. You can safely delete it if you don't need it.
-//
-// Note: This file assumes a basic esbuild setup without node_modules.
-// We include a generic paths alias to deps to mimic how esbuild resolves
-// the Phoenix and LiveView JavaScript assets.
-// If you have a package.json in your project, you should remove the
-// paths configuration and instead add the phoenix dependencies to the
-// dependencies section of your package.json:
-//
-// {
-//   ...
-//   "dependencies": {
-//     ...,
-//     "phoenix": "../deps/phoenix",
-//     "phoenix_html": "../deps/phoenix_html",
-//     "phoenix_live_view": "../deps/phoenix_live_view"
-//   }
-// }
-//
-// Feel free to adjust this configuration however you need.
 {
   "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+
+    // The legacy LiveView bundle (js/app.js and friends) is plain JavaScript
+    // resolved out of deps/ by esbuild's NODE_PATH. It is included so editors
+    // still complete Phoenix's API, but it is not type-checked.
+    "allowJs": true,
+    "checkJs": false,
     "baseUrl": ".",
     "paths": {
+      "phoenix": ["../deps/phoenix/priv/static/phoenix.mjs"],
+      "phoenix_html": ["../deps/phoenix_html/priv/static/phoenix_html.js"],
+      "phoenix_live_view": ["../deps/phoenix_live_view/priv/static/phoenix_live_view.esm.js"],
       "*": ["../deps/*"]
-    },
-    "allowJs": true,
-    "noEmit": true
+    }
   },
-  "include": ["js/**/*"]
+  "include": ["js/**/*"],
+  "exclude": ["node_modules", "vendor"]
 }

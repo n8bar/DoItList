@@ -32,7 +32,9 @@ Then open <http://localhost:4000>. Register an account, create an Initiative, an
 start adding lists and nested tasks.
 
 The first boot is slow — Elixir, Hex, and the JS asset toolchain are all
-pulled into the image. Subsequent runs use the cached `_build`, `deps`, and
+pulled into the image. The build also runs `npm ci` for the client's
+React/TypeScript dependencies from `assets/package-lock.json`, so no host Node
+or npm install is needed. Subsequent runs use the cached `_build`, `deps`, and
 `node_modules` named volumes.
 
 ### Environment
