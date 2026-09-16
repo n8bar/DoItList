@@ -17,6 +17,16 @@ export interface MenuItemModel {
   readonly disabled?: boolean;
   /** Destructive. The component gives it the danger style AND a confirm. */
   readonly danger?: boolean;
+  /**
+   * An in-app path. The item is then a real link — status bar, middle-click and
+   * "open in new tab" all work — routed by the client's own router.
+   */
+  readonly href?: string;
+  /**
+   * The user has not seen this one yet (a notification). Drawn heavier and with
+   * a marker, so "new" is never colour alone.
+   */
+  readonly unseen?: boolean;
 }
 
 const usable = (item: MenuItemModel): boolean => item.disabled !== true;

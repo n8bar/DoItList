@@ -14,9 +14,11 @@
 // Entirely client-side: opening a menu is view state and never waits on the
 // network (guardrail §6.5).
 
+import type { ReactNode } from "react";
 import { useEffect, useReducer, useRef, useState } from "react";
 
 import { controlClass } from "../frame/button_styles.ts";
+import { Link } from "../router/link.tsx";
 import { CLOSED_MENU, menuReducer } from "../frame/menu_state.ts";
 import { Icon } from "./icon.tsx";
 import type { MenuItemModel } from "./menu_model.ts";
@@ -25,13 +27,26 @@ import { firstEnabled, menuItemDomId, nextFocusIndex } from "./menu_model.ts";
 export interface MenuProps {
   /** Stable and unique; every item's id is derived from it. */
   id: string;
-  /** The trigger's visible text. */
+  /** The trigger's text, and its accessible name whatever it draws. */
   label: string;
   items: readonly MenuItemModel[];
   /** Runs for the chosen item. The menu closes first, so focus lands sanely. */
   onSelect: (itemId: string) => void;
   /** Extra classes on the wrapper, e.g. a breakpoint that hides this instance. */
   className?: string;
+  /**
+   * What the trigger draws instead of its label — an avatar, a bell. `label`
+   * stays the accessible name, so the control is still named in words.
+   */
+  trigger?: ReactNode;
+  /** Classes for the trigger button, when it is not an ordinary control. */
+  triggerClassName?: string;
+  /** How wide the panel is. The default suits a list of actions. */
+  panelClassName?: string;
+  /** Told whenever the menu opens or closes — the bell marks read on open. */
+  onOpenChange?: (open: boolean) => void;
+  /** What the panel says when there are no items at all. */
+  empty?: ReactNode;
 }
 
 const ITEM_BASE = [
@@ -48,20 +63,41 @@ const ITEM_STATE = {
   danger:
     "text-red-700 hover:bg-red-50 active:bg-red-100 dark:text-red-300 dark:hover:bg-red-950/50 dark:active:bg-red-950/80",
   disabled: "cursor-not-allowed text-zinc-400 dark:text-zinc-600",
+  unseen: "font-semibold text-zinc-900 dark:text-zinc-50",
 };
 
-export function Menu({ id, label, items, onSelect, className }: MenuProps) {
+export function Menu({
+  id,
+  label,
+  items,
+  onSelect,
+  className,
+  trigger,
+  triggerClassName,
+  panelClassName,
+  onOpenChange,
+  empty,
+}: MenuProps) {
   const [state, dispatch] = useReducer(menuReducer, CLOSED_MENU);
   const [focused, setFocused] = useState(-1);
-  const trigger = useRef<HTMLButtonElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
 
   // The focus the reducer says the trigger is owed, paid on the next commit.
   useEffect(() => {
     if (!state.restoreFocus) return;
-    trigger.current?.focus();
+    triggerRef.current?.focus();
     dispatch({ kind: "focus-restored" });
   }, [state.restoreFocus]);
+
+  // Whoever opened it is told once per change, after the commit — the bell
+  // marks its notifications read from here.
+  const announced = useRef(false);
+  useEffect(() => {
+    if (announced.current === state.open) return;
+    announced.current = state.open;
+    onOpenChange?.(state.open);
+  }, [state.open, onOpenChange]);
 
   // Opening puts focus on the first item the user can actually use — a menu
   // that opens with focus nowhere is a menu a keyboard user has to hunt for.
@@ -89,7 +125,7 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
     const onPointerDown = (event: Event) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (trigger.current?.contains(target) === true) return;
+      if (triggerRef.current?.contains(target) === true) return;
       if (panel.current?.contains(target) === true) return;
       dispatch({ kind: "close", reason: "outside" });
     };
@@ -103,7 +139,10 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
     // Closed first: the action may replace what is under the menu, and a menu
     // left open over new content is a menu pointing at the wrong thing.
     dispatch({ kind: "close", reason: "navigate" });
-    trigger.current?.focus();
+    // A link is the user choosing where to be. Pulling focus back to the
+    // trigger would overrule them; an action leaves focus nowhere, so it gets
+    // the trigger back.
+    if (item.href === undefined) triggerRef.current?.focus();
     onSelect(item.id);
   };
 
@@ -128,15 +167,20 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
       <button
         type="button"
         id={`${id}-button`}
-        ref={trigger}
+        ref={triggerRef}
         aria-expanded={state.open}
         aria-haspopup="menu"
         aria-controls={`${id}-list`}
-        className={controlClass({ open: state.open })}
+        aria-label={trigger === undefined ? undefined : label}
+        className={triggerClassName ?? controlClass({ open: state.open })}
         onClick={() => dispatch({ kind: "toggle" })}
       >
-        {label}
-        <Icon name="chevron-down" className="size-4 flex-none" />
+        {trigger ?? (
+          <>
+            {label}
+            <Icon name="chevron-down" className="size-4 flex-none" />
+          </>
+        )}
       </button>
 
       <div
@@ -145,7 +189,9 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
         role="menu"
         aria-label={label}
         hidden={!state.open}
-        className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+        className={`absolute right-0 z-50 mt-2 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 ${
+          panelClassName ?? "w-64"
+        }`}
         onKeyDown={(event) => {
           // Escape is the wrapper's; it bubbles there from here.
           const next = nextFocusIndex(items, focused, event.key);
@@ -154,29 +200,60 @@ export function Menu({ id, label, items, onSelect, className }: MenuProps) {
           setFocused(next);
         }}
       >
-        {items.map((item, index) => (
-          <button
-            key={item.id}
-            type="button"
-            id={menuItemDomId(id, item.id)}
-            role="menuitem"
-            // One stop for the whole menu: Tab leaves it, the arrows move
-            // inside it. That is what `menu` promises a keyboard user.
-            tabIndex={index === focused ? 0 : -1}
-            aria-disabled={item.disabled === true}
-            className={[
-              ITEM_BASE,
-              item.disabled === true
-                ? ITEM_STATE.disabled
-                : item.danger === true
-                  ? ITEM_STATE.danger
-                  : ITEM_STATE.normal,
-            ].join(" ")}
-            onClick={() => choose(item)}
-          >
-            {item.label}
-          </button>
-        ))}
+        {items.length === 0 && empty !== undefined ? (
+          <p className="px-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">{empty}</p>
+        ) : null}
+
+        {items.map((item, index) => {
+          const classes = [
+            ITEM_BASE,
+            item.disabled === true
+              ? ITEM_STATE.disabled
+              : item.danger === true
+                ? ITEM_STATE.danger
+                : ITEM_STATE.normal,
+            item.unseen === true ? ITEM_STATE.unseen : "",
+          ]
+            .filter((part) => part !== "")
+            .join(" ");
+          const body = (
+            <>
+              {item.unseen === true ? (
+                <span
+                  aria-hidden="true"
+                  className="size-1.5 flex-none rounded-full bg-red-500"
+                  data-menu-unseen
+                />
+              ) : null}
+              <span className="min-w-0 flex-1">{item.label}</span>
+            </>
+          );
+
+          // One stop for the whole menu: Tab leaves it, the arrows move inside
+          // it. That is what `menu` promises a keyboard user.
+          const shared = {
+            id: menuItemDomId(id, item.id),
+            role: "menuitem",
+            tabIndex: index === focused ? 0 : -1,
+            className: classes,
+          } as const;
+
+          return item.href !== undefined && item.disabled !== true ? (
+            <Link key={item.id} {...shared} to={item.href} onClick={() => choose(item)}>
+              {body}
+            </Link>
+          ) : (
+            <button
+              key={item.id}
+              type="button"
+              {...shared}
+              aria-disabled={item.disabled === true}
+              onClick={() => choose(item)}
+            >
+              {body}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
