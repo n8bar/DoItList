@@ -159,7 +159,12 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
                 className="hidden h-5 w-px flex-none bg-zinc-300 dark:bg-zinc-700 sm:block"
               />
 
-              <ThemeToggle stores={stores} className="hidden sm:inline-flex" />
+              {/* Wrapped, not classed: the group's own `inline-flex` outranks a
+                  `hidden` on the same element, so the breakpoint lives on a
+                  wrapper that is no box at all above it. */}
+              <div className="hidden sm:contents">
+                <ThemeToggle stores={stores} />
+              </div>
               {/* The bell is a top-level item at EVERY breakpoint — never
                   folded into the hamburger — exactly as the LiveView header
                   has it, so notifications are one tap away on a phone too. */}
