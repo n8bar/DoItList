@@ -407,7 +407,8 @@ export async function checkMenuSignOutSubmits(ctx) {
  * The connection summary (item 4.3, spec §7), driven for real: pull the network
  * out from under the tab and the badge must SAY so — in text, with an icon,
  * with its own `data-conn-state` — and must offer the way back. Then give the
- * network back and it must return to live by itself.
+ * network back: the badge stays offline until Retry is pressed, and pressing it
+ * puts the tab back to live.
  *
  * It must also do all that without moving anything: the summary is positioned
  * out of flow precisely so six different states cannot resize the header
@@ -426,15 +427,21 @@ export async function checkConnectionSummary(ctx) {
       if (badge === null) return null;
       if (badge.getAttribute("data-conn-state") !== "live") return null;
       const text = badge.querySelector("[data-conn-text]");
+      const region = badge.querySelector('[role="status"]');
       return {
-        role: badge.getAttribute("role"),
+        region: region !== null,
+        // The state is announced; the buttons must NOT be in the live region,
+        // or every state change re-reads "Try again" at the user.
+        buttonsInRegion:
+          region === null ? true : region.querySelector("button") !== null,
         text: text === null ? "" : text.textContent.trim(),
       };
     `,
       { timeoutMs: READY_TIMEOUT_MS, what: "the connection summary to read live" },
     );
 
-    if (live.role !== "status") throw new Error(`the summary is role="${live.role}"`);
+    if (!live.region) throw new Error("the summary announces nothing — no live region");
+    if (live.buttonsInRegion) throw new Error("a control sits inside the summary's live region");
     if (live.text.length === 0) throw new Error("the live state has no text — colour alone");
 
     const before = await measureChrome(session);
@@ -456,27 +463,41 @@ export async function checkConnectionSummary(ctx) {
         retry: document.getElementById("client-connection-retry") !== null,
       };
     `,
-      // A severed link is not an event: the socket is not closed, it simply
-      // stops answering, and what notices is Phoenix's heartbeat timing out.
-      // Measured at ~60s on this app, so the budget is 75s. How fast that is
-      // belongs to the socket (Task 8's `live/`), not to the badge — this
-      // check owns what the badge SAYS once it knows.
-      { timeoutMs: 75_000, what: "the summary to notice the connection went away" },
+      // The browser fires `offline` the moment the tab loses its network, and
+      // the client takes that signal: no waiting on a heartbeat to time out.
+      { timeoutMs: 10_000, what: "the summary to notice the network went away" },
     );
 
+    if (!dropped.state.startsWith("offline")) {
+      throw new Error(`the tab is offline and the badge says "${dropped.state}"`);
+    }
     if (dropped.text.length === 0) throw new Error(`state ${dropped.state} says nothing`);
+    if (!/offline/i.test(dropped.text)) {
+      throw new Error(`state ${dropped.state} reads "${dropped.text}" — not that we are offline`);
+    }
     if (dropped.icon === null) throw new Error(`state ${dropped.state} has no icon`);
-    if (dropped.state.startsWith("offline") && !dropped.retry) {
+    if (!dropped.retry) {
       throw new Error("the client stopped retrying and offered no way to try again");
     }
 
     const moved = shifted(before, await measureChrome(session));
     if (moved.length > 0) throw new Error(`the summary moved the frame: ${moved.join("; ")}`);
 
+    // The network comes back, and the badge stays offline until the user says
+    // otherwise: one rule for the way back, and Retry is it.
     await session.send("Network.emulateNetworkConditions", fast);
-    if (dropped.state.startsWith("offline")) {
-      await clickElement(session, "#client-connection-retry");
+    const stillOffline = await evaluate(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      return badge === null ? null : badge.getAttribute("data-conn-state");
+    `,
+    );
+    if (!String(stillOffline).startsWith("offline")) {
+      throw new Error(`the badge left offline on its own (${stillOffline}) — Retry was never used`);
     }
+
+    await clickElement(session, "#client-connection-retry");
 
     const back = await waitFor(
       session,
@@ -496,45 +517,228 @@ export async function checkConnectionSummary(ctx) {
 }
 
 /**
- * The confirm dialog (item 4.2). The client's one confirm today is Sign out
- * with unacknowledged writes, and Arc 1 has nothing that queues a write — so
- * this checks everything about it that is true while it is closed: it is a real
- * `<dialog>`, it is NOT open, and its name and description resolve to elements
- * inside it (guardrails §4.1).
+ * The confirm dialog, opened for real (item 4.2, guardrails §3.1).
  *
- * It deliberately does NOT open it: the only opener is the operator's Sign out.
- * Focus return on close is unit-tested (`ui/dialog_model.test.ts`), and this
- * check gets its drive the moment a feature opens a dialog of its own.
+ * The one confirm this client has is Sign out with work the server has not
+ * acknowledged, so the check makes that true: it puts ONE queued op into this
+ * tab's own local cache — the `pending_ops` store of the client's IndexedDB —
+ * and reloads, which is exactly how a real tab learns it has unsent work.
+ *
+ * Then it drives the path a keyboard user drives: open the menu, press Sign
+ * out, the dialog opens with focus INSIDE it, Escape closes it, and focus goes
+ * back to the control that opened it.
+ *
+ * It answers CANCEL, never confirm — and `form.submit` is stubbed for the whole
+ * check besides, so no path through it can end the operator's session. The
+ * seeded row is deleted afterwards, and the tab reloaded, so the cache is left
+ * as it was found.
  */
-export async function checkConfirmDialogWiring(ctx) {
+export async function checkDialogFocusReturn(ctx) {
   const { session } = ctx;
 
-  const wiring = await evaluate(
+  // Fresh boot first: the check before this one signs out (with the request
+  // stubbed), and a sign-out deletes this account's cache. The client opens it
+  // again at boot, and there has to be a store here to put the op in.
+  await session.send("Page.navigate", { url: `${APP_URL}/app/initiatives` });
+  await waitFor(session, "return window.__doit_client_ready === true;", {
+    timeoutMs: READY_TIMEOUT_MS,
+    what: "the client to come up before seeding",
+  });
+  await waitFor(
     session,
     `
-    const dialog = document.getElementById("client-sign-out-confirm");
-    if (dialog === null) return { ok: false, why: "no confirm dialog in the document" };
-    if (dialog.tagName !== "DIALOG") return { ok: false, why: "the confirm is not a <dialog>" };
-    if (dialog.open) return { ok: false, why: "the confirm is open with nothing to confirm" };
-
-    const named = dialog.getAttribute("aria-labelledby");
-    const described = dialog.getAttribute("aria-describedby");
-    const title = named === null ? null : dialog.querySelector("#" + CSS.escape(named));
-    const body = described === null ? null : dialog.querySelector("#" + CSS.escape(described));
-    if (title === null) return { ok: false, why: "aria-labelledby points at nothing inside it" };
-    if (body === null) return { ok: false, why: "aria-describedby points at nothing inside it" };
-
-    const buttons = [...dialog.querySelectorAll("button")].map((b) => b.textContent.trim());
-    if (buttons.length !== 2) return { ok: false, why: "a confirm has exactly two answers" };
-    if (buttons.some((label) => label.length === 0)) {
-      return { ok: false, why: "a confirm button with no words on it" };
-    }
-    return { ok: true, title: title.textContent.trim(), buttons };
+    return (async () => {
+      const dbs = await indexedDB.databases();
+      const found = dbs.find((d) => /^doit:v\\d+:\\d+$/.test(d.name ?? ""));
+      return found === undefined ? null : found.name;
+    })();
   `,
+    { timeoutMs: 10_000, what: "the client's local cache to open" },
   );
 
-  if (!wiring.ok) throw new Error(wiring.why);
-  return `"${wiring.title}" — ${wiring.buttons.join(" / ")}, closed and correctly named`;
+  const seed = await evaluate(
+    session,
+    `
+    return (async () => {
+    const dbs = await indexedDB.databases();
+    const found = dbs.find((d) => /^doit:v\\d+:\\d+$/.test(d.name ?? ""));
+    if (found === undefined) return { ok: false, why: "this tab has no client cache to seed" };
+    const db = await new Promise((resolve, reject) => {
+      // No version: open whatever is there. An upgrade here would be this
+      // harness rewriting the operator's cache, which it has no business doing.
+      const req = indexedDB.open(found.name);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    if (!db.objectStoreNames.contains("pending_ops")) {
+      db.close();
+      return { ok: false, why: "the cache has no pending_ops store" };
+    }
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction("pending_ops", "readwrite");
+      tx.objectStore("pending_ops").put({
+        key: ${JSON.stringify("cdp-focus-return-check")},
+        initiativeId: 0,
+        createdAt: Date.now(),
+        payload: { op: "harness_probe" },
+      });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+    return { ok: true, db: found.name };
+    })();
+  `,
+  );
+  if (!seed.ok) throw new Error(seed.why);
+
+  try {
+    await session.send("Page.navigate", { url: `${APP_URL}/app/initiatives` });
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come back up with the queued op",
+    });
+
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      ...NARROW_VIEWPORT,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+
+    await waitFor(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      return badge !== null && badge.getAttribute("data-conn-state") !== null ? true : null;
+    `,
+      { timeoutMs: 5_000, what: "the summary to mount" },
+    );
+
+    const stubbed = await evaluate(
+      session,
+      `
+      const form = document.getElementById("client-menu-sign-out-form");
+      if (form === null) return { ok: false, why: "the menu has no sign-out form" };
+      window.__doitSubmits = 0;
+      form.submit = function () { window.__doitSubmits += 1; };
+      return { ok: true };
+    `,
+    );
+    if (!stubbed.ok) throw new Error(stubbed.why);
+
+    await clickElement(session, "#client-menu-button");
+    await waitFor(
+      session,
+      `
+      const panel = document.getElementById("client-menu");
+      return panel !== null && !panel.hasAttribute("hidden") ? true : null;
+    `,
+      { timeoutMs: 5_000, what: "the menu to open" },
+    );
+
+    await clickElement(session, "#client-menu-sign-out");
+
+    const opened = await waitFor(
+      session,
+      `
+      const dialog = document.getElementById("client-menu-sign-out-confirm");
+      if (dialog === null || !dialog.open) return null;
+      const active = document.activeElement;
+      const named = dialog.getAttribute("aria-labelledby");
+      const described = dialog.getAttribute("aria-describedby");
+      const title = named === null ? null : dialog.querySelector("#" + CSS.escape(named));
+      const body = described === null ? null : dialog.querySelector("#" + CSS.escape(described));
+      const buttons = [...dialog.querySelectorAll("button")].map((b) => b.textContent.trim());
+      return {
+        inside: dialog.contains(active),
+        focused: active === null ? null : active.id || active.textContent.trim(),
+        named: title !== null,
+        described: body !== null,
+        title: title === null ? "" : title.textContent.trim(),
+        buttons,
+        submits: window.__doitSubmits,
+      };
+    `,
+      { timeoutMs: 5_000, what: "the confirm to open on unsent work" },
+    );
+
+    if (!opened.inside) throw new Error(`the dialog opened with focus on "${opened.focused}"`);
+    if (!opened.named) throw new Error("aria-labelledby points at nothing inside the dialog");
+    if (!opened.described) throw new Error("aria-describedby points at nothing inside the dialog");
+    if (opened.buttons.length !== 2) throw new Error("a confirm has exactly two answers");
+    if (opened.buttons.some((label) => label.length === 0)) {
+      throw new Error("a confirm button with no words on it");
+    }
+    if (opened.submits !== 0) throw new Error("the form was submitted before the user answered");
+
+    // A real Escape, virtual key code and all: the platform closes a modal
+    // <dialog> itself, and it only does that for a key event the browser
+    // recognises as Escape rather than one a JS handler merely reads.
+    await pressKey(session, "Escape", { windowsVirtualKeyCode: 27 });
+
+    const closed = await waitFor(
+      session,
+      `
+      const dialog = document.getElementById("client-menu-sign-out-confirm");
+      if (dialog === null || dialog.open) return null;
+      const active = document.activeElement;
+      return {
+        focused: active === null ? null : active.id,
+        submits: window.__doitSubmits,
+      };
+    `,
+      { timeoutMs: 5_000, what: "Escape to close the confirm" },
+    );
+
+    if (closed.focused !== "client-menu-sign-out") {
+      throw new Error(`focus went to "${closed.focused ?? "(none)"}", not back to the opener`);
+    }
+    if (closed.submits !== 0) throw new Error("Escape signed the user out");
+
+    return `"${opened.title}" (${opened.buttons.join(" / ")}) opened with focus inside; Escape returned focus to Sign out`;
+  } finally {
+    await evaluate(
+      session,
+      `
+      return (async () => {
+      const form = document.getElementById("client-menu-sign-out-form");
+      if (form !== null) delete form.submit;
+      delete window.__doitSubmits;
+      const dbs = await indexedDB.databases();
+      const found = dbs.find((d) => /^doit:v\\d+:\\d+$/.test(d.name ?? ""));
+      if (found === undefined) return true;
+      const db = await new Promise((resolve, reject) => {
+        const req = indexedDB.open(found.name);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (db.objectStoreNames.contains("pending_ops")) {
+        await new Promise((resolve) => {
+          const tx = db.transaction("pending_ops", "readwrite");
+          tx.objectStore("pending_ops").delete(${JSON.stringify("cdp-focus-return-check")});
+          tx.oncomplete = () => resolve(true);
+          tx.onerror = () => resolve(true);
+        });
+      }
+      db.close();
+      return true;
+      })();
+    `,
+    ).catch(() => {});
+
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      ...VIEWPORT,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+    // Back to a tab with nothing queued: the seeded op is gone from the device,
+    // and this drops it from the running client too.
+    await session.send("Page.navigate", { url: `${APP_URL}/app/initiatives` }).catch(() => {});
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come back up with a clean cache",
+    }).catch(() => {});
+  }
 }
 
 const CHECKS = [
@@ -545,7 +749,7 @@ const CHECKS = [
   ["no shift across routes", checkNoShiftAcrossRoutes],
   ["narrow viewport menu", checkNarrowMenu],
   ["menu sign out reaches the form", checkMenuSignOutSubmits],
-  ["confirm dialog wiring", checkConfirmDialogWiring],
+  ["dialog focus return", checkDialogFocusReturn],
   // Last: it takes the network away and back, so nothing after it inherits a
   // throttled tab.
   ["connection summary", checkConnectionSummary],
