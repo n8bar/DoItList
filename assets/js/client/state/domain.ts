@@ -13,6 +13,8 @@
 
 import type { BootstrapUser } from "../boot.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
+import type { NotificationsState } from "./notifications.ts";
+import { emptyNotifications } from "./notifications.ts";
 import type { Store } from "./store.ts";
 import { createStore } from "./store.ts";
 
@@ -23,12 +25,15 @@ export interface DomainState {
   readonly initiativeSummaries: readonly InitiativeSummary[] | null;
   /** Loaded Initiative trees, keyed by Initiative id. */
   readonly initiativeTrees: Readonly<Record<number, InitiativeTree>>;
+  /** The bell's rows and unread count — server records, like the rest (4.6). */
+  readonly notifications: NotificationsState;
 }
 
 export const initialDomainState: DomainState = {
   user: null,
   initiativeSummaries: null,
   initiativeTrees: {},
+  notifications: emptyNotifications,
 };
 
 export type DomainStore = Store<DomainState>;
@@ -62,6 +67,20 @@ export function forgetInitiative(store: DomainStore, id: number): void {
       initiativeSummaries:
         summaries === null ? null : summaries.filter((summary) => summary.id !== id),
     };
+  });
+}
+
+/**
+ * Applies a pure notifications change (`state/notifications.ts`) to the store.
+ * The rules live there; this only files the result.
+ */
+export function updateNotifications(
+  store: DomainStore,
+  change: (state: NotificationsState) => NotificationsState,
+): void {
+  store.set((state) => {
+    const notifications = change(state.notifications);
+    return notifications === state.notifications ? state : { ...state, notifications };
   });
 }
 

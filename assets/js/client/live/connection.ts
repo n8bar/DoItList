@@ -42,6 +42,16 @@ export interface Timers {
   clearTimeout(handle: unknown): void;
 }
 
+/** A notification row, as `DoItWeb.Api.NotificationView` serialises it. */
+export interface NotificationPush {
+  readonly id: number;
+  readonly kind: string;
+  readonly line: string;
+  readonly href: string;
+  readonly read: boolean;
+  readonly inserted_at: string;
+}
+
 export interface ConnectionDeps {
   transport: TransportFactory;
   /** Called whenever the reported status changes. */
@@ -54,6 +64,11 @@ export interface ConnectionDeps {
    * cue to stop showing what it has.
    */
   onAccessRevoked(initiativeId: number): void;
+  /**
+   * Called for every notification the server pushes on the user's own channel
+   * (item 4.6.2). Malformed pushes never get here.
+   */
+  onNotification?(row: NotificationPush): void;
   /** Injected in tests so the backoff jitter is assertable. */
   random?: () => number;
   /** How long a released subscription is kept joined. */
@@ -69,6 +84,12 @@ export interface Connection {
   status(): ConnectionStatus;
   /** Opens the socket. Idempotent — only a real reconnect moves the counter. */
   connect(): void;
+  /**
+   * Joins this user's own channel for the life of the tab. Idempotent, and
+   * never released by a route change: what happens TO you is not something you
+   * stop caring about because you walked to another screen.
+   */
+  watchUser(userId: number): void;
   /** Subscribing twice to the same Initiative refcounts; it never re-joins. */
   subscribeInitiative(id: number): void;
   /** Releases one hold. The channel is left after the grace period. */
@@ -110,6 +131,16 @@ export function parseChanged(initiativeId: number, payload: unknown): ChangedEve
   return { initiativeId, kind: kind as ChangedKind, id };
 }
 
+/** A `notification` payload, or `null` when the server said something we don't know. */
+export function parseNotification(payload: unknown): NotificationPush | null {
+  if (!isRecord(payload)) return null;
+  const { id, kind, line, href, read, inserted_at: insertedAt } = payload;
+  if (typeof id !== "number") return null;
+  if (typeof kind !== "string" || typeof line !== "string" || typeof href !== "string") return null;
+  if (typeof read !== "boolean" || typeof insertedAt !== "string") return null;
+  return { id, kind, line, href, read, inserted_at: insertedAt };
+}
+
 let nextConnectionId = 0;
 
 export function createConnection(deps: ConnectionDeps): Connection {
@@ -122,6 +153,9 @@ export function createConnection(deps: ConnectionDeps): Connection {
   };
 
   const subscriptions = new Map<number, Subscription>();
+  // The user's own channel. Not in `subscriptions`: it is not refcounted, not
+  // released on a route change, and it carries a different event.
+  let userChannel: { id: number; channel: LiveChannel } | null = null;
   let link: LinkState = initialLinkState;
   let connects = 0;
   // Set when the retry budget runs out. Only `retry()` clears it: a route
@@ -227,6 +261,21 @@ export function createConnection(deps: ConnectionDeps): Connection {
     status: () => link.status,
     connect,
 
+    watchUser(userId) {
+      connect();
+      if (userChannel !== null) return;
+      const channel = transport.channel(`user:${userId}`);
+      channel.on("notification", (payload) => {
+        const row = parseNotification(payload);
+        if (row !== null) deps.onNotification?.(row);
+      });
+      channel.join(() => {
+        // A refused join is not the screen's problem: the bell's read still
+        // works, it just will not update live until the socket comes back.
+      });
+      userChannel = { id: userId, channel };
+    },
+
     subscribeInitiative(initiativeId) {
       connect();
       const existing = subscriptions.get(initiativeId);
@@ -267,6 +316,10 @@ export function createConnection(deps: ConnectionDeps): Connection {
 
     disconnect() {
       stopWatchingNetwork();
+      if (userChannel !== null) {
+        userChannel.channel.leave();
+        userChannel = null;
+      }
       for (const [initiativeId, entry] of [...subscriptions.entries()]) {
         leave(initiativeId, entry);
       }

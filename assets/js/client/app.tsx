@@ -37,6 +37,8 @@ import {
   setStorageHealth,
 } from "./state/recovery.ts";
 import { fatalMessage } from "./state/fatal.ts";
+import { updateNotifications } from "./state/domain.ts";
+import { prepend } from "./state/notifications.ts";
 import { pushNotice } from "./state/ui.ts";
 import type { Stores } from "./state/stores.ts";
 import { ServicesProvider } from "./services.tsx";
@@ -108,6 +110,9 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
       onChanged: sync.onChanged,
       onAccessRevoked: sync.onAccessRevoked,
+      // What happened to YOU, wherever you are in the client: the row arrives
+      // ready to render, so the bell only has to put it on top.
+      onNotification: (row) => updateNotifications(stores.domain, (state) => prepend(state, row)),
     });
   });
 
@@ -188,8 +193,10 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     if (state.kind !== "ready" || started.current) return;
     started.current = true;
 
-    // Identity is known (the bootstrap named the user), so the socket may open.
+    // Identity is known (the bootstrap named the user), so the socket may open,
+    // and the user's own channel with it — it is the tab's, not a screen's.
     connection.connect();
+    if (bootstrap.user !== null) connection.watchUser(bootstrap.user.id);
 
     // What this device queued and never sent. It outlives the tab, so the
     // count in the summary — and the warning before Sign out throws it away —
@@ -221,7 +228,7 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
         });
       }
     });
-  }, [api, cache, connection, stores, state.kind]);
+  }, [api, bootstrap.user, cache, connection, stores, state.kind]);
 
   if (state.kind === "signed-out") {
     return (

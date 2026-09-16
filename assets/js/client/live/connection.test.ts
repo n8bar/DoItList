@@ -429,3 +429,63 @@ describe("the browser says the network went away (spec §7)", () => {
     assert.equal(net.unsubscribed(), true);
   });
 });
+
+describe("the user's own channel (item 4.6.2)", () => {
+  it("joins user:<id> once, however many times it is asked", () => {
+    const h = live();
+    h.connection.watchUser(7);
+    h.connection.watchUser(7);
+
+    const mine = h.socket.get().channels.filter((c) => c.topic === "user:7");
+    assert.equal(mine.length, 1);
+    assert.equal(mine[0]?.joins, 1);
+  });
+
+  it("hands a notification straight to the app", () => {
+    const seen: unknown[] = [];
+    const h = live({ onNotification: (row) => seen.push(row) });
+    h.connection.watchUser(7);
+
+    const row = {
+      id: 3,
+      kind: "assigned",
+      line: "Dana assigned you a task",
+      href: "/app/initiatives/1?task=2",
+      read: false,
+      inserted_at: "2026-09-16T10:00:00Z",
+    };
+    h.socket.get().channels.find((c) => c.topic === "user:7")?.emit("notification", row);
+
+    assert.deepEqual(seen, [row]);
+  });
+
+  it("drops a push that is not a notification row", () => {
+    const seen: unknown[] = [];
+    const h = live({ onNotification: (row) => seen.push(row) });
+    h.connection.watchUser(7);
+    const channel = h.socket.get().channels.find((c) => c.topic === "user:7");
+
+    channel?.emit("notification", { id: "three" });
+    channel?.emit("notification", null);
+
+    assert.deepEqual(seen, []);
+  });
+
+  it("is not a per-route subscription: navigating never leaves it", () => {
+    const h = live();
+    h.connection.watchUser(7);
+    h.connection.subscribeInitiative(1);
+    h.connection.unsubscribeInitiative(1);
+    h.clock.flush();
+
+    assert.equal(h.socket.get().channels.find((c) => c.topic === "user:7")?.leaves, 0);
+  });
+
+  it("goes with the connection when it is dropped", () => {
+    const h = live();
+    h.connection.watchUser(7);
+    h.connection.disconnect();
+
+    assert.equal(h.socket.get().channels.find((c) => c.topic === "user:7")?.leaves, 1);
+  });
+});
