@@ -24,6 +24,7 @@ defmodule DoItWeb.UserSocket do
   alias DoIt.Accounts.User
 
   channel "initiative:*", DoItWeb.InitiativeChannel
+  channel "user:*", DoItWeb.UserChannel
 
   @impl true
   def connect(_params, socket, connect_info) do

@@ -139,6 +139,50 @@ defmodule DoItWeb.Client.ClientApiTest do
     end
   end
 
+  describe "GET /app/api/notifications" do
+    test "returns the user's recent notifications, serialised, with the unread count", ctx do
+      {:ok, _} =
+        DoIt.Notifications.create(ctx.owner.id, "assigned", %{
+          "actor_name" => "Dana",
+          "task_title" => "Ship it",
+          "initiative_id" => ctx.ini.id,
+          "task_id" => ctx.phase1.id
+        })
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/notifications")
+
+      assert %{"data" => %{"recent" => [row], "unread" => 1}} = json_response(conn, 200)
+      assert row["kind"] == "assigned"
+      assert row["line"] == "Dana assigned you \u201cShip it\u201d"
+      assert row["href"] == "/app/initiatives/#{ctx.ini.id}?task=#{ctx.phase1.id}"
+      assert row["read"] == false
+      assert is_binary(row["inserted_at"])
+    end
+
+    test "never carries another user's notifications", ctx do
+      {:ok, _} = DoIt.Notifications.create(ctx.stranger.id, "member_added", %{})
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/notifications")
+
+      assert %{"data" => %{"recent" => [], "unread" => 0}} = json_response(conn, 200)
+    end
+
+    test "a bearer token alone is a JSON 401 — the bell is browser-private", ctx do
+      conn =
+        ctx.conn
+        |> put_req_header("authorization", "Bearer #{token(ctx.owner)}")
+        |> get(~p"/app/api/notifications")
+
+      assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
+               json_response(conn, 401)
+    end
+
+    test "signed out is a JSON 401", %{conn: conn} do
+      assert %{"error" => %{"code" => "unauthorized"}} =
+               conn |> get(~p"/app/api/notifications") |> json_response(401)
+    end
+  end
+
   describe "POST /app/api/operations" do
     test "commits a batch against an Initiative with agent access off", ctx do
       conn =
