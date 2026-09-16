@@ -18,9 +18,62 @@ export interface ResourceOptions<T> {
   /** True when the store already has it: no fetch, no spinner. */
   loaded: boolean;
   read: () => Promise<Result<T>>;
+  /** May throw: a read the screen cannot adopt is not an answer. */
   onData: (data: T) => void;
+  /**
+   * `onData` threw twice running. Return the line to show in place; the screen
+   * also raises whatever notice it wants from here.
+   */
+  onUnusable?: (error: unknown) => string;
   /** See `Services.escalate` — `true` means the shell took the failure over. */
   escalate: (error: ApiError) => boolean;
+}
+
+/** When the screen offers no wording of its own. */
+export const UNUSABLE_MESSAGE = "This did not arrive in a usable state.";
+
+/** How a single load ended. */
+export type Attempt =
+  | { outcome: "ready" }
+  /** The caller stopped caring (unmounted, or the key changed). */
+  | { outcome: "abandoned" }
+  | { outcome: "failed"; error: ApiError }
+  /** Every read came back, and none of them could be adopted. */
+  | { outcome: "unusable"; error: unknown };
+
+/**
+ * Read, hand the answer to the screen, and read once more if the screen threw
+ * it back — a snapshot that cannot be a tree may be one bad response rather
+ * than a broken Initiative. The second refusal is final: the screen shows an
+ * error the user can retry, never a spinner that never ends (arc item 1.6.2).
+ *
+ * Kept free of React so the rule can be tested on its own.
+ */
+export async function readUsable<T>(options: {
+  read: () => Promise<Result<T>>;
+  /** May throw to refuse the answer. */
+  adopt: (data: T) => void;
+  /** False once nobody is waiting for this any more. */
+  alive?: () => boolean;
+  /** How many extra reads a refusal buys. One, by contract. */
+  rereads?: number;
+}): Promise<Attempt> {
+  const alive = options.alive ?? (() => true);
+  let left = options.rereads ?? 1;
+
+  for (;;) {
+    const result = await options.read();
+    if (!alive()) return { outcome: "abandoned" };
+    if (!result.ok) return { outcome: "failed", error: result.error };
+
+    try {
+      options.adopt(result.data);
+      return { outcome: "ready" };
+    } catch (error) {
+      if (left <= 0) return { outcome: "unusable", error };
+      left -= 1;
+    }
+  }
 }
 
 export interface ResourceView {
@@ -55,15 +108,24 @@ export function useResource<T>(options: ResourceOptions<T>): ResourceView {
     let live = true;
     setState({ key, status: "loading", message: "" });
 
-    void latest.current.read().then((result) => {
+    void readUsable<T>({
+      read: () => latest.current.read(),
+      adopt: (data) => latest.current.onData(data),
+      alive: () => live,
+    }).then((attempt) => {
       if (!live) return;
-      if (result.ok) {
-        latest.current.onData(result.data);
+      if (attempt.outcome === "ready") {
         setState({ key, status: "ready", message: "" });
         return;
       }
-      if (latest.current.escalate(result.error)) return;
-      setState({ key, status: "error", message: result.error.message });
+      if (attempt.outcome === "abandoned") return;
+      if (attempt.outcome === "failed") {
+        if (latest.current.escalate(attempt.error)) return;
+        setState({ key, status: "error", message: attempt.error.message });
+        return;
+      }
+      const message = latest.current.onUnusable?.(attempt.error) ?? UNUSABLE_MESSAGE;
+      setState({ key, status: "error", message });
     });
 
     return () => {

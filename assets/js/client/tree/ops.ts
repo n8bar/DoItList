@@ -24,9 +24,14 @@ export interface OpResult {
   affected: number[];
 }
 
-/** A move the tree cannot make. The server would answer the same way. */
+/**
+ * An operation the tree cannot make. The server answers the same two ways:
+ * `"missing"` is `:not_found` — an id the model does not hold, which is a bug
+ * or a stale view — and `"cycle"` is the refused move, which is the user
+ * asking for something impossible.
+ */
 export interface OpError {
-  error: "cycle";
+  error: "cycle" | "missing";
 }
 
 export type MoveResult = OpResult | OpError;
@@ -44,8 +49,37 @@ export function putRecord(model: TreeModel, record: TaskRecord): TreeModel {
   return { ...model, tasks: { ...model.tasks, [record.id]: record } };
 }
 
+/**
+ * Field-for-field equality, with the three array fields compared element-wise.
+ * A freshly parsed read builds new arrays for `co_assignee_ids`,
+ * `cross_references` and `referenced_by` even when nothing about them changed;
+ * comparing those by reference would make every record on every refetch a new
+ * object, and re-render the whole tree for no reason (spec §1).
+ */
 function sameRecord(a: TaskRecord, b: TaskRecord): boolean {
-  return (Object.keys(b) as (keyof TaskRecord)[]).every((key) => a[key] === b[key]);
+  return (Object.keys(b) as (keyof TaskRecord)[]).every((key) => {
+    const left = a[key];
+    const right = b[key];
+    if (Array.isArray(left) && Array.isArray(right)) return sameList(left, right);
+    return left === right;
+  });
+}
+
+/** Element-wise, one level into the row objects the references are made of. */
+function sameList(a: readonly unknown[], b: readonly unknown[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((left, index) => {
+    const right = b[index];
+    if (left === right) return true;
+    if (!isRow(left) || !isRow(right)) return false;
+    const keys = Object.keys(left);
+    if (keys.length !== Object.keys(right).length) return false;
+    return keys.every((key) => left[key] === right[key]);
+  });
+}
+
+function isRow(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -153,8 +187,14 @@ export interface AddTaskArgs {
  * parent, appended when no slot is given, and wherever the parent's own sort
  * puts it when that parent is auto-sorted.
  */
-export function addTask(model: TreeModel, args: AddTaskArgs): OpResult {
+export function addTask(model: TreeModel, args: AddTaskArgs): MoveResult {
   const { tempId, parentId } = args;
+  // A parent the model does not hold would leave a child list behind for a task
+  // that is not there — a tree the validator rejects. Say so instead.
+  if (parentId !== model.rootId && model.tasks[parentId] === undefined) {
+    return { error: "missing" };
+  }
+
   const record: TaskRecord = {
     id: tempId,
     title: args.title,
@@ -476,9 +516,9 @@ export interface MoveArgs {
 export function moveTask(model: TreeModel, args: MoveArgs): MoveResult {
   const { id, parentId } = args;
   const record = model.tasks[id];
-  if (record === undefined) return { error: "cycle" };
+  if (record === undefined) return { error: "missing" };
+  if (parentId !== model.rootId && model.tasks[parentId] === undefined) return { error: "missing" };
   if (parentId === id) return { error: "cycle" };
-  if (parentId !== model.rootId && model.tasks[parentId] === undefined) return { error: "cycle" };
   if (subtreeIds(model, id).includes(parentId)) return { error: "cycle" };
 
   const oldParentId = record.parent_id;

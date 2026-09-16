@@ -5,6 +5,7 @@ import type { TaskSpec } from "./gen.ts";
 import { buildTree } from "./gen.ts";
 import type { TreeModel } from "./model.ts";
 import { fromSnapshot } from "./model.ts";
+import type { MoveResult, OpResult } from "./ops.ts";
 import {
   addTask,
   cascadeSort,
@@ -25,6 +26,12 @@ const modelOf = (specs: TaskSpec[], options = {}) => fromSnapshot(buildTree(spec
 
 const order = (model: TreeModel, parentId: number) => [...(model.childIds[parentId] ?? [])];
 
+/** Asserts an operation that can refuse did not, and unwraps it. */
+const made = (result: MoveResult): OpResult => {
+  assert.ok(!failed(result), failed(result) ? result.error : "");
+  return result;
+};
+
 const ok = (model: TreeModel) => {
   const verdict = validateModel(model);
   assert.equal(verdict.ok, true, verdict.ok ? "" : verdict.reason);
@@ -35,12 +42,12 @@ describe("addTask (ProductSpec §10.8)", () => {
   const base = () => modelOf([{ id: 10, children: [{ id: 11 }, { id: 12 }] }]);
 
   it("appends under a manual parent when no slot is given", () => {
-    const { model } = addTask(base(), { tempId: -1, parentId: 10, title: "New" });
+    const { model } = made(addTask(base(), { tempId: -1, parentId: 10, title: "New" }));
     assert.deepEqual(order(ok(model), 10), [11, 12, -1]);
   });
 
   it("lands at the form's slot when one is given", () => {
-    const { model } = addTask(base(), { tempId: -1, parentId: 10, position: 1, title: "New" });
+    const { model } = made(addTask(base(), { tempId: -1, parentId: 10, position: 1, title: "New" }));
     assert.deepEqual(order(ok(model), 10), [11, -1, 12]);
   });
 
@@ -49,34 +56,42 @@ describe("addTask (ProductSpec §10.8)", () => {
       { id: 10, sort_mode: "alphabetical", children: [{ id: 11, title: "a" }, { id: 12, title: "z" }] },
     ]);
 
-    const { model } = addTask(sorted, { tempId: -1, parentId: 10, position: 0, title: "m" });
+    const { model } = made(addTask(sorted, { tempId: -1, parentId: 10, position: 0, title: "m" }));
 
     assert.deepEqual(order(ok(model), 10), [11, -1, 12]);
   });
 
   it("gives the new row a label and a depth right away", () => {
-    const { model } = addTask(base(), { tempId: -1, parentId: 10, title: "New" });
+    const { model } = made(addTask(base(), { tempId: -1, parentId: 10, title: "New" }));
     assert.equal(model.tasks[-1]?.index, "1.3");
     assert.equal(model.tasks[-1]?.depth, 1);
     assert.equal(model.tasks[-1]?.priority, "normal");
   });
 
   it("makes a done ancestor untrue again", () => {
-    const done = modelOf([
+    const alreadyDone = modelOf([
       { id: 10, status: "done", children: [{ id: 11, status: "done" }] },
     ]);
 
-    const { model, affected } = addTask(done, { tempId: -1, parentId: 11, title: "More" });
+    const { model, affected } = made(addTask(alreadyDone, { tempId: -1, parentId: 11, title: "More" }));
 
     assert.equal(model.tasks[10]?.status, "open");
     assert.equal(model.tasks[11]?.status, "open");
     assert.ok(affected.includes(10));
   });
 
+  it("refuses a parent the model does not hold", () => {
+    const result = addTask(base(), { tempId: -1, parentId: 999, title: "New" });
+    assert.ok(failed(result) && result.error === "missing");
+  });
+
   it("moves the ancestors' bars in the same step", () => {
-    const { model } = addTask(
-      modelOf([{ id: 10, children: [{ id: 11, manual_progress: 100 }] }]),
-      { tempId: -1, parentId: 10, title: "New" },
+    const { model } = made(
+      addTask(modelOf([{ id: 10, children: [{ id: 11, manual_progress: 100 }] }]), {
+        tempId: -1,
+        parentId: 10,
+        title: "New",
+      }),
     );
     assert.equal(model.tasks[10]?.progress, 50);
     assert.equal(model.header.progress, 50);
@@ -265,6 +280,14 @@ describe("moveTask (Tasks.move_task/3)", () => {
   it("refuses to move a task into its own subtree", () => {
     const result = moveTask(base(), { id: 10, parentId: 11 });
     assert.ok(failed(result) && result.error === "cycle");
+  });
+
+  it("tells an id it does not hold apart from a refused move", () => {
+    const gone = moveTask(base(), { id: 999, parentId: 10 });
+    assert.ok(failed(gone) && gone.error === "missing");
+
+    const nowhere = moveTask(base(), { id: 11, parentId: 999 });
+    assert.ok(failed(nowhere) && nowhere.error === "missing");
   });
 
   it("lands a plain reparent at the top of the new parent", () => {

@@ -16,6 +16,16 @@ const OK: Verdict = { ok: true };
 
 const no = (reason: string): Verdict => ({ ok: false, reason });
 
+/**
+ * What the user is told when a read could not be made into a tree twice
+ * running. Shared by the screen and the live refresh so both say one thing.
+ */
+export const UNUSABLE_TREE_NOTICE =
+  "This Initiative did not arrive in one piece, twice running. What is on screen may be out of date — reload, and say something if it keeps happening.";
+
+/** The line shown in place of the tree, next to Try again. */
+export const UNUSABLE_TREE_MESSAGE = "This Initiative did not arrive in one piece.";
+
 /** Thrown by `fromSnapshot` when the read cannot be a tree. */
 export class InvalidTreeError extends Error {
   readonly reason: string;

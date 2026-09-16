@@ -10,7 +10,7 @@ import {
 } from "./delta.ts";
 import { buildTree } from "./gen.ts";
 import { fromSnapshot } from "./model.ts";
-import { validateModel } from "./validate.ts";
+import { InvalidTreeError, validateModel } from "./validate.ts";
 
 const base = () =>
   fromSnapshot(
@@ -181,10 +181,10 @@ describe("deltaFromSnapshot", () => {
     assert.deepEqual([...(ok(next).childIds[next.rootId] ?? [])], [10]);
   });
 
-  it("refuses a snapshot that cannot be a tree instead of half-applying it", () => {
+  it("throws on a snapshot that cannot be a tree, rather than looking empty", () => {
     const tree = buildTree([{ id: 10 }]);
     (tree.tasks[0] as { parent_id: number }).parent_id = 77;
-    assert.deepEqual(deltaFromSnapshot(tree), { upserts: [], removed: [] });
+    assert.throws(() => deltaFromSnapshot(tree), InvalidTreeError);
   });
 
   it("lands a re-read onto a diverged model, and stays put on a replay", () => {

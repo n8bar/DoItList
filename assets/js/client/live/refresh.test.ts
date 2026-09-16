@@ -5,6 +5,7 @@ import type { ApiClient, Result } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
 import { createDomainStore } from "../state/domain.ts";
 import { createUiStore } from "../state/ui.ts";
+import { buildTree } from "../tree/gen.ts";
 import type { TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
 import { createInitiativeSync } from "./refresh.ts";
@@ -25,6 +26,13 @@ const tree = (id: number, name: string): InitiativeTree => ({
 
 /** The same read, as the model the store now holds. */
 const model = (id: number, name: string) => fromSnapshot(tree(id, name));
+
+/** A read that cannot be a tree: the one task claims a parent nobody holds. */
+const badTree = (id: number): InitiativeTree => {
+  const read = buildTree([{ id: id * 10 + 1 }], { id, name: "Broken", rootTaskId: id * 10 });
+  (read.tasks[0] as { parent_id: number }).parent_id = 7777;
+  return read;
+};
 
 const summary = (id: number, name: string): InitiativeSummary =>
   ({ id, name, progress: 50 }) as unknown as InitiativeSummary;
@@ -177,6 +185,45 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
     await settle();
 
     assert.equal(domain.get().trees[12]?.header.name, "Old");
+  });
+});
+
+describe("a refresh that cannot be a tree (item 1.6.2)", () => {
+  it("reads once more, and takes the second answer", async () => {
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
+    const ui = createUiStore();
+    const fake = fakeApi({});
+    fake.answers("/initiatives/12", [badTree(12), tree(12, "New")]);
+
+    sync({ api: fake.api, domain, ui }).onChanged({
+      initiativeId: 12,
+      kind: "task_updated",
+      id: 5,
+    });
+    await settle();
+
+    assert.deepEqual(fake.calls, ["/initiatives/12", "/initiatives/12"]);
+    assert.equal(domain.get().trees[12]?.header.name, "New");
+    assert.deepEqual(ui.get().notices, [], "a recovered refresh said nothing");
+  });
+
+  it("says so once the second answer is bad too, and keeps the copy it has", async () => {
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
+    const ui = createUiStore();
+    const fake = fakeApi({});
+    fake.answers("/initiatives/12", [badTree(12), badTree(12)]);
+
+    sync({ api: fake.api, domain, ui }).onChanged({
+      initiativeId: 12,
+      kind: "task_updated",
+      id: 5,
+    });
+    await settle();
+
+    assert.deepEqual(fake.calls, ["/initiatives/12", "/initiatives/12"]);
+    assert.equal(domain.get().trees[12]?.header.name, "Old", "a bad read was drawn");
+    assert.equal(ui.get().notices.length, 1);
+    assert.equal(ui.get().notices[0]?.kind, "error");
   });
 });
 

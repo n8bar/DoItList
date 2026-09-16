@@ -37,14 +37,15 @@ const live = (model: TreeModel): number[] => Object.keys(model.tasks).map(Number
 
 function apply(model: TreeModel, op: GeneratedOp): TreeModel {
   switch (op.kind) {
-    case "add":
-      if (model.tasks[op.parentId] === undefined && op.parentId !== model.rootId) return model;
-      return addTask(model, {
+    case "add": {
+      const added = addTask(model, {
         tempId: op.tempId,
         parentId: op.parentId,
         position: op.position,
         title: `New ${op.tempId}`,
-      }).model;
+      });
+      return failed(added) ? model : added.model;
+    }
     case "update":
       return updateFields(model, op.id, { manual_progress: op.manual_progress, title: op.title })
         .model;
@@ -68,11 +69,20 @@ function apply(model: TreeModel, op: GeneratedOp): TreeModel {
   }
 }
 
+// Every property runs the same seeds, and a model is immutable, so the same
+// seed's run is built once and shared. It keeps 200 seeds affordable for all
+// eight properties instead of rebuilding each shape six times over.
+const runs = new Map<string, TreeModel>();
+
 function runOps(seed: number, sorted = false): TreeModel {
+  const memo = runs.get(`${seed}:${sorted}`);
+  if (memo !== undefined) return memo;
+
   let model = treeFor(seed, sorted);
   for (const op of genOps(seed + 5000, live(model), model.rootId, 10)) {
     model = apply(model, op);
   }
+  runs.set(`${seed}:${sorted}`, model);
   return model;
 }
 
@@ -85,7 +95,7 @@ describe("whatever the shape, and whatever is done to it", () => {
   });
 
   it("stays a tree with auto-sorted branches in play too", () => {
-    for (const seed of seeds(80)) {
+    for (const seed of seeds()) {
       const verdict = validateModel(runOps(seed, true));
       assert.equal(verdict.ok, true, `seed ${seed}: ${verdict.ok ? "" : verdict.reason}`);
     }
@@ -197,12 +207,19 @@ describe("applying canonical records", () => {
 
   it("lands a re-read of the same tree as no change at all", () => {
     for (const seed of seeds()) {
-      const read = genTree(seed, { maxTasks: 18 });
-      const model = fromSnapshot(read);
-      const { model: next, affected } = applyDelta(model, deltaFromSnapshot(read, model));
+      const model = fromSnapshot(genTree(seed, { maxTasks: 18 }));
+      // A SECOND, independently parsed copy — which is what a refetch actually
+      // hands us. Every object in it is new, so this is the case where a
+      // by-reference field comparison would re-render the whole tree.
+      const reread = structuredClone(genTree(seed, { maxTasks: 18 }));
+      const { model: next, affected } = applyDelta(model, deltaFromSnapshot(reread, model));
 
       assert.deepEqual(next.childIds, model.childIds, `seed ${seed}`);
       assert.deepEqual(affected, [], `seed ${seed}: an identical read claimed changes`);
+      assert.equal(next, model, `seed ${seed}: an identical read rebuilt the model`);
+      for (const id of live(model)) {
+        assert.equal(next.tasks[id], model.tasks[id], `seed ${seed}: task ${id} was replaced`);
+      }
     }
   });
 });

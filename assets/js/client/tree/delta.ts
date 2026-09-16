@@ -16,7 +16,7 @@ import { ancestors, headerFrom } from "./model.ts";
 import { relabel } from "./labels.ts";
 import { predictHeader } from "./progress.ts";
 import { putRecord, setChildOrder } from "./ops.ts";
-import { validateSnapshot } from "./validate.ts";
+import { InvalidTreeError, validateSnapshot } from "./validate.ts";
 
 /** A partial record: whatever the server said about this task, plus its id. */
 export type TaskUpsert = Partial<TaskRecord> & { id: number };
@@ -99,10 +99,14 @@ function upsertFromResult(result: TaskResult): TaskUpsert {
  * A whole re-read as a delta, so a refetch goes through the same door as an
  * acknowledgement. Pass the model being replaced and the delta also removes the
  * tasks that are no longer there; without it, it only upserts.
+ *
+ * A read that cannot be a tree throws, the same way `fromSnapshot` does: an
+ * empty delta would be indistinguishable from an Initiative with no tasks, and
+ * the caller is the one that decides whether to refetch or to say so.
  */
 export function deltaFromSnapshot(tree: InitiativeTree, previous?: TreeModel): TreeDelta {
   const verdict = validateSnapshot(tree);
-  if (!verdict.ok) return { upserts: [], removed: [] };
+  if (!verdict.ok) throw new InvalidTreeError(verdict.reason);
 
   const upserts: TaskUpsert[] = [];
   const present = new Set<number>();

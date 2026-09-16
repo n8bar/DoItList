@@ -20,9 +20,10 @@ import type { ApiClient } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
 import type { DomainStore } from "../state/domain.ts";
 import { forgetInitiative, putTree } from "../state/domain.ts";
-import type { TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
+import { UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
 import type { UiStore } from "../state/ui.ts";
+import { pushNotice } from "../state/ui.ts";
 import type { TreeCache } from "../storage/snapshots.ts";
 import type { ChangedEvent } from "./connection.ts";
 
@@ -111,24 +112,41 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
   const { api, domain, ui, onForbidden } = deps;
   const guard = deps.guard ?? createSyncGuard();
 
+  /**
+   * Re-reads one tree. A read that cannot be a tree is read once more — the
+   * same rule the screen follows — and a second failure is said out loud rather
+   * than dropped, because the copy on screen is now known to be stale and
+   * nothing else will tell the user (item 1.6.2).
+   */
+  const refreshTree = async (initiativeId: number, retry: boolean): Promise<void> => {
+    const seq = guard.beginTree(initiativeId);
+    const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
+    if (!tree.ok || !guard.currentTree(initiativeId, seq)) return;
+
+    try {
+      const model = fromSnapshot(tree.data);
+      putTree(domain, model);
+      deps.snapshots?.cacheTree(model);
+    } catch {
+      if (retry) {
+        await refreshTree(initiativeId, false);
+        return;
+      }
+      pushNotice(ui, {
+        kind: "error",
+        title: "This Initiative could not be refreshed",
+        message: UNUSABLE_TREE_NOTICE,
+      });
+    }
+  };
+
   return {
     onChanged(event: ChangedEvent) {
       void (async () => {
         const { initiativeId } = event;
 
         if (domain.get().trees[initiativeId] !== undefined) {
-          const seq = guard.beginTree(initiativeId);
-          const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
-          if (tree.ok && guard.currentTree(initiativeId, seq)) {
-            // A read that cannot be a tree is dropped rather than drawn: the
-            // next change brings another one, and the screen's own read is the
-            // path that reports a persistent failure (item 1.6.2).
-            const model = readModel(tree.data);
-            if (model !== null) {
-              putTree(domain, model);
-              deps.snapshots?.cacheTree(model);
-            }
-          }
+          await refreshTree(initiativeId, true);
         }
 
         if (domain.get().initiativeSummaries !== null) {
@@ -152,12 +170,4 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       if (route.kind === "initiative" && route.id === initiativeId) onForbidden();
     },
   };
-}
-
-function readModel(tree: InitiativeTree): TreeModel | null {
-  try {
-    return fromSnapshot(tree);
-  } catch {
-    return null;
-  }
 }

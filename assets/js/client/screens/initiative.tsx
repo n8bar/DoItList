@@ -22,6 +22,8 @@ import type { DomainState } from "../state/domain.ts";
 import { putTree } from "../state/domain.ts";
 import type { InitiativeHeader } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
+import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
+import { pushNotice } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
@@ -71,6 +73,17 @@ export function InitiativeScreen({ id }: { id: number }) {
       },
       [cache, stores.domain],
     ),
+    // Two reads in a row that could not be a tree. The screen stays on its own
+    // error with Try again, and a notice says so, rather than the user staring
+    // at a header that will never get a tree (item 1.6.2).
+    onUnusable: useCallback(() => {
+      pushNotice(stores.ui, {
+        kind: "error",
+        title: "This Initiative could not be shown",
+        message: UNUSABLE_TREE_NOTICE,
+      });
+      return UNUSABLE_TREE_MESSAGE;
+    }, [stores.ui]),
     escalate,
   });
 
