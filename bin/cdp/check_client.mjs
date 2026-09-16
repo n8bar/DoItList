@@ -311,11 +311,18 @@ export async function checkNarrowMenu(ctx) {
       (el) => el.closest("dialog:not([open])") === null,
     );
     const short = items.filter((el) => Math.round(el.getBoundingClientRect().height) < 44);
-    return { items: items.length, short: short.map((el) => el.id || el.textContent.trim()) };
+    // The account menu is gone below sm:, so its rows must be in here instead.
+    const account = ["client-menu-account", "client-menu-preferences"].filter(
+      (id) => !items.some((el) => el.id === id),
+    );
+    return { items: items.length, short: short.map((el) => el.id || el.textContent.trim()), account };
   `,
     { timeoutMs: 5_000, what: "the menu to open" },
   );
 
+  if (opened.account.length > 0) {
+    throw new Error(`the narrow menu has no account rows: #${opened.account.join(", #")}`);
+  }
   if (opened.short.length > 0) {
     throw new Error(`menu items under the 44px touch target: ${opened.short.join(", ")}`);
   }

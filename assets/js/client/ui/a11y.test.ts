@@ -58,7 +58,7 @@ describe("every control model carries a name (guardrails §4.1)", () => {
 describe("icons are decoration on top of words, never the words", () => {
   it("asks for real heroicon classes, one per name", () => {
     const classes = ICON_NAMES.map(iconClass);
-    for (const name of classes) assert.match(name, /^hero-[a-z-]+$/);
+    for (const name of classes) assert.match(name, /^hero-[a-z0-9-]+$/);
     assert.equal(new Set(classes).size, classes.length);
   });
 

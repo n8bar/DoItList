@@ -112,7 +112,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
           id="client-header"
           className="flex-none border-b border-zinc-300 bg-white dark:border-zinc-700 dark:bg-zinc-900"
         >
-          <div className={`${CONTAINER} flex items-center gap-3 px-4 py-3 sm:px-6`}>
+          <div className={`${CONTAINER} flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}>
             <Link
               id="client-wordmark"
               to={HOME_PATH}
@@ -122,17 +122,20 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
               Do It List
             </Link>
 
-            {/* The summary's own slot. Below `lg:` it is a fixed badge in the
-                bottom-left corner and this wrapper is not a box at all
-                (`display: contents`); from `lg:` up it is a flex item between
-                the wordmark and the controls, so the three share the band by
-                measurement rather than by luck. Nothing here can cover Retry,
-                and Retry cannot cover the nav.
+            {/* The summary's own slot. Below `md:` this wrapper is not a box
+                at all (`display: contents`) — `justify-between` keeps the
+                controls on the right edge and the badge floats bottom-left —
+                and from `md:` up it is a flex item between the wordmark and
+                the controls, so the three share the band by measurement rather
+                than by luck. The quiet "Live" fits that slot from `md:`; the
+                loud states (Retry, Reload) only move in from `lg:`, where the
+                slot is wide enough that nothing can cover Retry and Retry
+                cannot cover the nav (see `ConnectionSummary`).
 
                 The slot has a FIXED height and the badge floats inside it: the
                 summary has six states and a second line it can grow, and none
                 of them may make the header taller (item 4.6). */}
-            <div className="contents lg:relative lg:block lg:h-9 lg:min-w-0 lg:flex-1 lg:px-3">
+            <div className="contents md:relative md:block md:h-9 md:min-w-0 md:flex-1 md:px-3">
               {summary}
             </div>
 
@@ -162,7 +165,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
                   has it, so notifications are one tap away on a phone too. */}
               <Bell />
               {user === null ? null : <AccountMenu user={user} className="hidden sm:block" />}
-              <NavMenu stores={stores} route={route} />
+              <NavMenu stores={stores} route={route} user={user} />
             </div>
           </div>
         </header>

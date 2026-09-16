@@ -48,6 +48,12 @@ const TONE: Record<SummaryTone, string> = {
 const ACTION =
   "inline-flex min-h-11 items-center rounded-lg border border-current/40 px-2.5 py-1 text-sm font-medium transition-colors motion-reduce:transition-none hover:bg-black/5 active:bg-black/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current dark:hover:bg-white/10 dark:active:bg-white/20 sm:min-h-8";
 
+// Written out in full, twice: Tailwind only generates the classes it can read.
+const IN_HEADER_FROM_MD =
+  "md:absolute md:inset-x-0 md:bottom-auto md:left-0 md:top-1/2 md:z-auto md:max-w-full md:-translate-y-1/2 md:items-center";
+const IN_HEADER_FROM_LG =
+  "lg:absolute lg:inset-x-0 lg:bottom-auto lg:left-0 lg:top-1/2 lg:z-auto lg:max-w-full lg:-translate-y-1/2 lg:items-center";
+
 export function ConnectionSummary() {
   const { stores, connection } = useServices();
   const view = useStoreValue(stores.recovery, selectSummary);
@@ -68,15 +74,17 @@ export function ConnectionSummary() {
       data-conn-state={shown.state}
       className={[
         "pointer-events-none fixed bottom-4 left-4 z-50 flex max-w-[calc(100vw-2rem)] flex-col items-start gap-1",
-        // From `lg:` up it stops floating and takes its OWN slot in the header
-        // band, between the wordmark and the controls (see `AppFrame`). Out of
-        // flow it was centred over a band whose contents grow, and it ended up
-        // on top of the nav — where it both hid buttons and swallowed their
-        // clicks. This summary holds Retry and Reload: it is the only way back
-        // from offline, and it can never be the thing that is covered, nor the
-        // thing doing the covering.
-        "lg:absolute lg:inset-x-0 lg:bottom-auto lg:left-0 lg:top-1/2 lg:z-auto",
-        "lg:max-w-full lg:-translate-y-1/2 lg:items-center",
+        // Past a breakpoint it stops floating and takes its OWN slot in the
+        // header band, between the wordmark and the controls (see `AppFrame`).
+        // Out of flow it was centred over a band whose contents grow, and it
+        // ended up on top of the nav — where it both hid buttons and swallowed
+        // their clicks. This summary holds Retry and Reload: it is the only
+        // way back from offline, and it can never be the thing that is
+        // covered, nor the thing doing the covering. So the quiet "Live" word
+        // moves into the band at `md:`, where a tablet's slot has room for
+        // it, and the loud states wait for `lg:`, where the slot has room for
+        // their buttons.
+        shown.quiet ? IN_HEADER_FROM_MD : IN_HEADER_FROM_LG,
       ].join(" ")}
     >
       <div

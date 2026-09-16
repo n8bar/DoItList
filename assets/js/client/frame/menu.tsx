@@ -19,8 +19,12 @@
 
 import { useEffect, useReducer, useRef } from "react";
 
+import type { BootstrapUser } from "../boot.ts";
 import type { Route } from "../router/route.ts";
 import type { Stores } from "../state/stores.ts";
+import { Link } from "../router/link.tsx";
+import { Icon } from "../ui/icon.tsx";
+import { Avatar } from "./avatar.tsx";
 import { controlClass } from "./button_styles.ts";
 import { CLOSED_MENU, menuReducer } from "./menu_state.ts";
 import { NAV_ITEMS, isCurrentNav } from "./nav_model.ts";
@@ -28,7 +32,14 @@ import { NavButton } from "./nav_button.tsx";
 import { SignOut } from "./sign_out.tsx";
 import { ThemeToggle } from "./theme_toggle.tsx";
 
-export function NavMenu({ stores, route }: { stores: Stores; route: Route }) {
+export interface NavMenuProps {
+  stores: Stores;
+  route: Route;
+  /** The signed-in user, once the session read has said who. */
+  user: BootstrapUser | null;
+}
+
+export function NavMenu({ stores, route, user }: NavMenuProps) {
   const [state, dispatch] = useReducer(menuReducer, CLOSED_MENU);
   const trigger = useRef<HTMLButtonElement | null>(null);
   const panel = useRef<HTMLDivElement | null>(null);
@@ -95,7 +106,10 @@ export function NavMenu({ stores, route }: { stores: Stores; route: Route }) {
         className={controlClass({ open: state.open })}
         onClick={() => dispatch({ kind: "toggle" })}
       >
-        Menu
+        {/* The LiveView header's hamburger glyph; the word is for the reader
+            who cannot see it (guardrails §4.1). */}
+        <Icon name="bars-3" className="size-6" />
+        <span className="sr-only">Menu</span>
       </button>
 
       <div
@@ -104,6 +118,32 @@ export function NavMenu({ stores, route }: { stores: Stores; route: Route }) {
         hidden={!state.open}
         className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
       >
+        {/* The account menu is `sm:` and up, so below it the avatar and its
+            links live here — as the LiveView's mobile menu has them. */}
+        {user !== null && (
+          <>
+            <nav aria-label="Account" className="flex flex-col gap-1">
+              <Link
+                id="client-menu-account"
+                to="/app/account"
+                className={controlClass({ block: true })}
+                onClick={close}
+              >
+                <Avatar user={user} />
+                <span className="truncate">{user.name ?? user.username}</span>
+              </Link>
+              <Link
+                id="client-menu-preferences"
+                to="/account#account-preferences"
+                className={controlClass({ block: true })}
+                onClick={close}
+              >
+                User Preferences
+              </Link>
+            </nav>
+            <div className="my-2 border-t border-zinc-200 dark:border-zinc-700" />
+          </>
+        )}
         <nav aria-label="Menu" className="flex flex-col gap-1">
           {NAV_ITEMS.map((item) => (
             <NavButton

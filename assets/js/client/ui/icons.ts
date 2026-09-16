@@ -30,6 +30,8 @@ export const ICON_CLASS = {
   sun: "hero-sun",
   moon: "hero-moon",
   bell: "hero-bell",
+  // The narrow menu's hamburger — the LiveView header's glyph, not a word.
+  "bars-3": "hero-bars-3",
   plus: "hero-plus",
   check: "hero-check",
   // The tightest check glyph, stretched to the completion box's full width.
