@@ -10,7 +10,7 @@ Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` ar
 
 Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page. The server keeps only a hash, so a lost token is replaced, never recovered.
 
-The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read. It is not an agent surface — agents use the endpoints below.
+The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read, and carries a `user:<id>` channel — joinable only as yourself — whose `notification` event is one of the user's own notifications, already worded and linked. That surface also answers `GET /app/api/notifications` with the user's recent notifications and unread count; marking them read is the ordinary `update notification` operation, not a second write path. It is not an agent surface — agents use the endpoints below.
 
 ### Endpoints
 

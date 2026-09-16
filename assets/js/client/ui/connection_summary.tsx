@@ -68,7 +68,10 @@ export function ConnectionSummary() {
       data-conn-state={shown.state}
       className={[
         "pointer-events-none fixed bottom-4 left-4 z-50 flex max-w-[calc(100vw-2rem)] flex-col items-start gap-1",
-        "lg:absolute lg:bottom-auto lg:left-1/2 lg:top-1/2 lg:max-w-sm lg:-translate-x-1/2 lg:-translate-y-1/2",
+        // In the header band it sits BEHIND the header's own controls: the two
+        // can meet at narrow desktop widths, and the badge must not print over a
+        // nav button when they do.
+        "lg:absolute lg:bottom-auto lg:left-1/2 lg:top-1/2 lg:z-0 lg:max-w-sm lg:-translate-x-1/2 lg:-translate-y-1/2",
       ].join(" ")}
     >
       <div

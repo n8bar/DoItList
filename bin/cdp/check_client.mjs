@@ -64,7 +64,8 @@ export async function checkClientReady(ctx) {
     const ids = [
       "client-header", "client-nav-initiatives", "client-nav-assigned", "client-nav-account",
       "client-rail", "client-rail-nav-initiatives", "client-main", "client-menu-button",
-      "client-skip-link", "client-sign-out", "client-theme-toggle",
+      "client-skip-link", "client-theme-toggle", "client-bell-button",
+      "client-account-menu-button",
     ];
     const missing = ids.filter((id) => document.getElementById(id) === null);
     const heading = document.getElementById("route-heading");
@@ -927,14 +928,15 @@ const themeStateJs = `
 export async function checkKeyboardTraversal(ctx) {
   const { session } = ctx;
 
-  await evaluate(
-    session,
-    `
-    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
-    window.scrollTo(0, 0);
-    return true;
-  `,
-  );
+  // A fresh document, not just a blur: blurring leaves the browser's sequential
+  // focus starting point wherever the last check left it, so the first Tab
+  // would carry on from the middle of the header instead of the top.
+  await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` });
+  await waitFor(session, "return window.__doit_client_ready === true;", {
+    timeoutMs: READY_TIMEOUT_MS,
+    what: "the client to come up before tabbing through it",
+  });
+  await evaluate(session, `window.scrollTo(0, 0); return true;`);
 
   const expected = [
     "client-skip-link",
@@ -942,8 +944,11 @@ export async function checkKeyboardTraversal(ctx) {
     "client-nav-initiatives",
     "client-nav-assigned",
     "client-nav-account",
-    "client-theme-toggle",
-    "client-sign-out",
+    "client-theme-toggle-system",
+    "client-theme-toggle-light",
+    "client-theme-toggle-dark",
+    "client-bell-button",
+    "client-account-menu-button",
   ];
 
   const seen = [];
@@ -1272,24 +1277,30 @@ export async function checkAckUnderLatency(ctx) {
     const theme = await evaluate(
       session,
       `
-      const b = document.getElementById("client-theme-toggle");
-      const was = b.textContent.trim();
-      window.__theme = { t0: null, at: null, was };
+      const on = document.querySelector('[data-theme-choice][aria-pressed="true"]');
+      if (on === null) return null;
+      const was = on.dataset.themeChoice;
+      const other = [...document.querySelectorAll("#client-theme-toggle [data-theme-choice]")]
+        .map((el) => el.dataset.themeChoice)
+        .find((choice) => choice !== was);
+      window.__theme = { t0: null, at: null, was, other };
       document.addEventListener("click", () => { window.__theme.t0 = performance.now(); }, { capture: true, once: true });
       const tick = () => {
         const t = window.__theme;
-        if (t.t0 !== null && t.at === null &&
-            document.getElementById("client-theme-toggle").textContent.trim() !== t.was) {
+        const now = document.querySelector('[data-theme-choice][aria-pressed="true"]');
+        if (t.t0 !== null && t.at === null && now !== null && now.dataset.themeChoice !== t.was) {
           t.at = performance.now();
           return;
         }
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);
-      return was;
+      return { was, other };
     `,
     );
-    await clickElement(session, "#client-theme-toggle");
+    if (theme === null) throw new Error("no theme segment is pressed");
+
+    await clickElement(session, `#client-theme-toggle-${theme.other}`);
     const themeMs = await waitFor(
       session,
       `
@@ -1303,15 +1314,7 @@ export async function checkAckUnderLatency(ctx) {
       throw new Error(`the theme toggle took ${themeMs}ms on a 2s link — nothing about it is remote`);
     }
     // Put the operator's theme back the way the toggle found it.
-    for (let i = 0; i < 3; i += 1) {
-      const label = await evaluate(
-        session,
-        `return document.getElementById("client-theme-toggle").textContent.trim();`,
-      );
-      if (label === theme) break;
-      await clickElement(session, "#client-theme-toggle");
-      await new Promise((r) => setTimeout(r, 60));
-    }
+    await clickElement(session, `#client-theme-toggle-${theme.was}`).catch(() => {});
 
     await session.send("Network.emulateNetworkConditions", fast);
     return `route on the glass in ${ack.routeMs}ms and the wait shown in ${ack.busyMs}ms on a 2s link; theme flipped in ${themeMs}ms`;
@@ -1355,7 +1358,8 @@ export async function checkDisconnectedStartup(ctx) {
       session,
       `
       const ids = ["client-header", "client-nav-initiatives", "client-rail", "client-main",
-                   "client-theme-toggle", "client-sign-out", "client-connection"];
+                   "client-theme-toggle", "client-bell-button", "client-account-menu-button",
+                   "client-connection"];
       const missing = ids.filter((id) => document.getElementById(id) === null);
       if (missing.length > 0) return null;
       const error = document.getElementById("screen-error");
@@ -1495,11 +1499,207 @@ export async function checkNoHarnessResidue(ctx) {
   return `pending_ops is empty in ${residue.db}`;
 }
 
+/**
+ * The notifications bell (item 4.6.3).
+ *
+ * It is a top-level item next to the account menu, it opens locally, the unread
+ * dot lives inside its own box so nothing moves when it appears, and Escape
+ * closes it and gives focus back.
+ *
+ * The operator's real notifications are NOT marked read: the write is
+ * intercepted for the duration of the check and the payload asserted instead of
+ * sent. Nothing reaches the server.
+ */
+export async function checkBell(ctx) {
+  const { session } = ctx;
+
+  const stubbed = await evaluate(
+    session,
+    `
+    if (document.getElementById("client-bell-button") === null) {
+      return { ok: false, why: "there is no bell in the header" };
+    }
+    window.__doitOps = [];
+    window.__doitRealFetch = window.fetch;
+    window.fetch = function (input, init) {
+      const url = String(input && input.url ? input.url : input);
+      if (url.includes("/app/api/operations")) {
+        window.__doitOps.push(String((init && init.body) || ""));
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: { results: [] } }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return window.__doitRealFetch.call(window, input, init);
+    };
+    const dot = document.querySelector("#client-bell-button [data-notif-dot]");
+    return { ok: true, unreadBefore: dot !== null };
+  `,
+  );
+  if (!stubbed.ok) throw new Error(stubbed.why);
+
+  try {
+    const before = await measureChrome(session);
+    await clickElement(session, "#client-bell-button");
+
+    const opened = await waitFor(
+      session,
+      `
+      const panel = document.getElementById("client-bell-list");
+      const trigger = document.getElementById("client-bell-button");
+      if (panel === null || panel.hasAttribute("hidden")) return null;
+      if (trigger.getAttribute("aria-expanded") !== "true") return null;
+      const items = [...panel.querySelectorAll('[role="menuitem"]')];
+      return {
+        items: items.length,
+        short: items.filter((el) => Math.round(el.getBoundingClientRect().height) < 36).length,
+        named: items.every((el) => el.textContent.trim().length > 0),
+        dot: document.querySelector("#client-bell-button [data-notif-dot]") !== null,
+        role: panel.getAttribute("role"),
+        name: trigger.getAttribute("aria-label"),
+      };
+    `,
+      { timeoutMs: 5_000, what: "the bell to open" },
+    );
+
+    if (opened.role !== "menu") throw new Error(`the flyout is role="${opened.role}"`);
+    if (!/notification/i.test(opened.name ?? "")) {
+      throw new Error(`the bell is named "${opened.name}" \u2014 it does not say what it is`);
+    }
+    if (!opened.named) throw new Error("a notification row has no words");
+    if (opened.short > 0) throw new Error(`${opened.short} flyout row(s) under 36px`);
+
+    const moved = shifted(before, await measureChrome(session));
+    if (moved.length > 0) throw new Error(`opening the bell moved the frame: ${moved.join("; ")}`);
+
+    // Opening acknowledges instantly: the dot is gone before the write lands
+    // (it never lands here \u2014 we are holding it).
+    const ops = await evaluate(session, `return window.__doitOps.slice();`);
+    if (stubbed.unreadBefore) {
+      if (opened.dot) throw new Error("the dot is still showing after the bell was opened");
+      if (ops.length !== 1) throw new Error(`${ops.length} write(s) went out, expected 1`);
+      const body = JSON.parse(ops[0]);
+      const op = body.operations?.[0] ?? {};
+      if (op.type !== "update" || op.entity !== "notification" || op.all !== true) {
+        throw new Error(`mark-read sent ${ops[0]} \u2014 not the existing notification operation`);
+      }
+    } else if (ops.length > 0) {
+      throw new Error("the bell wrote to the server with nothing unread");
+    }
+
+    await pressKey(session, "Escape", { windowsVirtualKeyCode: 27 });
+    const closed = await waitFor(
+      session,
+      `
+      const panel = document.getElementById("client-bell-list");
+      if (panel === null || !panel.hasAttribute("hidden")) return null;
+      if (document.getElementById("client-bell-button").getAttribute("aria-expanded") !== "false") {
+        return null;
+      }
+      return { focused: document.activeElement === null ? null : document.activeElement.id };
+    `,
+      { timeoutMs: 5_000, what: "Escape to close the bell" },
+    );
+    if (closed.focused !== "client-bell-button") {
+      throw new Error(`focus went to "${closed.focused ?? "(none)"}", not back to the bell`);
+    }
+
+    return `${opened.items} row(s), ${
+      stubbed.unreadBefore ? "opening cleared the dot and sent the existing operation" : "nothing unread"
+    }, Escape closed it and returned focus`;
+  } finally {
+    await evaluate(
+      session,
+      `
+      if (typeof window.__doitRealFetch === "function") window.fetch = window.__doitRealFetch;
+      delete window.__doitRealFetch;
+      delete window.__doitOps;
+      return true;
+    `,
+    ).catch(() => {});
+  }
+}
+
+/**
+ * The account menu (item 4.5): the avatar in the top right, and behind it the
+ * three things the LiveView header has behind it. Opening is local, Escape
+ * closes it and hands focus back.
+ *
+ * Sign out is NOT pressed here \u2014 the narrow menu's check already proves the
+ * flow reaches the form, with the submit stubbed.
+ */
+export async function checkAccountMenu(ctx) {
+  const { session } = ctx;
+
+  const before = await measureChrome(session);
+  await clickElement(session, "#client-account-menu-button");
+
+  const opened = await waitFor(
+    session,
+    `
+    const panel = document.getElementById("client-account-menu-list");
+    const trigger = document.getElementById("client-account-menu-button");
+    if (panel === null || panel.hasAttribute("hidden")) return null;
+    if (trigger.getAttribute("aria-expanded") !== "true") return null;
+    const items = [...panel.querySelectorAll('[role="menuitem"]')];
+    return {
+      ids: items.map((el) => el.id),
+      labels: items.map((el) => el.textContent.trim()),
+      short: items.filter((el) => Math.round(el.getBoundingClientRect().height) < 36).length,
+      avatar: trigger.querySelector("[data-avatar]") !== null,
+      initials: (trigger.querySelector("[data-avatar]")?.textContent ?? "").trim(),
+      name: trigger.textContent.trim(),
+      form: document.getElementById("client-account-sign-out-form") !== null,
+    };
+  `,
+    { timeoutMs: 5_000, what: "the account menu to open" },
+  );
+
+  if (!opened.avatar) throw new Error("the account menu's trigger has no avatar");
+  if (opened.initials.length === 0) throw new Error("the avatar has no initials");
+  if (opened.name.length === 0) throw new Error("the account menu is not named in words");
+  const wanted = ["account", "preferences", "sign-out"];
+  for (const id of wanted) {
+    if (!opened.ids.some((each) => each.endsWith(id))) {
+      throw new Error(`the account menu has no "${id}" item (${opened.ids.join(", ")})`);
+    }
+  }
+  if (opened.short > 0) throw new Error(`${opened.short} account item(s) under 36px`);
+  if (!opened.form) throw new Error("Sign out has no form to carry the request");
+
+  const moved = shifted(before, await measureChrome(session));
+  if (moved.length > 0) {
+    throw new Error(`opening the account menu moved the frame: ${moved.join("; ")}`);
+  }
+
+  await pressKey(session, "Escape", { windowsVirtualKeyCode: 27 });
+  const closed = await waitFor(
+    session,
+    `
+    const panel = document.getElementById("client-account-menu-list");
+    if (panel === null || !panel.hasAttribute("hidden")) return null;
+    const trigger = document.getElementById("client-account-menu-button");
+    if (trigger.getAttribute("aria-expanded") !== "false") return null;
+    return { focused: document.activeElement === null ? null : document.activeElement.id };
+  `,
+    { timeoutMs: 5_000, what: "Escape to close the account menu" },
+  );
+  if (closed.focused !== "client-account-menu-button") {
+    throw new Error(`focus went to "${closed.focused ?? "(none)"}", not back to the avatar`);
+  }
+
+  return `${opened.labels.join(", ")}; Escape closed it and returned focus`;
+}
+
 const CHECKS = [
   ["client ready", checkClientReady],
   ["no layout shift", checkNoLayoutShift],
   ["skeleton row == real row", checkSkeletonMatchesRow],
   ["theme both ways", checkThemeBothWays],
+  ["notifications bell", checkBell],
+  ["account menu", checkAccountMenu],
   ["keyboard traversal of the frame", checkKeyboardTraversal],
   ["reduced motion", checkReducedMotion],
   ["nav click \u2192 Account", checkNavClickToAccount],

@@ -12,7 +12,8 @@
 // one product until the cutover (spec §2).
 //
 // Regions, and who owns them:
-//   header      — wordmark, primary nav, theme, sign out, narrow menu (here)
+//   header      — wordmark, primary nav, theme, bell, account menu, narrow
+//                 menu (here)
 //   rail        — the same nav as a desktop column (here)
 //   main        — the route outlet, with the `<h1>` focus contract (Task 4)
 //   pane        — right-hand slot routes fill; Arc 2's Details pane (pane.tsx)
@@ -25,6 +26,10 @@ import type { ReactNode, RefObject } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import { Link } from "../router/link.tsx";
+import type { DomainState } from "../state/domain.ts";
+import { useStoreValue } from "../state/use_store.ts";
+import { AccountMenu } from "./account_menu.tsx";
+import { Bell } from "./bell.tsx";
 import { HOME_PATH } from "../router/route.ts";
 import { useRoute } from "../router/router.tsx";
 import type { Stores } from "../state/stores.ts";
@@ -34,7 +39,6 @@ import { NavButton } from "./nav_button.tsx";
 import type { PaneControl } from "./pane.tsx";
 import { PaneProvider } from "./pane.tsx";
 import { addTenant, paneVisible, removeTenant } from "./pane_slot.ts";
-import { SignOut } from "./sign_out.tsx";
 import { ThemeToggle } from "./theme_toggle.tsx";
 
 /**
@@ -56,8 +60,13 @@ export interface AppFrameProps {
   children: ReactNode;
 }
 
+const selectUser = (state: DomainState) => state.user;
+
 export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps) {
   const route = useRoute();
+  // The header draws the signed-in user (the avatar). It comes from the domain
+  // store, not a prop: the session read fills it in a moment after boot.
+  const user = useStoreValue(stores.domain, selectUser);
   // How many routes are filling the pane, and the element they portal into. The
   // frame learns nothing about WHAT is in the pane, so a tenant re-rendering its
   // own content never re-renders the frame (see `pane.tsx`).
@@ -117,21 +126,36 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
               Do It List
             </Link>
 
-            <nav id="client-nav" aria-label="Primary" className="hidden items-center gap-2 sm:flex">
-              {NAV_ITEMS.map((item) => (
-                <NavButton
-                  key={item.key}
-                  id={`client-nav-${item.key}`}
-                  to={item.to}
-                  label={item.label}
-                  current={isCurrentNav(route, item.key)}
-                />
-              ))}
-            </nav>
+            {/* Nav and controls are ONE right-hand group, as the LiveView
+                header has them. That is not only for the look: the connection
+                summary is centred in this band, and a nav spread across the
+                middle would sit under it. `relative z-10` is the belt to that
+                braces — at narrow `lg:` widths the two can still meet, and when
+                they do the opaque controls win rather than printing over it. */}
+            <div className="relative z-10 flex flex-none items-center gap-2">
+              <nav id="client-nav" aria-label="Primary" className="hidden items-center gap-2 sm:flex">
+                {NAV_ITEMS.map((item) => (
+                  <NavButton
+                    key={item.key}
+                    id={`client-nav-${item.key}`}
+                    to={item.to}
+                    label={item.label}
+                    current={isCurrentNav(route, item.key)}
+                  />
+                ))}
+              </nav>
 
-            <div className="flex flex-none items-center gap-2">
+              <span
+                aria-hidden="true"
+                className="hidden h-5 w-px flex-none bg-zinc-300 dark:bg-zinc-700 sm:block"
+              />
+
               <ThemeToggle stores={stores} className="hidden sm:inline-flex" />
-              <SignOut idPrefix="client" className="hidden sm:block" />
+              {/* The bell is a top-level item at EVERY breakpoint — never
+                  folded into the hamburger — exactly as the LiveView header
+                  has it, so notifications are one tap away on a phone too. */}
+              <Bell />
+              {user === null ? null : <AccountMenu user={user} className="hidden sm:block" />}
               <NavMenu stores={stores} route={route} />
             </div>
 
