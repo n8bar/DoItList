@@ -30,6 +30,12 @@ export const ICON_CLASS = {
   sun: "hero-sun",
   moon: "hero-moon",
   bell: "hero-bell",
+  plus: "hero-plus",
+  check: "hero-check",
+  // The tightest check glyph, stretched to the completion box's full width.
+  "check-micro": "hero-check-micro",
+  "clipboard-document": "hero-clipboard-document",
+  "ellipsis-vertical": "hero-ellipsis-vertical",
 } as const;
 
 export type IconName = keyof typeof ICON_CLASS;

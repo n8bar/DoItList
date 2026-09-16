@@ -25,10 +25,14 @@ export function mulberry32(seed: number): () => number {
 export interface TaskSpec {
   id: number;
   title?: string;
+  description?: string | null;
   status?: TaskStatus;
   manual_progress?: number;
+  /** The rolled-up number the server would send. Defaults to the leaf value. */
+  progress?: number;
   priority?: Priority;
   assignee_id?: number | null;
+  co_assignee_ids?: number[];
   sort_mode?: SortMode | null;
   sort_reverse?: boolean;
   children?: TaskSpec[];
@@ -61,19 +65,19 @@ export function buildTree(specs: readonly TaskSpec[], options: TreeOptions = {})
     return {
       id: spec.id,
       title: spec.title ?? `Task ${spec.id}`,
-      description: null,
+      description: spec.description ?? null,
       index: label(positions, indexStyle),
       position,
       parent_id: parentId,
       depth,
-      progress: status === "done" ? 100 : (spec.manual_progress ?? 0),
+      progress: spec.progress ?? (status === "done" ? 100 : (spec.manual_progress ?? 0)),
       manual_progress: spec.manual_progress ?? 0,
       status,
       done: status === "done",
       leaf: children.length === 0,
       priority: spec.priority ?? "normal",
       assignee_id: spec.assignee_id ?? null,
-      co_assignee_ids: [],
+      co_assignee_ids: spec.co_assignee_ids ?? [],
       comment_count: 0,
       cross_references: [],
       referenced_by: [],
