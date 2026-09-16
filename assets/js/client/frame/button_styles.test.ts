@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { CONTROL_BASE, controlClass } from "./button_styles.ts";
+import { CONTROL_BASE, actionClass, controlClass } from "./button_styles.ts";
 
 const classes = (options?: Parameters<typeof controlClass>[0]) =>
   new Set(controlClass(options).split(/\s+/));
@@ -77,5 +77,39 @@ describe("nav control states", () => {
     for (const part of CONTROL_BASE.split(/\s+/)) {
       assert.ok(classes({ current: true }).has(part), `base class ${part} went missing`);
     }
+  });
+});
+
+describe("action buttons (item 4.2)", () => {
+  const action = (options?: Parameters<typeof actionClass>[0]) =>
+    new Set(actionClass(options).split(/\s+/));
+
+  it("keeps the shared base — same size, same ring, same touch target", () => {
+    for (const variant of ["default", "primary", "danger"] as const) {
+      const set = action({ variant });
+      for (const part of CONTROL_BASE.split(/\s+/)) {
+        assert.ok(set.has(part), `${variant} lost the base class ${part}`);
+      }
+    }
+  });
+
+  it("tells the three variants apart", () => {
+    assert.notEqual(actionClass({ variant: "primary" }), actionClass({ variant: "danger" }));
+    assert.notEqual(actionClass({ variant: "primary" }), actionClass());
+  });
+
+  it("carries a dark-theme rule for every variant", () => {
+    for (const variant of ["default", "primary", "danger"] as const) {
+      assert.ok(
+        [...action({ variant })].some((c) => c.startsWith("dark:")),
+        `${variant} has no dark-theme styling`,
+      );
+    }
+  });
+
+  it("makes a busy action unclickable without letting it read as available", () => {
+    const set = action({ variant: "primary", disabled: true });
+    assert.ok(set.has("pointer-events-none"));
+    assert.ok(!set.has("bg-emerald-600"), "a disabled primary still looks like the CTA");
   });
 });

@@ -87,3 +87,48 @@ export function controlClass(options: ControlStateOptions = {}): string {
 
   return [CONTROL_BASE, state, shape].join(" ");
 }
+
+/**
+ * The three kinds of ACTION button (item 4.2): the ordinary one, the one that
+ * carries the form or the dialog, and the one that destroys something.
+ *
+ * Same base as a nav control — same height, same touch target, same focus ring
+ * — so a dialog's buttons and the header's buttons are visibly the same family.
+ * The primary is the LiveView's solid emerald CTA (`core_components.button/1`),
+ * not a second idea of what a primary button looks like.
+ */
+export type ActionVariant = "default" | "primary" | "danger";
+
+export interface ActionOptions {
+  readonly variant?: ActionVariant;
+  /** In flight or otherwise unavailable. Never reads as the CTA. */
+  readonly disabled?: boolean;
+  readonly block?: boolean;
+}
+
+const PRIMARY_STATE = [
+  "border-emerald-600 bg-emerald-600 text-white",
+  "hover:bg-emerald-700 hover:border-emerald-700 active:bg-emerald-800",
+  "dark:border-emerald-500 dark:bg-emerald-600 dark:hover:bg-emerald-500 dark:active:bg-emerald-700",
+].join(" ");
+
+const DANGER_STATE = [
+  "border-red-600 bg-red-600 text-white",
+  "hover:bg-red-700 hover:border-red-700 active:bg-red-800",
+  "dark:border-red-500 dark:bg-red-600 dark:hover:bg-red-500 dark:active:bg-red-700",
+].join(" ");
+
+export function actionClass(options: ActionOptions = {}): string {
+  if (options.disabled === true) {
+    return controlClass({ disabled: true, ...(options.block === true ? { block: true } : {}) });
+  }
+
+  const state =
+    options.variant === "primary"
+      ? PRIMARY_STATE
+      : options.variant === "danger"
+        ? DANGER_STATE
+        : DEFAULT_STATE;
+
+  return [CONTROL_BASE, state, options.block === true ? BLOCK : INLINE].join(" ");
+}

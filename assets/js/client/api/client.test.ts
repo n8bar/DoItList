@@ -151,3 +151,22 @@ test("an unrecognised body is malformed, never silently ok", async () => {
   assert.ok(!bad.ok);
   assert.equal(bad.error.code, "malformed");
 });
+
+test("a rejection carries the body, so a form can place its field errors", async () => {
+  const body = {
+    error: { status: 422, code: "unprocessable_entity", message: "rolled back" },
+    results: [
+      {
+        index: 0,
+        status: "error",
+        error: { code: "unprocessable_entity", message: "can't be blank", pointer: "title" },
+      },
+    ],
+  };
+  const { api } = client([{ status: 422, body }]);
+
+  const result = await api.post("/operations", {});
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.deepEqual(result.error.payload, body);
+});

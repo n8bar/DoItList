@@ -20,6 +20,13 @@ export interface ApiError {
   code: ApiErrorCode;
   status: number;
   message: string;
+  /**
+   * The rejected response's body, verbatim, when there was one. A batch
+   * rejection carries per-op errors with field `pointer`s under `results`, and
+   * a form has to be able to put each message next to the field that caused it
+   * (guardrails §2.2) — which it cannot do from a summary sentence.
+   */
+  payload?: unknown;
 }
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
@@ -68,10 +75,16 @@ function errorFrom(status: number, body: unknown): ApiError {
         code: code as ApiErrorCode,
         status,
         message: typeof message === "string" ? message : "Something went wrong.",
+        payload: body,
       };
     }
   }
-  return { code: "malformed", status, message: `Unexpected response (HTTP ${status}).` };
+  return {
+    code: "malformed",
+    status,
+    message: `Unexpected response (HTTP ${status}).`,
+    payload: body,
+  };
 }
 
 export function createApiClient(options: ApiClientOptions): ApiClient {

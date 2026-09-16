@@ -14,13 +14,13 @@ import { useCallback } from "react";
 import type { InitiativeSummary, Role } from "../api/types.ts";
 import { controlClass } from "../frame/button_styles.ts";
 import { COUNT_MIN_WIDTH, LIST_ROW_HEIGHT } from "../frame/layout_budget.ts";
-import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
-import { ErrorNote, Heading } from "./chrome.tsx";
+import { EmptyState, InlineError, Skeleton } from "../ui/feedback.tsx";
+import { Heading } from "./chrome.tsx";
 import { useResource } from "./use_resource.ts";
 
 const selectSummaries = (state: DomainState) => state.initiativeSummaries;
@@ -60,13 +60,13 @@ export function InitiativesScreen() {
         <Skeleton region="initiatives-list" id="initiatives-skeleton" />
       )}
       {resource.status === "error" && (
-        <ErrorNote message={resource.message} onRetry={resource.reload} />
+        <InlineError message={resource.message} onRetry={resource.reload} />
       )}
 
       {summaries !== null && summaries.length === 0 && resource.status === "ready" && (
-        <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
-          You don’t have any Initiatives yet.
-        </p>
+        <EmptyState id="initiatives-empty" title="You don’t have any Initiatives yet.">
+          Start one from the current Initiatives page, or ask a colleague to share theirs with you.
+        </EmptyState>
       )}
 
       {summaries !== null && summaries.length > 0 && (

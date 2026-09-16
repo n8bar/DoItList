@@ -23,7 +23,8 @@ import { putInitiativeTree } from "../state/domain.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
-import { ErrorNote, Heading } from "./chrome.tsx";
+import { InlineError } from "../ui/feedback.tsx";
+import { Heading } from "./chrome.tsx";
 import { useResource } from "./use_resource.ts";
 
 export function InitiativeScreen({ id }: { id: number }) {
@@ -121,7 +122,7 @@ export function InitiativeScreen({ id }: { id: number }) {
       )}
 
       {resource.status === "error" && (
-        <ErrorNote message={resource.message} onRetry={resource.reload} />
+        <InlineError message={resource.message} onRetry={resource.reload} />
       )}
 
       <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
