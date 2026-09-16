@@ -21,7 +21,7 @@ export interface HistoryLike {
 
 export interface HistoryEnv {
   history: HistoryLike;
-  location: { readonly pathname: string };
+  location: { readonly pathname: string; readonly search: string; readonly hash: string };
   /** Registers a `popstate` listener; returns the unsubscribe function. */
   addPopStateListener(listener: (state: unknown) => void): () => void;
   /** Injected in tests; defaults to a random key. */
@@ -101,7 +101,11 @@ export function createClientHistory(env: HistoryEnv): ClientHistory {
     kind: "initial",
   };
   if (existing === null) {
-    env.history.replaceState(stateWithKey(env.history.state, entry.key), "", entry.path);
+    // The address bar, verbatim — `entry.path` is normalised for comparisons
+    // and must never be, but a bell link's `?task=9` or a `#fragment` is real
+    // navigation state a reload must not throw away.
+    const address = env.location.pathname + env.location.search + env.location.hash;
+    env.history.replaceState(stateWithKey(env.history.state, entry.key), "", address);
   }
 
   const emit = (next: HistoryEntry) => {

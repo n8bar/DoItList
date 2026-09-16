@@ -4,9 +4,20 @@ import { describe, it } from "node:test";
 import type { HistoryEntry, HistoryEnv, HistoryLike } from "./history.ts";
 import { createClientHistory, keyOf, normalizePath, stateWithKey } from "./history.ts";
 
-/** A fake browser history: a stack, a pathname, and a popstate we can fire. */
+/** Splits a URL the way a real `Location` does: pathname, search, hash. */
+function splitUrl(url: string): { pathname: string; search: string; hash: string } {
+  const hashIndex = url.indexOf("#");
+  const hash = hashIndex === -1 ? "" : url.slice(hashIndex);
+  const beforeHash = hashIndex === -1 ? url : url.slice(0, hashIndex);
+  const searchIndex = beforeHash.indexOf("?");
+  const search = searchIndex === -1 ? "" : beforeHash.slice(searchIndex);
+  const pathname = searchIndex === -1 ? beforeHash : beforeHash.slice(0, searchIndex);
+  return { pathname, search, hash };
+}
+
+/** A fake browser history: a stack, a URL, and a popstate we can fire. */
 function fakeEnv(startPath = "/app/initiatives", startState: unknown = null) {
-  let pathname = startPath;
+  let currentUrl = startPath;
   const stack: { path: string; state: unknown }[] = [{ path: startPath, state: startState }];
   let index = 0;
   const listeners: ((state: unknown) => void)[] = [];
@@ -19,11 +30,11 @@ function fakeEnv(startPath = "/app/initiatives", startState: unknown = null) {
       stack.length = index + 1;
       stack.push({ path: url, state });
       index += 1;
-      pathname = url;
+      currentUrl = url;
     },
     replaceState(state, _unused, url) {
       stack[index] = { path: url, state };
-      pathname = url;
+      currentUrl = url;
     },
     scrollRestoration: "auto",
   };
@@ -32,7 +43,13 @@ function fakeEnv(startPath = "/app/initiatives", startState: unknown = null) {
     history,
     location: {
       get pathname() {
-        return pathname;
+        return splitUrl(currentUrl).pathname;
+      },
+      get search() {
+        return splitUrl(currentUrl).search;
+      },
+      get hash() {
+        return splitUrl(currentUrl).hash;
       },
     },
     addPopStateListener(listener) {
@@ -55,7 +72,7 @@ function fakeEnv(startPath = "/app/initiatives", startState: unknown = null) {
     const next = index + delta;
     if (next < 0 || next >= stack.length) return;
     index = next;
-    pathname = stack[index]?.path ?? "/";
+    currentUrl = stack[index]?.path ?? "/";
     const state = stack[index]?.state ?? null;
     for (const listener of [...listeners]) listener(state);
   };
@@ -104,6 +121,14 @@ describe("createClientHistory", () => {
       kind: "initial",
     });
     assert.equal(keyOf(history.state), "key-1");
+  });
+
+  it("keeps the query string and fragment on the first load's replaceState (a bell link + refresh)", () => {
+    const { env, stack } = fakeEnv("/app/initiatives/3?task=9#comment-1");
+    const client = createClientHistory(env);
+
+    assert.deepEqual(stack(), ["/app/initiatives/3?task=9#comment-1"]);
+    assert.equal(client.current().path, "/app/initiatives/3", "the entry's own path stays normalised");
   });
 
   it("adopts the key a refresh left behind rather than minting a new one", () => {
