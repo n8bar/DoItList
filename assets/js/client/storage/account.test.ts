@@ -14,6 +14,7 @@ import { FakeIdb } from "./fake_idb.ts";
 import type { KeyValueStore } from "./last_user.ts";
 import { LAST_USER_KEY, readLastUser } from "./last_user.ts";
 import { LAST_SNAPSHOT_KEY, createTreeCache, parseInitiativeSnapshot, treeSummary } from "./snapshots.ts";
+import { fromSnapshot } from "../tree/model.ts";
 
 const USER = 41;
 const OTHER = 77;
@@ -27,7 +28,7 @@ const fakeStore = (initial: Record<string, string> = {}): KeyValueStore => {
   };
 };
 
-const tree = (overrides: Partial<InitiativeTree> = {}): InitiativeTree => ({
+const read = (overrides: Partial<InitiativeTree> = {}): InitiativeTree => ({
   id: 12,
   name: "Kitchen",
   subtitle: "the long one",
@@ -35,12 +36,45 @@ const tree = (overrides: Partial<InitiativeTree> = {}): InitiativeTree => ({
   progress: 42,
   progress_calc: "leaf_average",
   unit_count: 9,
-  index_style: "numeric",
+  index_style: "numerical",
   root_task_id: 1,
   version: 7,
   tasks: [],
   ...overrides,
 });
+
+/** One task under the root, so "drops the tree" has a tree to drop. */
+const withOneTask = (): InitiativeTree =>
+  read({
+    tasks: [
+      {
+        id: 5,
+        title: "Paint",
+        description: null,
+        index: "1",
+        position: 0,
+        parent_id: 1,
+        depth: 0,
+        progress: 0,
+        manual_progress: 0,
+        status: "open",
+        done: false,
+        leaf: true,
+        priority: "normal",
+        assignee_id: null,
+        co_assignee_ids: [],
+        comment_count: 0,
+        cross_references: [],
+        referenced_by: [],
+        sort_mode: null,
+        sort_reverse: false,
+        version: 1,
+        children: [],
+      },
+    ],
+  });
+
+const tree = (overrides: Partial<InitiativeTree> = {}) => fromSnapshot(read(overrides));
 
 const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -199,7 +233,7 @@ describe("withTimeout", () => {
 
 describe("the Initiative snapshot (item 3.4)", () => {
   it("keeps the header and drops the tree", () => {
-    const summary = treeSummary(tree({ tasks: [{ id: 1 }] as never }));
+    const summary = treeSummary(fromSnapshot(withOneTask()));
     assert.deepEqual(summary, {
       id: 12,
       name: "Kitchen",

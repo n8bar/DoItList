@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createStore } from "./store.ts";
-import { createDomainStore, initialDomainState, initiativeTree, putInitiativeTree } from "./domain.ts";
+import { createDomainStore, initialDomainState, putTree, tree as loadedTree } from "./domain.ts";
 import {
   createRecoveryStore,
   initialRecoveryState,
@@ -15,21 +15,22 @@ import {
 import { createPreferencesStore, initialPreferencesState, setThemePreference } from "./preferences.ts";
 import { createUiStore, initialUiState, rememberPlace, setRoute } from "./ui.ts";
 import { createStores } from "./stores.ts";
-import type { InitiativeTree } from "../api/types.ts";
+import { fromSnapshot } from "../tree/model.ts";
 
-const tree = (id: number, name: string): InitiativeTree => ({
-  id,
-  name,
-  subtitle: null,
-  role: "owner",
-  progress: 0,
-  progress_calc: "leaf_average",
-  unit_count: 0,
-  index_style: "numerical",
-  root_task_id: id * 10,
-  version: 1,
-  tasks: [],
-});
+const tree = (id: number, name: string) =>
+  fromSnapshot({
+    id,
+    name,
+    subtitle: null,
+    role: "owner",
+    progress: 0,
+    progress_calc: "leaf_average",
+    unit_count: 0,
+    index_style: "numerical",
+    root_task_id: id * 10,
+    version: 1,
+    tasks: [],
+  });
 
 describe("createStore", () => {
   it("returns the initial value until something sets it", () => {
@@ -122,7 +123,7 @@ describe("store separation (item 3.1)", () => {
     setThemePreference(stores.preferences, "dark");
     assert.deepEqual(woken, ["ui", "recovery", "preferences"]);
 
-    putInitiativeTree(stores.domain, tree(1, "Q3"));
+    putTree(stores.domain, tree(1, "Q3"));
     assert.deepEqual(woken, ["ui", "recovery", "preferences", "domain"]);
   });
 });
@@ -130,14 +131,14 @@ describe("store separation (item 3.1)", () => {
 describe("domain store", () => {
   it("files trees by id without disturbing the others", () => {
     const store = createDomainStore();
-    putInitiativeTree(store, tree(1, "Q3"));
-    putInitiativeTree(store, tree(2, "Q4"));
-    assert.equal(initiativeTree(store.get(), 1)?.name, "Q3");
-    assert.equal(initiativeTree(store.get(), 2)?.name, "Q4");
+    putTree(store, tree(1, "Q3"));
+    putTree(store, tree(2, "Q4"));
+    assert.equal(loadedTree(store.get(), 1)?.header.name, "Q3");
+    assert.equal(loadedTree(store.get(), 2)?.header.name, "Q4");
   });
 
   it("reports an unread tree as undefined rather than a blank one", () => {
-    assert.equal(initiativeTree(createDomainStore().get(), 7), undefined);
+    assert.equal(loadedTree(createDomainStore().get(), 7), undefined);
   });
 });
 

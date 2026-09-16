@@ -19,7 +19,9 @@
 import type { ApiClient } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
 import type { DomainStore } from "../state/domain.ts";
-import { forgetInitiative, putInitiativeTree } from "../state/domain.ts";
+import { forgetInitiative, putTree } from "../state/domain.ts";
+import type { TreeModel } from "../tree/model.ts";
+import { fromSnapshot } from "../tree/model.ts";
 import type { UiStore } from "../state/ui.ts";
 import type { TreeCache } from "../storage/snapshots.ts";
 import type { ChangedEvent } from "./connection.ts";
@@ -114,12 +116,18 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       void (async () => {
         const { initiativeId } = event;
 
-        if (domain.get().initiativeTrees[initiativeId] !== undefined) {
+        if (domain.get().trees[initiativeId] !== undefined) {
           const seq = guard.beginTree(initiativeId);
           const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
           if (tree.ok && guard.currentTree(initiativeId, seq)) {
-            putInitiativeTree(domain, tree.data);
-            deps.snapshots?.cacheTree(tree.data);
+            // A read that cannot be a tree is dropped rather than drawn: the
+            // next change brings another one, and the screen's own read is the
+            // path that reports a persistent failure (item 1.6.2).
+            const model = readModel(tree.data);
+            if (model !== null) {
+              putTree(domain, model);
+              deps.snapshots?.cacheTree(model);
+            }
           }
         }
 
@@ -144,4 +152,12 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       if (route.kind === "initiative" && route.id === initiativeId) onForbidden();
     },
   };
+}
+
+function readModel(tree: InitiativeTree): TreeModel | null {
+  try {
+    return fromSnapshot(tree);
+  } catch {
+    return null;
+  }
 }

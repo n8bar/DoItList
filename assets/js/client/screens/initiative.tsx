@@ -19,7 +19,9 @@ import { COUNT_MIN_WIDTH, reservedHeight } from "../frame/layout_budget.ts";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
-import { putInitiativeTree } from "../state/domain.ts";
+import { putTree } from "../state/domain.ts";
+import type { InitiativeHeader } from "../tree/model.ts";
+import { fromSnapshot } from "../tree/model.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
@@ -30,8 +32,8 @@ import { useResource } from "./use_resource.ts";
 export function InitiativeScreen({ id }: { id: number }) {
   const { api, stores, connection, cache, escalate } = useServices();
 
-  const select = useCallback((state: DomainState) => state.initiativeTrees[id], [id]);
-  const tree = useStoreValue(stores.domain, select);
+  const select = useCallback((state: DomainState) => state.trees[id], [id]);
+  const model = useStoreValue(stores.domain, select);
 
   // The last copy this device saved, shown while the live read is in flight so
   // a reload on a slow link has a header instead of a spinner. It is dropped
@@ -55,14 +57,17 @@ export function InitiativeScreen({ id }: { id: number }) {
 
   const resource = useResource<InitiativeTree>({
     key: `initiative:${id}`,
-    loaded: tree !== undefined,
+    loaded: model !== undefined,
     read: () => api.get<InitiativeTree>(`/initiatives/${id}`),
     onData: useCallback(
       (data: InitiativeTree) => {
-        putInitiativeTree(stores.domain, data);
+        // The nested read becomes the client's own model here and nowhere else;
+        // a snapshot that cannot be a tree throws instead of being half-drawn.
+        const next = fromSnapshot(data);
+        putTree(stores.domain, next);
         // Same path as the store write, so a tree the guard rejected is never
         // the one that gets cached.
-        cache.cacheTree(data);
+        cache.cacheTree(next);
       },
       [cache, stores.domain],
     ),
@@ -70,8 +75,8 @@ export function InitiativeScreen({ id }: { id: number }) {
   });
 
   // The server's copy always wins; the cache only fills the gap before it lands.
-  const shown: InitiativeTree | InitiativeSnapshot | null = tree ?? cached;
-  const fromCache = tree === undefined && cached !== null;
+  const shown: InitiativeHeader | InitiativeSnapshot | null = model?.header ?? cached;
+  const fromCache = model === undefined && cached !== null;
 
   return (
     <section aria-labelledby={ROUTE_HEADING_ID}>

@@ -1,14 +1,15 @@
 // What a cached Initiative is, and who writes it (m04.01 items 3.4, 3.6).
 //
-// Only the header is cached, not the task tree: this arc renders the header,
-// and a recovery cache should hold what the client can honestly show, not a
-// copy of the whole database (spec §5). Arc 2 widens the payload when it has a
-// tree to draw; the record shape and the bounds already allow for it.
+// Only the header is cached, not the task tree: a recovery cache should hold
+// what the client can honestly show, not a copy of the whole database (spec
+// §5). The record shape and the bounds already allow for a wider payload when
+// the tree earns one.
 //
 // Every write is fire-and-forget on purpose. Caching is a courtesy to the next
 // page load — a user's action must never wait on it (UX_GUARDRAILS §6).
 
-import type { InitiativeTree, Role } from "../api/types.ts";
+import type { Role } from "../api/types.ts";
+import type { TreeModel } from "../tree/model.ts";
 import type { AccountStorage } from "./db.ts";
 
 export const LAST_SNAPSHOT_KEY = "last_snapshot";
@@ -34,16 +35,9 @@ export interface SnapshotMeta {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-export function treeSummary(tree: InitiativeTree): InitiativeSnapshot {
-  return {
-    id: tree.id,
-    name: tree.name,
-    subtitle: tree.subtitle,
-    role: tree.role,
-    progress: tree.progress,
-    unit_count: tree.unit_count,
-    version: tree.version,
-  };
+export function treeSummary(model: TreeModel): InitiativeSnapshot {
+  const { id, name, subtitle, role, progress, unit_count, version } = model.header;
+  return { id, name, subtitle, role, progress, unit_count, version };
 }
 
 export function parseInitiativeSnapshot(value: unknown): InitiativeSnapshot | null {
@@ -84,9 +78,9 @@ export function parseSnapshotMeta(value: unknown): SnapshotMeta | null {
 
 export interface TreeCache {
   /** Caches a tree the server just confirmed. Never throws, never awaited. */
-  cacheTree(tree: InitiativeTree): void;
+  cacheTree(model: TreeModel): void;
   /** The same write, awaitable — for callers that must know when it landed. */
-  writeTree(tree: InitiativeTree): Promise<boolean>;
+  writeTree(model: TreeModel): Promise<boolean>;
   /** The last copy saved on this device, or `null`. Never throws. */
   readTree(initiativeId: number): Promise<InitiativeSnapshot | null>;
   /**
@@ -109,20 +103,20 @@ export function createTreeCache(deps: {
   const onMetaCleared = deps.onMetaCleared ?? (() => {});
 
   const cache: TreeCache = {
-    cacheTree(tree) {
-      void cache.writeTree(tree);
+    cacheTree(model) {
+      void cache.writeTree(model);
     },
 
-    async writeTree(tree) {
+    async writeTree(model) {
       const written = await storage.putSnapshot({
-        initiativeId: tree.id,
-        seq: tree.version,
-        payload: treeSummary(tree),
+        initiativeId: model.initiativeId,
+        seq: model.header.version,
+        payload: treeSummary(model),
       });
       if (!written.ok) return false;
       const meta: SnapshotMeta = {
-        initiativeId: tree.id,
-        version: tree.version,
+        initiativeId: model.initiativeId,
+        version: model.header.version,
         savedAt: written.value.savedAt,
       };
       await storage.putMeta(LAST_SNAPSHOT_KEY, meta);

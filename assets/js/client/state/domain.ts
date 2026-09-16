@@ -12,7 +12,8 @@
 // stay disjoint.
 
 import type { BootstrapUser } from "../boot.ts";
-import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
+import type { InitiativeSummary } from "../api/types.ts";
+import type { TreeModel } from "../tree/model.ts";
 import type { NotificationsState } from "./notifications.ts";
 import { emptyNotifications } from "./notifications.ts";
 import type { Store } from "./store.ts";
@@ -23,8 +24,12 @@ export interface DomainState {
   readonly user: BootstrapUser | null;
   /** The Initiatives index, or `null` before it has ever been read. */
   readonly initiativeSummaries: readonly InitiativeSummary[] | null;
-  /** Loaded Initiative trees, keyed by Initiative id. */
-  readonly initiativeTrees: Readonly<Record<number, InitiativeTree>>;
+  /**
+   * Loaded Initiative trees, keyed by Initiative id, in the client's own
+   * normalized form (`tree/model.ts`) — records by id and child order by
+   * parent. The nested read the server sent is not kept.
+   */
+  readonly trees: Readonly<Record<number, TreeModel>>;
   /** The bell's rows and unread count — server records, like the rest (4.6). */
   readonly notifications: NotificationsState;
 }
@@ -32,7 +37,7 @@ export interface DomainState {
 export const initialDomainState: DomainState = {
   user: null,
   initiativeSummaries: null,
-  initiativeTrees: {},
+  trees: {},
   notifications: emptyNotifications,
 };
 
@@ -43,10 +48,10 @@ export function createDomainStore(initial: Partial<DomainState> = {}): DomainSto
 }
 
 /** Files one loaded tree, leaving every other loaded tree alone. */
-export function putInitiativeTree(store: DomainStore, tree: InitiativeTree): void {
+export function putTree(store: DomainStore, tree: TreeModel): void {
   store.set((state) => ({
     ...state,
-    initiativeTrees: { ...state.initiativeTrees, [tree.id]: tree },
+    trees: { ...state.trees, [tree.initiativeId]: tree },
   }));
 }
 
@@ -58,12 +63,12 @@ export function putInitiativeTree(store: DomainStore, tree: InitiativeTree): voi
  */
 export function forgetInitiative(store: DomainStore, id: number): void {
   store.set((state) => {
-    const initiativeTrees = { ...state.initiativeTrees };
-    delete initiativeTrees[id];
+    const trees = { ...state.trees };
+    delete trees[id];
     const summaries = state.initiativeSummaries;
     return {
       ...state,
-      initiativeTrees,
+      trees,
       initiativeSummaries:
         summaries === null ? null : summaries.filter((summary) => summary.id !== id),
     };
@@ -85,6 +90,6 @@ export function updateNotifications(
 }
 
 /** The loaded tree for `id`, or `undefined` if it has not been read yet. */
-export function initiativeTree(state: DomainState, id: number): InitiativeTree | undefined {
-  return state.initiativeTrees[id];
+export function tree(state: DomainState, id: number): TreeModel | undefined {
+  return state.trees[id];
 }

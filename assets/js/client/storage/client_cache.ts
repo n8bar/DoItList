@@ -119,12 +119,12 @@ export function openClientCache(deps: ClientCacheDeps): ClientCache {
 
     async writeTree(value) {
       if (userId === null) return false;
-      const gen = generation(value.id);
+      const gen = generation(value.initiativeId);
       const store = await tree();
       const written = await store.writeTree(value);
       // Access was taken away while this write was in flight: undo it.
-      if (generation(value.id) !== gen) {
-        await store.forgetTree(value.id);
+      if (generation(value.initiativeId) !== gen) {
+        await store.forgetTree(value.initiativeId);
         return false;
       }
       return written;

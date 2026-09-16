@@ -10,6 +10,7 @@ import type { KeyValueStore } from "./last_user.ts";
 import { LAST_USER_KEY, readLastUser } from "./last_user.ts";
 import type { SnapshotMeta } from "./snapshots.ts";
 import { treeSummary } from "./snapshots.ts";
+import { fromSnapshot } from "../tree/model.ts";
 
 const USER = 41;
 const OTHER = 77;
@@ -23,19 +24,20 @@ const fakeStore = (initial: Record<string, string> = {}): KeyValueStore => {
   };
 };
 
-const tree = (id = 12, version = 7): InitiativeTree => ({
-  id,
-  name: `Initiative ${id}`,
-  subtitle: null,
-  role: "owner",
-  progress: 10,
-  progress_calc: "leaf_average",
-  unit_count: 3,
-  index_style: "numeric",
-  root_task_id: 1,
-  version,
-  tasks: [],
-});
+const tree = (id = 12, version = 7) =>
+  fromSnapshot({
+    id,
+    name: `Initiative ${id}`,
+    subtitle: null,
+    role: "owner",
+    progress: 10,
+    progress_calc: "leaf_average",
+    unit_count: 3,
+    index_style: "numerical",
+    root_task_id: 1,
+    version,
+    tasks: [],
+  } satisfies InitiativeTree);
 
 describe("the tab's cache handle (items 3.4–3.6)", () => {
   it("keeps a write made before the store finished opening", async () => {

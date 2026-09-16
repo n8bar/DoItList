@@ -5,10 +5,26 @@ import type { ApiClient, Result } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
 import { createDomainStore } from "../state/domain.ts";
 import { createUiStore } from "../state/ui.ts";
+import type { TreeModel } from "../tree/model.ts";
+import { fromSnapshot } from "../tree/model.ts";
 import { createInitiativeSync } from "./refresh.ts";
 
-const tree = (id: number, name: string): InitiativeTree =>
-  ({ id, name, progress: 50, unit_count: 2, root: null }) as unknown as InitiativeTree;
+const tree = (id: number, name: string): InitiativeTree => ({
+  id,
+  name,
+  subtitle: null,
+  role: "owner",
+  progress: 50,
+  progress_calc: "leaf_average",
+  unit_count: 2,
+  index_style: "numerical",
+  root_task_id: id * 10,
+  version: 1,
+  tasks: [],
+});
+
+/** The same read, as the model the store now holds. */
+const model = (id: number, name: string) => fromSnapshot(tree(id, name));
 
 const summary = (id: number, name: string): InitiativeSummary =>
   ({ id, name, progress: 50 }) as unknown as InitiativeSummary;
@@ -66,7 +82,7 @@ function sync(parts: {
   domain?: ReturnType<typeof createDomainStore>;
   ui?: ReturnType<typeof createUiStore>;
   onForbidden?: () => void;
-  snapshots?: { cacheTree(tree: InitiativeTree): void; forgetTree(id: number): Promise<void> };
+  snapshots?: { cacheTree(model: TreeModel): void; forgetTree(id: number): Promise<void> };
 }) {
   return createInitiativeSync({
     api: parts.api ?? fakeApi({}).api,
@@ -84,7 +100,7 @@ const fakeSnapshots = () => {
   return {
     cached,
     forgotten,
-    cacheTree: (value: InitiativeTree) => void cached.push(value.id),
+    cacheTree: (value: TreeModel) => void cached.push(value.initiativeId),
     forgetTree: (id: number) => {
       forgotten.push(id);
       return Promise.resolve();
@@ -94,14 +110,14 @@ const fakeSnapshots = () => {
 
 describe("what a `changed` event makes the client do (item 1.5)", () => {
   it("re-reads the Initiative it is holding", async () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const { api, calls } = fakeApi({ "/initiatives/12": tree(12, "New") });
 
     sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
     await settle();
 
     assert.deepEqual(calls, ["/initiatives/12"]);
-    assert.equal(domain.get().initiativeTrees[12]?.name, "New");
+    assert.equal(domain.get().trees[12]?.header.name, "New");
   });
 
   it("does not fetch a tree the tab is not holding", async () => {
@@ -116,7 +132,7 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
 
   it("refreshes the Initiatives list once it has been read", async () => {
     const domain = createDomainStore({
-      initiativeTrees: { 12: tree(12, "Old") },
+      trees: { 12: model(12, "Old") },
       initiativeSummaries: [summary(12, "Old")],
     });
     const { api, calls } = fakeApi({
@@ -132,7 +148,7 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
   });
 
   it("never lets an older read land on top of a newer one", async () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const fake = fakeApi({});
     fake.answers("/initiatives/12", [tree(12, "First"), tree(12, "Second")]);
     fake.hold();
@@ -150,17 +166,17 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
     fake.release(0);
     await settle();
 
-    assert.equal(domain.get().initiativeTrees[12]?.name, "Second");
+    assert.equal(domain.get().trees[12]?.header.name, "Second");
   });
 
   it("leaves what it has alone when the re-read fails", async () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const { api } = fakeApi({});
 
     sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_deleted", id: 5 });
     await settle();
 
-    assert.equal(domain.get().initiativeTrees[12]?.name, "Old");
+    assert.equal(domain.get().trees[12]?.header.name, "Old");
   });
 });
 
@@ -169,7 +185,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
     // The race: `changed` starts a read, access is taken away while it is out,
     // and the answer arrives last. It must be dropped, not written.
     const domain = createDomainStore({
-      initiativeTrees: { 12: tree(12, "Old") },
+      trees: { 12: model(12, "Old") },
       initiativeSummaries: [summary(12, "Old"), summary(13, "Other")],
     });
     const ui = createUiStore({ route: { kind: "initiative", id: 12 } });
@@ -187,14 +203,14 @@ describe("what losing access makes the client do (item 1.5)", () => {
     assert.equal(fake.parked(), 1, "the tree read is in flight");
 
     unit.onAccessRevoked(12);
-    assert.equal(domain.get().initiativeTrees[12], undefined);
+    assert.equal(domain.get().trees[12], undefined);
     assert.equal(forbidden, 1);
 
     fake.release(0);
     await settle();
     await settle();
 
-    assert.equal(domain.get().initiativeTrees[12], undefined, "the stale read wrote it back");
+    assert.equal(domain.get().trees[12], undefined, "the stale read wrote it back");
 
     if (fake.parked() > 1) fake.release(1);
     await settle();
@@ -231,7 +247,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
   });
 
   it("lets a read begun after the revocation land (access given back)", async () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const ui = createUiStore({ route: { kind: "initiatives" } });
     const fake = fakeApi({ "/initiatives/12": tree(12, "Fresh") });
 
@@ -241,25 +257,25 @@ describe("what losing access makes the client do (item 1.5)", () => {
     // The user is let back in, the screen reloads the tree, and a change lands.
     domain.set((state) => ({
       ...state,
-      initiativeTrees: { ...state.initiativeTrees, 12: tree(12, "Old") },
+      trees: { ...state.trees, 12: model(12, "Old") },
     }));
     unit.onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
     await settle();
 
-    assert.equal(domain.get().initiativeTrees[12]?.name, "Fresh");
+    assert.equal(domain.get().trees[12]?.header.name, "Fresh");
   });
 
   it("forgets the Initiative, tree and index row alike", () => {
     const domain = createDomainStore({
-      initiativeTrees: { 12: tree(12, "Gone"), 13: tree(13, "Kept") },
+      trees: { 12: model(12, "Gone"), 13: model(13, "Kept") },
       initiativeSummaries: [summary(12, "Gone"), summary(13, "Kept")],
     });
     const ui = createUiStore({ route: { kind: "initiatives" } });
 
     sync({ domain, ui }).onAccessRevoked(12);
 
-    assert.equal(domain.get().initiativeTrees[12], undefined);
-    assert.equal(domain.get().initiativeTrees[13]?.name, "Kept");
+    assert.equal(domain.get().trees[12], undefined);
+    assert.equal(domain.get().trees[13]?.header.name, "Kept");
     assert.deepEqual(
       domain.get().initiativeSummaries?.map((s) => s.id),
       [13],
@@ -267,7 +283,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
   });
 
   it("says so when the user is looking at it", () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Gone") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Gone") } });
     const ui = createUiStore({ route: { kind: "initiative", id: 12 } });
     let forbidden = 0;
 
@@ -277,20 +293,20 @@ describe("what losing access makes the client do (item 1.5)", () => {
   });
 
   it("does not hijack the screen for an Initiative the user is not on", () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Gone") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Gone") } });
     const ui = createUiStore({ route: { kind: "initiative", id: 13 } });
     let forbidden = 0;
 
     sync({ domain, ui, onForbidden: () => (forbidden += 1) }).onAccessRevoked(12);
 
     assert.equal(forbidden, 0);
-    assert.equal(domain.get().initiativeTrees[12], undefined, "the copy still goes");
+    assert.equal(domain.get().trees[12], undefined, "the copy still goes");
   });
 });
 
 describe("the local cache follows the same rules (items 3.4–3.6)", () => {
   it("caches a tree the guard let through", async () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const snapshots = fakeSnapshots();
     const backend = fakeApi({ "/initiatives/12": tree(12, "New") });
 
@@ -301,7 +317,7 @@ describe("the local cache follows the same rules (items 3.4–3.6)", () => {
   });
 
   it("deletes the snapshot when access is taken away", () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const snapshots = fakeSnapshots();
 
     sync({ domain, snapshots }).onAccessRevoked(12);
@@ -310,7 +326,7 @@ describe("the local cache follows the same rules (items 3.4–3.6)", () => {
   });
 
   it("does not cache a tree that arrived after access was taken away", async () => {
-    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const snapshots = fakeSnapshots();
     const backend = fakeApi({ "/initiatives/12": tree(12, "New") });
     backend.hold();
