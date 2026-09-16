@@ -637,5 +637,39 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-14  Tweak (skill): 3.4.6 applies a mirror import by re-running it without --preview -- the CLI preview prints no id, so "apply the preview by its id" left agents stuck.
 2026-09-14  Tweak (skill): 3.4.3 forbids source numbers in titles under any index style, --numbered included -- the Initiative's index already supplies the number.
 2026-09-14  Tweak (skill): 3.4.3's numbering rule reads "unless the style is none" and carries an example -- "any other style" was unclear.
+2026-09-14  Correction (m04): the 2026-09-13 entry saying Tree Tools landed early was wrong -- the six tools are unbuilt and now belong to scoped Arc 7; navigation actions must look unmistakably like buttons.
+2026-09-14  M04 scoping draft splits eight arcs around a product-wide browser-rendering boundary, durable pending writes, ordered convergence, separate concurrent-user and large-Initiative performance tracks, Tree Tools plus bounded view controls, and a measured final cutover; proposed target ~2026-Q4.
+2026-09-14  Tweak (m04 spec): "one domain path" now says clients may use different transports but share server authorization, validation, transactions, and business rules -- the boundary is explicit instead of jargon.
+2026-09-14  Tweak (m04 spec): numbered the Resilient Client's 13 top-level sections for precise review references.
+2026-09-14  Tweak (m04 spec): removed the redundant client-state-lifetime section; its unique IndexedDB lifetime rule now lives with reconnect behavior, leaving 12 sections.
+2026-09-14  Fix (m04 spec): removed its M02 and arc references -- the subordinate spec now names ProductSpec/UX_GUARDRAILS behavior and implementation-independent regression checkpoints, preserving the spec/action-list boundary.
+2026-09-15  Doc: numbered ProductSpec's 12 top-level sections and Reorganization's nine subsections so reviews and cross-references can point precisely.
+2026-09-15  Doc: changed ProductSpec's continuous requirement and principle lists from bullets to numbered items; glossary and metaphor-mapping lists remain bullets.
+2026-09-15  ProductSpec 11.2: browser owns rendering and immediate UI state; server owns identity, permissions, validation, ordering, durable data, and live delivery -- the approved boundary no longer depends on a subordinate client spec.
+2026-09-15  ProductSpec 6 gains UI/UX: it adopts UX_GUARDRAILS as the universal baseline, gives browser/server ownership and shared server operations a product-specific Client Interface home, and nests Task Tree Display beneath it; Collaboration Model now contains collaboration only.
+2026-09-15  ProductSpec 6.1.4: durable changes stay visibly pending until accepted; pending work survives navigation, reload, and connection loss, while rejected editable input remains recoverable.
+2026-09-15  ProductSpec 11.2-11.3: accepted changes propagate promptly, the server establishes their order, and every client converges on the resulting durable state; efficiency wording moves out of the collaboration rule.
+2026-09-15  ProductSpec 6.1.5-6.1.7: server disruption leaves known content and local actions usable, queues durable changes that do not need current server facts, refuses server-dependent actions immediately, and ends repeated reconnect failure in a clear Retry state.
+2026-09-15  ProductSpec 6.2.6 and 11.6: tree work is limited to visible and changed Tasks; each accepted change is validated, persisted, and serialized once, with no per-recipient database read or product-view rendering during delivery.
+2026-09-15  M04 opening: condensed the milestone goal and accomplishments around client ownership, resilience, efficient scaling, large Initiatives, view controls, and measurable gates.
+2026-09-15  M04 Included: limited delivery to browser-rendered views, resilient operations, efficient tree and collaboration work, selected view controls, and reproducible capacity tests.
+2026-09-15  ProductSpec 11.7-11.9: added advisory field-editing presence and non-blocking same-field collision handling that preserves changed local drafts without locks or choice prompts.
+2026-09-15  ProductSpec 11.9: a dirty field receiving a remote value now shows that value and a contextual Cancel button, preventing blur-save from making overwrite the only available outcome.
+2026-09-15  ProductSpec 11.7: reduced concurrent-field collaboration to its product standard; detailed presence and collision behavior moved to M04's action list.
+2026-09-15  M04 exclusions and gates: clarified collaboration and offline limits, defined measurable release evidence, and grounded scaling tests in primary guidance.
+2026-09-15  M04 scope approved: fixed the milestone outcome, included and excluded work, release gates, target, and scaling method before arc review.
+2026-09-15  M04 hierarchy: moved release evidence and cited scaling practices into their owning arcs; the milestone retains one completion rule.
+2026-09-15  M04 cleanup: removed the M03 carryover section; its tree, recovery, and Tree Tools work remains in Arcs 3, 4, and 7.
+2026-09-15  M04 arc plan: converted the proposed first arc into a temporary scoping TODO, renumbered the remaining seven arcs, and marked every arc draft unapproved.
+2026-09-15  M04 scaling practice: kept the temporary scoping TODO decision-only and placed measurement guidance and cited test methods in the two capacity arcs.
+2026-09-15  M04 stack decision: selected React/TypeScript with Phoenix esbuild, tsc, node:test, direct browser CDP, and Phoenix Channels; Arc 1 builds the production foundation without a disposable proof.
+2026-09-15  M04 Arc 4 profiles: added a 1,000-watcher hot Initiative and a 10,000-user many-Initiative load with 1,000 active editors; Arc boundaries 1–5 are approved.
+2026-09-15  M04 Arc 6 boundary approved: Tree Tools and selected view controls consume the client-owned, synchronized, large-Initiative tree foundations.
+2026-09-15  M04 arc map approved: Arc 7 owns final product cutover and combined-system proof; all seven arc boundaries and dependencies are accepted.
+2026-09-15  M04 ownership decision: ProductSpec 6.1.2 applies without surface-specific exceptions; synchronization design and test-environment work remain in their owning arcs.
+2026-09-15  M04 arc goals approved: all seven goals accepted; Arc 4 explicitly seeks orders-of-magnitude reduction in work amplified by viewers, rooms, or reconnects.
+2026-09-15  M04 Arc 1 draft: split heavy bootstrap, routing, storage, shared-interface, and testing items into independently verifiable work without changing scope.
+2026-09-15  M04 Arc 1 approved: client runtime scope, worklists, testing, and Exit accepted.
+2026-09-15  M04 Arc 2 draft: split heavy model, rendering, optimistic-semantics, and testing items into independently verifiable work without changing scope.
 2026-09-15  Tweak (header): the Initiative's leaf count shows its completed count above it, faded.
 2026-09-15  Tweak (tree): top-level Lists show their completed count above the leaf count, faded; both counts hide at zero or when all are done.
