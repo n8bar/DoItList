@@ -11,7 +11,7 @@
 // numbers from here rather than sprinkling their own magic heights.
 
 /** Every region of the client that paints before its data exists. */
-export const ASYNC_REGIONS = ["initiatives-list", "initiative-header"] as const;
+export const ASYNC_REGIONS = ["initiatives-list", "initiative-header", "initiative-tree"] as const;
 
 export type AsyncRegion = (typeof ASYNC_REGIONS)[number];
 
@@ -32,12 +32,22 @@ export interface Reservation {
  */
 export const LIST_ROW_HEIGHT = 48;
 
+/**
+ * The height of one task row, in px. A title line, a second line for the
+ * description or the wrap, and the progress bar pinned to the bottom edge.
+ */
+export const TREE_ROW_HEIGHT = 72;
+
 const BUDGET: Record<AsyncRegion, Reservation> = {
   // A row is a name line plus the progress bar under it, matching the real row
   // in `InitiativesScreen` — which renders `LIST_ROW_HEIGHT` too.
   "initiatives-list": { rows: 6, rowHeight: LIST_ROW_HEIGHT, label: "Loading…" },
   // The heading, the subtitle line and the progress line, stacked.
   "initiative-header": { rows: 1, rowHeight: 80, label: "Loading…" },
+  // The tree under the header. A task row is a two-line row plus its progress
+  // bar; six of them is a screenful, so the first paint holds open roughly what
+  // the tree will fill and the page does not jump when the read lands.
+  "initiative-tree": { rows: 6, rowHeight: TREE_ROW_HEIGHT, label: "Loading…" },
 };
 
 /** The space `region` holds open. Total, in px, including the row gaps. */

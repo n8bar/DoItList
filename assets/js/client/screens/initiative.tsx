@@ -1,29 +1,42 @@
 // One Initiative — the deep-link route (m04.01 items 3.2, 3.7, 4.6).
 //
 // `/app/initiatives/:id` typed into the address bar, pasted from a chat, or
-// reloaded must all land here with the Initiative on screen. Only the header
-// (name, subtitle, rolled-up progress) is rendered: Arc 2 owns the task tree.
+// reloaded must all land here with the Initiative on screen — the header first,
+// and the whole task tree under it, drawn from the client's own model.
 //
 // The header holds its height from the first paint: name, subtitle and progress
 // occupy the same block whether they are known, cached or still in flight, so
-// the tree Arc 2 hangs underneath does not get pushed down when the read lands.
+// the tree underneath does not get pushed down when the read lands. The tree
+// holds its own height the same way, through the layout budget.
+//
+// The tree is READ-ONLY here. Every control is drawn and every key is bound, but
+// the writes land with the operation adapter (Arc 3). Nothing is silently dead:
+// a control that cannot do its job yet says so (guardrail §6.7).
 //
 // This is also where the connection seam is exercised — the screen subscribes
 // on mount and unsubscribes on unmount, while the connection object itself
 // outlives both (guardrail §7.4).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { InitiativeTree } from "../api/types.ts";
+import type { InitiativeTree, Member } from "../api/types.ts";
 import { COUNT_MIN_WIDTH, reservedHeight } from "../frame/layout_budget.ts";
+import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
-import { putTree } from "../state/domain.ts";
-import type { InitiativeHeader } from "../tree/model.ts";
+import { members as membersOf, putMembers, putTree } from "../state/domain.ts";
+import type { PreferencesState } from "../state/preferences.ts";
+import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
+import { permissionsFor } from "../tree/permissions.ts";
+import { memberIndex } from "../tree/row_model.ts";
+import { Tree } from "../tree/tree.tsx";
+import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
+import { useTree } from "../tree/use_tree.ts";
 import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
-import { pushNotice } from "../state/ui.ts";
+import type { UiState } from "../state/ui.ts";
+import { pushNotice, selectTask } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
@@ -143,8 +156,15 @@ export function InitiativeScreen({ id }: { id: number }) {
         <InlineError message={resource.message} onRetry={resource.reload} />
       )}
 
+      {model === undefined ? (
+        // The tree's space, held open before there is a tree, so the Back link
+        // and everything under it do not jump when the read lands (§1.1).
+        <Skeleton region="initiative-tree" id="initiative-tree-skeleton" />
+      ) : (
+        <TreeSection id={id} model={model} />
+      )}
+
       <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
-        The task tree lands in the next arc.{" "}
         <Link
           id="initiative-back"
           to="/app/initiatives"
@@ -154,5 +174,110 @@ export function InitiativeScreen({ id }: { id: number }) {
         </Link>
       </p>
     </section>
+  );
+}
+
+/** Read-only for now: every write the tree can ask for gets this back. */
+const READ_ONLY_TITLE = "Not yet";
+const READ_ONLY_MESSAGE =
+  "Editing from this view lands in the next arc. Use the workspace to make changes.";
+
+/** The tree, and everything that is true only once there is a tree. */
+function TreeSection({ id, model }: { id: number; model: TreeModel }) {
+  const { api, stores, escalate } = useServices();
+  const rows = useStoreValue(
+    stores.preferences,
+    useCallback((state: PreferencesState) => state.rows, []),
+  );
+  const selectedId = useStoreValue(
+    stores.ui,
+    useCallback((state: UiState) => state.selectedTaskId, []),
+  );
+  const select = useCallback(
+    (taskId: number | null) => selectTask(stores.ui, taskId),
+    [stores.ui],
+  );
+  const memberList = useStoreValue(
+    stores.domain,
+    useCallback((state: DomainState) => membersOf(state, id), [id]),
+  );
+
+  // Who the Initiative's members are — the tree needs them to name an assignee
+  // and to draw a co-assignee's avatar. A separate read, because the tree read
+  // carries ids, not people.
+  useResource<Member[]>({
+    key: `members:${id}`,
+    loaded: memberList.length > 0,
+    read: () => api.get<Member[]>(`/initiatives/${id}/members`),
+    onData: useCallback(
+      (data: Member[]) => putMembers(stores.domain, id, data),
+      [id, stores.domain],
+    ),
+    escalate,
+  });
+
+  const members = useMemo(() => memberIndex(memberList), [memberList]);
+  // `viewer_plus` is not in the tree read, so the client assumes it is off and
+  // a viewer sees no Progress control it cannot use (item 1.2.3).
+  const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
+
+  const notYet = useCallback(() => {
+    pushNotice(stores.ui, {
+      kind: "info",
+      title: READ_ONLY_TITLE,
+      message: READ_ONLY_MESSAGE,
+    });
+  }, [stores.ui]);
+
+  const tree = useTree({
+    model,
+    initiativeId: id,
+    members,
+    permissions,
+    rows,
+    selectedId,
+    select,
+    onIntent: notYet,
+    onAdd: notYet,
+    onBlocked: useCallback(() => {
+      pushNotice(stores.ui, {
+        kind: "info",
+        title: "That move has nowhere to go",
+        message: "This task is already as far that way as it goes.",
+      });
+    }, [stores.ui]),
+  });
+
+  // The selected task rides in the address bar, so a link to a row in a deep
+  // branch opens that branch and lands on it. Read once, on arrival.
+  const { reveal } = tree;
+  useEffect(() => {
+    const asked = Number(new URLSearchParams(window.location.search).get("task"));
+    if (Number.isInteger(asked) && asked > 0) reveal(asked);
+  }, [reveal]);
+
+  // Kept in step afterwards without navigating: same history entry, same key,
+  // same scroll — only the address bar changes, so a copied link reopens what
+  // the user is looking at.
+  const selected = tree.ctx.selectedTaskId;
+  useEffect(() => {
+    const url =
+      selected === null
+        ? window.location.pathname
+        : `${window.location.pathname}?task=${selected}`;
+    window.history.replaceState(window.history.state, "", url);
+  }, [selected]);
+
+  return (
+    <div className="mt-4">
+      <Tree
+        ctx={tree.ctx}
+        addSlot={tree.addSlot}
+        onAddMove={tree.onAddMove}
+        onAddClose={tree.onAddClose}
+        onAdd={tree.onAdd}
+      />
+      <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
+    </div>
   );
 }

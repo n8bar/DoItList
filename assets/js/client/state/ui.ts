@@ -47,6 +47,17 @@ export function setRoute(store: UiStore, route: Route): void {
   store.set((state) => (state.route === route ? state : { ...state, route }));
 }
 
+/**
+ * The selected task. Client-owned, always: selecting a row is the client
+ * answering a question it already knows the answer to, and a round trip before
+ * the highlight moves is the anti-pattern §6.5 exists to forbid.
+ */
+export function selectTask(store: UiStore, taskId: number | null): void {
+  store.set((state) =>
+    state.selectedTaskId === taskId ? state : { ...state, selectedTaskId: taskId },
+  );
+}
+
 /** Records where the user was on `key` before leaving it. */
 export function rememberPlace(
   store: UiStore,
