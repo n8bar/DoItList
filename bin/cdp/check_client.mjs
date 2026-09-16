@@ -295,7 +295,12 @@ export async function checkNarrowMenu(ctx) {
     const trigger = document.getElementById("client-menu-button");
     if (panel === null || panel.hasAttribute("hidden")) return null;
     if (trigger.getAttribute("aria-expanded") !== "true") return null;
-    const items = [...panel.querySelectorAll("a, button")];
+    // Controls inside a CLOSED dialog are not menu items — they are not in the
+    // menu, not focusable and not rendered. The menu's confirm lives inside the
+    // panel on purpose (closing the panel must not unmount its form).
+    const items = [...panel.querySelectorAll("a, button")].filter(
+      (el) => el.closest("dialog:not([open])") === null,
+    );
     const short = items.filter((el) => Math.round(el.getBoundingClientRect().height) < 44);
     return { items: items.length, short: short.map((el) => el.id || el.textContent.trim()) };
   `,
@@ -398,6 +403,140 @@ export async function checkMenuSignOutSubmits(ctx) {
   }
 }
 
+/**
+ * The connection summary (item 4.3, spec §7), driven for real: pull the network
+ * out from under the tab and the badge must SAY so — in text, with an icon,
+ * with its own `data-conn-state` — and must offer the way back. Then give the
+ * network back and it must return to live by itself.
+ *
+ * It must also do all that without moving anything: the summary is positioned
+ * out of flow precisely so six different states cannot resize the header
+ * (item 4.6).
+ */
+export async function checkConnectionSummary(ctx) {
+  const { session } = ctx;
+  const fast = { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+
+  await session.send("Network.enable");
+  try {
+    const live = await waitFor(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      if (badge === null) return null;
+      if (badge.getAttribute("data-conn-state") !== "live") return null;
+      const text = badge.querySelector("[data-conn-text]");
+      return {
+        role: badge.getAttribute("role"),
+        text: text === null ? "" : text.textContent.trim(),
+      };
+    `,
+      { timeoutMs: READY_TIMEOUT_MS, what: "the connection summary to read live" },
+    );
+
+    if (live.role !== "status") throw new Error(`the summary is role="${live.role}"`);
+    if (live.text.length === 0) throw new Error("the live state has no text — colour alone");
+
+    const before = await measureChrome(session);
+    await session.send("Network.emulateNetworkConditions", { ...fast, offline: true });
+
+    const dropped = await waitFor(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      if (badge === null) return null;
+      const state = badge.getAttribute("data-conn-state");
+      if (state === "live") return null;
+      const text = badge.querySelector("[data-conn-text]");
+      const icon = badge.querySelector('[data-conn-badge] span[aria-hidden="true"]');
+      return {
+        state,
+        text: text === null ? "" : text.textContent.trim(),
+        icon: icon === null ? null : [...icon.classList].find((c) => c.startsWith("hero-")) ?? null,
+        retry: document.getElementById("client-connection-retry") !== null,
+      };
+    `,
+      // A severed link is not an event: the socket is not closed, it simply
+      // stops answering, and what notices is Phoenix's heartbeat timing out.
+      // Measured at ~60s on this app, so the budget is 75s. How fast that is
+      // belongs to the socket (Task 8's `live/`), not to the badge — this
+      // check owns what the badge SAYS once it knows.
+      { timeoutMs: 75_000, what: "the summary to notice the connection went away" },
+    );
+
+    if (dropped.text.length === 0) throw new Error(`state ${dropped.state} says nothing`);
+    if (dropped.icon === null) throw new Error(`state ${dropped.state} has no icon`);
+    if (dropped.state.startsWith("offline") && !dropped.retry) {
+      throw new Error("the client stopped retrying and offered no way to try again");
+    }
+
+    const moved = shifted(before, await measureChrome(session));
+    if (moved.length > 0) throw new Error(`the summary moved the frame: ${moved.join("; ")}`);
+
+    await session.send("Network.emulateNetworkConditions", fast);
+    if (dropped.state.startsWith("offline")) {
+      await clickElement(session, "#client-connection-retry");
+    }
+
+    const back = await waitFor(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      if (badge === null) return null;
+      return badge.getAttribute("data-conn-state") === "live" ? true : null;
+    `,
+      { timeoutMs: 20_000, what: "the connection to come back" },
+    );
+
+    return `live → ${dropped.state} ("${dropped.text}", ${dropped.icon}) → live again (${back})`;
+  } finally {
+    await session.send("Network.emulateNetworkConditions", fast).catch(() => {});
+    await session.send("Network.disable").catch(() => {});
+  }
+}
+
+/**
+ * The confirm dialog (item 4.2). The client's one confirm today is Sign out
+ * with unacknowledged writes, and Arc 1 has nothing that queues a write — so
+ * this checks everything about it that is true while it is closed: it is a real
+ * `<dialog>`, it is NOT open, and its name and description resolve to elements
+ * inside it (guardrails §4.1).
+ *
+ * It deliberately does NOT open it: the only opener is the operator's Sign out.
+ * Focus return on close is unit-tested (`ui/dialog_model.test.ts`), and this
+ * check gets its drive the moment a feature opens a dialog of its own.
+ */
+export async function checkConfirmDialogWiring(ctx) {
+  const { session } = ctx;
+
+  const wiring = await evaluate(
+    session,
+    `
+    const dialog = document.getElementById("client-sign-out-confirm");
+    if (dialog === null) return { ok: false, why: "no confirm dialog in the document" };
+    if (dialog.tagName !== "DIALOG") return { ok: false, why: "the confirm is not a <dialog>" };
+    if (dialog.open) return { ok: false, why: "the confirm is open with nothing to confirm" };
+
+    const named = dialog.getAttribute("aria-labelledby");
+    const described = dialog.getAttribute("aria-describedby");
+    const title = named === null ? null : dialog.querySelector("#" + CSS.escape(named));
+    const body = described === null ? null : dialog.querySelector("#" + CSS.escape(described));
+    if (title === null) return { ok: false, why: "aria-labelledby points at nothing inside it" };
+    if (body === null) return { ok: false, why: "aria-describedby points at nothing inside it" };
+
+    const buttons = [...dialog.querySelectorAll("button")].map((b) => b.textContent.trim());
+    if (buttons.length !== 2) return { ok: false, why: "a confirm has exactly two answers" };
+    if (buttons.some((label) => label.length === 0)) {
+      return { ok: false, why: "a confirm button with no words on it" };
+    }
+    return { ok: true, title: title.textContent.trim(), buttons };
+  `,
+  );
+
+  if (!wiring.ok) throw new Error(wiring.why);
+  return `"${wiring.title}" — ${wiring.buttons.join(" / ")}, closed and correctly named`;
+}
+
 const CHECKS = [
   ["client ready", checkClientReady],
   ["no layout shift", checkNoLayoutShift],
@@ -406,6 +545,10 @@ const CHECKS = [
   ["no shift across routes", checkNoShiftAcrossRoutes],
   ["narrow viewport menu", checkNarrowMenu],
   ["menu sign out reaches the form", checkMenuSignOutSubmits],
+  ["confirm dialog wiring", checkConfirmDialogWiring],
+  // Last: it takes the network away and back, so nothing after it inherits a
+  // throttled tab.
+  ["connection summary", checkConnectionSummary],
 ];
 
 // ---------------------------------------------------------------------------

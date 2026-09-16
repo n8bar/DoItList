@@ -8,6 +8,7 @@
 // harness's and the reviewer's; these are the ones a unit test can hold.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import { NAV_ITEMS } from "../frame/nav_model.ts";
@@ -59,6 +60,19 @@ describe("icons are decoration on top of words, never the words", () => {
     const classes = ICON_NAMES.map(iconClass);
     for (const name of classes) assert.match(name, /^hero-[a-z-]+$/);
     assert.equal(new Set(classes).size, classes.length);
+  });
+
+  it("writes every icon class out in full, so the stylesheet actually has it", () => {
+    // A class assembled at runtime is a class Tailwind never saw and never
+    // generated: it renders as an empty box and nothing catches it.
+    const source = readFileSync(new URL("./icons.ts", import.meta.url), "utf8");
+    for (const name of ICON_NAMES) {
+      assert.ok(
+        source.includes(`"${iconClass(name)}"`),
+        `${iconClass(name)} is not written out as a literal`,
+      );
+    }
+    assert.doesNotMatch(source, /`hero-\$\{/, "an icon class is built at runtime");
   });
 
   it("gives every connection state an icon AND its own words", () => {
