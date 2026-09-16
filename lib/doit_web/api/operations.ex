@@ -119,10 +119,20 @@ defmodule DoItWeb.Api.Operations do
   ownership. A single unauthorized op fails the **whole** batch.
 
   **Agent access** (m03.04 2.4.1.2): every per-op authorize runs through
-  `Authz.fetch_initiative/3`, so an op targeting an Initiative with agent access
+  `Authz.fetch_initiative/4`, so an op targeting an Initiative with agent access
   **off** fails `not_found` before any work — masked to the op's own target
   shape (a task/comment inside it reads as "no such task/comment"), so the
   response never confirms a flagged-off Initiative or its contents exist.
+
+  **Surface** (m04.01 worklist 5): the agent-access gate above belongs to the
+  `:agent` surface (the `/api/v1` bearer API and the MCP server riding it) and
+  is the default. The browser client (`/app/api`) applies the SAME batch through
+  `apply_batch(user, operations, surface: :browser)`, which skips only the
+  agent-access gate — the checkbox governs agents, not a member working their
+  own Initiative in a browser — and creates Initiatives with agent access
+  **off** (an agent still needs the human's explicit opt-in). Role
+  authorization, validation, versioning, ordering, roll-up, and broadcasts are
+  byte-identical on both surfaces; no logic is forked.
 
   ## Irreversible ops — rejected
 
@@ -323,12 +333,14 @@ defmodule DoItWeb.Api.Operations do
     * `{:error, :invalid_request}` — the body was not a non-empty operations list
       (rendered by the controller as the single-error shape).
   """
-  @spec apply_batch(User.t(), list()) ::
+  @spec apply_batch(User.t(), list(), keyword()) ::
           {:ok, [map()]}
           | {:error, 403 | 422, [map()], map()}
           | {:error, :batch_too_large, String.t()}
           | {:error, :invalid_request}
-  def apply_batch(%User{} = user, operations)
+  def apply_batch(user, operations, opts \\ [])
+
+  def apply_batch(%User{} = user, operations, opts)
       when is_list(operations) and operations != [] do
     # Reject an oversized batch before any DB work — the whole batch shares one
     # synchronous transaction bound by the 15 s timeout (see @max_batch_size).
@@ -338,11 +350,36 @@ defmodule DoItWeb.Api.Operations do
       {:error, :batch_too_large,
        "Batch has #{count} operations; the maximum is #{@max_batch_size} per request."}
     else
-      apply_within_cap(user, operations, count)
+      with_surface(Keyword.get(opts, :surface, :agent), fn ->
+        apply_within_cap(user, operations, count)
+      end)
     end
   end
 
-  def apply_batch(_user, _operations), do: {:error, :invalid_request}
+  def apply_batch(_user, _operations, _opts), do: {:error, :invalid_request}
+
+  # The calling surface for THIS batch, scoped to the calling process for the
+  # batch's duration and torn down in an `after` — the same
+  # process-scoped-context pattern `DoIt.BatchMemo` and `DoIt.Broadcast` already
+  # use inside a batch, so the flag reaches the task-resolution funnel without
+  # threading an extra argument through every op dispatch.
+  @surface_key :doit_operations_surface
+
+  defp with_surface(surface, fun) when surface in [:agent, :browser] do
+    previous = Process.get(@surface_key)
+    Process.put(@surface_key, surface)
+
+    try do
+      fun.()
+    after
+      if previous, do: Process.put(@surface_key, previous), else: Process.delete(@surface_key)
+    end
+  end
+
+  defp surface, do: Process.get(@surface_key, :agent)
+
+  # The agent-access checkbox gates the agent surface only (see the moduledoc).
+  defp agent_access_required?, do: surface() == :agent
 
   @doc """
   The hard cap on operations per batch — the size a caller must chunk to.
@@ -660,8 +697,10 @@ defmodule DoItWeb.Api.Operations do
 
       # API/MCP-created Initiatives are agent-accessible from birth (m03.04
       # m03.04 2.4.1.1) — granted server-side by the context, never cast from the
-      # op's data (agent_access isn't an accepted key above).
-      case Initiatives.create_initiative(user, attrs, agent_access: true) do
+      # op's data (agent_access isn't an accepted key above). A browser-created
+      # one is NOT (m04.01 worklist 5): the human opts an Initiative in to agent
+      # access deliberately, the same as one created in the LiveView.
+      case Initiatives.create_initiative(user, attrs, agent_access: agent_access_required?()) do
         {:ok, initiative} ->
           with :ok <- maybe_set_subtitle(initiative, data) do
             ok(lid, initiative.id, "initiative", initiative_result(initiative))
@@ -1631,9 +1670,13 @@ defmodule DoItWeb.Api.Operations do
   # names the foreign Initiative. Role-based denial on an *accessible*
   # Initiative is unaffected — that still 403s at authorize downstream.
   defp mask_agent_access(%Task{} = task, id) do
-    case Initiatives.get_initiative(task.initiative_id) do
-      %Initiative{agent_access: true} -> {:ok, task}
-      _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
+    if agent_access_required?() do
+      case Initiatives.get_initiative(task.initiative_id) do
+        %Initiative{agent_access: true} -> {:ok, task}
+        _ -> {:error, err(:not_found, "No such task with id #{id}.", 422)}
+      end
+    else
+      {:ok, task}
     end
   end
 
@@ -1659,7 +1702,9 @@ defmodule DoItWeb.Api.Operations do
   defp authorize(user, initiative_id, capability, not_found_override \\ nil)
 
   defp authorize(%User{} = user, initiative_id, capability, not_found_override) do
-    case Authz.fetch_initiative(user, initiative_id, capability) do
+    case Authz.fetch_initiative(user, initiative_id, capability,
+           require_agent_access: agent_access_required?()
+         ) do
       {:ok, %Initiative{} = initiative} ->
         {:ok, initiative}
 

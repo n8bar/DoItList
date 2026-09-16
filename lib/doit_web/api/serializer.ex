@@ -26,7 +26,10 @@ defmodule DoItWeb.Api.Serializer do
         "progress": 42,
         "unit_count": 7,
         "root_task_id": 100,
-        "version": 3
+        "version": 3,
+        "sort_order": null,
+        "archived": false,
+        "updated_at": "2026-09-15T12:00:00Z"
       }
 
   `url` is the Initiative's web address — the operator-facing handle (m03.04
@@ -44,7 +47,10 @@ defmodule DoItWeb.Api.Serializer do
   top-level tasks under `single_level` (the header badge in the UI).
   `root_task_id` is the Initiative's system root task — the Initiative's own
   comment thread lives on it (item 6.4): read/write comments with
-  `task_id = root_task_id`.
+  `task_id = root_task_id`. `sort_order` is the reader's own manual index
+  position (`null` until they reorder the list), `archived` their per-user archive state, and `updated_at` the
+  Initiative's last-write instant — the three the browser client's Initiatives
+  index orders and labels by (m04.01 worklist 5).
 
   ## Initiative tree — `GET /api/v1/initiatives/:id`
 
@@ -285,7 +291,10 @@ defmodule DoItWeb.Api.Serializer do
       progress: progress || 0,
       unit_count: unit_count,
       root_task_id: initiative.root_task_id,
-      version: initiative.version
+      version: initiative.version,
+      sort_order: initiative.my_sort_order,
+      archived: initiative.archived? == true,
+      updated_at: iso8601(initiative.updated_at)
     }
   end
 

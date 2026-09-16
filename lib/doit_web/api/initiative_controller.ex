@@ -20,7 +20,7 @@ defmodule DoItWeb.Api.InitiativeController do
   alias DoIt.{Initiatives, Tasks}
   alias DoIt.Tasks.Task
   alias DoItWeb.Api
-  alias DoItWeb.Api.{Authz, Errors, Serializer}
+  alias DoItWeb.Api.{Authz, Errors, Reads, Serializer}
 
   action_fallback DoItWeb.Api.FallbackController
 
@@ -32,50 +32,13 @@ defmodule DoItWeb.Api.InitiativeController do
   """
   def index(conn, _params) do
     user = conn.assigns.current_user
-
-    initiatives = Initiatives.list_visible_initiatives(user, agent_access_only: true)
-    unit_counts = Tasks.unit_counts_for_initiatives(initiatives)
-
-    summaries =
-      Enum.map(initiatives, fn ini ->
-        Serializer.initiative_summary(
-          ini,
-          ini.my_role,
-          ini.progress,
-          Map.get(unit_counts, ini.id, 0)
-        )
-      end)
-
-    json(conn, Api.data(summaries))
+    json(conn, Api.data(Reads.initiative_summaries(user, agent_access_only: true)))
   end
 
   @doc "The whole nested Initiative tree in one response."
   def show(conn, %{"id" => id}) do
-    user = conn.assigns.current_user
-
-    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view) do
-      role = Initiatives.get_role(initiative.id, user.id)
-      %{subtitle: subtitle, progress: progress} = Initiatives.header(initiative)
-      tree = Tasks.initiative_task_tree(initiative.id)
-      co_ids = Tasks.co_assignee_ids_for_initiative(initiative.id)
-      comment_counts = Tasks.comment_counts_for_initiative(initiative.id)
-      links = Tasks.list_links_for_initiative(initiative.id)
-
-      json(
-        conn,
-        Api.data(
-          Serializer.initiative_tree(
-            initiative,
-            tree,
-            role,
-            subtitle,
-            progress,
-            co_ids,
-            comment_counts,
-            links
-          )
-        )
-      )
+    with {:ok, payload} <- Reads.initiative_tree(conn.assigns.current_user, id) do
+      json(conn, Api.data(payload))
     end
   end
 

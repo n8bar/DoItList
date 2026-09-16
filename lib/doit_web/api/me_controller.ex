@@ -7,21 +7,12 @@ defmodule DoItWeb.Api.MeController do
   use DoItWeb, :controller
 
   alias DoItWeb.Api
+  alias DoItWeb.Api.Identity
 
   action_fallback DoItWeb.Api.FallbackController
 
   @doc "Who the token belongs to."
   def show(conn, _params) do
-    user = conn.assigns.current_user
-
-    json(
-      conn,
-      Api.data(%{
-        id: user.id,
-        email: user.email,
-        username: user.username,
-        name: user.name
-      })
-    )
+    json(conn, Api.data(Identity.user(conn.assigns.current_user)))
   end
 end

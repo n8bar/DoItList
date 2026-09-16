@@ -48,8 +48,16 @@ defmodule DoItWeb.Api.Authz do
     * Otherwise `{:ok, %Initiative{}}`.
 
   `capability` defaults to `:view` — the whole read surface is view-gated.
+
+  `opts[:require_agent_access]` defaults to `true` — the `/api/v1` bearer
+  surface. The browser client surface (`/app/api`, m04.01 worklist 5) passes
+  `false`: the per-Initiative agent-access checkbox gates *agents*, not the
+  Initiative's own members using the app in their browser. Everything else —
+  the id parse, the unknown-id 404, the role check — is shared unchanged.
   """
-  def fetch_initiative(%User{} = user, id, capability \\ :view) do
+  def fetch_initiative(%User{} = user, id, capability \\ :view, opts \\ []) do
+    require_agent_access? = Keyword.get(opts, :require_agent_access, true)
+
     case parse_id(id) do
       nil ->
         {:error, :not_found}
@@ -59,7 +67,7 @@ defmodule DoItWeb.Api.Authz do
           nil ->
             {:error, :not_found}
 
-          %Initiative{agent_access: false} ->
+          %Initiative{agent_access: false} when require_agent_access? ->
             {:error, :not_found}
 
           %Initiative{} = initiative ->

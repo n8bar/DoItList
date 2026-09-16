@@ -17,6 +17,19 @@ defmodule DoItWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # The browser client's private data boundary (m04.01 worklist 5). Session
+  # cookie only — no bearer token is ever read here, and the :api pipeline above
+  # never fetches the session, so neither surface can pick up the other's
+  # credential. Both auth failures render JSON, never HTML: the browser client
+  # calls these with fetch(). The contract lives in `DoItWeb.Client.Api`.
+  pipeline :client_api do
+    plug :accepts, ["json"]
+    plug :fetch_session
+    plug :fetch_current_user
+    plug DoItWeb.Client.AuthPlug
+    plug DoItWeb.Client.CsrfPlug
+  end
+
   # Pre-auth per-IP throttle (m03.01 worklist 1.5). Runs BEFORE :api_auth so the
   # unauthenticated path is metered too — caps requests by source IP before auth
   # spends a hash + DB lookup resolving a (possibly garbage) Bearer token.
@@ -66,6 +79,18 @@ defmodule DoItWeb.Router do
     # by DoIt.Imports.Parser, applied through the operations engine above in
     # cap-sized batches. Preview mode writes nothing.
     post "/imports", ImportController, :create
+  end
+
+  # The browser client's private JSON surface (m04.01 worklist 5). Thin edges
+  # over the SAME contexts, Authz, Serializer, and Operations engine /api/v1
+  # uses — see `DoItWeb.Client.Api` for the endpoint and error contract.
+  scope "/app/api", DoItWeb.Client do
+    pipe_through :client_api
+
+    get "/session", SessionController, :show
+    get "/initiatives", InitiativeController, :index
+    get "/initiatives/:id", InitiativeController, :show
+    post "/operations", OperationsController, :create
   end
 
   scope "/", DoItWeb do
