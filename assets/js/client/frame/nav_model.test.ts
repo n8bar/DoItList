@@ -8,7 +8,7 @@ describe("the primary nav model", () => {
   it("names every section once, with a text label and an in-app path", () => {
     assert.deepEqual(
       NAV_ITEMS.map((item) => item.key),
-      ["initiatives", "assigned", "account"],
+      ["initiatives", "assigned"],
     );
     for (const item of NAV_ITEMS) {
       assert.notEqual(item.label, "", `${item.key} has no label`);
@@ -19,7 +19,6 @@ describe("the primary nav model", () => {
   it("marks the entry whose route is showing", () => {
     assert.equal(activeNavKey(matchRoute("/app/initiatives")), "initiatives");
     assert.equal(activeNavKey(matchRoute("/app/assigned")), "assigned");
-    assert.equal(activeNavKey(matchRoute("/app/account")), "account");
   });
 
   it("keeps one Initiative under Initiatives", () => {
@@ -30,6 +29,8 @@ describe("the primary nav model", () => {
 
   it("marks nothing when the route is outside the nav", () => {
     assert.equal(activeNavKey(matchRoute("/app/nope")), null);
+    // Account lives behind the avatar menu, not in the nav.
+    assert.equal(activeNavKey(matchRoute("/app/account")), null);
     assert.equal(activeNavKey(matchRoute("/app")), null);
     for (const item of NAV_ITEMS) {
       assert.equal(isCurrentNav(matchRoute("/app/nope"), item.key), false);
@@ -37,7 +38,7 @@ describe("the primary nav model", () => {
   });
 
   it("never marks two entries at once", () => {
-    for (const path of ["/app/initiatives", "/app/initiatives/3", "/app/assigned", "/app/account"]) {
+    for (const path of ["/app/initiatives", "/app/initiatives/3", "/app/assigned"]) {
       const route = matchRoute(path);
       const marked = NAV_ITEMS.filter((item) => isCurrentNav(route, item.key));
       assert.equal(marked.length, 1, `${path} marked ${marked.length} entries`);

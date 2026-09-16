@@ -70,7 +70,7 @@ export async function checkClientReady(ctx) {
     session,
     `
     const ids = [
-      "client-header", "client-nav-initiatives", "client-nav-assigned", "client-nav-account",
+      "client-header", "client-nav-initiatives", "client-nav-assigned",
       "client-rail", "client-rail-nav-initiatives", "client-main", "client-menu-button",
       "client-skip-link", "client-theme-toggle", "client-bell-button",
       "client-account-menu-button",
@@ -210,36 +210,36 @@ export async function checkSkeletonMatchesRow(ctx) {
   }
 }
 
-/** ONE real interaction: click the Account nav link like a person would. */
-export async function checkNavClickToAccount(ctx) {
+/** ONE real interaction: click the Assigned to Me nav link like a person would. */
+export async function checkNavClickToAssigned(ctx) {
   const { session } = ctx;
 
-  const at = await clickElement(session, "#client-nav-account");
+  const at = await clickElement(session, "#client-nav-assigned");
   const landed = await waitFor(
     session,
     `
     const heading = document.getElementById("route-heading");
-    if (location.pathname !== "/app/account") return null;
-    if (heading === null || heading.textContent.trim() !== "Account") return null;
+    if (location.pathname !== "/app/assigned") return null;
+    if (heading === null || heading.textContent.trim() !== "Assigned to Me") return null;
     return {
       path: location.pathname,
       focused: document.activeElement === null ? null : document.activeElement.id,
-      current: document.getElementById("client-nav-account").getAttribute("aria-current"),
+      current: document.getElementById("client-nav-assigned").getAttribute("aria-current"),
     };
   `,
-    { timeoutMs: 5_000, what: "the Account route" },
+    { timeoutMs: 5_000, what: "the Assigned to Me route" },
   );
 
   if (landed.focused !== "route-heading") {
     throw new Error(`focus went to "${landed.focused ?? "(none)"}", not the route heading`);
   }
-  if (landed.current !== "page") throw new Error("the Account nav link is not aria-current=page");
+  if (landed.current !== "page") throw new Error("the Assigned nav link is not aria-current=page");
   return `clicked at (${at.x},${at.y}) → ${landed.path}, focus on the heading`;
 }
 
 /**
  * Changing route must not move the frame either (item 4.6). The baseline here
- * is the Account route the previous check landed on; we go back to Initiatives
+ * is the Assigned route the previous check landed on; we go back to Initiatives
  * and the header, nav, rail and main column must all be exactly where they were.
  */
 export async function checkNoShiftAcrossRoutes(ctx) {
@@ -518,7 +518,7 @@ export async function checkConnectionSummary(ctx) {
           return el === at || el.contains(at) ? null : (at.id || at.tagName.toLowerCase());
         };
         const retry = covered("client-connection-retry");
-        const nav = covered("client-nav-account");
+        const nav = covered("client-nav-assigned");
         if (retry === "missing" || nav === "missing") return null;
         return { retry, nav };
       `,
@@ -529,7 +529,7 @@ export async function checkConnectionSummary(ctx) {
         throw new Error(`at ${width}px, Try again is covered by ${hit.retry}`);
       }
       if (hit.nav !== null) {
-        throw new Error(`at ${width}px, the Account nav button is covered by ${hit.nav}`);
+        throw new Error(`at ${width}px, the Assigned nav button is covered by ${hit.nav}`);
       }
       reachable.push(width);
     }
@@ -1010,7 +1010,6 @@ export async function checkKeyboardTraversal(ctx) {
     "client-wordmark",
     "client-nav-initiatives",
     "client-nav-assigned",
-    "client-nav-account",
     "client-theme-toggle-system",
     "client-theme-toggle-light",
     "client-theme-toggle-dark",
@@ -1182,15 +1181,15 @@ export async function checkDeepLinkAndHistory(ctx) {
     `
     const heading = document.getElementById("route-heading");
     if (heading === null || heading.textContent.trim() !== "Account") return null;
-    return {
-      path: location.pathname,
-      current: document.getElementById("client-nav-account").getAttribute("aria-current"),
-    };
+    // Account lives behind the avatar menu, so no nav entry may claim it.
+    const claimed = ["initiatives", "assigned"].filter((k) =>
+      document.getElementById("client-nav-" + k)?.getAttribute("aria-current") === "page");
+    return { path: location.pathname, current: claimed.length === 0 ? "none" : claimed.join(",") };
   `,
     { timeoutMs: READY_TIMEOUT_MS, what: "the Account screen on a direct load" },
   );
   if (deep.path !== "/app/account") throw new Error(`landed on ${deep.path}`);
-  if (deep.current !== "page") throw new Error("the deep-linked route is not marked in the nav");
+  if (deep.current !== "none") throw new Error(`a nav entry claims the Account route: ${deep.current}`);
 
   // To the list, scrolled down, then away again.
   await clickElement(session, "#client-nav-initiatives");
@@ -1209,14 +1208,14 @@ export async function checkDeepLinkAndHistory(ctx) {
     { timeoutMs: READY_TIMEOUT_MS, what: "the Initiatives list to scroll" },
   );
 
-  await clickElement(session, "#client-nav-account");
+  await clickElement(session, "#client-nav-assigned");
   await waitFor(
     session,
     `
     const heading = document.getElementById("route-heading");
-    return heading !== null && heading.textContent.trim() === "Account" ? true : null;
+    return heading !== null && heading.textContent.trim() === "Assigned to Me" ? true : null;
   `,
-    { timeoutMs: 5_000, what: "the Account route again" },
+    { timeoutMs: 5_000, what: "the Assigned to Me route" },
   );
 
   await evaluate(session, `history.back(); return true;`);
@@ -1252,10 +1251,10 @@ export async function checkDeepLinkAndHistory(ctx) {
     session,
     `
     const heading = document.getElementById("route-heading");
-    if (location.pathname !== "/app/account") return null;
-    return heading !== null && heading.textContent.trim() === "Account" ? true : null;
+    if (location.pathname !== "/app/assigned") return null;
+    return heading !== null && heading.textContent.trim() === "Assigned to Me" ? true : null;
   `,
-    { timeoutMs: 10_000, what: "forward to Account" },
+    { timeoutMs: 10_000, what: "forward to Assigned to Me" },
   );
 
   return `deep link → Account, back restored ${scrolled.top}px of scroll${
@@ -1446,13 +1445,13 @@ export async function checkDisconnectedStartup(ctx) {
 
     // The controls respond with no network behind them: a route change is
     // entirely local, and it must be instant.
-    await clickElement(session, "#client-nav-account");
+    await clickElement(session, "#client-nav-assigned");
     await waitFor(
       session,
       `
       const heading = document.getElementById("route-heading");
-      return location.pathname === "/app/account" && heading !== null &&
-        heading.textContent.trim() === "Account" ? true : null;
+      return location.pathname === "/app/assigned" && heading !== null &&
+        heading.textContent.trim() === "Assigned to Me" ? true : null;
     `,
       { timeoutMs: 5_000, what: "a route change with no network" },
     );
@@ -1793,7 +1792,7 @@ const CHECKS = [
   ["account menu", checkAccountMenu],
   ["keyboard traversal of the frame", checkKeyboardTraversal],
   ["reduced motion", checkReducedMotion],
-  ["nav click \u2192 Account", checkNavClickToAccount],
+  ["nav click \u2192 Assigned to Me", checkNavClickToAssigned],
   ["no shift across routes", checkNoShiftAcrossRoutes],
   ["deep link, back and forward", checkDeepLinkAndHistory],
   ["acknowledgement under latency", checkAckUnderLatency],

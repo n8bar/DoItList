@@ -7,7 +7,7 @@
 
 import type { Route } from "../router/route.ts";
 
-export type NavKey = "initiatives" | "assigned" | "account";
+export type NavKey = "initiatives" | "assigned";
 
 export interface NavItem {
   readonly key: NavKey;
@@ -20,12 +20,12 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { key: "initiatives", to: "/app/initiatives", label: "Initiatives" },
   { key: "assigned", to: "/app/assigned", label: "Assigned to Me" },
-  { key: "account", to: "/app/account", label: "Account" },
 ];
 
 /**
  * The nav entry the current route belongs to, or `null` when the route is
- * outside the nav (not-found, or the `/app` redirect still in flight).
+ * outside the nav (Account — reached from the avatar menu, not the nav —
+ * not-found, or the `/app` redirect still in flight).
  *
  * One Initiative belongs under Initiatives: a user who has drilled in has not
  * left that section, and the nav saying otherwise would be a lie.
@@ -37,8 +37,6 @@ export function activeNavKey(route: Route): NavKey | null {
       return "initiatives";
     case "assigned":
       return "assigned";
-    case "account":
-      return "account";
     default:
       return null;
   }
