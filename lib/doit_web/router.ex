@@ -13,6 +13,19 @@ defmodule DoItWeb.Router do
     plug :fetch_current_user
   end
 
+  # The browser client's bootstrap document (m04.01 worklist 2). Like :browser
+  # but deliberately WITHOUT `:require_authenticated_user` and without the
+  # LiveView root layout: signed out is a 200 with `user: null`, and the client
+  # paints its own "Signed out" screen. No live flash either — nothing on this
+  # document is server-rendered product chrome.
+  pipeline :client_browser do
+    plug :accepts, ["html"]
+    plug :fetch_session
+    plug :protect_from_forgery
+    plug :put_secure_browser_headers
+    plug :fetch_current_user
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -91,6 +104,16 @@ defmodule DoItWeb.Router do
     get "/initiatives", InitiativeController, :index
     get "/initiatives/:id", InitiativeController, :show
     post "/operations", OperationsController, :create
+  end
+
+  # The React client's bootstrap document (m04.01 worklist 2). Declared AFTER
+  # "/app/api" above so the JSON surface wins those paths; everything else under
+  # /app is one document and the client routes it in the browser.
+  scope "/app", DoItWeb do
+    pipe_through :client_browser
+
+    get "/", ClientController, :index
+    get "/*path", ClientController, :index
   end
 
   scope "/", DoItWeb do

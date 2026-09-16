@@ -1,0 +1,42 @@
+<%!--
+Shared first-paint theme script. Rendered by BOTH documents — the LiveView
+root layout and the React client's bootstrap document (m04.01 item 2.5) — so
+the two can never drift. It must run before first paint: it resolves the saved
+preference (localStorage `phx:theme`) to an explicit light/dark and puts it on
+`<html data-theme>` while the body is still unpainted.
+--%>
+<script>
+  (() => {
+    // "system" resolves to an explicit light/dark BEFORE first paint, so
+    // Tailwind's dark: variant and daisyUI's component vars always read
+    // the same data-theme — no attribute means neither ever goes dark.
+    const resolve = (theme) =>
+      theme === "light" || theme === "dark"
+        ? theme
+        : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    const setTheme = (theme) => {
+      if (theme === "system") {
+        localStorage.removeItem("phx:theme");
+      } else {
+        localStorage.setItem("phx:theme", theme);
+      }
+      document.documentElement.setAttribute("data-theme", resolve(theme));
+      // Marks "following the OS" so the media listener below knows to re-resolve.
+      document.documentElement.toggleAttribute("data-theme-system", theme === "system");
+    };
+    if (!document.documentElement.hasAttribute("data-theme")) {
+      setTheme(localStorage.getItem("phx:theme") || "system");
+    }
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+      if (document.documentElement.hasAttribute("data-theme-system")) setTheme("system");
+    });
+    window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
+
+    window.addEventListener("phx:set-theme", (e) => {
+      // Click via JS.dispatch puts the value on the button's data attribute;
+      // server-side push_event puts it in e.detail. Handle both.
+      const theme = (e.detail && e.detail.theme) || (e.target && e.target.dataset && e.target.dataset.phxTheme);
+      if (theme) setTheme(theme);
+    });
+  })();
+</script>

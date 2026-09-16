@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en" class="bg-white dark:bg-zinc-950" data-theme={Layouts.theme_attr(assigns)}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <link rel="icon" type="image/svg+xml" href={~p"/images/favicon.svg"} />
+    <title>Do It List</title>
+    <link rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <Layouts.theme_script />
+    <%!--
+    The client's starting facts: who is signed in (null when signed out), the
+    CSRF token its writes send as `x-csrf-token`, and the path it should route
+    to. No bearer token — the session cookie is the credential (spec §12).
+    --%>
+    <script type="application/json" id="bootstrap">
+      <%= raw(@bootstrap_json) %>
+    </script>
+    <%!--
+    Recovery for the two ways the client can fail to appear at all: the bundle
+    never loads, or it loads and throws before it paints. Both replace the
+    loading state with an explicit screen and a Reload — never an inert
+    product-shaped skeleton (spec §2). Plain inline JS is fine here: this is a
+    dead controller template, not a LiveView one, and this handler has to run
+    before the bundle it is guarding.
+    --%>
+    <script>
+      (() => {
+        const screen = (title, detail) => `
+          <div class="min-h-dvh flex items-center justify-center p-6">
+            <div class="max-w-md w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm">
+              <h1 class="text-lg font-semibold text-zinc-900 dark:text-zinc-100">${title}</h1>
+              <p class="mt-2 text-sm text-zinc-600 dark:text-zinc-400">${detail}</p>
+              <button type="button" id="boot-reload"
+                class="mt-5 inline-flex items-center rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white">
+                Reload
+              </button>
+            </div>
+          </div>`;
+        const show = (title, detail) => {
+          const app = document.getElementById("app");
+          if (!app) return;
+          app.innerHTML = screen(title, detail);
+          const button = document.getElementById("boot-reload");
+          if (button) button.addEventListener("click", () => location.reload());
+        };
+        window.__doitBootFail = (kind) => {
+          if (window.__doit_client_ready) return;
+          window.__doit_boot_failed = true;
+          if (kind === "asset") {
+            show("Do It List couldn’t load", "The app’s files didn’t download. Check your connection and reload.");
+          } else {
+            show("Do It List is still loading", "It’s taking longer than expected. Reload to try again.");
+          }
+        };
+        // Watchdog: a spinner that never resolves is not a state. If the client
+        // hasn't signalled ready, say so and offer the way out.
+        window.addEventListener("DOMContentLoaded", () => {
+          setTimeout(() => {
+            if (!window.__doit_client_ready && !window.__doit_boot_failed) window.__doitBootFail("slow");
+          }, 8000);
+        });
+      })();
+    </script>
+    <script defer src={~p"/assets/js/client.js"} onerror="window.__doitBootFail('asset')">
+    </script>
+  </head>
+  <body class="h-dvh bg-white text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+    <div id="app">
+      <div
+        role="status"
+        class="min-h-dvh flex items-center justify-center gap-3 text-zinc-600 dark:text-zinc-400"
+      >
+        <span
+          aria-hidden="true"
+          class="size-5 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-600 dark:border-zinc-700 dark:border-t-zinc-300"
+        >
+        </span>
+        <span class="text-sm">Loading Do It List…</span>
+      </div>
+    </div>
+    <noscript>
+      <div class="min-h-dvh flex items-center justify-center p-6 text-center">
+        <p class="max-w-md text-sm text-zinc-600 dark:text-zinc-400">
+          Do It List needs JavaScript. Turn it on for this site and reload.
+        </p>
+      </div>
+    </noscript>
+  </body>
+</html>
