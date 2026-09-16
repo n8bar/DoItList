@@ -64,6 +64,19 @@ defmodule DoItWeb.InitiativeChannelTest do
       {:ok, {plaintext, _}} = Accounts.mint_api_token(owner, "test")
       assert :error = connect(UserSocket, %{"token" => plaintext}, connect_info: %{session: %{}})
     end
+
+    test "a bearer token is not a credential under any param name", %{owner: owner} do
+      {:ok, {plaintext, _}} = Accounts.mint_api_token(owner, "test")
+
+      for params <- [
+            %{"authorization" => "Bearer " <> plaintext},
+            %{"api_token" => plaintext},
+            %{"_csrf_token" => plaintext},
+            %{"user_id" => owner.id}
+          ] do
+        assert :error = connect(UserSocket, params, connect_info: %{session: %{}})
+      end
+    end
   end
 
   describe "joining" do

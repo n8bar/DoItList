@@ -309,5 +309,64 @@ defmodule DoItWeb.Client.ClientApiTest do
       assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
                json_response(conn, 401)
     end
+
+    test "a bearer token alone cannot WRITE on /app/api either", ctx do
+      conn =
+        ctx.conn
+        |> put_req_header("authorization", "Bearer " <> token(ctx.owner))
+        |> post(~p"/app/api/operations", %{
+          "operations" => [
+            %{
+              "op" => "add",
+              "type" => "task",
+              "data" => %{"parent_id" => ctx.phase1.id, "title" => "Bearer write"}
+            }
+          ]
+        })
+
+      assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
+               json_response(conn, 401)
+    end
+
+    test "a bearer token alone cannot read the client's session endpoint", ctx do
+      conn =
+        ctx.conn
+        |> put_req_header("authorization", "Bearer " <> token(ctx.owner))
+        |> get(~p"/app/api/session")
+
+      assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
+               json_response(conn, 401)
+    end
+
+    test "a signed-in session alone cannot WRITE on /api/v1 either", ctx do
+      conn =
+        ctx.conn
+        |> sign_in(ctx.owner)
+        |> post(~p"/api/v1/operations", %{
+          "operations" => [
+            %{
+              "op" => "add",
+              "type" => "task",
+              "data" => %{"parent_id" => ctx.phase1.id, "title" => "Session write"}
+            }
+          ]
+        })
+
+      assert %{"error" => %{"status" => 401, "code" => "unauthorized"}} =
+               json_response(conn, 401)
+    end
+
+    test "a bearer token beside a session never raises the session's authority", ctx do
+      # The stranger's token on a conn signed in as the owner: /app/api must
+      # answer as the SESSION's user, and must not adopt the token at all.
+      conn =
+        ctx.conn
+        |> sign_in(ctx.owner)
+        |> put_req_header("authorization", "Bearer " <> token(ctx.stranger))
+        |> get(~p"/app/api/session")
+
+      assert %{"data" => %{"user" => %{"id" => id}}} = json_response(conn, 200)
+      assert id == ctx.owner.id
+    end
   end
 end
