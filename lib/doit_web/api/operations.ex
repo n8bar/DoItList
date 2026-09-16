@@ -75,6 +75,7 @@ defmodule DoItWeb.Api.Operations do
   | `update` | `notification` | `read: true` (target `id`), or `all: true`     | `Notifications.mark_read/1` / `mark_all_read/1` | own notification |
   | `add`    | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.create_link/2`              | edit (source) |
   | `remove` | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.remove_link/2`              | edit (source) |
+  | `add`    | `history`      | `initiative_id`, `action: "undo"`/`"redo"`      | `Tasks.undo/2` / `Tasks.redo/2`         | view (the reversal is role-gated inside) |
 
   ### Task parentage (and one-batch bootstrap)
 
@@ -107,6 +108,30 @@ defmodule DoItWeb.Api.Operations do
       target). A target in another Initiative — or a foreign task the caller can't
       reach — is rejected, the analogue of the `parent_id` same-Initiative guard.
       Both endpoints must be **live** (a soft-deleted/Trashed endpoint → `not_found`).
+
+  ### Undo / redo (`history`, m04.02 item 3.1.2)
+
+  `add history` with `data: {"initiative_id": …, "action": "undo"|"redo"}`
+  reverses (or re-applies) the Initiative's newest reversible action through
+  `DoIt.Tasks.undo/2` / `redo/2` — the shared stack the workspace toolbar
+  drives, so a browser, an agent, and the LiveView all move the same one. The
+  stack is per Initiative, not per user; who may reverse WHICH event is the
+  context's own role gate (owner/editor anything, a viewer+ only their own
+  privileges, a plain viewer nothing), so an op the caller isn't entitled to
+  reads as "nothing to undo". The result is a delta the caller can apply
+  without a refetch:
+
+      {"type": "history", "action": "undo", "kind": "child_deleted",
+       "upserts": [<task_result>, ...], "removed": [<task id>, ...]}
+
+  `kind` is the activity event that was reversed. `upserts` are the current
+  records of every task the reversal changed and that is still live — the
+  moved/edited/restored tasks plus any ancestor whose roll-up moved with them —
+  and `removed` lists tasks that stopped being live (an undone create, a redone
+  delete, a whole subtree). Both are computed by comparing the Initiative's
+  live tasks either side of the reversal, so no kind is special-cased into
+  being wrong. Nothing to reverse is an `unprocessable_entity` per-op error
+  ("nothing to undo" / "nothing to redo").
 
   Per-op **authorization** (no privilege escalation — the token only identifies
   the user): the affected Initiative is resolved for each op and the acting user
@@ -207,7 +232,7 @@ defmodule DoItWeb.Api.Operations do
   alias DoIt.Tasks.{Comment, Index, Task}
   alias DoItWeb.Api.Authz
 
-  @types ~w(task initiative comment member notification link)
+  @types ~w(task initiative comment member notification link history)
   @verbs ~w(add update remove)
 
   # Hard cap on ops per batch, enforced before any DB work (see apply_batch/2).
@@ -255,7 +280,8 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "member"} => ~w(initiative_id initiative_lid initiative user_id),
     {"update", "notification"} => ~w(all read),
     {"add", "link"} => ~w(source_id source_lid source target_id target_lid target),
-    {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target)
+    {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target),
+    {"add", "history"} => ~w(initiative_id action)
   }
 
   # --- doc generation (m03.05 worklist 2) ------------------------------------
@@ -939,6 +965,22 @@ defmodule DoItWeb.Api.Operations do
              422
            )}
       end
+    end
+  end
+
+  # ---- history (undo / redo, m04.02 item 3.1.2) -----------------------------
+
+  defp dispatch(user, "add", "history", op, _changes) do
+    data = data(op)
+
+    with {:ok, action} <- fetch_history_action(data),
+         {:ok, initiative_id} <- fetch_int(data, "initiative_id"),
+         # `view` is the floor. WHICH events this user may reverse is decided
+         # inside Tasks.undo_candidate/2 (owner/editor anything, a viewer+ only
+         # their own privileges, a plain viewer nothing), so the role gate is
+         # never duplicated — or drifted from — here.
+         {:ok, initiative} <- authorize(user, initiative_id, :view) do
+      apply_history(user, initiative, action)
     end
   end
 
@@ -1871,6 +1913,95 @@ defmodule DoItWeb.Api.Operations do
       type: "link",
       source_task_id: source.id,
       target_task_id: target.id
+    }
+  end
+
+  # --- history (undo / redo) helpers -----------------------------------------
+
+  defp fetch_history_action(%{"action" => action}) when action in ~w(undo redo),
+    do: {:ok, action}
+
+  defp fetch_history_action(data) do
+    {:error,
+     err(
+       :unprocessable_entity,
+       "action must be \"undo\" or \"redo\" (got #{inspect(Map.get(data, "action"))}).",
+       422,
+       "action"
+     )}
+  end
+
+  # Snapshot the live tree, reverse, snapshot again, and report the difference.
+  # The candidate is read first because the context answers with a description,
+  # not the event, and the caller needs the KIND it reversed.
+  defp apply_history(%User{} = user, %Initiative{} = initiative, action) do
+    case history_candidate(user, initiative.id, action) do
+      nil ->
+        {:error, err(:unprocessable_entity, "nothing to #{action}", 422, "action")}
+
+      event ->
+        before = live_task_results(initiative)
+
+        case reverse_history(user, initiative.id, action) do
+          {:ok, _description} ->
+            # This op's delta must carry final roll-up numbers, and inside a
+            # batch each op only SEEDS its ancestor recompute (the batch
+            # flushes once at the end). Flush here so the "after" snapshot is
+            # the settled tree; the batch's own final flush then has nothing
+            # of ours left to do.
+            Tasks.flush_deferred_rollup()
+
+            ok(
+              nil,
+              initiative.id,
+              "history",
+              history_result(action, event.kind, before, live_task_results(initiative))
+            )
+
+          {:error, reason} when reason in [:nothing_to_undo, :nothing_to_redo] ->
+            {:error, err(:unprocessable_entity, "nothing to #{action}", 422, "action")}
+
+          {:error, {:conflict, description}} ->
+            {:error,
+             err(
+               :unprocessable_entity,
+               "Couldn't #{action} the #{description}: what it targets is gone.",
+               422
+             )}
+        end
+    end
+  end
+
+  defp history_candidate(user, initiative_id, "undo"),
+    do: Tasks.undo_candidate(user, initiative_id)
+
+  defp history_candidate(user, initiative_id, "redo"),
+    do: Tasks.redo_candidate(user, initiative_id)
+
+  defp reverse_history(user, initiative_id, "undo"), do: Tasks.undo(user, initiative_id)
+  defp reverse_history(user, initiative_id, "redo"), do: Tasks.redo(user, initiative_id)
+
+  # Every live task in the Initiative by id, as the op result shape — the system
+  # root excluded, since it is never a node in anyone's tree.
+  defp live_task_results(%Initiative{id: id, root_task_id: root_id}) do
+    from(t in Task, where: t.initiative_id == ^id and is_nil(t.deleted_at) and t.id != ^root_id)
+    |> Repo.all()
+    |> Map.new(&{&1.id, task_result(&1)})
+  end
+
+  defp history_result(action, kind, before, now) do
+    upserts =
+      now
+      |> Enum.filter(fn {id, result} -> Map.get(before, id) != result end)
+      |> Enum.map(&elem(&1, 1))
+      |> Enum.sort_by(& &1.id)
+
+    %{
+      type: "history",
+      action: action,
+      kind: kind,
+      upserts: upserts,
+      removed: Enum.sort(Map.keys(before) -- Map.keys(now))
     }
   end
 
