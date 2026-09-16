@@ -1,25 +1,32 @@
-// The theme toggle (m04.01 worklist 2, rehomed into the frame by item 4.1).
+// The theme toggle (m04.01 worklist 2, rehomed into the frame by item 4.1,
+// restored to the product's three-way group by item 4.7).
 //
-// Entirely local: the click changes the document attribute and the preference
+// System / Light / Dark, three joined segments, the one in force pressed in —
+// the same control the LiveView header has (`Layouts.theme_toggle` `:group`),
+// so `/app` and the rest of the product are visibly one product. It is exempt
+// from item 4's "one control per action" tidying on purpose: the choice IS
+// three-way, and showing all three is how the user reads which one is on
+// without pressing anything.
+//
+// Entirely local: the press changes the document attribute and the preference
 // store in the same tick, so the theme flips instantly and no round trip stands
 // between the user and the control (UX_GUARDRAILS §6.7).
 //
-// It holds a fixed width. The label cycles System → Light → Dark, and letting a
-// three-letter word shrink the control would shove its neighbours sideways
-// every time somebody pressed it (item 4.6).
+// The group's size never depends on which segment is on (see
+// `theme_toggle_model.ts`), so pressing one cannot shove its neighbours
+// sideways (item 4.4).
 
 import { setThemePreference } from "../state/preferences.ts";
 import type { Stores } from "../state/stores.ts";
 import { useStore } from "../state/use_store.ts";
-import type { ThemePreference } from "../lib/theme.ts";
-import { browserThemeEnv, nextPreference, setTheme } from "../lib/theme.ts";
-import { controlClass } from "./button_styles.ts";
-
-export const THEME_LABEL: Record<ThemePreference, string> = {
-  system: "System",
-  light: "Light",
-  dark: "Dark",
-};
+import { browserThemeEnv, setTheme } from "../lib/theme.ts";
+import { Icon } from "../ui/icon.tsx";
+import {
+  THEME_SEGMENTS,
+  segmentClass,
+  themeGroupClass,
+  themeSegmentId,
+} from "./theme_toggle_model.ts";
 
 export interface ThemeToggleProps {
   stores: Stores;
@@ -30,27 +37,39 @@ export interface ThemeToggleProps {
 
 export function ThemeToggle({ stores, id, className, block }: ThemeToggleProps) {
   const { theme } = useStore(stores.preferences);
+  const controlId = id ?? "client-theme-toggle";
 
   return (
-    <button
-      type="button"
-      id={id ?? "client-theme-toggle"}
-      aria-label={`Theme: ${THEME_LABEL[theme]}. Switch theme`}
-      title={`Theme: ${THEME_LABEL[theme]}`}
-      className={[
-        controlClass(block === true ? { block } : {}),
-        block === true ? "" : "min-w-24",
-        className ?? "",
-      ]
+    <div
+      id={controlId}
+      role="group"
+      aria-label="Theme"
+      className={[themeGroupClass(block === true), className ?? ""]
         .filter((part) => part !== "")
         .join(" ")}
-      onClick={() => {
-        const next = nextPreference(theme);
-        setTheme(next, browserThemeEnv());
-        setThemePreference(stores.preferences, next);
-      }}
     >
-      {THEME_LABEL[theme]}
-    </button>
+      {THEME_SEGMENTS.map((segment, position) => {
+        const active = theme === segment.preference;
+        return (
+          <button
+            key={segment.preference}
+            type="button"
+            id={themeSegmentId(controlId, segment.preference)}
+            data-theme-choice={segment.preference}
+            aria-label={segment.ariaLabel}
+            aria-pressed={active}
+            title={segment.title}
+            className={segmentClass({ active, position })}
+            onClick={() => {
+              setTheme(segment.preference, browserThemeEnv());
+              setThemePreference(stores.preferences, segment.preference);
+            }}
+          >
+            <Icon name={segment.icon} className="size-4 flex-none" />
+            <span className="sr-only">{segment.label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }

@@ -742,12 +742,14 @@ export async function checkDialogFocusReturn(ctx) {
 }
 
 /**
- * The theme, driven both ways in a real browser (items 2.5, 4.2 — audit 6.3).
+ * The theme, driven both ways in a real browser (items 2.5, 4.2, 4.7 — audit 6.3).
  *
- * The toggle is a local action: the label, the `data-theme` attribute and the
- * saved preference all move on the click, with nothing in between (§6.7). Then
- * the preference is reloaded, because a theme that does not survive a refresh
- * is a theme the user has to set again every morning.
+ * The control is the product's three-way System / Light / Dark group: three
+ * segments, the one in force pressed in. Pressing one is a local action — the
+ * pressed segment, the `data-theme` attribute and the saved preference all move
+ * on the click, with nothing in between (§6.7) — and it must not move the frame
+ * a pixel (item 4.4). Then the preference is reloaded, because a theme that
+ * does not survive a refresh is a theme the user has to set again every morning.
  *
  * The preference lives in the operator's own profile, so whatever was there
  * when we arrived is put back before we leave.
@@ -761,47 +763,74 @@ export async function checkThemeBothWays(ctx) {
   );
 
   try {
-    // Start from a known place: click until the control reads "Light".
-    for (let i = 0; i < 4; i += 1) {
-      const label = await evaluate(
-        session,
-        `const b = document.getElementById("client-theme-toggle"); return b === null ? null : b.textContent.trim();`,
-      );
-      if (label === "Light") break;
-      if (label === null) throw new Error("no theme control in the header");
-      await clickElement(session, "#client-theme-toggle");
-      await new Promise((r) => setTimeout(r, 60));
-    }
+    const group = await evaluate(
+      session,
+      `
+      const g = document.getElementById("client-theme-toggle");
+      if (g === null) return { missing: true };
+      const segments = [...g.querySelectorAll("[data-theme-choice]")];
+      const short = segments.filter((el) => {
+        const r = el.getBoundingClientRect();
+        return Math.round(r.height) < 44 && window.innerWidth < 640;
+      });
+      return {
+        missing: false,
+        role: g.getAttribute("role"),
+        name: g.getAttribute("aria-label"),
+        choices: segments.map((el) => el.dataset.themeChoice),
+        named: segments.every((el) => (el.getAttribute("aria-label") ?? "").trim().length > 0),
+        short: short.length,
+      };
+    `,
+    );
 
-    const light = await readTheme(session);
-    if (light.label !== "Light") throw new Error(`could not reach Light (at ${light.label})`);
-    if (light.attr !== "light") throw new Error(`label says Light, <html> says ${light.attr}`);
+    if (group.missing) throw new Error("no theme control in the header");
+    if (group.role !== "group") throw new Error(`the theme control is role="${group.role}"`);
+    if (group.choices.join(",") !== "system,light,dark") {
+      throw new Error(`the theme group offers ${group.choices.join(", ") || "nothing"}`);
+    }
+    if (!group.named) throw new Error("a theme segment has no accessible name");
+    if (group.short > 0) throw new Error(`${group.short} theme segment(s) under 44px`);
+
+    // Pressing a segment must not resize the group or move anything around it.
+    const framed = await measureChrome(session);
+    await clickElement(session, "#client-theme-toggle-light");
+    const light = await waitFor(session, themeStateJs, {
+      timeoutMs: 5_000,
+      what: "the theme to go light",
+    });
+    const moved = shifted(framed, await measureChrome(session));
+    if (moved.length > 0) throw new Error(`pressing a theme segment moved the frame: ${moved.join("; ")}`);
+
+    if (light.pressed !== "light") throw new Error(`Light is not the pressed segment (${light.pressed})`);
+    if (light.attr !== "light") throw new Error(`Light is pressed, <html> says ${light.attr}`);
     if (light.saved !== "light") throw new Error(`Light was not saved (${light.saved})`);
 
-    await clickElement(session, "#client-theme-toggle");
+    await clickElement(session, "#client-theme-toggle-dark");
     const dark = await waitFor(
       session,
       `
-      const b = document.getElementById("client-theme-toggle");
-      if (b === null || b.textContent.trim() !== "Dark") return null;
+      const root = document.documentElement;
+      if (root.getAttribute("data-theme") !== "dark") return null;
+      const on = document.querySelector('[data-theme-choice][aria-pressed="true"]');
+      if (on === null || on.dataset.themeChoice !== "dark") return null;
       return {
-        label: "Dark",
-        attr: document.documentElement.getAttribute("data-theme"),
+        pressed: "dark",
+        attr: "dark",
         saved: localStorage.getItem("phx:theme"),
         headerBg: getComputedStyle(document.getElementById("client-header")).backgroundColor,
-        name: b.getAttribute("aria-label"),
+        name: on.getAttribute("aria-label"),
       };
     `,
       { timeoutMs: 5_000, what: "the theme to go dark" },
     );
 
-    if (dark.attr !== "dark") throw new Error(`label says Dark, <html> says ${dark.attr}`);
     if (dark.saved !== "dark") throw new Error(`Dark was not saved (${dark.saved})`);
     if (dark.headerBg === light.headerBg) {
-      throw new Error(`the header is ${dark.headerBg} in both themes — the label lied`);
+      throw new Error(`the header is ${dark.headerBg} in both themes — the control lied`);
     }
     if (!/dark/i.test(dark.name ?? "")) {
-      throw new Error(`the control is named "${dark.name}" — it does not say which theme is on`);
+      throw new Error(`the pressed segment is named "${dark.name}" — it does not say which theme it sets`);
     }
 
     // Dark survives a refresh, and it is on the document from the first paint:
@@ -826,19 +855,22 @@ export async function checkThemeBothWays(ctx) {
       timeoutMs: READY_TIMEOUT_MS,
       what: "the client to come back up",
     });
-    const afterReload = await readTheme(session);
-    if (afterReload.label !== "Dark") {
-      throw new Error(`the control reads "${afterReload.label}" after a refresh, not Dark`);
+    const afterReload = await waitFor(session, themeStateJs, {
+      timeoutMs: 5_000,
+      what: "the theme group to come back",
+    });
+    if (afterReload.pressed !== "dark") {
+      throw new Error(`"${afterReload.pressed}" is pressed after a refresh, not dark`);
     }
 
     // And back to System: the preference is stored as ABSENCE, and the document
     // still carries an explicit light/dark resolved against the OS.
-    await clickElement(session, "#client-theme-toggle");
+    await clickElement(session, "#client-theme-toggle-system");
     const system = await waitFor(
       session,
       `
-      const b = document.getElementById("client-theme-toggle");
-      if (b === null || b.textContent.trim() !== "System") return null;
+      const on = document.querySelector('[data-theme-choice][aria-pressed="true"]');
+      if (on === null || on.dataset.themeChoice !== "system") return null;
       return {
         saved: localStorage.getItem("phx:theme"),
         attr: document.documentElement.getAttribute("data-theme"),
@@ -853,7 +885,7 @@ export async function checkThemeBothWays(ctx) {
       throw new Error(`System resolved to ${system.attr}, but the OS asks for ${resolved}`);
     }
 
-    return `Light → Dark (${dark.headerBg} vs ${light.headerBg}), dark held across a refresh${
+    return `three segments; Light \u2192 Dark (${dark.headerBg} vs ${light.headerBg}) with no shift, dark held across a refresh${
       firstPaint.ready ? "" : " before the client was ready"
     }, System resolved to ${resolved}`;
   } finally {
@@ -871,21 +903,18 @@ export async function checkThemeBothWays(ctx) {
   }
 }
 
-async function readTheme(session) {
-  return evaluate(
-    session,
-    `
-    const b = document.getElementById("client-theme-toggle");
-    return {
-      label: b === null ? null : b.textContent.trim(),
-      attr: document.documentElement.getAttribute("data-theme"),
-      saved: localStorage.getItem("phx:theme"),
-      headerBg: getComputedStyle(document.getElementById("client-header")).backgroundColor,
-      name: b === null ? null : b.getAttribute("aria-label"),
-    };
-  `,
-  );
-}
+/** Which segment is pressed, and what the document and the profile say. */
+const themeStateJs = `
+  const on = document.querySelector('[data-theme-choice][aria-pressed="true"]');
+  if (on === null) return null;
+  return {
+    pressed: on.dataset.themeChoice,
+    attr: document.documentElement.getAttribute("data-theme"),
+    saved: localStorage.getItem("phx:theme"),
+    headerBg: getComputedStyle(document.getElementById("client-header")).backgroundColor,
+    name: on.getAttribute("aria-label"),
+  };
+`;
 
 /**
  * The frame by keyboard alone (audit 6.4, guardrails §3).

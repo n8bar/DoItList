@@ -26,6 +26,10 @@ export const ICON_CLASS = {
   "check-circle": "hero-check-circle",
   "x-mark": "hero-x-mark",
   "chevron-down": "hero-chevron-down",
+  "computer-desktop": "hero-computer-desktop",
+  sun: "hero-sun",
+  moon: "hero-moon",
+  bell: "hero-bell",
 } as const;
 
 export type IconName = keyof typeof ICON_CLASS;
