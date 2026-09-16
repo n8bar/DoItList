@@ -355,6 +355,20 @@ describe("the tab's one connection (item 3.7)", () => {
     assert.equal(connection.connectCount(), 2, "reconnecting must move the counter");
   });
 
+  it("retry does nothing once the connection has been disconnected", () => {
+    // disconnect() has already dropped the network watcher and every
+    // channel; retry() standing a socket back up here would leave it with
+    // nothing wired to it.
+    const { connection, socket } = live();
+    connection.disconnect();
+    assert.equal(connection.status(), "offline");
+
+    connection.retry();
+
+    assert.equal(socket.get().connects, 1, "disconnect must not be undone by retry");
+    assert.equal(connection.status(), "offline");
+  });
+
   it("only a new tab gets a new connection", () => {
     const socket = fakeTransport();
     const deps = bareDeps(socket);
@@ -365,11 +379,12 @@ describe("the tab's one connection (item 3.7)", () => {
 });
 
 describe("the browser says the network went away (spec §7)", () => {
-  function fakeNetwork() {
+  function fakeNetwork(initialOnline = true) {
+    let online = initialOnline;
     let listener: ((online: boolean) => void) | null = null;
     let unsubscribed = false;
     const signal: NetworkSignal = {
-      online: () => true,
+      online: () => online,
       subscribe(onChange) {
         listener = onChange;
         return () => {
@@ -379,7 +394,10 @@ describe("the browser says the network went away (spec §7)", () => {
     };
     return {
       signal,
-      go: (online: boolean) => listener?.(online),
+      go: (next: boolean) => {
+        online = next;
+        listener?.(next);
+      },
       unsubscribed: () => unsubscribed,
     };
   }
@@ -427,6 +445,29 @@ describe("the browser says the network went away (spec §7)", () => {
     h.connection.disconnect();
 
     assert.equal(net.unsubscribed(), true);
+  });
+
+  it("says offline right away when a tab boots with no network at all", () => {
+    const net = fakeNetwork(false);
+    const h = harness({ network: net.signal });
+
+    h.connection.connect();
+
+    assert.equal(h.connection.status(), "offline");
+    assert.equal(h.socket.get().connects, 0, "must not open a socket with no network");
+  });
+
+  it("connects once the user retries after the network comes back", () => {
+    const net = fakeNetwork(false);
+    const h = harness({ network: net.signal });
+    h.connection.connect();
+    assert.equal(h.connection.status(), "offline");
+
+    net.go(true);
+    h.connection.retry();
+
+    assert.equal(h.connection.status(), "connecting");
+    assert.equal(h.socket.get().connects, 1);
   });
 });
 

@@ -162,6 +162,10 @@ export function createConnection(deps: ConnectionDeps): Connection {
   // change must not quietly resurrect a connection the client has told the
   // user it gave up on.
   let gaveUp = false;
+  // Set by `disconnect()` and never cleared: the network watcher is gone and
+  // every channel has been left, so `retry()` reaching this point would stand
+  // a socket back up with nothing wired to it.
+  let disposed = false;
 
   const report = (next: LinkState) => {
     const before = link.status;
@@ -225,6 +229,15 @@ export function createConnection(deps: ConnectionDeps): Connection {
   const connect = () => {
     if (gaveUp) return;
     if (connects > 0 && link.status !== "offline") return;
+    // A tab booting (or navigating) with no network at all would otherwise
+    // sit on "Connecting…" through the whole retry schedule before the socket
+    // ever notices. Same path a network loss takes mid-session: say so now,
+    // and leave the way back to the user's own click (spec §7).
+    if (!network.online()) {
+      gaveUp = true;
+      report(nextLinkState(link, { kind: "down" }));
+      return;
+    }
     if (link.status === "offline") report(nextLinkState(link, { kind: "retry" }));
     connects += 1;
     transport.connect();
@@ -315,6 +328,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
     joined: () => [...subscriptions.keys()],
 
     disconnect() {
+      disposed = true;
       stopWatchingNetwork();
       if (userChannel !== null) {
         userChannel.channel.leave();
@@ -330,6 +344,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
     // The way back from `offline`: the client stopped on its own budget, so
     // resuming is the user's call and it is one click (spec §7).
     retry() {
+      if (disposed) return;
       if (link.status !== "offline") return;
       gaveUp = false;
       connect();
