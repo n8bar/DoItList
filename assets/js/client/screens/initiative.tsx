@@ -17,7 +17,7 @@
 // on mount and unsubscribes on unmount, while the connection object itself
 // outlives both (guardrail §7.4).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InitiativeTree, Member } from "../api/types.ts";
 import { COUNT_MIN_WIDTH, reservedHeight } from "../frame/layout_budget.ts";
@@ -29,7 +29,9 @@ import { members as membersOf, putMembers, putTree } from "../state/domain.ts";
 import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
+import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { permissionsFor } from "../tree/permissions.ts";
+import { searchWithTask, taskParam } from "../tree/reveal_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
 import { Tree } from "../tree/tree.tsx";
 import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
@@ -78,13 +80,22 @@ export function InitiativeScreen({ id }: { id: number }) {
       (data: InitiativeTree) => {
         // The nested read becomes the client's own model here and nowhere else;
         // a snapshot that cannot be a tree throws instead of being half-drawn.
-        const next = fromSnapshot(data);
+        //
+        // A refetch goes through the delta rather than replacing the model
+        // wholesale, so what the read no longer holds is *removed* rather than
+        // merely absent — the set Arc 3's echo cleanup needs, and the only path
+        // canonical records are allowed to enter the model by (item 1.5.1).
+        const previous = stores.domain.get().trees[id];
+        const next =
+          previous === undefined
+            ? fromSnapshot(data)
+            : applyDelta(previous, deltaFromSnapshot(data, previous)).model;
         putTree(stores.domain, next);
         // Same path as the store write, so a tree the guard rejected is never
         // the one that gets cached.
         cache.cacheTree(next);
       },
-      [cache, stores.domain],
+      [cache, id, stores.domain],
     ),
     // Two reads in a row that could not be a tree. The screen stays on its own
     // error with Try again, and a notice says so, rather than the user staring
@@ -229,6 +240,9 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     });
   }, [stores.ui]);
 
+  // Read once, off the address bar the screen arrived on.
+  const [deepLinkTaskId] = useState(() => taskParam(window.location.search));
+
   const tree = useTree({
     model,
     initiativeId: id,
@@ -237,6 +251,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     rows,
     selectedId,
     select,
+    deepLinkTaskId,
     onIntent: notYet,
     onAdd: notYet,
     onBlocked: useCallback(() => {
@@ -248,23 +263,16 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     }, [stores.ui]),
   });
 
-  // The selected task rides in the address bar, so a link to a row in a deep
-  // branch opens that branch and lands on it. Read once, on arrival.
-  const { reveal } = tree;
-  useEffect(() => {
-    const asked = Number(new URLSearchParams(window.location.search).get("task"));
-    if (Number.isInteger(asked) && asked > 0) reveal(asked);
-  }, [reveal]);
-
-  // Kept in step afterwards without navigating: same history entry, same key,
-  // same scroll — only the address bar changes, so a copied link reopens what
-  // the user is looking at.
+  // Kept in step without navigating: same history entry, same key, same scroll —
+  // only the one parameter we own changes, so a copied link reopens what the
+  // user is looking at. The first pass writes nothing: `?task=` is an answer
+  // arriving, not a selection leaving.
   const selected = tree.ctx.selectedTaskId;
+  const written = useRef<number | null>(deepLinkTaskId);
   useEffect(() => {
-    const url =
-      selected === null
-        ? window.location.pathname
-        : `${window.location.pathname}?task=${selected}`;
+    if (written.current === selected) return;
+    written.current = selected;
+    const url = window.location.pathname + searchWithTask(window.location.search, selected);
     window.history.replaceState(window.history.state, "", url);
   }, [selected]);
 
@@ -273,6 +281,8 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
       <Tree
         ctx={tree.ctx}
         addSlot={tree.addSlot}
+        addTitle={tree.addTitle}
+        onAddTitleChange={tree.onAddTitleChange}
         onAddMove={tree.onAddMove}
         onAddClose={tree.onAddClose}
         onAdd={tree.onAdd}

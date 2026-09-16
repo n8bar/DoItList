@@ -22,7 +22,10 @@ import type { Permissions } from "./permissions.ts";
 import type { RowUser } from "./row_model.ts";
 import { canProgress } from "./permissions.ts";
 import type { CollapseStore } from "./tree_model.ts";
-import { branchesToOpen, readCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
+import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
+import { revealPlan } from "./reveal_model.ts";
+import { keptSelection, noSelection, rememberSelection } from "./selection_model.ts";
+import type { SelectionState } from "./selection_model.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
 
 /** The tab's `localStorage`, or nothing at all where it is blocked. */
@@ -49,6 +52,8 @@ export interface UseTreeOptions {
   /** The selected task id, from the `ui` store, and the writer for it. */
   selectedId: number | null;
   select: (id: number | null) => void;
+  /** The task a `?task=<id>` link named, revealed once per value. */
+  deepLinkTaskId?: number | null;
   /** Where collapse state is kept. Injected so a test can hand it a fake. */
   store?: CollapseStore | null;
 }
@@ -56,6 +61,8 @@ export interface UseTreeOptions {
 export interface TreeState {
   ctx: TreeContext;
   addSlot: AddSlot | null;
+  addTitle: string;
+  onAddTitleChange: (title: string) => void;
   onAddMove: (dir: -1 | 1) => void;
   onAddClose: () => void;
   onAdd: (request: AddRequest) => void;
@@ -76,31 +83,26 @@ export function useTree(options: UseTreeOptions): TreeState {
     [options.store],
   );
 
-  const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<number>>(() => new Set<number>());
+  // Seeded SYNCHRONOUSLY, before the first render decides what is visible. Read
+  // in an effect instead and a deep link would look at an empty set on mount,
+  // conclude there was nothing to expand, and leave its task buried.
+  const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<number>>(() =>
+    seedCollapsed(model, (id) => readCollapsed(store, initiativeId, id)),
+  );
   const [addSlot, setAddSlot] = useState<AddSlot | null>(null);
+  // The typed title lives here, not in the form: walking to another slot
+  // re-parents the form element and React remounts it, and the whole point of
+  // the walk is that what you have typed comes with you.
+  const [addTitle, setAddTitle] = useState("");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
-  // Which ids have already been looked up. A task the user has never touched is
-  // open, and a task that arrives later inherits whatever was saved for it —
-  // read once, then this set is the answer.
-  const seeded = useRef(new Set<number>());
-
+  // A refetch can bring tasks this tree has never seen; they inherit whatever
+  // was saved for them. Already-known ids are never re-read, so a branch the
+  // user collapsed since is not re-opened by the next read landing.
   useEffect(() => {
-    let changed = false;
-    const next = new Set(collapsedIds);
-    for (const key of Object.keys(model.tasks)) {
-      const id = Number(key);
-      if (seeded.current.has(id)) continue;
-      seeded.current.add(id);
-      if (readCollapsed(store, initiativeId, id)) {
-        next.add(id);
-        changed = true;
-      }
-    }
-    if (changed) setCollapsedIds(next);
-    // `collapsedIds` is deliberately not a dependency: this seeds from storage
-    // when the tree gains tasks, and must not re-run on every toggle.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setCollapsedIds((current) =>
+      seedCollapsed(model, (id) => readCollapsed(store, initiativeId, id), current),
+    );
   }, [model, initiativeId, store]);
 
   const collapsed = useCallback((id: number) => collapsedIds.has(id), [collapsedIds]);
@@ -127,13 +129,32 @@ export function useTree(options: UseTreeOptions): TreeState {
 
   const reveal = useCallback(
     (id: number) => {
-      for (const branchId of branchesToOpen(model, id, (other) => collapsedIds.has(other))) {
-        setCollapsed(branchId, false);
-      }
-      if (model.tasks[id] !== undefined) setSelectedId(id);
+      const plan = revealPlan(model, id, (other) => collapsedIds.has(other));
+      for (const branchId of plan.expand) setCollapsed(branchId, false);
+      if (plan.select === null) return;
+      setSelectedId(plan.select);
+      // Deferred a frame, like the LiveView's `deep-link-task` handler, so the
+      // rows that were just expanded are laid out before anything measures.
+      const target = plan.select;
+      requestAnimationFrame(() => scrollRowIntoView(target));
     },
     [collapsedIds, model, setCollapsed, setSelectedId],
   );
+
+  // One reveal per `?task=` value. Keyed on the id rather than on `reveal`,
+  // whose identity changes every time a branch opens or closes — key it on the
+  // callback and collapsing an ancestor of the selected row snaps it open again.
+  const deepLinkTaskId = options.deepLinkTaskId ?? null;
+  const revealRef = useRef(reveal);
+  revealRef.current = reveal;
+  const settled = useRef(false);
+
+  useEffect(() => {
+    if (deepLinkTaskId !== null) revealRef.current(deepLinkTaskId);
+    // Only now may an off-screen selection be cleared: before this the branch
+    // the link points into has not been expanded yet.
+    settled.current = true;
+  }, [deepLinkTaskId]);
 
   const visible = useMemo(() => visibleRows(model, collapsed), [model, collapsed]);
   const slots = useMemo(() => addSlots(model, collapsed), [model, collapsed]);
@@ -141,13 +162,24 @@ export function useTree(options: UseTreeOptions): TreeState {
   // A selected task that has been deleted, or hidden by a collapse, is not a
   // selection any more — otherwise the arrows navigate from a row nobody sees.
   useEffect(() => {
-    if (selectedId === null) return;
-    if (!visible.some((row) => row.id === selectedId)) setSelectedId(null);
+    const kept = keptSelection(
+      selectedId,
+      visible.map((row) => row.id),
+      settled.current,
+    );
+    if (kept !== selectedId) setSelectedId(kept);
   }, [selectedId, setSelectedId, visible]);
+
+  // "Enter with nothing selected reopens the last task" means the task the user
+  // was last on, not the last row in the tree.
+  const selection = useRef<SelectionState>(noSelection);
+  selection.current = rememberSelection(selection.current, selectedId);
+  const lastSelectedId = selection.current.lastSelectedId;
 
   const openAdd = useCallback(
     (anchor: AddAnchor) => {
       if (!permissions.canEdit) return;
+      setAddTitle("");
       setAddSlot(anchor);
     },
     [permissions.canEdit],
@@ -197,7 +229,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       model,
       visible,
       selectedId,
-      lastId: visible.length === 0 ? null : (visible[visible.length - 1]?.id ?? null),
+      lastId: lastSelectedId,
     },
     onOutcome,
     // The overlay owns Escape and the arrows while it is up.
@@ -226,6 +258,8 @@ export function useTree(options: UseTreeOptions): TreeState {
   return {
     ctx,
     addSlot,
+    addTitle,
+    onAddTitleChange: setAddTitle,
     onAddMove: useCallback(
       (dir: -1 | 1) => {
         setAddSlot((current) => {
@@ -238,13 +272,11 @@ export function useTree(options: UseTreeOptions): TreeState {
       },
       [slots],
     ),
-    onAddClose: useCallback(() => setAddSlot(null), []),
-    onAdd: useCallback(
-      (request: AddRequest) => {
-        onAdd(request);
-      },
-      [onAdd],
-    ),
+    onAddClose: useCallback(() => {
+      setAddSlot(null);
+      setAddTitle("");
+    }, []),
+    onAdd,
     shortcutsOpen,
     closeShortcuts: useCallback(() => setShortcutsOpen(false), []),
     reveal,

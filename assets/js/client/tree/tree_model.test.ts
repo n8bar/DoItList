@@ -10,7 +10,7 @@ import {
   collapseKey,
   isVisible,
   readCollapsed,
-  scrollEdges,
+  seedCollapsed,
   treeMinWidth,
   treeMinWidthStyle,
   visibleIds,
@@ -143,36 +143,6 @@ describe("how wide the tree has to be", () => {
   });
 });
 
-describe("the scroll fades", () => {
-  it("shows the top fade once scrolled, and hides the bottom one at the end", () => {
-    assert.deepEqual(scrollEdges({ scrollTop: 0, clientHeight: 100, scrollHeight: 500 }), {
-      scrolled: false,
-      atEnd: false,
-    });
-    assert.deepEqual(scrollEdges({ scrollTop: 10, clientHeight: 100, scrollHeight: 500 }), {
-      scrolled: true,
-      atEnd: false,
-    });
-    assert.deepEqual(scrollEdges({ scrollTop: 400, clientHeight: 100, scrollHeight: 500 }), {
-      scrolled: true,
-      atEnd: true,
-    });
-  });
-
-  it("reads a box with nothing to scroll as already at the end", () => {
-    assert.equal(
-      scrollEdges({ scrollTop: 0, clientHeight: 500, scrollHeight: 500 }).atEnd,
-      true,
-    );
-  });
-
-  it("absorbs a sub-pixel shortfall rather than never reaching the end", () => {
-    assert.equal(
-      scrollEdges({ scrollTop: 399.7, clientHeight: 100, scrollHeight: 500 }).atEnd,
-      true,
-    );
-  });
-});
 
 describe("revealing a deep-linked task", () => {
   it("names every collapsed ancestor between the root and the task", () => {
@@ -195,5 +165,38 @@ describe("revealing a deep-linked task", () => {
 
   it("does not ask to open the task itself, only the way down to it", () => {
     assert.deepEqual(branchesToOpen(model(), 12, closedSet(10, 12)), [10]);
+  });
+});
+
+describe("seeding a tree's open state", () => {
+  it("reads every task's saved state in one pass", () => {
+    const store = new FakeStore();
+    writeCollapsed(store, 7, 10, true);
+    writeCollapsed(store, 7, 12, true);
+
+    const seeded = seedCollapsed(model(), (id) => readCollapsed(store, 7, id));
+    assert.deepEqual([...seeded].sort((a, b) => a - b), [10, 12]);
+  });
+
+  // Seeding happens again when a refetch brings new tasks; what the user has
+  // collapsed since must not be undone by it.
+  it("keeps what is already collapsed and only asks about the rest", () => {
+    const asked: number[] = [];
+    const seeded = seedCollapsed(
+      model(),
+      (id) => {
+        asked.push(id);
+        return id === 12;
+      },
+      new Set([10, 11]),
+    );
+
+    assert.deepEqual([...seeded].sort((a, b) => a - b), [10, 11, 12]);
+    assert.deepEqual(asked.sort((a, b) => a - b), [12, 13, 20]);
+  });
+
+  it("hands back the same set when nothing changed", () => {
+    const already = new Set([10]);
+    assert.equal(seedCollapsed(model(), (id) => id === 10, already), already);
   });
 });

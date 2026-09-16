@@ -128,6 +128,34 @@ export function branchesToOpen(
   return ancestors(model, id).filter(collapsed).reverse();
 }
 
+/**
+ * Every task in `model` whose saved state says collapsed, in one pass, folded
+ * into what is already known. Synchronous by design: the tree's open state has
+ * to be settled BEFORE the first render decides what is visible, or a deep link
+ * looks at an empty set and concludes there is nothing to expand.
+ *
+ * `known` is trusted and never re-read — a branch the user collapsed since the
+ * last seed must not be re-opened by the next one. Returns `known` itself when
+ * nothing changed, so a caller can compare by identity.
+ */
+export function seedCollapsed(
+  model: TreeModel,
+  isCollapsed: (id: number) => boolean,
+  known: ReadonlySet<number> = EMPTY_IDS,
+): ReadonlySet<number> {
+  let next: Set<number> | null = null;
+  for (const key of Object.keys(model.tasks)) {
+    const id = Number(key);
+    if (known.has(id)) continue;
+    if (!isCollapsed(id)) continue;
+    next ??= new Set(known);
+    next.add(id);
+  }
+  return next ?? known;
+}
+
+const EMPTY_IDS: ReadonlySet<number> = new Set<number>();
+
 // --- Width (ProductSpec §6.2) ---------------------------------------------
 
 /**
@@ -158,25 +186,3 @@ export function treeMinWidthStyle(indents: readonly number[]): string {
   return `${treeMinWidth(indents)}px`;
 }
 
-export interface ScrollEdges {
-  /** Scrolled down from the very top: the top fade shows. */
-  readonly scrolled: boolean;
-  /** At (or unable to reach) the bottom: the bottom fade hides. */
-  readonly atEnd: boolean;
-}
-
-/**
- * The scroll-fade state, from a scroll box's three numbers. A 1px slack absorbs
- * sub-pixel rounding, exactly as `Hooks.TreeScrollFade` does — without it a box
- * scrolled to the bottom can report one-third of a pixel short forever.
- */
-export function scrollEdges(box: {
-  scrollTop: number;
-  clientHeight: number;
-  scrollHeight: number;
-}): ScrollEdges {
-  return {
-    scrolled: box.scrollTop > 0,
-    atEnd: box.scrollTop + box.clientHeight >= box.scrollHeight - 1,
-  };
-}
