@@ -1,22 +1,34 @@
-// The client's first painted screen (m04.01 items 2.4–2.6).
+// The client shell (m04.01 worklists 2–3).
 //
-// Everything here is interactive the instant it paints: the navigation and the
-// theme toggle are local state, and the session check runs in an effect AFTER
-// mount — a round trip never stands between the user and a control
-// (UX_GUARDRAILS §6.7). Task 4 adds real routing and Task 6 the real frame;
-// this is the minimum honest shell.
+// Everything here is interactive the instant it paints: the nav, the theme
+// toggle and the router are all local, and the session read runs in an effect
+// AFTER mount — a round trip never stands between the user and a control
+// (UX_GUARDRAILS §6.7). A route change is the same deal: the new screen is on
+// the glass before anything is fetched (spec §2).
+//
+// The stores, the API client and the live connection are built once, outside
+// the render, and handed down by context — a route change remounts screens, not
+// infrastructure (guardrail §7.4).
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Bootstrap, ClientState } from "./boot.ts";
 import { initialState, loginPath, stateForErrorCode } from "./boot.ts";
-import type { SessionData } from "./api/client.ts";
+import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
+import { getConnection } from "./live/connection.ts";
+import { Link } from "./router/link.tsx";
+import type { Route } from "./router/route.ts";
+import { matchRoute } from "./router/route.ts";
+import { RouterProvider, useRoute } from "./router/router.tsx";
+import { RouteView } from "./screens/route_view.tsx";
+import { createStores } from "./state/stores.ts";
+import { setThemePreference } from "./state/preferences.ts";
+import { useStore } from "./state/use_store.ts";
+import type { Stores } from "./state/stores.ts";
+import { ServicesProvider } from "./services.tsx";
 import type { ThemePreference } from "./lib/theme.ts";
 import { browserThemeEnv, currentPreference, nextPreference, setTheme } from "./lib/theme.ts";
-
-type Section = "initiatives" | "account";
-type SessionStatus = "checking" | "loaded" | "unavailable";
 
 const THEME_LABEL: Record<ThemePreference, string> = {
   system: "System",
@@ -31,55 +43,64 @@ const BUTTON =
 const PRIMARY =
   "inline-flex items-center rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-white";
 
-function ThemeToggle() {
-  const [preference, setPreference] = useState<ThemePreference>(() =>
-    currentPreference(browserThemeEnv()),
-  );
+function ThemeToggle({ stores }: { stores: Stores }) {
+  const { theme } = useStore(stores.preferences);
 
   return (
     <button
       type="button"
       id="client-theme-toggle"
       aria-label="Switch theme"
-      title={`Theme: ${THEME_LABEL[preference]}`}
+      title={`Theme: ${THEME_LABEL[theme]}`}
       className={BUTTON}
       onClick={() => {
-        const next = nextPreference(preference);
+        const next = nextPreference(theme);
         setTheme(next, browserThemeEnv());
-        setPreference(next);
+        setThemePreference(stores.preferences, next);
       }}
     >
-      {THEME_LABEL[preference]}
+      {THEME_LABEL[theme]}
     </button>
   );
 }
 
-function Header({ section, onSection }: { section: Section; onSection: (s: Section) => void }) {
-  const tab = (value: Section, label: string) => (
-    <button
-      type="button"
-      id={`client-nav-${value}`}
-      aria-current={section === value ? "page" : undefined}
+/** True when this nav entry is the route currently showing. */
+function current(route: Route, kind: Route["kind"]): boolean {
+  if (route.kind === kind) return true;
+  // A single Initiative still belongs under Initiatives.
+  return kind === "initiatives" && route.kind === "initiative";
+}
+
+function Header({ stores }: { stores: Stores }) {
+  const route = useRoute();
+
+  const tab = (kind: Route["kind"], to: string, label: string) => (
+    <Link
+      id={`client-nav-${kind}`}
+      to={to}
+      aria-current={current(route, kind) ? "page" : undefined}
       className={[
         BUTTON,
-        section === value ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100" : "",
+        current(route, kind) ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100" : "",
       ].join(" ")}
-      onClick={() => onSection(value)}
     >
       {label}
-    </button>
+    </Link>
   );
 
   return (
     <header
       id="client-header"
-      className="flex items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800"
+      className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800"
     >
       <span className="mr-2 text-sm font-semibold tracking-tight">Do It List</span>
-      {tab("initiatives", "Initiatives")}
-      {tab("account", "Account")}
+      <nav aria-label="Sections" className="flex items-center gap-1">
+        {tab("initiatives", "/app/initiatives", "Initiatives")}
+        {tab("assigned", "/app/assigned", "Assigned")}
+        {tab("account", "/app/account", "Account")}
+      </nav>
       <span className="flex-1" />
-      <ThemeToggle />
+      <ThemeToggle stores={stores} />
     </header>
   );
 }
@@ -97,11 +118,42 @@ function Screen({ title, children }: { title: string; children: ReactNode }) {
 
 export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   const [state, setState] = useState<ClientState>(() => initialState({ ok: true, bootstrap }));
-  const [section, setSection] = useState<Section>("initiatives");
-  const [status, setStatus] = useState<SessionStatus>("checking");
-  const [email, setEmail] = useState<string | null>(bootstrap.user?.email ?? null);
 
-  const api = useMemo(() => createApiClient({ csrfToken: bootstrap.csrfToken }), [bootstrap]);
+  // Built once. `useState`'s initialiser, not `useMemo`, because these must not
+  // be rebuilt even if React decides to discard a memo.
+  const [stores] = useState<Stores>(() =>
+    createStores({
+      domain: { user: bootstrap.user },
+      preferences: { theme: currentPreference(browserThemeEnv()) },
+      ui: { route: matchRoute(bootstrap.path) },
+    }),
+  );
+  const [api] = useState(() => createApiClient({ csrfToken: bootstrap.csrfToken }));
+  // The tab's one live connection. A route change must never recreate it.
+  const [connection] = useState(getConnection);
+
+  const mainRef = useRef<HTMLElement | null>(null);
+  const scrollContainer = useCallback(() => mainRef.current, []);
+
+  /**
+   * Only "your session ended" and "you can't see this" belong to the shell: a
+   * whole-app takeover for a flaky network would throw away a screen the user
+   * can perfectly well retry in place (§6).
+   */
+  const escalate = useCallback((error: ApiError): boolean => {
+    const next = stateForErrorCode(error.code, error.message);
+    if (next !== null && (next.kind === "signed-out" || next.kind === "forbidden")) {
+      setState(next);
+      return true;
+    }
+    return false;
+  }, []);
+
+  const services = useMemo(
+    () => ({ api, stores, connection, escalate }),
+    [api, stores, connection, escalate],
+  );
+
   const started = useRef(false);
 
   useEffect(() => {
@@ -112,25 +164,29 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     void api.get<SessionData>("/session").then((result) => {
       if (!live) return;
       if (result.ok) {
-        setEmail(result.data.user.email);
-        setStatus("loaded");
+        stores.domain.set((domain) => ({ ...domain, user: result.data.user }));
         return;
       }
       const next = stateForErrorCode(result.error.code, result.error.message);
-      if (next) setState(next);
-      else setStatus("unavailable");
+      // A failed session check is not a reason to tear the app down: the
+      // bootstrap already told us who we are.
+      if (next !== null && next.kind !== "start-failed") setState(next);
     });
 
     return () => {
       live = false;
     };
-  }, [api, state.kind]);
+  }, [api, stores, state.kind]);
 
   if (state.kind === "signed-out") {
     return (
       <Screen title="Signed out">
         <p>Your session has ended. Sign in again to pick up where you left off.</p>
-        <a id="client-sign-in" className={`${PRIMARY} mt-5`} href={loginPath(bootstrap.path)}>
+        <a
+          id="client-sign-in"
+          className={`${PRIMARY} mt-5`}
+          href={loginPath(window.location.pathname)}
+        >
           Sign in
         </a>
       </Screen>
@@ -165,18 +221,19 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
-      <Header section={section} onSection={setSection} />
-      <main id="client-main" className="flex-1 p-6 text-sm text-zinc-600 dark:text-zinc-400">
-        <p className="font-medium text-zinc-900 dark:text-zinc-100">
-          {section === "initiatives" ? "Initiatives" : "Account"}
-        </p>
-        <p id="client-session-status" className="mt-2" role="status">
-          {status === "checking" && "Checking your session…"}
-          {status === "loaded" && `Loaded · signed in as ${email ?? "—"}`}
-          {status === "unavailable" && "Loaded · couldn’t reach the server for a session check."}
-        </p>
-      </main>
-    </div>
+    <ServicesProvider value={services}>
+      <RouterProvider stores={stores} scrollContainer={scrollContainer}>
+        <div className="flex h-dvh flex-col">
+          <Header stores={stores} />
+          <main
+            id="client-main"
+            ref={mainRef}
+            className="flex-1 overflow-y-auto p-6 text-zinc-700 dark:text-zinc-300"
+          >
+            <RouteView />
+          </main>
+        </div>
+      </RouterProvider>
+    </ServicesProvider>
   );
 }
