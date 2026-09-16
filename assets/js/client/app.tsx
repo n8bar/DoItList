@@ -29,11 +29,14 @@ import { RouterProvider } from "./router/router.tsx";
 import { RouteView } from "./screens/route_view.tsx";
 import { createStores } from "./state/stores.ts";
 import {
+  pendingWriteFrom,
   setConnectionStatus,
   setFatalError,
+  setPendingWrites,
   setSnapshotMeta,
   setStorageHealth,
 } from "./state/recovery.ts";
+import { fatalMessage } from "./state/fatal.ts";
 import { pushNotice } from "./state/ui.ts";
 import type { Stores } from "./state/stores.ts";
 import { ServicesProvider } from "./services.tsx";
@@ -139,24 +142,22 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     [api, stores, connection, cache, escalate],
   );
 
-  // Errors that escape everything else, once the client is up. Before it is up
-  // the startup guard owns them (it paints the recovery screen and drops these
-  // listeners); after it is up, React's boundary catches render failures but
-  // nothing catches a throw in an event handler or a rejected promise. Silence
-  // there is the worst option: the tab is broken and looks fine. So the
-  // connection summary says so, and offers Reload — the content on screen stays
-  // readable meanwhile (spec §7).
+  // Failures that escape everything else, once the client is up — but only the
+  // ones the client itself marked unrecoverable (`markFatal`). Not every stray
+  // rejection: this client hands off plenty of fire-and-forget work, most of it
+  // to IndexedDB, and one refused write is a storage-health matter that belongs
+  // on the secondary storage line, not a reason to replace the connection state
+  // with "Do It List hit a problem". A cross-origin script error, which arrives
+  // with no error object at all, is no reason either. When it IS fatal the
+  // summary says so and offers Reload, and the content on screen stays readable
+  // meanwhile (spec §7).
   useEffect(() => {
     const report = (error: unknown) => {
       if (window.__doit_client_ready !== true) return;
-      setFatalError(
-        stores.recovery,
-        error instanceof Error && error.message !== ""
-          ? error.message
-          : "Something in the app stopped working.",
-      );
+      const message = fatalMessage(error);
+      if (message !== null) setFatalError(stores.recovery, message);
     };
-    const onError = (event: ErrorEvent) => report(event.error ?? event.message);
+    const onError = (event: ErrorEvent) => report(event.error);
     const onRejection = (event: PromiseRejectionEvent) => report(event.reason);
 
     window.addEventListener("error", onError);
@@ -169,6 +170,20 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
 
   const started = useRef(false);
 
+  // Is this component still on screen? Kept apart from the startup effect
+  // below on purpose. That effect runs its work ONCE (`started`), but React
+  // in development mounts, unmounts and mounts again — so its own cleanup
+  // would cancel the work the first mount started and the second mount would
+  // never redo it. This one re-arms on every mount, so what is in flight is
+  // only dropped when the component really goes away.
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (state.kind !== "ready" || started.current) return;
     started.current = true;
@@ -176,9 +191,15 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     // Identity is known (the bootstrap named the user), so the socket may open.
     connection.connect();
 
-    let live = true;
+    // What this device queued and never sent. It outlives the tab, so the
+    // count in the summary — and the warning before Sign out throws it away —
+    // has to be read back off the device, not assumed to be zero (spec §7).
+    void cache.pendingOps().then((ops) => {
+      if (!alive.current) return;
+      setPendingWrites(stores.recovery, ops.map(pendingWriteFrom));
+    });
     void api.get<SessionData>("/session").then((result) => {
-      if (!live) return;
+      if (!alive.current) return;
       if (result.ok) {
         stores.domain.set((domain) => ({ ...domain, user: result.data.user }));
         // The session belongs to somebody else — a re-login in another tab,
@@ -200,10 +221,6 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
         });
       }
     });
-
-    return () => {
-      live = false;
-    };
   }, [api, cache, connection, stores, state.kind]);
 
   if (state.kind === "signed-out") {

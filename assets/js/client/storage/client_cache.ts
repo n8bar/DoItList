@@ -8,7 +8,12 @@
 
 import type { AccountCache, AccountCacheDeps } from "./account.ts";
 import { openAccountCache, purgeAccountCache } from "./account.ts";
-import type { AccountStorage, StorageDegraded, StorageStatus } from "./db.ts";
+import type {
+  AccountStorage,
+  PendingOpRecord,
+  StorageDegraded,
+  StorageStatus,
+} from "./db.ts";
 import { createMemoryStorage } from "./db.ts";
 import type { IdbFactoryLike } from "./idb.ts";
 import type { KeyValueStore } from "./last_user.ts";
@@ -40,6 +45,12 @@ export interface ClientCache extends TreeCache {
    * tab, say): the old account's cache goes and this one opens.
    */
   switchTo(userId: number): Promise<void>;
+  /**
+   * The ops this device queued and has not sent. Empty when the store is
+   * unavailable or refused the read: a cache that cannot answer is not a
+   * reason to claim there is unsent work.
+   */
+  pendingOps(): Promise<readonly PendingOpRecord[]>;
   /** Sign-out: everything this account left on the device, gone. */
   purge(): Promise<boolean>;
   close(): void;
@@ -168,6 +179,13 @@ export function openClientCache(deps: ClientCacheDeps): ClientCache {
       } catch {
         return false;
       }
+    },
+
+    async pendingOps() {
+      if (userId === null) return [];
+      const opened = await ready;
+      const result = await opened.storage.listPendingOps();
+      return result.ok ? result.value : [];
     },
 
     close() {

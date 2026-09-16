@@ -6,9 +6,13 @@
 // out of flow at every width, so it cannot push anything around when it
 // changes (item 4.6).
 //
+// The badge's buttons sit OUTSIDE its live region: a live region announces
+// itself whenever its text changes, and a control read out that way — "Try
+// again" with no subject — is noise.
+//
 // It is a summary, not a takeover. Even at its worst — an unrecoverable client
 // error — the content on screen stays readable and the badge offers the way
-// out (Reload). When the client has stopped retrying, Retry is here: that is
+// out (Reload), with Dismiss to put the real connection state back. When the client has stopped retrying, Retry is here: that is
 // the ONLY thing that restarts the connection (`connection.retry()`), so
 // without this badge the state machine's exit is unreachable.
 //
@@ -17,6 +21,7 @@
 
 import { useServices } from "../services.tsx";
 import type { RecoveryState } from "../state/recovery.ts";
+import { clearFatalError } from "../state/recovery.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import type { SummaryTone } from "./connection_model.ts";
 import { describeConnection, storageLine, summaryState } from "./connection_model.ts";
@@ -60,8 +65,6 @@ export function ConnectionSummary() {
   return (
     <div
       id="client-connection"
-      role="status"
-      aria-live="polite"
       data-conn-state={shown.state}
       className={[
         "pointer-events-none fixed bottom-4 left-4 z-50 flex max-w-[calc(100vw-2rem)] flex-col items-start gap-1",
@@ -76,8 +79,15 @@ export function ConnectionSummary() {
           TONE[shown.tone],
         ].join(" ")}
       >
-        <Icon name={shown.icon} spin={shown.spin} />
-        <span data-conn-text>{shown.label}</span>
+        {/*
+          The live region holds the STATE, and nothing else. A button inside it
+          is re-announced every time the label changes, and "Try again" read out
+          on its own tells the user nothing (§4.1).
+        */}
+        <span role="status" aria-live="polite" className="inline-flex items-center gap-2">
+          <Icon name={shown.icon} spin={shown.spin} />
+          <span data-conn-text>{shown.label}</span>
+        </span>
 
         {shown.action === "retry" && (
           <button
@@ -97,6 +107,16 @@ export function ConnectionSummary() {
             onClick={() => window.location.reload()}
           >
             Reload
+          </button>
+        )}
+        {shown.state === "error" && (
+          <button
+            type="button"
+            id="client-connection-dismiss"
+            className={ACTION}
+            onClick={() => clearFatalError(stores.recovery)}
+          >
+            Dismiss
           </button>
         )}
       </div>

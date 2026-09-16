@@ -6,7 +6,7 @@
 // "are we online?" flag, and nothing else gets to stash a pending write in a
 // component.
 
-import type { StorageStatus } from "../storage/db.ts";
+import type { PendingOpRecord, StorageStatus } from "../storage/db.ts";
 import type { SnapshotMeta } from "../storage/snapshots.ts";
 import type { Store } from "./store.ts";
 import { createStore } from "./store.ts";
@@ -105,6 +105,33 @@ export function setStorageHealth(
  */
 export function setFatalError(store: RecoveryStore, message: string): void {
   store.set((state) => (state.fatalError === null ? { ...state, fatalError: message } : state));
+}
+
+/**
+ * Takes the failure back off the screen. The summary's error state hides the
+ * real connection state, so it must be possible to put that state back —
+ * whether the user dismisses it or the client recovers on its own.
+ */
+export function clearFatalError(store: RecoveryStore): void {
+  store.set((state) => (state.fatalError === null ? state : { ...state, fatalError: null }));
+}
+
+/** Reads a queued op off the device as the pending write it stands for. */
+export function pendingWriteFrom(record: PendingOpRecord): PendingWrite {
+  return { id: record.key, operation: record.payload, queuedAt: record.createdAt };
+}
+
+/**
+ * Replaces the queue. Called at boot with whatever this device still holds:
+ * unsent work survives a reload, so the count the user is shown — and the
+ * warning before Sign out throws it away — has to survive one too.
+ */
+export function setPendingWrites(store: RecoveryStore, writes: readonly PendingWrite[]): void {
+  store.set((state) =>
+    state.pendingWrites.length === 0 && writes.length === 0
+      ? state
+      : { ...state, pendingWrites: writes },
+  );
 }
 
 /** Records the newest snapshot this device holds, or that it holds none. */

@@ -6,7 +6,9 @@ import { createDomainStore, initialDomainState, initiativeTree, putInitiativeTre
 import {
   createRecoveryStore,
   initialRecoveryState,
+  pendingWriteFrom,
   setConnectionStatus,
+  setPendingWrites,
   setSnapshotMeta,
   setStorageHealth,
 } from "./recovery.ts";
@@ -221,5 +223,39 @@ describe("ui store", () => {
     const store = createUiStore();
     assert.deepEqual(store.get().route, { kind: "initiatives" });
     assert.equal(store.get().selectedTaskId, null);
+  });
+});
+
+describe("writes this device has not sent yet", () => {
+  it("reads a queued op off the device as a pending write", () => {
+    const write = pendingWriteFrom({
+      key: "op-7",
+      initiativeId: 3,
+      createdAt: 1_700_000_000_000,
+      payload: { op: "update_task" },
+    });
+
+    assert.equal(write.id, "op-7");
+    assert.equal(write.queuedAt, 1_700_000_000_000);
+    assert.deepEqual(write.operation, { op: "update_task" });
+  });
+
+  it("puts them in the store, so the count the user is shown is the real one", () => {
+    const store = createRecoveryStore();
+
+    setPendingWrites(store, [
+      pendingWriteFrom({ key: "a", initiativeId: 1, createdAt: 1, payload: null }),
+    ]);
+
+    assert.equal(store.get().pendingWrites.length, 1);
+  });
+
+  it("does not churn the state when there is nothing queued and nothing was", () => {
+    const store = createRecoveryStore();
+    const before = store.get();
+
+    setPendingWrites(store, []);
+
+    assert.equal(store.get(), before);
   });
 });
