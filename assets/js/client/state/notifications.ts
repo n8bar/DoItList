@@ -40,13 +40,35 @@ export function unreadCount(rows: readonly NotificationRow[]): number {
   return rows.filter((row) => !row.read).length;
 }
 
-/** The answer to `GET /app/api/notifications`, taken verbatim. */
+/** Newest first: by when it happened, and by id when two share a moment. */
+function newestFirst(a: NotificationRow, b: NotificationRow): number {
+  if (a.inserted_at === b.inserted_at) return b.id - a.id;
+  return a.inserted_at < b.inserted_at ? 1 : -1;
+}
+
+/**
+ * The answer to `GET /app/api/notifications`, merged with what we already hold.
+ *
+ * The socket is joined before this read comes back, so a notification can
+ * arrive BEFORE the answer describing the world without it. Taking the answer
+ * verbatim would throw that row away, and the bell would go quiet about
+ * something the user was already told about. So the server's rows win wherever
+ * the two overlap, and anything we hold that the server's snapshot never saw is
+ * kept — counted, if it is unread.
+ */
 export function loaded(
-  _state: NotificationsState,
+  state: NotificationsState,
   recent: readonly NotificationRow[],
   unread: number,
 ): NotificationsState {
-  return { recent: recent.slice(0, MAX_RECENT), unread, loaded: true };
+  const fromServer = new Set(recent.map((row) => row.id));
+  const ours = state.recent.filter((row) => !fromServer.has(row.id));
+
+  return {
+    recent: [...recent, ...ours].sort(newestFirst).slice(0, MAX_RECENT),
+    unread: unread + unreadCount(ours),
+    loaded: true,
+  };
 }
 
 /**
@@ -74,4 +96,25 @@ export function markAllRead(state: NotificationsState): NotificationsState {
     unread: 0,
     loaded: state.loaded,
   };
+}
+
+/**
+ * Undo an optimistic `markAllRead` after the write failed.
+ *
+ * It does NOT put a whole earlier snapshot back: rows can arrive over the
+ * socket during the round trip, and restoring a value from before the request
+ * would erase them. Only the read flags we set are unset, and only for the rows
+ * that were unread when we set them.
+ */
+export function restoreUnread(
+  state: NotificationsState,
+  unreadIds: readonly number[],
+): NotificationsState {
+  const wasUnread = new Set(unreadIds);
+  if (!state.recent.some((row) => wasUnread.has(row.id) && row.read)) return state;
+
+  const recent = state.recent.map((row) =>
+    wasUnread.has(row.id) && row.read ? { ...row, read: false } : row,
+  );
+  return { recent, unread: unreadCount(recent), loaded: state.loaded };
 }

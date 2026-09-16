@@ -19,7 +19,8 @@ import { useServices } from "../services.tsx";
 import type { DomainState } from "../state/domain.ts";
 import { updateNotifications } from "../state/domain.ts";
 import type { NotificationRow, NotificationsState } from "../state/notifications.ts";
-import { loaded, markAllRead } from "../state/notifications.ts";
+import { loaded, markAllRead, restoreUnread } from "../state/notifications.ts";
+import { markAllReadRequest } from "../state/notification_ops.js";
 import { pushNotice } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { Icon } from "../ui/icon.tsx";
@@ -70,22 +71,25 @@ export function Bell({ className }: { className?: string }) {
     const before = stores.domain.get().notifications;
     if (before.unread === 0) return;
 
+    // Which rows WE are about to quieten. Kept as ids, not as a snapshot: a
+    // notification can arrive over the socket while the request is in flight,
+    // and putting an older whole value back would erase it.
+    const quietened = before.recent.filter((row) => !row.read).map((row) => row.id);
+
     // Optimistic first, request second.
     updateNotifications(stores.domain, markAllRead);
 
-    void api
-      .post("/operations", {
-        operations: [{ type: "update", entity: "notification", all: true }],
-      })
-      .then((result) => {
-        if (result.ok || !alive.current) return;
-        // Never leave the user believing something happened that didn't.
-        updateNotifications(stores.domain, () => before);
-        pushNotice(stores.ui, {
-          kind: "error",
-          message: "Couldn’t mark your notifications read. They’re still waiting for you.",
-        });
+    // The engine's envelope, from the one module that writes it down — see
+    // `state/notification_ops.js`.
+    void api.post("/operations", markAllReadRequest()).then((result) => {
+      if (result.ok || !alive.current) return;
+      // Never leave the user believing something happened that didn't.
+      updateNotifications(stores.domain, (state) => restoreUnread(state, quietened));
+      pushNotice(stores.ui, {
+        kind: "error",
+        message: "Couldn’t mark your notifications read. They’re still waiting for you.",
       });
+    });
   }, [api, stores.domain, stores.ui]);
 
   const items: readonly MenuItemModel[] = recent.map((row) => ({

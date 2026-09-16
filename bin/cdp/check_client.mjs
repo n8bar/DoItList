@@ -35,10 +35,18 @@ import {
   pressKey,
   waitFor,
 } from "./cdp.mjs";
+// The bell's write, from the module the browser itself bundles — so this check
+// cannot assert a shape the client stopped sending (or never sent).
+import { markAllReadRequest } from "../../assets/js/client/state/notification_ops.js";
 
 const CDP_URL = (process.env.CDP_URL ?? "http://localhost:9222").replace(/\/$/, "");
 const APP_URL = (process.env.APP_URL ?? "http://localhost:4000").replace(/\/$/, "");
 const VIEWPORT = { width: 1280, height: 800 };
+// Desktop widths where the header band is tightest: the summary took its own
+// slot at `lg:` (1024px) precisely because it used to be centred ON TOP of the
+// nav here, hiding Retry — the only way back from offline — and eating its
+// clicks.
+const CROWDED_WIDTHS = [1024, 1100, 1180, 1280];
 const NARROW_VIEWPORT = { width: 390, height: 844 };
 const READY_TIMEOUT_MS = 15_000;
 const SHOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../tmp/cdp");
@@ -484,6 +492,54 @@ export async function checkConnectionSummary(ctx) {
     const moved = shifted(before, await measureChrome(session));
     if (moved.length > 0) throw new Error(`the summary moved the frame: ${moved.join("; ")}`);
 
+    // Offline is the state where the summary MATTERS, and the state where it is
+    // widest. So this is the moment to prove that at every desktop width the
+    // band gets tight, Retry is still the thing under Retry — and the nav is
+    // still the thing under the nav.
+    const reachable = [];
+    for (const width of CROWDED_WIDTHS) {
+      await session.send("Emulation.setDeviceMetricsOverride", {
+        width,
+        height: VIEWPORT.height,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+
+      const hit = await waitFor(
+        session,
+        `
+        const covered = (id) => {
+          const el = document.getElementById(id);
+          if (el === null) return "missing";
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 || r.height === 0) return "not shown";
+          const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          if (at === null) return "nothing";
+          return el === at || el.contains(at) ? null : (at.id || at.tagName.toLowerCase());
+        };
+        const retry = covered("client-connection-retry");
+        const nav = covered("client-nav-account");
+        if (retry === "missing" || nav === "missing") return null;
+        return { retry, nav };
+      `,
+        { timeoutMs: 5_000, what: `the header to settle at ${width}px` },
+      );
+
+      if (hit.retry !== null) {
+        throw new Error(`at ${width}px, Try again is covered by ${hit.retry}`);
+      }
+      if (hit.nav !== null) {
+        throw new Error(`at ${width}px, the Account nav button is covered by ${hit.nav}`);
+      }
+      reachable.push(width);
+    }
+
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      ...VIEWPORT,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+
     // The network comes back, and the badge stays offline until the user says
     // otherwise: one rule for the way back, and Retry is it.
     await session.send("Network.emulateNetworkConditions", fast);
@@ -510,10 +566,17 @@ export async function checkConnectionSummary(ctx) {
       { timeoutMs: 20_000, what: "the connection to come back" },
     );
 
-    return `live → ${dropped.state} ("${dropped.text}", ${dropped.icon}) → live again (${back})`;
+    return `live → ${dropped.state} ("${dropped.text}", ${dropped.icon}) → live again (${back}); Try again and the nav both hit-testable at ${reachable.join(", ")}px`;
   } finally {
     await session.send("Network.emulateNetworkConditions", fast).catch(() => {});
     await session.send("Network.disable").catch(() => {});
+    await session
+      .send("Emulation.setDeviceMetricsOverride", {
+        ...VIEWPORT,
+        deviceScaleFactor: 1,
+        mobile: false,
+      })
+      .catch(() => {});
   }
 }
 
@@ -1513,6 +1576,26 @@ export async function checkNoHarnessResidue(ctx) {
 export async function checkBell(ctx) {
   const { session } = ctx;
 
+  // What the SERVER says this user has, read before anything is stubbed. The
+  // bell loads asynchronously, so without this the check races the read and
+  // reports whatever happened to be on screen — "0 rows" one run, ten the next.
+  const server = await evaluate(
+    session,
+    `
+    return (async () => {
+      const response = await fetch("/app/api/notifications", {
+        headers: { accept: "application/json" },
+        credentials: "same-origin",
+      });
+      if (!response.ok) return { ok: false, why: "the notifications read answered " + response.status };
+      const body = await response.json();
+      const data = body && body.data ? body.data : {};
+      return { ok: true, rows: (data.recent || []).length, unread: data.unread || 0 };
+    })();
+  `,
+  );
+  if (!server.ok) throw new Error(server.why);
+
   const stubbed = await evaluate(
     session,
     `
@@ -1552,6 +1635,10 @@ export async function checkBell(ctx) {
       if (panel === null || panel.hasAttribute("hidden")) return null;
       if (trigger.getAttribute("aria-expanded") !== "true") return null;
       const items = [...panel.querySelectorAll('[role="menuitem"]')];
+      // The bell must be showing what the server has, not a half-loaded list.
+      // Opening clears the unread count optimistically, so the "Mark all read"
+      // item is gone by the time we look: the rows are all that is left.
+      if (items.length !== ${server.rows}) return null;
       return {
         items: items.length,
         short: items.filter((el) => Math.round(el.getBoundingClientRect().height) < 36).length,
@@ -1561,7 +1648,7 @@ export async function checkBell(ctx) {
         name: trigger.getAttribute("aria-label"),
       };
     `,
-      { timeoutMs: 5_000, what: "the bell to open" },
+      { timeoutMs: 10_000, what: `the bell to open with its ${server.rows} row(s)` },
     );
 
     if (opened.role !== "menu") throw new Error(`the flyout is role="${opened.role}"`);
@@ -1580,10 +1667,10 @@ export async function checkBell(ctx) {
     if (stubbed.unreadBefore) {
       if (opened.dot) throw new Error("the dot is still showing after the bell was opened");
       if (ops.length !== 1) throw new Error(`${ops.length} write(s) went out, expected 1`);
-      const body = JSON.parse(ops[0]);
-      const op = body.operations?.[0] ?? {};
-      if (op.type !== "update" || op.entity !== "notification" || op.all !== true) {
-        throw new Error(`mark-read sent ${ops[0]} \u2014 not the existing notification operation`);
+      const sent = JSON.stringify(JSON.parse(ops[0]));
+      const expected = JSON.stringify(markAllReadRequest());
+      if (sent !== expected) {
+        throw new Error(`mark-read sent ${sent}, not ${expected}`);
       }
     } else if (ops.length > 0) {
       throw new Error("the bell wrote to the server with nothing unread");

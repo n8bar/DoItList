@@ -7,17 +7,18 @@ import {
   loaded,
   markAllRead,
   prepend,
+  restoreUnread,
   unreadCount,
 } from "./notifications.ts";
 import type { NotificationRow } from "./notifications.ts";
 
-const row = (id: number, read = false): NotificationRow => ({
+const row = (id: number, read = false, at = "2026-09-16T10:00:00Z"): NotificationRow => ({
   id,
   kind: "assigned",
   line: `Dana assigned you task ${id}`,
   href: `/app/initiatives/1?task=${id}`,
   read,
-  inserted_at: "2026-09-16T10:00:00Z",
+  inserted_at: at,
 });
 
 describe("what the bell holds", () => {
@@ -96,5 +97,75 @@ describe("marking everything read", () => {
 describe("unreadCount", () => {
   it("counts the rows that have not been read", () => {
     assert.equal(unreadCount([row(1), row(2, true), row(3)]), 2);
+  });
+});
+
+describe("the read landing after the socket has already spoken", () => {
+  it("keeps a row that arrived while the read was in flight, and counts it", () => {
+    // The channel is joined before the read comes back, so this ordering is
+    // normal, not exotic: push first, answer second. The answer is a snapshot
+    // from BEFORE the push, and taking it verbatim would lose the row.
+    const pushed = prepend(emptyNotifications, row(9, false, "2026-09-16T11:00:00Z"));
+    const state = loaded(pushed, [row(2), row(1, true)], 1);
+
+    assert.deepEqual(
+      state.recent.map((n) => n.id),
+      [9, 2, 1],
+    );
+    assert.equal(state.unread, 2);
+    assert.equal(state.loaded, true);
+  });
+
+  it("lets the server's copy of a row win over the one we were pushed", () => {
+    const pushed = prepend(emptyNotifications, row(2, false));
+    const state = loaded(pushed, [row(2, true)], 0);
+
+    assert.deepEqual(
+      state.recent.map((n) => n.id),
+      [2],
+    );
+    assert.equal(state.recent[0]?.read, true);
+    assert.equal(state.unread, 0);
+  });
+
+  it("still holds only the newest MAX_RECENT after a merge", () => {
+    const many = Array.from({ length: MAX_RECENT }, (_, i) => row(i + 1, true));
+    const pushed = prepend(emptyNotifications, row(99, false, "2026-09-16T12:00:00Z"));
+    const state = loaded(pushed, many, 0);
+
+    assert.equal(state.recent.length, MAX_RECENT);
+    assert.equal(state.recent[0]?.id, 99);
+  });
+});
+
+describe("putting the dot back when the write failed", () => {
+  it("restores only the rows that were unread", () => {
+    const before = loaded(emptyNotifications, [row(2), row(1, true)], 1);
+    const optimistic = markAllRead(before);
+    const rolledBack = restoreUnread(optimistic, [2]);
+
+    assert.equal(rolledBack.unread, 1);
+    assert.equal(rolledBack.recent.find((n) => n.id === 2)?.read, false);
+    assert.equal(rolledBack.recent.find((n) => n.id === 1)?.read, true);
+  });
+
+  it("does not erase a row that arrived during the round trip", () => {
+    const before = loaded(emptyNotifications, [row(2)], 1);
+    const optimistic = markAllRead(before);
+    const during = prepend(optimistic, row(7, false, "2026-09-16T11:00:00Z"));
+    const rolledBack = restoreUnread(during, [2]);
+
+    assert.deepEqual(
+      rolledBack.recent.map((n) => n.id),
+      [7, 2],
+    );
+    // The new row was never marked read by us, so it keeps its own state and
+    // its own place in the count.
+    assert.equal(rolledBack.unread, 2);
+  });
+
+  it("changes nothing when nothing was unread to begin with", () => {
+    const state = loaded(emptyNotifications, [row(1, true)], 0);
+    assert.equal(restoreUnread(state, []), state);
   });
 });
