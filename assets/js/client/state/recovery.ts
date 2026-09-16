@@ -6,6 +6,8 @@
 // "are we online?" flag, and nothing else gets to stash a pending write in a
 // component.
 
+import type { StorageStatus } from "../storage/db.ts";
+import type { SnapshotMeta } from "../storage/snapshots.ts";
 import type { Store } from "./store.ts";
 import { createStore } from "./store.ts";
 
@@ -30,8 +32,20 @@ export interface PendingWrite {
   readonly queuedAt: number;
 }
 
+/**
+ * How the local recovery cache stands. `opening` is the boot state; `ready`
+ * means writes land; `degraded` means the store is there but has refused
+ * something; `unavailable` means this tab has no durable recovery at all and
+ * the user is entitled to be told so.
+ */
+export type StorageHealth = "opening" | StorageStatus;
+
 export interface RecoveryState {
   readonly connection: ConnectionStatus;
+  /** The local cache's health. */
+  readonly storage: StorageHealth;
+  /** One plain sentence about why, when the health is not `ready`. */
+  readonly storageNote: string | null;
   /** Writes made but not yet acknowledged. Arc 3 drains this; nothing does yet. */
   readonly pendingWrites: readonly PendingWrite[];
   /** The Initiative the last local snapshot covers, or `null`. */
@@ -46,6 +60,8 @@ export interface RecoveryState {
 
 export const initialRecoveryState: RecoveryState = {
   connection: "connecting",
+  storage: "opening",
+  storageNote: null,
   pendingWrites: [],
   snapshotInitiativeId: null,
   snapshotVersion: null,
@@ -61,4 +77,26 @@ export function createRecoveryStore(initial: Partial<RecoveryState> = {}): Recov
 
 export function setConnectionStatus(store: RecoveryStore, connection: ConnectionStatus): void {
   store.set((state) => (state.connection === connection ? state : { ...state, connection }));
+}
+
+export function setStorageHealth(
+  store: RecoveryStore,
+  storage: StorageHealth,
+  storageNote: string | null = null,
+): void {
+  store.set((state) =>
+    state.storage === storage && state.storageNote === storageNote
+      ? state
+      : { ...state, storage, storageNote },
+  );
+}
+
+/** Records the newest snapshot this device holds, or that it holds none. */
+export function setSnapshotMeta(store: RecoveryStore, meta: SnapshotMeta | null): void {
+  store.set((state) => ({
+    ...state,
+    snapshotInitiativeId: meta?.initiativeId ?? null,
+    snapshotVersion: meta?.version ?? null,
+    snapshotAt: meta?.savedAt ?? null,
+  }));
 }

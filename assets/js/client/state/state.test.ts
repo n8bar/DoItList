@@ -3,7 +3,13 @@ import { describe, it } from "node:test";
 
 import { createStore } from "./store.ts";
 import { createDomainStore, initialDomainState, initiativeTree, putInitiativeTree } from "./domain.ts";
-import { createRecoveryStore, initialRecoveryState, setConnectionStatus } from "./recovery.ts";
+import {
+  createRecoveryStore,
+  initialRecoveryState,
+  setConnectionStatus,
+  setSnapshotMeta,
+  setStorageHealth,
+} from "./recovery.ts";
 import { createPreferencesStore, initialPreferencesState, setThemePreference } from "./preferences.ts";
 import { createUiStore, initialUiState, rememberPlace, setRoute } from "./ui.ts";
 import { createStores } from "./stores.ts";
@@ -149,6 +155,42 @@ describe("recovery store", () => {
     });
     setConnectionStatus(store, "live");
     assert.equal(calls, 0);
+  });
+
+  it("starts with the local store still opening and nothing to say about it", () => {
+    const store = createRecoveryStore();
+    assert.equal(store.get().storage, "opening");
+    assert.equal(store.get().storageNote, null);
+  });
+
+  it("records the local store's health and why (items 3.5–3.6)", () => {
+    const store = createRecoveryStore();
+    setStorageHealth(store, "unavailable", "private mode");
+    assert.equal(store.get().storage, "unavailable");
+    assert.equal(store.get().storageNote, "private mode");
+  });
+
+  it("ignores a storage write that changes nothing", () => {
+    const store = createRecoveryStore({ storage: "ready" });
+    let calls = 0;
+    store.subscribe(() => {
+      calls += 1;
+    });
+    setStorageHealth(store, "ready");
+    assert.equal(calls, 0);
+  });
+
+  it("records the newest snapshot, and that there is none", () => {
+    const store = createRecoveryStore();
+    setSnapshotMeta(store, { initiativeId: 12, version: 7, savedAt: 900 });
+    assert.equal(store.get().snapshotInitiativeId, 12);
+    assert.equal(store.get().snapshotVersion, 7);
+    assert.equal(store.get().snapshotAt, 900);
+
+    setSnapshotMeta(store, null);
+    assert.equal(store.get().snapshotInitiativeId, null);
+    assert.equal(store.get().snapshotVersion, null);
+    assert.equal(store.get().snapshotAt, null);
   });
 });
 

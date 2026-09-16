@@ -11,11 +11,14 @@ import { createContext, useContext } from "react";
 import type { ApiClient, ApiError } from "./api/client.ts";
 import type { Connection } from "./live/connection.ts";
 import type { Stores } from "./state/stores.ts";
+import type { ClientCache } from "./storage/client_cache.ts";
 
 export interface Services {
   readonly api: ApiClient;
   readonly stores: Stores;
   readonly connection: Connection;
+  /** This account's local recovery cache. Never throws at a screen. */
+  readonly cache: ClientCache;
   /**
    * Hands a failure to the app shell. Returns `true` when the shell took it
    * over (the session ended, or access was refused) and the screen should stop

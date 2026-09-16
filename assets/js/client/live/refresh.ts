@@ -21,6 +21,7 @@ import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
 import type { DomainStore } from "../state/domain.ts";
 import { forgetInitiative, putInitiativeTree } from "../state/domain.ts";
 import type { UiStore } from "../state/ui.ts";
+import type { TreeCache } from "../storage/snapshots.ts";
 import type { ChangedEvent } from "./connection.ts";
 
 /**
@@ -76,6 +77,12 @@ export interface SyncDeps {
   ui: UiStore;
   /** Hands the app the "you don't have access" screen. */
   onForbidden(): void;
+  /**
+   * The local recovery cache. A tree is written to it on the SAME path that
+   * writes it to the store — a snapshot that bypassed the guard could cache a
+   * tree the user is no longer allowed to see.
+   */
+  snapshots?: Pick<TreeCache, "cacheTree">;
   /** Injected in tests; one is made per client otherwise. */
   guard?: SyncGuard;
 }
@@ -109,7 +116,10 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
         if (domain.get().initiativeTrees[initiativeId] !== undefined) {
           const seq = guard.beginTree(initiativeId);
           const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
-          if (tree.ok && guard.currentTree(initiativeId, seq)) putInitiativeTree(domain, tree.data);
+          if (tree.ok && guard.currentTree(initiativeId, seq)) {
+            putInitiativeTree(domain, tree.data);
+            deps.snapshots?.cacheTree(tree.data);
+          }
         }
 
         if (domain.get().initiativeSummaries !== null) {

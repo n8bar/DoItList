@@ -26,10 +26,14 @@ import { RouterProvider, useRoute } from "./router/router.tsx";
 import { RouteView } from "./screens/route_view.tsx";
 import { createStores } from "./state/stores.ts";
 import { setThemePreference } from "./state/preferences.ts";
-import { setConnectionStatus } from "./state/recovery.ts";
-import { useStore } from "./state/use_store.ts";
+import type { RecoveryState } from "./state/recovery.ts";
+import { setConnectionStatus, setSnapshotMeta, setStorageHealth } from "./state/recovery.ts";
+import { useStore, useStoreValue } from "./state/use_store.ts";
 import type { Stores } from "./state/stores.ts";
 import { ServicesProvider } from "./services.tsx";
+import { openClientCache } from "./storage/client_cache.ts";
+import { browserIdb } from "./storage/idb.ts";
+import { browserKeyValueStore } from "./storage/last_user.ts";
 import type { ThemePreference } from "./lib/theme.ts";
 import { browserThemeEnv, currentPreference, nextPreference, setTheme } from "./lib/theme.ts";
 
@@ -108,6 +112,38 @@ function Header({ stores }: { stores: Stores }) {
   );
 }
 
+const selectStorage = (state: RecoveryState) => ({
+  health: state.storage,
+  note: state.storageNote,
+});
+
+/**
+ * What the user is owed when the local cache is not what it should be: one
+ * sentence, in place, never a takeover. Task 7's connection summary absorbs
+ * this; until then the client saying nothing would be the client knowing
+ * something the user doesn't.
+ */
+function StorageNote({ stores }: { stores: Stores }) {
+  const { health, note } = useStoreValue(stores.recovery, selectStorage);
+  if (health === "opening" || health === "ready") return null;
+
+  const headline =
+    health === "unavailable"
+      ? "This browser isn’t saving a local copy, so a reload starts from the server."
+      : "Some of the local copy couldn’t be kept.";
+
+  return (
+    <p
+      id="client-storage-note"
+      role="status"
+      className="shrink-0 border-b border-zinc-200 bg-zinc-50 px-4 py-2 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
+    >
+      {headline}
+      {note !== null && <span className="ml-1 text-zinc-500 dark:text-zinc-500">({note})</span>}
+    </p>
+  );
+}
+
 function Screen({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="flex min-h-dvh items-center justify-center p-6">
@@ -133,6 +169,19 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     }),
   );
   const [api] = useState(() => createApiClient({ csrfToken: bootstrap.csrfToken }));
+  // The account's local cache. Opening it is asynchronous and nothing waits on
+  // it: a signed-out tab opens nothing, and a browser that refuses to give us a
+  // database gets an in-memory stand-in plus a line in the UI saying so.
+  const [cache] = useState(() =>
+    openClientCache({
+      userId: bootstrap.user?.id ?? null,
+      idb: browserIdb(),
+      keyValue: browserKeyValueStore(),
+      onStatus: (status, reason) =>
+        setStorageHealth(stores.recovery, status, reason?.message ?? null),
+      onMeta: (meta) => setSnapshotMeta(stores.recovery, meta),
+    }),
+  );
   // The tab's one live connection. A route change must never recreate it — and
   // it opens no socket until the effect below says we have an identity, so a
   // signed-out tab never hammers a handshake it cannot pass.
@@ -143,6 +192,7 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       api,
       domain: stores.domain,
       ui: stores.ui,
+      snapshots: cache,
       onForbidden: () => setState({ kind: "forbidden" }),
     });
 
@@ -172,8 +222,8 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   }, []);
 
   const services = useMemo(
-    () => ({ api, stores, connection, escalate }),
-    [api, stores, connection, escalate],
+    () => ({ api, stores, connection, cache, escalate }),
+    [api, stores, connection, cache, escalate],
   );
 
   const started = useRef(false);
@@ -191,6 +241,10 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       if (result.ok) {
         stores.domain.set((domain) => ({ ...domain, user: result.data.user }));
         setSessionNote(null);
+        // The session belongs to somebody else — a re-login in another tab,
+        // say. Their cache is not ours to read: the old one goes before this
+        // one is opened (spec §12).
+        if (result.data.user.id !== cache.userId()) void cache.switchTo(result.data.user.id);
         return;
       }
       const next = stateForErrorCode(result.error.code, result.error.message);
@@ -205,7 +259,7 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     return () => {
       live = false;
     };
-  }, [api, connection, stores, state.kind]);
+  }, [api, cache, connection, stores, state.kind]);
 
   if (state.kind === "signed-out") {
     return (
@@ -254,6 +308,7 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       <RouterProvider stores={stores} scrollContainer={scrollContainer}>
         <div className="flex h-dvh flex-col">
           <Header stores={stores} />
+          <StorageNote stores={stores} />
           {sessionNote !== null && (
             <p
               id="client-session-note"

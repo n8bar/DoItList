@@ -8,7 +8,7 @@
 // on mount and unsubscribes on unmount, while the connection object itself
 // outlives both (guardrail §7.4).
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import type { InitiativeTree } from "../api/types.ts";
 import { Link } from "../router/link.tsx";
@@ -17,14 +17,30 @@ import type { DomainState } from "../state/domain.ts";
 import { putInitiativeTree } from "../state/domain.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
+import type { InitiativeSnapshot } from "../storage/snapshots.ts";
 import { ErrorNote, Heading, Loading } from "./chrome.tsx";
 import { useResource } from "./use_resource.ts";
 
 export function InitiativeScreen({ id }: { id: number }) {
-  const { api, stores, connection, escalate } = useServices();
+  const { api, stores, connection, cache, escalate } = useServices();
 
   const select = useCallback((state: DomainState) => state.initiativeTrees[id], [id]);
   const tree = useStoreValue(stores.domain, select);
+
+  // The last copy this device saved, shown while the live read is in flight so
+  // a reload on a slow link has a header instead of a spinner. It is dropped
+  // the moment the server answers, and it is never shown as if it were current.
+  const [cached, setCached] = useState<InitiativeSnapshot | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void cache.readTree(id).then((snapshot) => {
+      if (live) setCached(snapshot);
+    });
+    return () => {
+      live = false;
+    };
+  }, [cache, id]);
 
   useEffect(() => {
     connection.subscribeInitiative(id);
@@ -36,26 +52,41 @@ export function InitiativeScreen({ id }: { id: number }) {
     loaded: tree !== undefined,
     read: () => api.get<InitiativeTree>(`/initiatives/${id}`),
     onData: useCallback(
-      (data: InitiativeTree) => putInitiativeTree(stores.domain, data),
-      [stores.domain],
+      (data: InitiativeTree) => {
+        putInitiativeTree(stores.domain, data);
+        // Same path as the store write, so a tree the guard rejected is never
+        // the one that gets cached.
+        cache.cacheTree(data);
+      },
+      [cache, stores.domain],
     ),
     escalate,
   });
 
+  // The server's copy always wins; the cache only fills the gap before it lands.
+  const shown: InitiativeTree | InitiativeSnapshot | null = tree ?? cached;
+  const fromCache = tree === undefined && cached !== null;
+
   return (
     <section aria-labelledby={ROUTE_HEADING_ID}>
-      <Heading>{tree?.name ?? "Initiative"}</Heading>
+      <Heading>{shown?.name ?? "Initiative"}</Heading>
 
-      {tree?.subtitle && (
-        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{tree.subtitle}</p>
+      {shown?.subtitle && (
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">{shown.subtitle}</p>
       )}
 
-      {tree && (
+      {shown && (
         <p id="initiative-progress" className="mt-3 text-sm text-zinc-600 dark:text-zinc-300">
           <span className="font-medium tabular-nums text-zinc-900 dark:text-zinc-100">
-            {tree.progress}%
+            {shown.progress}%
           </span>{" "}
-          across {tree.unit_count} {tree.unit_count === 1 ? "unit" : "units"}
+          across {shown.unit_count} {shown.unit_count === 1 ? "unit" : "units"}
+        </p>
+      )}
+
+      {fromCache && (
+        <p id="initiative-cached" className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+          The last copy saved on this device, while the current one loads.
         </p>
       )}
 
