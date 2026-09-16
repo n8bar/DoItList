@@ -6,6 +6,7 @@ defmodule DoItWeb.Layouts do
 
   alias Phoenix.LiveView.JS
   alias DoIt.Notifications
+  alias DoItWeb.Api.NotificationView
 
   embed_templates "layouts/*"
 
@@ -49,26 +50,13 @@ defmodule DoItWeb.Layouts do
 
   defp notif_href(_), do: ~p"/initiatives"
 
-  # One-line, human description of a notification for the flyout.
-  defp notif_line(%{kind: kind} = notif) do
-    who = get_in(notif.data, ["actor_name"]) || "Someone"
-    title = get_in(notif.data, ["task_title"])
-    role = get_in(notif.data, ["role"])
-
-    case kind do
-      "member_added" -> "#{who} added you to an Initiative"
-      "member_removed" -> "#{who} removed you from an Initiative"
-      "role_changed" -> "#{who} changed your role to #{role || "a new role"} in an Initiative"
-      "assigned" -> "#{who} assigned you " <> task_phrase(title)
-      "unassigned" -> "#{who} unassigned you from " <> task_phrase(title)
-      "co_assigned" -> "#{who} added you as a co-assignee on " <> task_phrase(title)
-      "co_unassigned" -> "#{who} removed you as a co-assignee from " <> task_phrase(title)
-      _ -> "#{who} updated something"
-    end
-  end
-
-  defp task_phrase(nil), do: "a task"
-  defp task_phrase(title), do: "“#{title}”"
+  # One-line, human description of a notification for the flyout. The
+  # sentences themselves live in `DoItWeb.Api.NotificationView.line/1` — the
+  # client reads the same wording over `/app/api/notifications`, and the two
+  # must never drift apart. `notif_href/1` above stays separate on purpose:
+  # this flyout links to LiveView routes, the client's own API links to
+  # `/app` routes, and that split is real.
+  defp notif_line(notif), do: NotificationView.line(notif)
 
   attr :flash, :map, required: true
   attr :current_user, :map, default: nil
