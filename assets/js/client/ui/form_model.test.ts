@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { SAVING_LABEL, describedBy, fieldErrorsFrom, fieldIds } from "./form_model.ts";
+import {
+  SAVING_LABEL,
+  SUBMIT_REJECTED,
+  describedBy,
+  fieldErrorsFrom,
+  fieldIds,
+  rejectionMessage,
+} from "./form_model.ts";
 
 describe("field wiring (guardrails §2.2, §4.1)", () => {
   it("derives the ids a field needs from the form and the field name", () => {
@@ -80,5 +87,18 @@ describe("turning the server's per-op errors into field errors (item 4.2)", () =
     assert.deepEqual(fieldErrorsFrom({ error: { message: "m", pointer: "" } }), {});
     assert.deepEqual(fieldErrorsFrom({ error: { message: "m", pointer: 7 } }), {});
     assert.deepEqual(fieldErrorsFrom({ error: { pointer: "title" } }), {});
+  });
+});
+
+describe("a submit that never answers (guardrails §6.7)", () => {
+  it("becomes a form-level message, never a field one", () => {
+    assert.equal(rejectionMessage(new Error("The network dropped.")), "The network dropped.");
+    assert.equal(rejectionMessage("nope"), "nope");
+  });
+
+  it("always says something, however empty the failure was", () => {
+    assert.equal(rejectionMessage(new Error("")), SUBMIT_REJECTED);
+    assert.equal(rejectionMessage(undefined), SUBMIT_REJECTED);
+    assert.notEqual(SUBMIT_REJECTED, "");
   });
 });

@@ -88,3 +88,23 @@ export function fieldErrorsFrom(payload: unknown): Record<string, string> {
 
   return errors;
 }
+
+/**
+ * What a form says when the submit never came back with an answer at all — the
+ * promise rejected rather than resolving to a `Result`. A dropped connection, a
+ * refused write, a bug in the caller: from the user's seat it is the same, and
+ * the one thing they must not be left with is a button that stays busy forever
+ * (§6.7).
+ */
+export const SUBMIT_REJECTED = "Couldn’t save that. Try again.";
+
+/**
+ * The form-level message for a rejected submit. Never a field message: nothing
+ * in a rejection says which field was at fault, and guessing would send the
+ * user to edit a value that was fine.
+ */
+export function rejectionMessage(reason: unknown): string {
+  if (reason instanceof Error && reason.message !== "") return reason.message;
+  if (typeof reason === "string" && reason !== "") return reason;
+  return SUBMIT_REJECTED;
+}

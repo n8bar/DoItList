@@ -11,13 +11,16 @@
 //   * a rejection's per-op `pointer` errors land on their fields (§2.2,
 //     `fieldErrorsFrom`), and whatever cannot be placed on a field becomes the
 //     form-level message rather than being swallowed;
+//   * a submit that rejects outright ends the press too: `busy` clears and the
+//     failure becomes a form-level message, because a form stuck on "Saving…"
+//     is the one failure the user cannot get out of;
 //   * editing a field clears that field's error — the error described the value
 //     the user has just changed.
 
 import { useCallback, useRef, useState } from "react";
 
 import type { ApiError, Result } from "../api/client.ts";
-import { fieldErrorsFrom } from "./form_model.ts";
+import { fieldErrorsFrom, rejectionMessage } from "./form_model.ts";
 
 export type FormValues = Record<string, string | boolean>;
 
@@ -81,19 +84,28 @@ export function useForm<V extends FormValues, T>(options: UseFormOptions<V, T>):
       setFormError(null);
 
       const sent = { ...values };
-      void latest.current.submit(sent as V).then((result) => {
-        setBusy(false);
-        if (result.ok) {
-          latest.current.onSuccess?.(result.data, sent as V);
-          return;
-        }
+      void latest.current
+        .submit(sent as V)
+        .then((result) => {
+          setBusy(false);
+          if (result.ok) {
+            latest.current.onSuccess?.(result.data, sent as V);
+            return;
+          }
 
-        const fields = fieldErrorsFrom(result.error.payload);
-        setErrors(fields);
-        // Placed on a field, or said out loud — never neither.
-        if (Object.keys(fields).length === 0) setFormError(result.error.message);
-        latest.current.onError?.(result.error);
-      });
+          const fields = fieldErrorsFrom(result.error.payload);
+          setErrors(fields);
+          // Placed on a field, or said out loud — never neither.
+          if (Object.keys(fields).length === 0) setFormError(result.error.message);
+          latest.current.onError?.(result.error);
+        })
+        .catch((reason: unknown) => {
+          // The submit never came back with an answer at all. Leaving `busy`
+          // set would wedge the form for good, so the press ends here and says
+          // so — form-level, because nothing here points at a field (§6.7).
+          setBusy(false);
+          setFormError(rejectionMessage(reason));
+        });
     },
     [busy, values],
   );
