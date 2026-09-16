@@ -671,5 +671,13 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-15  M04 Arc 1 draft: split heavy bootstrap, routing, storage, shared-interface, and testing items into independently verifiable work without changing scope.
 2026-09-15  M04 Arc 1 approved: client runtime scope, worklists, testing, and Exit accepted.
 2026-09-15  M04 Arc 2 draft: split heavy model, rendering, optimistic-semantics, and testing items into independently verifiable work without changing scope.
+2026-09-15  M04 Arcs 1-2: moved continuing invariants and parity standards from leaf actions into their owning worklist titles, retaining concrete verification in Testing.
+2026-09-15  M04 Arc 2 approved: client-owned tree scope, worklists, testing, and Exit accepted.
+2026-09-15  M04 Arc 3 draft: decomposed heavy delivery, replay, resync, collaboration, degraded-mode, and testing leaves with nested subitems while preserving scope.
+2026-09-15  M04 Arc 3 draft: moved retention, resync, field-rebase, and degraded-mode invariants into their worklist titles and retained them as explicit tests.
+2026-09-15  M04 Arcs 4-7 drafts: decomposed heavy capacity, performance, view-control, cutover, and testing leaves into independently completable subitems without changing scope.
+2026-09-15  M04 Arcs 4-7 drafts: moved continuing invariants into worklist titles and rewrote outcome-language leaves as explicit actions, retaining verification in Testing.
+2026-09-15  M04 arc scope approved: all seven arc documents accepted; synchronized milestone and PLAN status and removed the completed temporary scoping checklist.
 2026-09-15  Tweak (header): the Initiative's leaf count shows its completed count above it, faded.
 2026-09-15  Tweak (tree): top-level Lists show their completed count above the leaf count, faded; both counts hide at zero or when all are done.
+2026-09-16  M04 Arc 1 (client runtime) built: React client at /app with its own session-only API and socket, per-account local cache, shared frame with account menu, bell, and three-way theme toggle, and a browser-check harness; every arc item except the human eye pass is done.

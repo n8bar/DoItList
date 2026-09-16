@@ -1,5 +1,5 @@
 # M04-Resilient-Client
-_Status: Milestone scope approved 2026-09-15 · Arc scoping in progress · Target: ~2026-Q4_
+_Status: Milestone and arc scope approved 2026-09-15 · Target: ~2026-Q4_
 
 Product behavior comes from [`ProductSpec.md`](../../ProductSpec.md) and [`UX_GUARDRAILS.md`](../../UX_GUARDRAILS.md).
 
@@ -27,7 +27,7 @@ Keep Do It List immediate, dependable, and efficient through latency, disconnect
 
 ## Arcs
 
-Remaining decisions live in the temporary [`M04 Scoping TODO`](m04-scoping-todo.md). All seven arc documents are unapproved drafts.
+All seven arc documents are approved.
 
 | Arc | Focus | Proposed dependency |
 |---|---|---|

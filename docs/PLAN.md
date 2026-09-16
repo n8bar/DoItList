@@ -21,7 +21,7 @@ No public release yet. The app won't open to the public before **M06 (Prep and L
 ## Milestones
 | Status | ID | Milestone | Short intent | Target | Doc |
 |---|---|---|---|---|---|
-| [ ] | M04 | Resilient Client | Client-owned UI, resilient collaboration, efficient scaling, responsive large Initiatives, and selected tree/view controls. Milestone scope approved; arcs unapproved. | ~2026-Q4 | [`milestones/m04-resilient-client/m04-resilient-client.md`](milestones/m04-resilient-client/m04-resilient-client.md) |
+| [ ] | M04 | Resilient Client | Client-owned UI, resilient collaboration, efficient scaling, responsive large Initiatives, and selected tree/view controls. Milestone and arc scope approved; implementation pending. | ~2026-Q4 | [`milestones/m04-resilient-client/m04-resilient-client.md`](milestones/m04-resilient-client/m04-resilient-client.md) |
 | [ ] | M05 | Final Features | Last product features before public — email infra & invites, recovery codes, TOTP, donation. Stub. | TBD | [`milestones/m05-final-features/m05-final-features.md`](milestones/m05-final-features/m05-final-features.md) |
 | [ ] | M06 | Prep and Launch | Launch readiness (legal, onboarding, security) + go-live (hosting, deploy, observability, backups). Opens the app to the public. Stub. | TBD | [`milestones/m06-prep-launch/m06-prep-launch.md`](milestones/m06-prep-launch/m06-prep-launch.md) |
 | [ ] | M07 | Appify | Post-launch: wrap the web frontend as installable Android & iOS apps — app-store presence, native shell, push. Stub. | TBD | [`milestones/m07-appify/m07-appify.md`](milestones/m07-appify/m07-appify.md) |
