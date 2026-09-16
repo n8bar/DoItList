@@ -1,29 +1,74 @@
-// The live connection seam (m04.01 item 3.7).
+// The tab's one live connection (m04.01 items 3.7 and 1.5).
 //
-// Task 8 puts a socket behind this. What matters *now* is where it lives: the
-// connection is created once at boot and held outside React, so a route change
-// — which unmounts one screen and mounts another — cannot tear it down and
-// stand it back up. Guardrail §7.4: navigating keeps the live session,
-// subscriptions and presence; a user who walks between Initiatives should not
-// disappear from everyone else's presence list and reappear.
+// Created once at boot, held outside React, and never torn down by a route
+// change: a screen unmounting must not drop the live session, the channel or
+// (later) the user's presence (guardrail §7.4). Subscriptions are refcounted
+// and released on a short grace timer, so walking from one Initiative to
+// another and straight back re-uses the channel that is already joined instead
+// of leaving and re-joining it.
 //
-// Everything below is a stub with real bookkeeping: the subscription set is
-// tracked for real (so leaks show up in tests today), the transport is not.
+// The transport is injected (`transport.ts`), so everything here — the
+// refcounting, the grace, the state mapping, the refetch fan-out — is exercised
+// by `node --test` against a fake socket. `phoenix_transport.ts` is the real one.
 
 import type { ConnectionStatus } from "../state/recovery.ts";
+import type { LinkState } from "./connection_state.ts";
+import { initialLinkState, nextLinkState, reconnectDelayMs } from "./connection_state.ts";
+import type { LiveChannel, LiveTransport, TransportFactory } from "./transport.ts";
+
+/** The kinds of change the server announces on a joined Initiative. */
+export const CHANGED_KINDS = [
+  "task_created",
+  "task_updated",
+  "task_moved",
+  "task_deleted",
+  "members_changed",
+] as const;
+
+export type ChangedKind = (typeof CHANGED_KINDS)[number];
+
+export interface ChangedEvent {
+  /** The Initiative whose channel carried the event. */
+  readonly initiativeId: number;
+  readonly kind: ChangedKind;
+  /** The record that moved — a task id, except `members_changed`. */
+  readonly id: number;
+}
+
+export interface Timers {
+  setTimeout(callback: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+export interface ConnectionDeps {
+  transport: TransportFactory;
+  /** Called whenever the reported status changes. */
+  onStatus(status: ConnectionStatus): void;
+  /** Called for every `changed` push on a joined Initiative. */
+  onChanged(event: ChangedEvent): void;
+  /** How long a released subscription is kept joined. */
+  leaveGraceMs?: number;
+  timers?: Timers;
+}
 
 export interface Connection {
   /** Stable for the life of the tab; a new value means something recreated it. */
   readonly id: string;
   status(): ConnectionStatus;
-  /** Stub until Task 8. Subscribing twice to the same Initiative is a no-op. */
+  /** Opens the socket. Idempotent — only a real reconnect moves the counter. */
+  connect(): void;
+  /** Subscribing twice to the same Initiative refcounts; it never re-joins. */
   subscribeInitiative(id: number): void;
-  /** Stub until Task 8. Unsubscribing something not subscribed is a no-op. */
+  /** Releases one hold. The channel is left after the grace period. */
   unsubscribeInitiative(id: number): void;
-  /** Currently subscribed Initiative ids, in subscribe order. */
+  /** Currently held Initiative ids, in subscribe order. */
   subscriptions(): readonly number[];
-  /** Drops the live session and everything subscribed on it. Task 8 owns when. */
+  /** Initiative ids whose channel is still joined (held or still in grace). */
+  joined(): readonly number[];
+  /** Drops the live session and everything on it. */
   disconnect(): void;
+  /** Resume after the client gave up. Only meaningful when `offline`. */
+  retry(): void;
   /**
    * How many times this connection has been established. It must still read 1
    * after any amount of navigating — a second connect means the live session,
@@ -32,44 +77,158 @@ export interface Connection {
   connectCount(): number;
 }
 
+/** Long enough to cover a route change, short enough to not leak a channel. */
+export const DEFAULT_LEAVE_GRACE_MS = 5_000;
+
+interface Subscription {
+  channel: LiveChannel;
+  refs: number;
+  leaveHandle: unknown;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** A `changed` payload, or `null` when the server said something we don't know. */
+export function parseChanged(initiativeId: number, payload: unknown): ChangedEvent | null {
+  if (!isRecord(payload)) return null;
+  const { kind, id } = payload;
+  if (typeof kind !== "string" || !(CHANGED_KINDS as readonly string[]).includes(kind)) return null;
+  if (typeof id !== "number") return null;
+  return { initiativeId, kind: kind as ChangedKind, id };
+}
+
 let nextConnectionId = 0;
 
-export function createConnection(): Connection {
+export function createConnection(deps: ConnectionDeps): Connection {
   nextConnectionId += 1;
   const id = `conn-${nextConnectionId}`;
-  const subscriptions = new Set<number>();
-  let connected = false;
-  let connects = 0;
-
-  // Task 8 replaces this with the socket handshake. What it is here for now is
-  // the count: connecting is something that happens, so a regression that
-  // rebuilds the connection on every route change is visible rather than
-  // vacuously "still 1".
-  const connect = () => {
-    if (connected) return;
-    connected = true;
-    connects += 1;
+  const grace = deps.leaveGraceMs ?? DEFAULT_LEAVE_GRACE_MS;
+  const timers: Timers = deps.timers ?? {
+    setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
+    clearTimeout: (handle) => globalThis.clearTimeout(handle as number),
   };
 
-  connect();
+  const subscriptions = new Map<number, Subscription>();
+  let link: LinkState = initialLinkState;
+  let connects = 0;
+  let open = false;
+
+  const report = (next: LinkState) => {
+    const before = link.status;
+    link = next;
+    if (link.status !== before) deps.onStatus(link.status);
+  };
+
+  const transport = deps.transport({
+    reconnectAfterMs: (tries) => reconnectDelayMs(tries),
+  });
+
+  transport.onOpen(() => {
+    open = true;
+    report(nextLinkState(link, { kind: "open" }));
+  });
+
+  const dropped = () => {
+    open = false;
+    const before = link;
+    const next = nextLinkState(before, { kind: "drop" });
+    report(next);
+    // The budget is spent: stop Phoenix's own retry loop rather than let it
+    // spin behind a screen that says we have stopped.
+    if (next.exhausted && !before.exhausted) transport.disconnect();
+  };
+
+  transport.onClose(dropped);
+  transport.onError(dropped);
+
+  // Idempotent: only a connection that is actually down is stood back up, so
+  // navigating (which subscribes) can never cost a reconnect.
+  const connect = () => {
+    if (connects > 0 && link.status !== "offline") return;
+    if (link.status === "offline") report(nextLinkState(link, { kind: "retry" }));
+    connects += 1;
+    transport.connect();
+  };
+
+  const join = (initiativeId: number): Subscription => {
+    const channel = transport.channel(`initiative:${initiativeId}`);
+    channel.on("changed", (payload) => {
+      const event = parseChanged(initiativeId, payload);
+      if (event !== null) deps.onChanged(event);
+    });
+    channel.join(() => {
+      // Arc 3 owns what a refused or timed-out join tells the user; today the
+      // reads still work, so a failed join must not take the screen down.
+    });
+    return { channel, refs: 0, leaveHandle: null };
+  };
+
+  const leave = (initiativeId: number, entry: Subscription) => {
+    if (entry.leaveHandle !== null) timers.clearTimeout(entry.leaveHandle);
+    entry.channel.leave();
+    subscriptions.delete(initiativeId);
+  };
 
   return {
     id,
-    // Task 8 reports the real transport state; until then the client behaves as
-    // if reads are live, which is what the HTTP surface actually is.
-    status: (): ConnectionStatus => (connected ? "online" : "offline"),
+    status: () => link.status,
+    connect,
+
     subscribeInitiative(initiativeId) {
       connect();
-      subscriptions.add(initiativeId);
+      const existing = subscriptions.get(initiativeId);
+      if (existing) {
+        if (existing.leaveHandle !== null) {
+          timers.clearTimeout(existing.leaveHandle);
+          existing.leaveHandle = null;
+        }
+        existing.refs += 1;
+        return;
+      }
+      const entry = join(initiativeId);
+      entry.refs = 1;
+      subscriptions.set(initiativeId, entry);
     },
+
     unsubscribeInitiative(initiativeId) {
-      subscriptions.delete(initiativeId);
+      const entry = subscriptions.get(initiativeId);
+      if (!entry || entry.refs === 0) return;
+      entry.refs -= 1;
+      if (entry.refs > 0) return;
+      // Keep the channel a moment: a route change releases the old screen's
+      // hold before the new screen takes its own, and coming straight back
+      // must not cost a leave/join round trip (§7.4).
+      entry.leaveHandle = timers.setTimeout(() => {
+        const current = subscriptions.get(initiativeId);
+        if (current && current.refs === 0) {
+          current.channel.leave();
+          subscriptions.delete(initiativeId);
+        }
+      }, grace);
     },
-    subscriptions: () => [...subscriptions],
+
+    subscriptions: () =>
+      [...subscriptions.entries()].filter(([, entry]) => entry.refs > 0).map(([key]) => key),
+
+    joined: () => [...subscriptions.keys()],
+
     disconnect() {
-      connected = false;
-      subscriptions.clear();
+      for (const [initiativeId, entry] of [...subscriptions.entries()]) {
+        leave(initiativeId, entry);
+      }
+      open = false;
+      report(nextLinkState(link, { kind: "down" }));
+      transport.disconnect();
     },
+
+    // The way back from `offline`: the client stopped on its own budget, so
+    // resuming is the user's call and it is one click (spec §7).
+    retry() {
+      if (link.status !== "offline") return;
+      connect();
+    },
+
     connectCount: () => connects,
   };
 }
@@ -77,11 +236,17 @@ export function createConnection(): Connection {
 let instance: Connection | null = null;
 
 /**
- * The one connection for this tab. Called from boot and from any view that
- * needs to subscribe; every caller gets the same object.
+ * Builds the tab's one connection, or hands back the one already built. Called
+ * from `app.tsx` once identity is known — a signed-out tab opens no socket.
  */
+export function initConnection(deps: ConnectionDeps): Connection {
+  if (instance === null) instance = createConnection(deps);
+  return instance;
+}
+
+/** The connection built by `initConnection`. */
 export function getConnection(): Connection {
-  if (instance === null) instance = createConnection();
+  if (instance === null) throw new Error("getConnection was called before initConnection.");
   return instance;
 }
 

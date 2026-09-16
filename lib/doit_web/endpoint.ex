@@ -17,6 +17,13 @@ defmodule DoItWeb.Endpoint do
     websocket: [connect_info: [:uri, session: @session_options]],
     longpoll: [connect_info: [:uri, session: @session_options]]
 
+  # The React client's socket (m04.01 1.5). Session-authenticated like every
+  # other browser surface; both transports are offered so a network that blocks
+  # WebSockets still gets live updates over long-polling (UX_GUARDRAILS §6.9).
+  socket "/socket", DoItWeb.UserSocket,
+    websocket: [connect_info: [session: @session_options]],
+    longpoll: [connect_info: [session: @session_options]]
+
   # Serve at "/" the static files from "priv/static" directory.
   #
   # When code reloading is disabled (e.g., in production),

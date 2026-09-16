@@ -142,12 +142,12 @@ describe("recovery store", () => {
   });
 
   it("ignores a status write that changes nothing", () => {
-    const store = createRecoveryStore({ connection: "online" });
+    const store = createRecoveryStore({ connection: "live" });
     let calls = 0;
     store.subscribe(() => {
       calls += 1;
     });
-    setConnectionStatus(store, "online");
+    setConnectionStatus(store, "live");
     assert.equal(calls, 0);
   });
 });

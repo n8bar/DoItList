@@ -16,7 +16,9 @@ import type { Bootstrap, ClientState } from "./boot.ts";
 import { initialState, loginPath, stateForErrorCode } from "./boot.ts";
 import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
-import { getConnection } from "./live/connection.ts";
+import { initConnection } from "./live/connection.ts";
+import { phoenixTransport } from "./live/phoenix_transport.ts";
+import { createChangedHandler } from "./live/refresh.ts";
 import { Link } from "./router/link.tsx";
 import type { Route } from "./router/route.ts";
 import { matchRoute } from "./router/route.ts";
@@ -24,6 +26,7 @@ import { RouterProvider, useRoute } from "./router/router.tsx";
 import { RouteView } from "./screens/route_view.tsx";
 import { createStores } from "./state/stores.ts";
 import { setThemePreference } from "./state/preferences.ts";
+import { setConnectionStatus } from "./state/recovery.ts";
 import { useStore } from "./state/use_store.ts";
 import type { Stores } from "./state/stores.ts";
 import { ServicesProvider } from "./services.tsx";
@@ -130,8 +133,16 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     }),
   );
   const [api] = useState(() => createApiClient({ csrfToken: bootstrap.csrfToken }));
-  // The tab's one live connection. A route change must never recreate it.
-  const [connection] = useState(getConnection);
+  // The tab's one live connection. A route change must never recreate it — and
+  // it opens no socket until the effect below says we have an identity, so a
+  // signed-out tab never hammers a handshake it cannot pass.
+  const [connection] = useState(() =>
+    initConnection({
+      transport: (options) => phoenixTransport(options, () => api.csrfToken()),
+      onStatus: (status) => setConnectionStatus(stores.recovery, status),
+      onChanged: createChangedHandler({ api, domain: stores.domain }),
+    }),
+  );
 
   const mainRef = useRef<HTMLElement | null>(null);
   const scrollContainer = useCallback(() => mainRef.current, []);
@@ -161,6 +172,9 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     if (state.kind !== "ready" || started.current) return;
     started.current = true;
 
+    // Identity is known (the bootstrap named the user), so the socket may open.
+    connection.connect();
+
     let live = true;
     void api.get<SessionData>("/session").then((result) => {
       if (!live) return;
@@ -181,7 +195,7 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     return () => {
       live = false;
     };
-  }, [api, stores, state.kind]);
+  }, [api, connection, stores, state.kind]);
 
   if (state.kind === "signed-out") {
     return (

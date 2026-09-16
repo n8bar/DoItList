@@ -72,6 +72,14 @@ defmodule DoItWeb.UserAuth do
   def local_return_path(_path), do: nil
 
   def log_out_user(conn) do
+    # Drop this user's live sockets (m04.01 1.5) before the session is wiped —
+    # a client holding an open socket would otherwise keep receiving updates
+    # for an identity the browser has just given up. Other still-signed-in tabs
+    # reconnect on their own cookie.
+    if user_id = get_session(conn, @session_key) do
+      DoItWeb.Endpoint.broadcast("user_socket:#{user_id}", "disconnect", %{})
+    end
+
     conn
     |> renew_session()
     |> redirect(to: ~p"/")

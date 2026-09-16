@@ -10,11 +10,13 @@ import type { Store } from "./store.ts";
 import { createStore } from "./store.ts";
 
 /**
- * Where the live connection stands. `connecting` is the boot state; `offline`
- * means the client is serving what it already has and queueing what the user
- * does; `reconnecting` is a retry in flight after an `offline`.
+ * Where the live connection stands. `connecting` is the boot state; `live`
+ * means the socket is open and the joined Initiative is being kept current;
+ * `reconnecting` is a retry in flight; `offline` means the client has stopped
+ * retrying, is serving what it already has, and is waiting for the user to ask
+ * it to try again (`Connection.retry()`).
  */
-export type ConnectionStatus = "connecting" | "online" | "reconnecting" | "offline";
+export type ConnectionStatus = "connecting" | "live" | "reconnecting" | "offline";
 
 /**
  * A write the user has made that the server has not yet acknowledged. Arc 3
