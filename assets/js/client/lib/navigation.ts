@@ -99,3 +99,83 @@ export function focusTarget(
   if (id !== null && exists(id)) return { kind: "element", id };
   return { kind: "heading" };
 }
+
+// --- Restoring a scroll position against content that arrives late -----------
+//
+// A remembered position can't always be honoured on the first try: if the route
+// being restored has to fetch, the container is still short and the browser
+// clamps `scrollTop = 420` down to 0. Nothing about the first attempt is wrong;
+// it is simply too early. So restoring is a small, bounded conversation instead
+// of a single assignment — the caller re-runs `restoreStep` whenever the
+// content changes, and this decides whether to try again, and when to give up.
+//
+// Two things it will not do: keep watching forever, and move a container the
+// user has since scrolled themselves.
+
+/** How many attempts a single restore gets before it gives up. */
+export const MAX_RESTORE_ATTEMPTS = 24;
+
+/** How long a restore keeps watching for late content, in milliseconds. */
+export const RESTORE_TIMEOUT_MS = 3000;
+
+export interface RestoreState {
+  /** The position we are trying to reach. */
+  readonly target: number;
+  readonly attempts: number;
+  /** The `scrollTop` we last set, or `null` before the first attempt. */
+  readonly applied: number | null;
+  /** True once nothing more will be attempted. */
+  readonly finished: boolean;
+}
+
+/** What the container looks like right now. */
+export interface ScrollMetrics {
+  readonly scrollTop: number;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+}
+
+export interface RestoreStep {
+  /** The `scrollTop` to set now, or `null` to leave the container alone. */
+  readonly apply: number | null;
+  /** True when the caller should stop watching for more content. */
+  readonly finished: boolean;
+  readonly state: RestoreState;
+}
+
+export function beginRestore(target: number): RestoreState {
+  return { target: Math.max(0, Math.round(target)), attempts: 0, applied: null, finished: false };
+}
+
+/**
+ * One attempt. Call it as soon as the route has rendered, then again each time
+ * the content changes.
+ *
+ *   * The container is tall enough → set the target and finish.
+ *   * The container is still short → set as far as it goes and stay open, so a
+ *     fetch that lands a moment later finishes the job.
+ *   * The `scrollTop` isn't where we left it → the user scrolled; stop, and
+ *     don't touch it. Their scroll outranks our memory of an old one.
+ *   * Out of attempts → stop. A route whose content never grows must not leave
+ *     a watcher running for the rest of the session.
+ */
+export function restoreStep(state: RestoreState, metrics: ScrollMetrics): RestoreStep {
+  if (state.finished) return { apply: null, finished: true, state };
+
+  if (state.applied !== null && metrics.scrollTop !== state.applied) {
+    const stopped = { ...state, finished: true };
+    return { apply: null, finished: true, state: stopped };
+  }
+
+  const attempts = state.attempts + 1;
+  const maxScroll = Math.max(0, metrics.scrollHeight - metrics.clientHeight);
+  const reachable = Math.min(state.target, maxScroll);
+  const arrived = reachable >= state.target;
+  const finished = arrived || attempts >= MAX_RESTORE_ATTEMPTS;
+
+  return {
+    apply: reachable,
+    finished,
+    state: { target: state.target, attempts, applied: reachable, finished },
+  };
+}

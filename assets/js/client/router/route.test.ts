@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { HOME_PATH, internalPath, matchRoute, parseId, routePath } from "./route.ts";
+import { HOME_PATH, internalPath, matchRoute, parseId, routePath, sameRoute } from "./route.ts";
 
 describe("matchRoute", () => {
   it("resolves the four product paths", () => {
@@ -89,3 +89,23 @@ describe("internalPath", () => {
   });
 });
 
+describe("sameRoute", () => {
+  it("distinguishes routes that render different screens", () => {
+    assert.equal(sameRoute({ kind: "initiatives" }, { kind: "initiatives" }), true);
+    assert.equal(sameRoute({ kind: "initiative", id: 1 }, { kind: "initiative", id: 1 }), true);
+    assert.equal(sameRoute({ kind: "initiative", id: 1 }, { kind: "initiative", id: 2 }), false);
+    assert.equal(sameRoute({ kind: "initiatives" }, { kind: "account" }), false);
+    assert.equal(
+      sameRoute({ kind: "not-found", path: "/app/a" }, { kind: "not-found", path: "/app/b" }),
+      false,
+    );
+  });
+
+  it("sees a trailing slash as the same screen", () => {
+    assert.equal(sameRoute(matchRoute("/app/account"), matchRoute("/app/account/")), true);
+    assert.equal(
+      sameRoute(matchRoute("/app/initiatives/42"), matchRoute("/app/initiatives/42/")),
+      true,
+    );
+  });
+});

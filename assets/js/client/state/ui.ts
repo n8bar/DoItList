@@ -2,8 +2,8 @@
 //
 // Everything here dies with the tab and the server never hears about it
 // (guardrails §7.3): which route is showing, what is selected, which panes are
-// open, where focus should land, and the per-history-entry scroll/focus memory
-// that makes back/forward feel like the browser (item 3.3).
+// open, and the per-history-entry scroll/focus memory that makes back/forward
+// feel like the browser (item 3.3).
 //
 // Nothing here is a server record, and no server record is here — `state.test.ts`
 // holds that line.
@@ -21,11 +21,6 @@ export interface UiState {
   readonly selectedTaskId: number | null;
   /** Open panes/disclosures, by a stable client-side key. */
   readonly openPanes: readonly string[];
-  /**
-   * The element id focus should move to after the next render, or `null` for
-   * "the route's heading". Consumed and cleared by the router.
-   */
-  readonly focusTarget: string | null;
   /** Scroll position and last-focused element, per history entry (item 3.3). */
   readonly navigationMemory: NavigationMemory;
 }
@@ -34,7 +29,6 @@ export const initialUiState: UiState = {
   route: { kind: "initiatives" },
   selectedTaskId: null,
   openPanes: [],
-  focusTarget: null,
   navigationMemory: emptyNavigationMemory,
 };
 

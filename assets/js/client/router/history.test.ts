@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { HistoryEntry, HistoryEnv, HistoryLike } from "./history.ts";
-import { createClientHistory, keyOf, stateWithKey } from "./history.ts";
+import { createClientHistory, keyOf, normalizePath, stateWithKey } from "./history.ts";
 
 /** A fake browser history: a stack, a pathname, and a popstate we can fire. */
 function fakeEnv(startPath = "/app/initiatives", startState: unknown = null) {
@@ -75,6 +75,16 @@ describe("history state keys", () => {
   it("preserves anything already on the state object", () => {
     assert.deepEqual(stateWithKey({ phx: 1 }, "k1"), { phx: 1, doitKey: "k1" });
     assert.deepEqual(stateWithKey(null, "k1"), { doitKey: "k1" });
+  });
+});
+
+describe("normalizePath", () => {
+  it("reduces every form to the pathname popstate would report", () => {
+    assert.equal(normalizePath("/app/initiatives"), "/app/initiatives");
+    assert.equal(normalizePath("/app/initiatives?filter=mine"), "/app/initiatives");
+    assert.equal(normalizePath("/app/initiatives#task-3"), "/app/initiatives");
+    assert.equal(normalizePath("/app/initiatives?a=1#b"), "/app/initiatives");
+    assert.equal(normalizePath(""), "/");
   });
 });
 
@@ -177,5 +187,19 @@ describe("createClientHistory", () => {
     go(-1);
 
     assert.equal(calls, 0);
+  });
+
+  it("records the same path form for a push and for the pop that returns to it", () => {
+    const { env, go } = fakeEnv();
+    const client = createClientHistory(env);
+
+    client.push("/app/initiatives/42?from=list");
+    const pushed = client.current().path;
+
+    go(-1);
+    go(1);
+
+    assert.equal(pushed, "/app/initiatives/42");
+    assert.equal(client.current().path, pushed);
   });
 });

@@ -3,11 +3,14 @@ import { describe, it } from "node:test";
 
 import {
   MAX_ENTRIES,
+  MAX_RESTORE_ATTEMPTS,
+  beginRestore,
   emptyNavigationMemory,
   focusTarget,
   recall,
   remember,
   restorationPlan,
+  restoreStep,
 } from "./navigation.ts";
 
 const place = (scrollTop: number, focusElementId: string | null = null) => ({
@@ -110,5 +113,75 @@ describe("focusTarget", () => {
     assert.deepEqual(focusTarget({ scrollTop: 0, focusElementId: null }, always), {
       kind: "heading",
     });
+  });
+});
+
+describe("restoreStep (content that arrives late)", () => {
+  const metrics = (scrollTop: number, scrollHeight: number, clientHeight = 500) => ({
+    scrollTop,
+    scrollHeight,
+    clientHeight,
+  });
+
+  it("restores in one attempt when the content is already there", () => {
+    const step = restoreStep(beginRestore(420), metrics(0, 2000));
+    assert.equal(step.apply, 420);
+    assert.equal(step.finished, true);
+  });
+
+  it("finishes immediately for a top-of-page restore", () => {
+    const step = restoreStep(beginRestore(0), metrics(0, 500));
+    assert.equal(step.apply, 0);
+    assert.equal(step.finished, true);
+  });
+
+  it("stays open while the container is too short, then restores when content arrives", () => {
+    // The route rendered its heading but its fetch hasn't landed: 120px of
+    // content in a 500px box, so 420 is unreachable.
+    const first = restoreStep(beginRestore(420), metrics(0, 620));
+    assert.equal(first.apply, 120);
+    assert.equal(first.finished, false, "a short container must not end the restore");
+
+    // The list arrives.
+    const second = restoreStep(first.state, metrics(120, 2000));
+    assert.equal(second.apply, 420);
+    assert.equal(second.finished, true);
+  });
+
+  it("does not clobber a scroll the user made while we were waiting", () => {
+    const first = restoreStep(beginRestore(420), metrics(0, 620));
+    assert.equal(first.apply, 120);
+
+    // The user scrolled to 40 themselves; that outranks our memory.
+    const second = restoreStep(first.state, metrics(40, 2000));
+    assert.equal(second.apply, null);
+    assert.equal(second.finished, true);
+
+    // And a later change must not reopen it.
+    const third = restoreStep(second.state, metrics(40, 4000));
+    assert.equal(third.apply, null);
+    assert.equal(third.finished, true);
+  });
+
+  it("gives up after the attempt cap rather than watching forever", () => {
+    let state = beginRestore(420);
+    let applies = 0;
+    for (let i = 0; i < MAX_RESTORE_ATTEMPTS + 5; i += 1) {
+      const step = restoreStep(state, metrics(state.applied ?? 0, 620));
+      state = step.state;
+      if (step.apply !== null) applies += 1;
+      if (step.finished) break;
+    }
+    assert.equal(state.finished, true);
+    assert.equal(state.attempts, MAX_RESTORE_ATTEMPTS);
+    assert.equal(applies, MAX_RESTORE_ATTEMPTS);
+  });
+
+  it("is a no-op once finished", () => {
+    const done = restoreStep(beginRestore(420), metrics(0, 2000)).state;
+    const again = restoreStep(done, metrics(420, 4000));
+    assert.equal(again.apply, null);
+    assert.equal(again.finished, true);
+    assert.equal(again.state, done);
   });
 });

@@ -22,7 +22,13 @@ export interface Connection {
   unsubscribeInitiative(id: number): void;
   /** Currently subscribed Initiative ids, in subscribe order. */
   subscriptions(): readonly number[];
-  /** How many times `connect` has run. Must stay at 1 across route changes. */
+  /** Drops the live session and everything subscribed on it. Task 8 owns when. */
+  disconnect(): void;
+  /**
+   * How many times this connection has been established. It must still read 1
+   * after any amount of navigating — a second connect means the live session,
+   * and the user's presence with it, was dropped and rebuilt.
+   */
   connectCount(): number;
 }
 
@@ -32,22 +38,38 @@ export function createConnection(): Connection {
   nextConnectionId += 1;
   const id = `conn-${nextConnectionId}`;
   const subscriptions = new Set<number>();
-  // One "connect" per connection object. Task 8 replaces this with the socket
-  // handshake; the count is what the continuity test asserts on.
-  const connects = 1;
+  let connected = false;
+  let connects = 0;
+
+  // Task 8 replaces this with the socket handshake. What it is here for now is
+  // the count: connecting is something that happens, so a regression that
+  // rebuilds the connection on every route change is visible rather than
+  // vacuously "still 1".
+  const connect = () => {
+    if (connected) return;
+    connected = true;
+    connects += 1;
+  };
+
+  connect();
 
   return {
     id,
     // Task 8 reports the real transport state; until then the client behaves as
     // if reads are live, which is what the HTTP surface actually is.
-    status: (): ConnectionStatus => "online",
+    status: (): ConnectionStatus => (connected ? "online" : "offline"),
     subscribeInitiative(initiativeId) {
+      connect();
       subscriptions.add(initiativeId);
     },
     unsubscribeInitiative(initiativeId) {
       subscriptions.delete(initiativeId);
     },
     subscriptions: () => [...subscriptions],
+    disconnect() {
+      connected = false;
+      subscriptions.clear();
+    },
     connectCount: () => connects,
   };
 }

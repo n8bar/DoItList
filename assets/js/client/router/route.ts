@@ -90,6 +90,19 @@ export function routePath(route: Route): string {
   }
 }
 
+/**
+ * True when two paths resolve to the same screen. Used to answer "are we
+ * already here?" — a question about routes, not strings, so `/app/account` and
+ * `/app/account/` don't stack a history entry on each other.
+ */
+export function sameRoute(a: Route, b: Route): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "initiative" && b.kind === "initiative") return a.id === b.id;
+  if (a.kind === "not-found" && b.kind === "not-found") return a.path === b.path;
+  if (a.kind === "redirect" && b.kind === "redirect") return a.to === b.to;
+  return true;
+}
+
 /** True when the client owns this path, i.e. a `<Link>` may intercept it. */
 export function internalPath(path: string): boolean {
   return path === BASE_PATH || path.startsWith(`${BASE_PATH}/`);

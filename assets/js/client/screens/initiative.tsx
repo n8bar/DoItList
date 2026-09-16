@@ -12,6 +12,7 @@ import { useCallback, useEffect } from "react";
 
 import type { InitiativeTree } from "../api/types.ts";
 import { Link } from "../router/link.tsx";
+import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
 import { putInitiativeTree } from "../state/domain.ts";
 import { useStoreValue } from "../state/use_store.ts";
@@ -42,7 +43,7 @@ export function InitiativeScreen({ id }: { id: number }) {
   });
 
   return (
-    <section aria-labelledby="route-heading">
+    <section aria-labelledby={ROUTE_HEADING_ID}>
       <Heading>{tree?.name ?? "Initiative"}</Heading>
 
       {tree?.subtitle && (

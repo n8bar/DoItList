@@ -71,6 +71,20 @@ describe("the tab's one connection (item 3.7)", () => {
     assert.deepEqual(last.subscriptions(), []);
   });
 
+  it("counts a reconnect, so the continuity assertion is not vacuous", () => {
+    const connection = getConnection();
+    assert.equal(connection.connectCount(), 1);
+    assert.equal(connection.status(), "online");
+
+    connection.subscribeInitiative(12);
+    connection.disconnect();
+    assert.equal(connection.status(), "offline");
+    assert.deepEqual(connection.subscriptions(), []);
+
+    connection.subscribeInitiative(12);
+    assert.equal(connection.connectCount(), 2, "reconnecting must move the counter");
+  });
+
   it("only a new tab gets a new connection", () => {
     const before = getConnection().id;
     resetConnection();

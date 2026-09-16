@@ -5,11 +5,12 @@
 // than leaving the user on an empty frame.
 
 import { Link } from "../router/link.tsx";
+import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import { Heading } from "./chrome.tsx";
 
 export function NotFoundScreen({ path }: { path: string }) {
   return (
-    <section aria-labelledby="route-heading">
+    <section aria-labelledby={ROUTE_HEADING_ID}>
       <Heading>We couldn’t find that page</Heading>
       <p className="mt-4 text-sm text-zinc-500 dark:text-zinc-400">
         Nothing lives at <code className="font-mono">{path}</code>.

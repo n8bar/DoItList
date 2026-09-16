@@ -9,6 +9,7 @@ import { useCallback } from "react";
 
 import type { InitiativeSummary } from "../api/types.ts";
 import { Link } from "../router/link.tsx";
+import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
@@ -35,7 +36,7 @@ export function InitiativesScreen() {
   });
 
   return (
-    <section aria-labelledby="route-heading">
+    <section aria-labelledby={ROUTE_HEADING_ID}>
       <Heading>Initiatives</Heading>
 
       {resource.status === "loading" && <Loading>Loading your Initiatives…</Loading>}

@@ -22,13 +22,20 @@ import {
   useState,
 } from "react";
 
-import { focusTarget, restorationPlan } from "../lib/navigation.ts";
+import type { RestorationPlan } from "../lib/navigation.ts";
+import {
+  RESTORE_TIMEOUT_MS,
+  beginRestore,
+  focusTarget,
+  restorationPlan,
+  restoreStep,
+} from "../lib/navigation.ts";
 import type { Stores } from "../state/stores.ts";
 import { rememberPlace, setRoute } from "../state/ui.ts";
 import type { ClientHistory, HistoryEntry } from "./history.ts";
 import { browserHistoryEnv, createClientHistory } from "./history.ts";
 import type { Route } from "./route.ts";
-import { matchRoute } from "./route.ts";
+import { matchRoute, sameRoute } from "./route.ts";
 
 /** The id every route's `<h1>` carries, and the default focus landing spot. */
 export const ROUTE_HEADING_ID = "route-heading";
@@ -75,6 +82,57 @@ function activeElementId(): string | null {
   return active.id === "" ? null : active.id;
 }
 
+/** Moves focus to the remembered element, or to the route's heading. */
+function applyFocus(plan: RestorationPlan): void {
+  const target = focusTarget(plan, (id) => document.getElementById(id) !== null);
+  const id = target.kind === "element" ? target.id : ROUTE_HEADING_ID;
+  // The scroll we just set (or are still working towards) is the intended one;
+  // focusing must not undo it.
+  document.getElementById(id)?.focus({ preventScroll: true });
+}
+
+/**
+ * Drives `restoreStep` against a real container: once now, and again whenever
+ * the content changes, until the position is reached, the attempts run out, the
+ * watch times out, or the user scrolls. Returns the teardown.
+ */
+function restoreScroll(container: HTMLElement, target: number): () => void {
+  let state = beginRestore(target);
+  let observer: MutationObserver | null = null;
+  let timer: number | undefined;
+
+  const stop = () => {
+    observer?.disconnect();
+    observer = null;
+    if (timer !== undefined) window.clearTimeout(timer);
+    timer = undefined;
+  };
+
+  const attempt = () => {
+    const step = restoreStep(state, {
+      scrollTop: container.scrollTop,
+      scrollHeight: container.scrollHeight,
+      clientHeight: container.clientHeight,
+    });
+    state = step.state;
+    if (step.apply !== null) container.scrollTop = step.apply;
+    if (step.finished) stop();
+  };
+
+  attempt();
+
+  // Not there yet: the route is still fetching what gives the page its height.
+  // A DOM change in the container is the signal to try again — setting
+  // `scrollTop` mutates nothing, so this cannot feed itself.
+  if (!state.finished && typeof MutationObserver !== "undefined") {
+    observer = new MutationObserver(attempt);
+    observer.observe(container, { childList: true, subtree: true, characterData: true });
+    timer = window.setTimeout(stop, RESTORE_TIMEOUT_MS);
+  }
+
+  return stop;
+}
+
 export interface RouterProviderProps {
   stores: Stores;
   /** The element whose `scrollTop` is remembered and restored. */
@@ -110,7 +168,9 @@ export function RouterProvider({ stores, scrollContainer, children }: RouterProv
   const navigate = useCallback(
     (to: string, options?: NavigateOptions) => {
       const current = history.current();
-      if (options?.replace !== true && to === current.path) return;
+      // "Already here" is a question about routes, not strings: `/app/account`
+      // and `/app/account/` are the same screen and must not stack an entry.
+      if (options?.replace !== true && sameRoute(matchRoute(to), matchRoute(current.path))) return;
       rememberCurrent();
       if (options?.replace === true) history.replace(to);
       else history.push(to);
@@ -138,18 +198,18 @@ export function RouterProvider({ stores, scrollContainer, children }: RouterProv
 
     const plan = restorationPlan(entry.kind, entry.key, stores.ui.get().navigationMemory);
     const container = scrollContainer();
-    if (container) container.scrollTop = plan.scrollTop;
-    else window.scrollTo(0, plan.scrollTop);
 
     // A first paint is not a navigation: the browser has just given the page
     // focus and moving it would be the client taking something the user didn't
     // ask for.
-    if (entry.kind === "initial") return;
+    if (entry.kind !== "initial") applyFocus(plan);
 
-    const target = focusTarget(plan, (id) => document.getElementById(id) !== null);
-    const id = target.kind === "element" ? target.id : ROUTE_HEADING_ID;
-    document.getElementById(id)?.focus({ preventScroll: true });
-    // The scroll we just set is the intended one; focusing must not undo it.
+    if (!container) {
+      window.scrollTo(0, plan.scrollTop);
+      return;
+    }
+
+    return restoreScroll(container, plan.scrollTop);
   }, [entry.key, entry.kind, route.kind, scrollContainer, stores.ui]);
 
   const value = useMemo<RouterValue>(

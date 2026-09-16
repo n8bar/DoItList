@@ -64,6 +64,17 @@ export function stateWithKey(state: unknown, key: string): Record<string, unknow
   return { ...(isRecord(state) ? state : {}), [KEY_FIELD]: key };
 }
 
+/**
+ * One path form for every entry. `popstate` reports `location.pathname`, which
+ * carries neither a query string nor a fragment; a pushed `to` might. Both go
+ * through here so an entry's `path` means the same thing however it was made.
+ */
+export function normalizePath(path: string): string {
+  const withoutFragment = path.split("#", 1)[0] ?? "";
+  const withoutQuery = withoutFragment.split("?", 1)[0] ?? "";
+  return withoutQuery === "" ? "/" : withoutQuery;
+}
+
 let counter = 0;
 
 function defaultMakeKey(): string {
@@ -85,7 +96,7 @@ export function createClientHistory(env: HistoryEnv): ClientHistory {
   // the same entry rather than minting a fresh one with no memory.
   const existing = keyOf(env.history.state);
   let entry: HistoryEntry = {
-    path: env.location.pathname,
+    path: normalizePath(env.location.pathname),
     key: existing ?? makeKey(),
     kind: "initial",
   };
@@ -99,7 +110,11 @@ export function createClientHistory(env: HistoryEnv): ClientHistory {
   };
 
   const unlisten = env.addPopStateListener((state) => {
-    emit({ path: env.location.pathname, key: keyOf(state) ?? makeKey(), kind: "pop" });
+    emit({
+      path: normalizePath(env.location.pathname),
+      key: keyOf(state) ?? makeKey(),
+      kind: "pop",
+    });
   });
 
   return {
@@ -108,7 +123,7 @@ export function createClientHistory(env: HistoryEnv): ClientHistory {
     push(path) {
       const key = makeKey();
       env.history.pushState(stateWithKey(null, key), "", path);
-      emit({ path, key, kind: "push" });
+      emit({ path: normalizePath(path), key, kind: "push" });
     },
 
     replace(path) {
@@ -116,7 +131,7 @@ export function createClientHistory(env: HistoryEnv): ClientHistory {
       // the user will never see again.
       const key = makeKey();
       env.history.replaceState(stateWithKey(null, key), "", path);
-      emit({ path, key, kind: "replace" });
+      emit({ path: normalizePath(path), key, kind: "replace" });
     },
 
     listen(listener) {

@@ -118,6 +118,7 @@ function Screen({ title, children }: { title: string; children: ReactNode }) {
 
 export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   const [state, setState] = useState<ClientState>(() => initialState({ ok: true, bootstrap }));
+  const [sessionNote, setSessionNote] = useState<string | null>(null);
 
   // Built once. `useState`'s initialiser, not `useMemo`, because these must not
   // be rebuilt even if React decides to discard a memo.
@@ -165,12 +166,16 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       if (!live) return;
       if (result.ok) {
         stores.domain.set((domain) => ({ ...domain, user: result.data.user }));
+        setSessionNote(null);
         return;
       }
       const next = stateForErrorCode(result.error.code, result.error.message);
       // A failed session check is not a reason to tear the app down: the
-      // bootstrap already told us who we are.
+      // bootstrap already told us who we are. It is a reason to say so, though —
+      // silently carrying on would be the client knowing something the user
+      // doesn't. Task 7 replaces this line with the real connection summary.
       if (next !== null && next.kind !== "start-failed") setState(next);
+      else setSessionNote("Couldn’t reach the server to confirm your session.");
     });
 
     return () => {
@@ -225,6 +230,15 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       <RouterProvider stores={stores} scrollContainer={scrollContainer}>
         <div className="flex h-dvh flex-col">
           <Header stores={stores} />
+          {sessionNote !== null && (
+            <p
+              id="client-session-note"
+              role="status"
+              className="shrink-0 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100"
+            >
+              {sessionNote}
+            </p>
+          )}
           <main
             id="client-main"
             ref={mainRef}
