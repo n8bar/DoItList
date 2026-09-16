@@ -6,6 +6,7 @@ import { createConnection, getConnection, initConnection, parseChanged, resetCon
 import type { ConnectionStatus } from "../state/recovery.ts";
 import { RECONNECT_BUDGET } from "./connection_state.ts";
 import { fakeTimers, fakeTransport } from "./fake_transport.ts";
+import type { NetworkSignal } from "./network.ts";
 import { matchRoute } from "../router/route.ts";
 
 function harness(overrides: Partial<ConnectionDeps> = {}) {
@@ -360,5 +361,71 @@ describe("the tab's one connection (item 3.7)", () => {
     const before = initConnection(deps).id;
     resetConnection();
     assert.notEqual(initConnection(deps).id, before);
+  });
+});
+
+describe("the browser says the network went away (spec §7)", () => {
+  function fakeNetwork() {
+    let listener: ((online: boolean) => void) | null = null;
+    let unsubscribed = false;
+    const signal: NetworkSignal = {
+      online: () => true,
+      subscribe(onChange) {
+        listener = onChange;
+        return () => {
+          unsubscribed = true;
+        };
+      },
+    };
+    return {
+      signal,
+      go: (online: boolean) => listener?.(online),
+      unsubscribed: () => unsubscribed,
+    };
+  }
+
+  it("stops saying Live the moment the machine loses its network", () => {
+    const net = fakeNetwork();
+    const h = live({ network: net.signal });
+    assert.equal(h.connection.status(), "live");
+
+    net.go(false);
+
+    assert.equal(h.connection.status(), "offline");
+    assert.equal(h.socket.get().disconnects, 1);
+  });
+
+  it("does not come back on its own — the way back is the user's click", () => {
+    const net = fakeNetwork();
+    const h = live({ network: net.signal });
+
+    net.go(false);
+    net.go(true);
+    assert.equal(h.connection.status(), "offline");
+
+    h.connection.retry();
+    assert.equal(h.connection.status(), "connecting");
+    h.socket.get().open();
+    assert.equal(h.connection.status(), "live");
+  });
+
+  it("says it once, however many times the browser repeats itself", () => {
+    const net = fakeNetwork();
+    const h = live({ network: net.signal });
+
+    net.go(false);
+    net.go(false);
+
+    assert.deepEqual(h.statuses.slice(-1), ["offline"]);
+    assert.equal(h.statuses.filter((s) => s === "offline").length, 1);
+  });
+
+  it("lets go of the browser when the connection is torn down", () => {
+    const net = fakeNetwork();
+    const h = live({ network: net.signal });
+
+    h.connection.disconnect();
+
+    assert.equal(net.unsubscribed(), true);
   });
 });

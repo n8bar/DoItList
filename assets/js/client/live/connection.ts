@@ -14,6 +14,8 @@
 import type { ConnectionStatus } from "../state/recovery.ts";
 import type { LinkState } from "./connection_state.ts";
 import { initialLinkState, nextLinkState, reconnectDelayMs } from "./connection_state.ts";
+import type { NetworkSignal } from "./network.ts";
+import { browserNetwork } from "./network.ts";
 import type { LiveChannel, LiveTransport, TransportFactory } from "./transport.ts";
 
 /** The kinds of change the server announces on a joined Initiative. */
@@ -56,6 +58,8 @@ export interface ConnectionDeps {
   random?: () => number;
   /** How long a released subscription is kept joined. */
   leaveGraceMs?: number;
+  /** "Has this machine a network?" Injected in tests; the window by default. */
+  network?: NetworkSignal;
   timers?: Timers;
 }
 
@@ -167,6 +171,20 @@ export function createConnection(deps: ConnectionDeps): Connection {
   transport.onClose(dropped);
   transport.onError(dropped);
 
+  // The browser losing its network is not something to wait out: the socket
+  // would take a heartbeat to notice, and the badge would read "Live" the whole
+  // time. Treated exactly like the budget running out — stopped, and one click
+  // from trying again. Coming back online is NOT a resume: one rule for the way
+  // back, and it is the user's (spec §7).
+  const network = deps.network ?? browserNetwork();
+  const stopWatchingNetwork = network.subscribe((online) => {
+    if (online) return;
+    if (link.status === "offline" && link.exhausted) return;
+    gaveUp = true;
+    report(nextLinkState(link, { kind: "down" }));
+    transport.disconnect();
+  });
+
   // Idempotent: only a connection that is actually down is stood back up, so
   // navigating (which subscribes) can never cost a reconnect — and a client
   // that gave up stays given up until the user says otherwise.
@@ -248,6 +266,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
     joined: () => [...subscriptions.keys()],
 
     disconnect() {
+      stopWatchingNetwork();
       for (const [initiativeId, entry] of [...subscriptions.entries()]) {
         leave(initiativeId, entry);
       }
