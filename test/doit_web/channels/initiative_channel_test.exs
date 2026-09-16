@@ -26,6 +26,15 @@ defmodule DoItWeb.InitiativeChannelTest do
     connect(UserSocket, %{}, connect_info: %{session: %{"user_id" => user.id}})
   end
 
+  # Presence untracking is asynchronous; poll rather than sleep a fixed beat.
+  defp eventually(fun, tries \\ 50) do
+    cond do
+      fun.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(20) && eventually(fun, tries - 1)
+    end
+  end
+
   setup do
     owner = user("owner")
     stranger = user("stranger")
@@ -207,6 +216,96 @@ defmodule DoItWeb.InitiativeChannelTest do
 
       assert_push "changed", %{kind: "members_changed"}
       assert Process.alive?(channel.channel_pid)
+    end
+  end
+
+  describe "selection presence" do
+    setup %{owner: owner, initiative: initiative} do
+      {:ok, socket} = connect_as(owner)
+
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, InitiativeChannel, "initiative:#{initiative.id}")
+
+      %{channel: channel}
+    end
+
+    test "join pushes the current presence state", %{owner: owner, initiative: initiative} do
+      assert_push "presence_state", state
+      key = to_string(owner.id)
+
+      assert %{^key => %{metas: [meta]}} = state
+      assert meta.user_id == owner.id
+      assert meta.task_id == nil
+      assert meta.name == owner.name
+      assert is_binary(meta.initials) and is_binary(meta.bg) and is_binary(meta.fg)
+
+      # The LiveView-side topic sees the channel's member, in the same shape.
+      assert %{^key => %{metas: [^meta]}} =
+               DoItWeb.Presence.list(DoItWeb.Presence.initiative_topic(initiative.id))
+    end
+
+    test "a select announces the row as a diff", %{channel: channel, owner: owner, task: task} do
+      # Our own join is a diff too — take it out of the mailbox first.
+      assert_push "presence_diff", %{joins: %{}}
+
+      ref = push(channel, "select", %{"task_id" => task.id})
+      assert_reply ref, :ok
+
+      key = to_string(owner.id)
+      assert_push "presence_diff", %{joins: %{^key => %{metas: [meta]}}}
+      assert meta.task_id == task.id
+      assert meta.user_id == owner.id
+
+      # Clearing the selection is the same push with a null id.
+      clear = push(channel, "select", %{"task_id" => nil})
+      assert_reply clear, :ok
+      assert_push "presence_diff", %{joins: %{^key => %{metas: [cleared]}}}
+      assert cleared.task_id == nil
+    end
+
+    test "a task_id that isn't an id is refused", %{channel: channel} do
+      for bad <- [%{"task_id" => "12"}, %{"task_id" => %{}}, %{}] do
+        ref = push(channel, "select", bad)
+        assert_reply ref, :error, %{reason: "bad_task_id"}
+      end
+    end
+
+    test "a second member's arrival is a diff", %{
+      owner: owner,
+      stranger: other,
+      initiative: initiative
+    } do
+      assert_push "presence_state", _state
+
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "viewer", owner)
+      {:ok, socket} = connect_as(other)
+
+      {:ok, _reply, _channel} =
+        subscribe_and_join(socket, InitiativeChannel, "initiative:#{initiative.id}")
+
+      key = to_string(other.id)
+      assert_push "presence_diff", %{joins: %{^key => %{metas: [meta]}}}
+      assert meta.user_id == other.id
+    end
+
+    test "presence ends with the channel", %{
+      channel: channel,
+      owner: owner,
+      initiative: initiative
+    } do
+      assert_push "presence_state", _state
+      topic = DoItWeb.Presence.initiative_topic(initiative.id)
+      assert Map.has_key?(DoItWeb.Presence.list(topic), to_string(owner.id))
+
+      # The channel is linked to this test process; unlink so its normal
+      # shutdown on leave isn't an exit signal here.
+      Process.unlink(channel.channel_pid)
+      ref = Process.monitor(channel.channel_pid)
+      Phoenix.ChannelTest.leave(channel)
+      assert_receive {:DOWN, ^ref, :process, _pid, _reason}
+
+      # Presence's own cleanup is async; wait for the topic to empty.
+      assert eventually(fn -> DoItWeb.Presence.list(topic) == %{} end)
     end
   end
 

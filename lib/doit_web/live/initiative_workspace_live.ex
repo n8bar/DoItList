@@ -219,14 +219,12 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       Phoenix.PubSub.subscribe(DoIt.PubSub, presence_topic(initiative.id))
 
       {:ok, _} =
-        DoItWeb.Presence.track(self(), presence_topic(initiative.id), to_string(user.id), %{
-          user_id: user.id,
-          task_id: nil,
-          name: user.name,
-          initials: initials(user),
-          bg: avatar_bg(user),
-          fg: avatar_fg(user)
-        })
+        DoItWeb.Presence.track(
+          self(),
+          presence_topic(initiative.id),
+          to_string(user.id),
+          DoItWeb.Presence.selection_meta(user, nil)
+        )
 
       # Live chat (m02.08 worklist 3 item 3.1): a per-Initiative ephemeral topic.
       Phoenix.PubSub.subscribe(DoIt.PubSub, chat_topic(initiative.id))
@@ -379,7 +377,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
   # --- Selection presence (.04.01.12) --------------------------------------
 
-  defp presence_topic(initiative_id), do: "initiative_presence:#{initiative_id}"
+  defp presence_topic(initiative_id), do: DoItWeb.Presence.initiative_topic(initiative_id)
 
   # --- Live chat (m02.08 worklist 3 item 3.1) ------------------------------
 

@@ -20,6 +20,30 @@ defmodule DoItWeb.Presence do
 
   @global_topic "presence:online"
 
+  @doc """
+  The per-Initiative presence topic — "who is here, and what do they have
+  selected". Both routes into a workspace (the LiveView and the browser
+  client's `initiative:<id>` channel) track on this one topic, so each sees the
+  other's members while both routes are live.
+  """
+  def initiative_topic(initiative_id), do: "initiative_presence:#{initiative_id}"
+
+  @doc """
+  The meta one member publishes on `initiative_topic/1`: who they are, what
+  they have selected, and the avatar ingredients, so a subscriber paints
+  without a user lookup.
+  """
+  def selection_meta(user, task_id) do
+    %{
+      user_id: user.id,
+      task_id: task_id,
+      name: user.name,
+      initials: DoItWeb.CoreComponents.initials(user),
+      bg: DoItWeb.CoreComponents.avatar_bg(user),
+      fg: DoItWeb.CoreComponents.avatar_fg(user)
+    }
+  end
+
   @doc "The global presence topic to subscribe to / track on."
   def global_topic, do: @global_topic
 

@@ -24,11 +24,23 @@ defmodule DoItWeb.InitiativeChannel do
   kind and the id that moved. There is no tree payload: Arc 3 defines the delta envelope,
   and until it does the honest thing is to tell the client *that* something
   changed and let it refetch. Messages this arc has no client story for
-  (`:initiative_updated`, presence, chat) are ignored rather than guessed at.
+  (`:initiative_updated`, chat) are ignored rather than guessed at.
+
+  ## Selection presence (m04.02 item 2.4.1)
+
+  A joined client is tracked on `DoItWeb.Presence.initiative_topic/1` — the
+  SAME topic the LiveView workspace tracks on, with the same meta — so while
+  both routes are live each sees the other's members. On join the channel gets
+  `"presence_state"` (everyone here now) and thereafter `"presence_diff"` as
+  people come, go, and change selection. A client announces its own selection
+  with `"select"`, `%{"task_id" => id | nil}`; the id only labels a row, so it
+  is type-checked and otherwise taken at face value. Presence ends with the
+  channel process — a leave or a dropped socket untracks it.
   """
   use DoItWeb, :channel
 
   alias DoItWeb.Api.Authz
+  alias DoItWeb.Presence
 
   @kinds [:task_created, :task_updated, :task_moved, :task_deleted, :members_changed]
 
@@ -38,6 +50,7 @@ defmodule DoItWeb.InitiativeChannel do
            require_agent_access: false
          ) do
       {:ok, initiative} ->
+        send(self(), :after_join)
         {:ok, %{initiative_id: initiative.id}, assign(socket, :initiative_id, initiative.id)}
 
       {:error, :forbidden} ->
@@ -49,6 +62,46 @@ defmodule DoItWeb.InitiativeChannel do
   end
 
   @impl true
+  def handle_in("select", %{"task_id" => task_id}, socket)
+      when is_integer(task_id) or is_nil(task_id) do
+    Presence.update(
+      self(),
+      Presence.initiative_topic(socket.assigns.initiative_id),
+      to_string(socket.assigns.current_user.id),
+      &Map.put(&1, :task_id, task_id)
+    )
+
+    {:reply, :ok, socket}
+  end
+
+  def handle_in("select", _params, socket) do
+    {:reply, {:error, %{reason: "bad_task_id"}}, socket}
+  end
+
+  # Subscribe first, then track: our own join diff arrives as the initial push
+  # and already includes everyone else here, so the state we send is complete.
+  @impl true
+  def handle_info(:after_join, socket) do
+    topic = Presence.initiative_topic(socket.assigns.initiative_id)
+    Phoenix.PubSub.subscribe(DoIt.PubSub, topic)
+
+    {:ok, _ref} =
+      Presence.track(
+        self(),
+        topic,
+        to_string(socket.assigns.current_user.id),
+        Presence.selection_meta(socket.assigns.current_user, nil)
+      )
+
+    push(socket, "presence_state", Presence.list(topic))
+    {:noreply, socket}
+  end
+
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff", payload: diff}, socket) do
+    push(socket, "presence_diff", diff)
+    {:noreply, socket}
+  end
+
   def handle_info({:members_changed, id}, socket) do
     case authorize(socket) do
       {:ok, _initiative} ->
