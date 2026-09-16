@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { InitiativeTree } from "../api/types.ts";
-import { PURGE_TIMEOUT_MS, openAccountCache, purgeAccountCache, withTimeout } from "./account.ts";
+import {
+  PURGE_TIMEOUT_MS,
+  openAccountCache,
+  purgeAccountCache,
+  signOutPurge,
+  withTimeout,
+} from "./account.ts";
 import { accountDbName, createMemoryStorage } from "./db.ts";
 import { FakeIdb } from "./fake_idb.ts";
 import type { KeyValueStore } from "./last_user.ts";
@@ -126,6 +132,54 @@ describe("purging on sign-out (item 3.6)", () => {
 
   it("has a bounded default", () => {
     assert.ok(PURGE_TIMEOUT_MS > 0 && PURGE_TIMEOUT_MS <= 3000);
+  });
+});
+
+describe("signing out never strands the user (item 3.6)", () => {
+  it("purges, then submits", async () => {
+    const submitted: number[] = [];
+    const purged = await signOutPurge({ purge: () => Promise.resolve(true) }, () =>
+      void submitted.push(1),
+    );
+
+    assert.equal(purged, true);
+    assert.deepEqual(submitted, [1]);
+  });
+
+  it("submits anyway when the purge blows up", async () => {
+    const submitted: number[] = [];
+    const purged = await signOutPurge(
+      {
+        purge: () => Promise.reject(new Error("the store is on fire")),
+      },
+      () => submitted.push(1),
+    );
+
+    assert.equal(purged, false);
+    assert.deepEqual(submitted, [1], "a broken cache must not keep somebody signed in");
+  });
+
+  it("submits anyway when the purge throws before it even starts", async () => {
+    const submitted: number[] = [];
+    await signOutPurge(
+      {
+        purge: () => {
+          throw new Error("no store at all");
+        },
+      },
+      () => submitted.push(1),
+    );
+
+    assert.deepEqual(submitted, [1]);
+  });
+
+  it("submits anyway when the purge never answers", async () => {
+    const submitted: number[] = [];
+    const hangs = { purge: () => new Promise<boolean>(() => {}) };
+    const purged = await signOutPurge(hangs, () => void submitted.push(1), 5);
+
+    assert.equal(purged, false);
+    assert.deepEqual(submitted, [1]);
   });
 });
 

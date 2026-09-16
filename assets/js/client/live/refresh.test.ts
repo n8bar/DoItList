@@ -66,14 +66,31 @@ function sync(parts: {
   domain?: ReturnType<typeof createDomainStore>;
   ui?: ReturnType<typeof createUiStore>;
   onForbidden?: () => void;
+  snapshots?: { cacheTree(tree: InitiativeTree): void; forgetTree(id: number): Promise<void> };
 }) {
   return createInitiativeSync({
     api: parts.api ?? fakeApi({}).api,
     domain: parts.domain ?? createDomainStore(),
     ui: parts.ui ?? createUiStore(),
     onForbidden: parts.onForbidden ?? (() => {}),
+    ...(parts.snapshots === undefined ? {} : { snapshots: parts.snapshots }),
   });
 }
+
+/** Records what the local cache was asked to do. */
+const fakeSnapshots = () => {
+  const cached: number[] = [];
+  const forgotten: number[] = [];
+  return {
+    cached,
+    forgotten,
+    cacheTree: (value: InitiativeTree) => void cached.push(value.id),
+    forgetTree: (id: number) => {
+      forgotten.push(id);
+      return Promise.resolve();
+    },
+  };
+};
 
 describe("what a `changed` event makes the client do (item 1.5)", () => {
   it("re-reads the Initiative it is holding", async () => {
@@ -268,5 +285,44 @@ describe("what losing access makes the client do (item 1.5)", () => {
 
     assert.equal(forbidden, 0);
     assert.equal(domain.get().initiativeTrees[12], undefined, "the copy still goes");
+  });
+});
+
+describe("the local cache follows the same rules (items 3.4–3.6)", () => {
+  it("caches a tree the guard let through", async () => {
+    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const snapshots = fakeSnapshots();
+    const backend = fakeApi({ "/initiatives/12": tree(12, "New") });
+
+    sync({ api: backend.api, domain, snapshots }).onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
+    await settle();
+
+    assert.deepEqual(snapshots.cached, [12]);
+  });
+
+  it("deletes the snapshot when access is taken away", () => {
+    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const snapshots = fakeSnapshots();
+
+    sync({ domain, snapshots }).onAccessRevoked(12);
+
+    assert.deepEqual(snapshots.forgotten, [12], "the copy on disk goes too (spec §12)");
+  });
+
+  it("does not cache a tree that arrived after access was taken away", async () => {
+    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const snapshots = fakeSnapshots();
+    const backend = fakeApi({ "/initiatives/12": tree(12, "New") });
+    backend.hold();
+
+    const unit = sync({ api: backend.api, domain, snapshots });
+    unit.onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
+    await settle();
+    unit.onAccessRevoked(12);
+    backend.release(0);
+    await settle();
+
+    assert.deepEqual(snapshots.cached, [], "the guard rejected it, so it was never cached");
+    assert.deepEqual(snapshots.forgotten, [12]);
   });
 });

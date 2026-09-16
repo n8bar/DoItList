@@ -212,14 +212,20 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
    * whole-app takeover for a flaky network would throw away a screen the user
    * can perfectly well retry in place (§6).
    */
-  const escalate = useCallback((error: ApiError): boolean => {
-    const next = stateForErrorCode(error.code, error.message);
-    if (next !== null && (next.kind === "signed-out" || next.kind === "forbidden")) {
-      setState(next);
-      return true;
-    }
-    return false;
-  }, []);
+  const escalate = useCallback(
+    (error: ApiError): boolean => {
+      const next = stateForErrorCode(error.code, error.message);
+      if (next !== null && (next.kind === "signed-out" || next.kind === "forbidden")) {
+        // The session is over however it ended: what it cached goes with it
+        // (spec §12), not just when the user pressed Sign out.
+        if (next.kind === "signed-out") void cache.purge();
+        setState(next);
+        return true;
+      }
+      return false;
+    },
+    [cache],
+  );
 
   const services = useMemo(
     () => ({ api, stores, connection, cache, escalate }),

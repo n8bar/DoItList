@@ -423,7 +423,14 @@ function createIdbStorage(db: IdbDatabaseLike, options: OpenOptions): AccountSto
       try {
         const tx = db.transaction(META, "readonly");
         const row = await request(tx.objectStore(META).get(key));
-        return ok(isRecord(row) ? row["value"] : null);
+        if (row === undefined || row === null) return ok(null);
+        if (!isRecord(row)) {
+          // Same rule as a corrupt snapshot: delete it, don't re-read it.
+          await write(META, (store) => store.delete(key), undefined);
+          worsen({ kind: "corrupt", message: "A cached setting was unreadable and was discarded." });
+          return ok(null);
+        }
+        return ok(row["value"]);
       } catch (error) {
         const message = error instanceof Error ? error.message : "The read failed.";
         worsen({ kind: "failed", message });
@@ -545,6 +552,22 @@ export function createMemoryStorage(
 // ---------------------------------------------------------------------------
 // Purging
 // ---------------------------------------------------------------------------
+
+/**
+ * Deletes this account's databases at EVERY schema version we have ever used,
+ * not just the current one: on a browser without `databases()` the boot sweep
+ * cannot see an older one, so sign-out is the only chance to remove it.
+ */
+export async function purgeAccountDbs(
+  userId: number,
+  idb: IdbFactoryLike | null,
+): Promise<boolean> {
+  let deleted = false;
+  for (let schema = SCHEMA_VERSION; schema >= 1; schema -= 1) {
+    if (await purgeAccountDb(userId, idb, schema)) deleted = true;
+  }
+  return deleted;
+}
 
 /** Deletes this account's database. Resolves either way — logout never waits on us. */
 export async function purgeAccountDb(

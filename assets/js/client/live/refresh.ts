@@ -80,9 +80,10 @@ export interface SyncDeps {
   /**
    * The local recovery cache. A tree is written to it on the SAME path that
    * writes it to the store — a snapshot that bypassed the guard could cache a
-   * tree the user is no longer allowed to see.
+   * tree the user is no longer allowed to see — and losing access deletes what
+   * is already there, on the same path that forgets the in-memory copy.
    */
-  snapshots?: Pick<TreeCache, "cacheTree">;
+  snapshots?: Pick<TreeCache, "cacheTree" | "forgetTree">;
   /** Injected in tests; one is made per client otherwise. */
   guard?: SyncGuard;
 }
@@ -135,6 +136,10 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
     onAccessRevoked(initiativeId: number) {
       guard.revoke(initiativeId);
       forgetInitiative(domain, initiativeId);
+      // The copy on disk is part of "forget it", not an afterthought: cached
+      // data is purged on access loss, not only on logout (spec §12). The cache
+      // sequences this against any write still in flight for the same id.
+      void deps.snapshots?.forgetTree(initiativeId);
       const route = ui.get().route;
       if (route.kind === "initiative" && route.id === initiativeId) onForbidden();
     },

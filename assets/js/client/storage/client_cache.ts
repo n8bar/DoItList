@@ -26,6 +26,11 @@ export interface ClientCacheDeps {
 }
 
 export interface ClientCache extends TreeCache {
+  /**
+   * Access to this Initiative is gone: its snapshot goes, and a write still in
+   * flight for it is discarded on arrival rather than left on disk.
+   */
+  forgetInitiative(initiativeId: number): Promise<void>;
   /** Resolves when the account store is open (or has failed over to memory). */
   readonly ready: Promise<AccountCache>;
   /** The account this cache belongs to. */
@@ -49,6 +54,14 @@ const inertCache = (deps: ClientCacheDeps): AccountCache => ({
 export function openClientCache(deps: ClientCacheDeps): ClientCache {
   const onMeta = deps.onMeta ?? (() => {});
   let userId = deps.userId;
+  /**
+   * One counter per Initiative, bumped by `forgetInitiative`. A write captures
+   * it before it starts and checks it after: a snapshot that landed after the
+   * forget is deleted again, so losing access cannot be beaten by a read that
+   * was already on its way.
+   */
+  const forgotten = new Map<number, number>();
+  const generation = (id: number): number => forgotten.get(id) ?? 0;
 
   const open = (id: number): Promise<AccountCache> => {
     const options: AccountCacheDeps = {
@@ -69,10 +82,20 @@ export function openClientCache(deps: ClientCacheDeps): ClientCache {
     userId === null ? Promise.resolve(inertCache(deps)) : open(userId);
 
   const storage = (): Promise<AccountStorage> => ready.then((cache) => cache.storage);
-  const tree = (): Promise<TreeCache> =>
-    storage().then((account) => createTreeCache({ storage: account, onMeta }));
+  // One tree cache per open store, not one per write.
+  let trees: Promise<TreeCache> | null = null;
+  const tree = (): Promise<TreeCache> => {
+    trees ??= storage().then((account) =>
+      createTreeCache({
+        storage: account,
+        onMeta,
+        onMetaCleared: () => onMeta(null),
+      }),
+    );
+    return trees;
+  };
 
-  return {
+  const cache: ClientCache = {
     get ready() {
       return ready;
     },
@@ -80,9 +103,30 @@ export function openClientCache(deps: ClientCacheDeps): ClientCache {
     userId: () => userId,
 
     cacheTree(value) {
-      if (userId === null) return;
-      void tree().then((cache) => cache.cacheTree(value));
+      void cache.writeTree(value);
     },
+
+    async writeTree(value) {
+      if (userId === null) return false;
+      const gen = generation(value.id);
+      const store = await tree();
+      const written = await store.writeTree(value);
+      // Access was taken away while this write was in flight: undo it.
+      if (generation(value.id) !== gen) {
+        await store.forgetTree(value.id);
+        return false;
+      }
+      return written;
+    },
+
+    async forgetInitiative(initiativeId) {
+      forgotten.set(initiativeId, generation(initiativeId) + 1);
+      if (userId === null) return;
+      await (await tree()).forgetTree(initiativeId);
+    },
+
+    /** Same thing under the `TreeCache` name; the sequencing is not optional. */
+    forgetTree: (initiativeId) => cache.forgetInitiative(initiativeId),
 
     async readTree(initiativeId) {
       if (userId === null) return null;
@@ -91,6 +135,7 @@ export function openClientCache(deps: ClientCacheDeps): ClientCache {
 
     async switchTo(nextUserId) {
       if (nextUserId === userId) return;
+      trees = null;
       const previous = userId;
       const opened = await ready;
       opened.storage.close();
@@ -109,17 +154,26 @@ export function openClientCache(deps: ClientCacheDeps): ClientCache {
 
     async purge() {
       if (userId === null) return false;
-      const opened = await ready;
-      return purgeAccountCache({
-        userId,
-        idb: deps.idb,
-        keyValue: deps.keyValue,
-        storage: opened.storage,
-      });
+      // Nothing about signing out may reject: the caller submits the request
+      // that ends the session either way (spec §12, UX_GUARDRAILS §6.7).
+      try {
+        const opened = await ready;
+        trees = null;
+        return await purgeAccountCache({
+          userId,
+          idb: deps.idb,
+          keyValue: deps.keyValue,
+          storage: opened.storage,
+        });
+      } catch {
+        return false;
+      }
     },
 
     close() {
-      void ready.then((cache) => cache.storage.close());
+      void ready.then((opened) => opened.storage.close());
     },
   };
+
+  return cache;
 }

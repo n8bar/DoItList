@@ -6,7 +6,7 @@
 // leaves a window in which a shared profile holds two accounts at once.
 
 import type { AccountStorage, StorageDegraded, StorageStatus } from "./db.ts";
-import { openAccountStorage, purgeAccountDb, purgeOtherAccountDbs } from "./db.ts";
+import { openAccountStorage, purgeAccountDbs, purgeOtherAccountDbs } from "./db.ts";
 import type { IdbFactoryLike } from "./idb.ts";
 import type { KeyValueStore } from "./last_user.ts";
 import { clearLastUser, readLastUser, staleAccount, writeLastUser } from "./last_user.ts";
@@ -46,7 +46,7 @@ export async function openAccountCache(deps: AccountCacheDeps): Promise<AccountC
   const purged: number[] = [];
 
   const stale = staleAccount(readLastUser(keyValue), userId);
-  if (stale !== null && (await purgeAccountDb(stale, idb))) purged.push(stale);
+  if (stale !== null && (await purgeAccountDbs(stale, idb))) purged.push(stale);
 
   for (const name of await purgeOtherAccountDbs(userId, idb)) {
     const id = Number(name.split(":")[2]);
@@ -94,6 +94,29 @@ export function withTimeout<T>(work: Promise<T>, ms: number, fallback: T): Promi
 }
 
 /**
+ * Sign-out, in one bounded step: the purge is given `timeoutMs` and `submit` is
+ * called exactly once afterwards, whether the purge finished, timed out or
+ * failed outright. A store that will not delete must never be able to leave a
+ * user pressing a dead button in a session they asked to end.
+ */
+export async function signOutPurge(
+  cache: { purge(): Promise<boolean> },
+  submit: () => void,
+  timeoutMs: number = PURGE_TIMEOUT_MS,
+): Promise<boolean> {
+  let purged = false;
+  try {
+    // The whole chain is inside the bound, including whatever the cache has to
+    // wait for before it can even start deleting.
+    purged = await withTimeout(Promise.resolve().then(() => cache.purge()), timeoutMs, false);
+  } catch {
+    purged = false;
+  }
+  submit();
+  return purged;
+}
+
+/**
  * Everything this account left on the device, gone. Bounded: a store that will
  * not delete must not be able to trap the user in a session they asked to end,
  * so sign-out proceeds either way and the boot sweep tries again next time.
@@ -108,7 +131,7 @@ export async function purgeAccountCache(deps: {
   deps.storage?.close();
   clearLastUser(deps.keyValue);
   return withTimeout(
-    purgeAccountDb(deps.userId, deps.idb),
+    purgeAccountDbs(deps.userId, deps.idb),
     deps.timeoutMs ?? PURGE_TIMEOUT_MS,
     false,
   );

@@ -181,12 +181,18 @@ class FakeDatabase implements IdbDatabaseLike {
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
+    this.idb.connectionClosed(this.name);
   }
 }
 
 export class FakeIdb implements IdbFactoryLike {
   readonly databasesByName = new Map<string, FakeData>();
+  /** Open connections, the way a real browser tracks them. */
+  private readonly connections = new Map<string, FakeDatabase[]>();
+  /** Deletes waiting for those connections to close, per the IDB spec. */
+  private readonly blockedDeletes: { name: string; done: () => void }[] = [];
   /** Set to make the next `open` reject with this DOM error name. */
   openFailure: { name: string; message: string } | null = null;
   /** Set to make `open` never answer, the way a blocked upgrade behaves. */
@@ -219,6 +225,28 @@ export class FakeIdb implements IdbFactoryLike {
 
   takeWriteFailure(): { name: string; message: string } | null {
     return this.writeFailures.shift() ?? null;
+  }
+
+  /** How many connections are still open — a real `versionchange` blocker. */
+  openConnections(name: string): number {
+    return (this.connections.get(name) ?? []).filter((db) => !db.closed).length;
+  }
+
+  /** Called by a connection closing; retries whatever was waiting on it. */
+  connectionClosed(name: string): void {
+    this.connections.set(name, (this.connections.get(name) ?? []).filter((db) => !db.closed));
+    if (this.openConnections(name) > 0) return;
+    for (const pending of this.blockedDeletes.filter((entry) => entry.name === name)) {
+      this.blockedDeletes.splice(this.blockedDeletes.indexOf(pending), 1);
+      pending.done();
+    }
+  }
+
+  /** Asks every open connection to get out of the way. */
+  private askToClose(name: string): void {
+    for (const db of this.connections.get(name) ?? []) {
+      if (!db.closed) db.onversionchange?.();
+    }
   }
 
   /** Pre-seeds a database at a given schema version, for migration tests. */
@@ -270,7 +298,17 @@ export class FakeIdb implements IdbFactoryLike {
         return;
       }
 
+      if (version > data.version) {
+        // An upgrade waits for the other connections, and says so if they stay.
+        this.askToClose(name);
+        if (this.openConnections(name) > 0) {
+          req.onblocked?.();
+          return;
+        }
+      }
+
       const db = new FakeDatabase(name, data, this);
+      this.connections.set(name, [...(this.connections.get(name) ?? []), db]);
       req.result = db;
 
       if (version > data.version) {
@@ -298,10 +336,23 @@ export class FakeIdb implements IdbFactoryLike {
 
   deleteDatabase(name: string): IdbRequestLike<unknown> {
     const req = makeRequest<unknown>();
-    queueMicrotask(() => {
+    const finish = () => {
       this.databasesByName.delete(name);
+      this.connections.delete(name);
       req.onsuccess?.();
+    };
+
+    queueMicrotask(() => {
+      // Exactly like the real thing: every open connection is told, and the
+      // delete blocks until they are all gone.
+      this.askToClose(name);
+      if (this.openConnections(name) > 0) {
+        this.blockedDeletes.push({ name, done: finish });
+        return;
+      }
+      finish();
     });
+
     return req;
   }
 

@@ -110,6 +110,48 @@ describe("the tab's cache handle (items 3.4–3.6)", () => {
     assert.equal(await cache.readTree(12), null, "the new account starts empty");
   });
 
+  it("deletes the snapshot when access to an Initiative is taken away", async () => {
+    const idb = new FakeIdb();
+    const metas: unknown[] = [];
+    const cache = openClientCache({
+      userId: USER,
+      idb,
+      keyValue: fakeStore(),
+      onMeta: (meta) => metas.push(meta),
+    });
+    await cache.writeTree(tree());
+
+    await cache.forgetInitiative(12);
+
+    assert.equal(await cache.readTree(12), null);
+    assert.equal(metas.at(-1), null, "the newest-snapshot pointer goes with it");
+  });
+
+  it("discards a snapshot that lands after access was taken away", async () => {
+    const idb = new FakeIdb();
+    const cache = openClientCache({ userId: USER, idb, keyValue: fakeStore() });
+    await cache.ready;
+
+    // The write is in flight when the revocation arrives.
+    const inFlight = cache.writeTree(tree());
+    await cache.forgetInitiative(12);
+    assert.equal(await inFlight, false, "a write undone is not a write that landed");
+
+    assert.equal(await cache.readTree(12), null);
+  });
+
+  it("leaves other Initiatives alone when one is forgotten", async () => {
+    const idb = new FakeIdb();
+    const cache = openClientCache({ userId: USER, idb, keyValue: fakeStore() });
+    await cache.writeTree(tree(12));
+    await cache.writeTree(tree(13));
+
+    await cache.forgetInitiative(12);
+
+    assert.equal(await cache.readTree(12), null);
+    assert.deepEqual(await cache.readTree(13), treeSummary(tree(13)));
+  });
+
   it("does not churn the store when the session confirms the same user", async () => {
     const idb = new FakeIdb();
     const cache = openClientCache({ userId: USER, idb, keyValue: fakeStore() });

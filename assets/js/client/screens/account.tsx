@@ -11,6 +11,7 @@
 
 import { useRef, useState } from "react";
 
+import { signOutPurge } from "../storage/account.ts";
 import type { DomainState } from "../state/domain.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
@@ -48,7 +49,7 @@ export function AccountScreen() {
           // Acknowledged on the spot; the purge and the request follow
           // (UX_GUARDRAILS §6.7).
           setSigningOut(true);
-          void cache.purge().then(() => form.current?.submit());
+          void signOutPurge(cache, () => form.current?.submit());
         }}
       >
         <input type="hidden" name="_method" value="delete" />

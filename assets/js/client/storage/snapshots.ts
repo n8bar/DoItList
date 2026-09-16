@@ -85,35 +85,60 @@ export function parseSnapshotMeta(value: unknown): SnapshotMeta | null {
 export interface TreeCache {
   /** Caches a tree the server just confirmed. Never throws, never awaited. */
   cacheTree(tree: InitiativeTree): void;
+  /** The same write, awaitable — for callers that must know when it landed. */
+  writeTree(tree: InitiativeTree): Promise<boolean>;
   /** The last copy saved on this device, or `null`. Never throws. */
   readTree(initiativeId: number): Promise<InitiativeSnapshot | null>;
+  /**
+   * Throws away everything cached for one Initiative: the snapshot, and the
+   * "newest snapshot" pointer if it named this one. Access loss is a purge
+   * trigger, exactly like signing out (spec §12).
+   */
+  forgetTree(initiativeId: number): Promise<void>;
 }
 
 export function createTreeCache(deps: {
   storage: AccountStorage;
   /** Told about the newest snapshot, for the recovery store. */
   onMeta?: (meta: SnapshotMeta) => void;
+  /** Told when there is no newest snapshot any more. */
+  onMetaCleared?: () => void;
 }): TreeCache {
   const { storage } = deps;
   const onMeta = deps.onMeta ?? (() => {});
+  const onMetaCleared = deps.onMetaCleared ?? (() => {});
 
-  return {
+  const cache: TreeCache = {
     cacheTree(tree) {
-      void (async () => {
-        const written = await storage.putSnapshot({
-          initiativeId: tree.id,
-          seq: tree.version,
-          payload: treeSummary(tree),
-        });
-        if (!written.ok) return;
-        const meta: SnapshotMeta = {
-          initiativeId: tree.id,
-          version: tree.version,
-          savedAt: written.value.savedAt,
-        };
-        await storage.putMeta(LAST_SNAPSHOT_KEY, meta);
-        onMeta(meta);
-      })();
+      void cache.writeTree(tree);
+    },
+
+    async writeTree(tree) {
+      const written = await storage.putSnapshot({
+        initiativeId: tree.id,
+        seq: tree.version,
+        payload: treeSummary(tree),
+      });
+      if (!written.ok) return false;
+      const meta: SnapshotMeta = {
+        initiativeId: tree.id,
+        version: tree.version,
+        savedAt: written.value.savedAt,
+      };
+      await storage.putMeta(LAST_SNAPSHOT_KEY, meta);
+      onMeta(meta);
+      return true;
+    },
+
+    async forgetTree(initiativeId) {
+      await storage.deleteSnapshot(initiativeId);
+      const meta = await storage.getMeta(LAST_SNAPSHOT_KEY);
+      const newest = meta.ok ? parseSnapshotMeta(meta.value) : null;
+      // The pointer must not outlive what it points at.
+      if (newest?.initiativeId === initiativeId) {
+        await storage.putMeta(LAST_SNAPSHOT_KEY, null);
+        onMetaCleared();
+      }
     },
 
     async readTree(initiativeId) {
@@ -122,4 +147,6 @@ export function createTreeCache(deps: {
       return parseInitiativeSnapshot(result.value.payload);
     },
   };
+
+  return cache;
 }

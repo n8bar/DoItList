@@ -4,7 +4,6 @@ import { describe, it } from "node:test";
 import { MAX_SNAPSHOT_AGE_MS } from "./bounds.ts";
 import type { StorageDegraded, StorageStatus } from "./db.ts";
 import {
-  META,
   PENDING_OPS,
   SCHEMA_VERSION,
   SNAPSHOTS,
@@ -13,7 +12,9 @@ import {
   openAccountStorage,
   parseDbName,
   payloadBytes,
+  META,
   purgeAccountDb,
+  purgeAccountDbs,
   purgeOtherAccountDbs,
 } from "./db.ts";
 import { FakeIdb } from "./fake_idb.ts";
@@ -122,6 +123,41 @@ describe("opening the account database (item 3.4)", () => {
     assert.equal(storage.status(), "unavailable");
   });
 
+  it("stands aside when another tab needs a newer schema", async () => {
+    const idb = new FakeIdb();
+    const sink = statusSink();
+    const storage = await openWith(idb, { onStatus: sink.onStatus });
+    assert.equal(storage.status(), "ready");
+
+    // Another tab asks for a schema we do not have: the browser tells every
+    // open connection, and ours must let go rather than block it.
+    const blocked = idb.open(NAME, SCHEMA_VERSION + 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(storage.status(), "unavailable");
+    assert.equal(sink.seen.at(-1)?.status, "unavailable");
+    // Our connection let go, so the other tab's upgrade was not blocked.
+    assert.equal(idb.databasesByName.get(NAME)?.version, SCHEMA_VERSION + 1);
+    assert.ok(blocked !== null);
+    const refused = await storage.putSnapshot({ initiativeId: 1, seq: 1, payload: { a: 1 } });
+    assert.equal(refused.ok, false, "a closed store refuses writes instead of throwing");
+  });
+
+  it("falls back to memory when an upgrade is blocked by another connection", async () => {
+    const idb = new FakeIdb();
+    // A connection from a tab that will NOT get out of the way.
+    idb.seedDatabase(accountDbName(USER), 1, {});
+    const stubborn = idb.open(NAME, 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(idb.openConnections(NAME), 1);
+    assert.ok(stubborn !== null);
+
+    const storage = await openWith(idb, { openTimeoutMs: 50 });
+
+    assert.equal(storage.kind, "memory");
+    assert.equal(storage.status(), "unavailable");
+  });
+
   it("gives up on an open that never answers rather than hanging the boot", async () => {
     const idb = new FakeIdb();
     idb.openHangs = true;
@@ -190,6 +226,16 @@ describe("snapshots and meta (items 3.4, 3.6)", () => {
     await storage.putMeta("last_initiative", 12);
     assert.equal(unwrap(await storage.getMeta("last_initiative")), 12);
     assert.equal(unwrap(await storage.getMeta("never_written")), null);
+  });
+
+  it("deletes a meta row it cannot read, exactly like a snapshot", async () => {
+    const idb = new FakeIdb();
+    const storage = await openWith(idb);
+    idb.seedRow(NAME, META, "last_snapshot", "not a record at all");
+
+    assert.equal(unwrap(await storage.getMeta("last_snapshot")), null);
+    assert.equal(storage.status(), "degraded");
+    assert.deepEqual(idb.rows(NAME, META), []);
   });
 });
 
@@ -331,6 +377,31 @@ describe("purging (item 3.6)", () => {
 
   it("resolves false, not rejected, where there is no IndexedDB", async () => {
     assert.equal(await purgeAccountDb(USER, null), false);
+  });
+
+  it("deletes this account's older schemas too, not just the current one", async () => {
+    const idb = new FakeIdb();
+    idb.seedDatabase(accountDbName(USER, 1), 1, {});
+    idb.seedDatabase(accountDbName(USER), SCHEMA_VERSION, {});
+    idb.seedDatabase(accountDbName(OTHER, 1), 1, {});
+
+    assert.equal(await purgeAccountDbs(USER, idb), true);
+
+    assert.equal(idb.databasesByName.has(accountDbName(USER, 1)), false);
+    assert.equal(idb.databasesByName.has(accountDbName(USER)), false);
+    assert.ok(idb.databasesByName.has(accountDbName(OTHER, 1)), "other accounts are not ours to delete here");
+  });
+
+  it("waits for the open connection it just told to close", async () => {
+    const idb = new FakeIdb();
+    const storage = await openWith(idb);
+    await storage.putSnapshot({ initiativeId: 1, seq: 1, payload: { a: 1 } });
+
+    // No explicit close: the delete fires `versionchange`, the store closes
+    // itself, and only then does the delete go through.
+    assert.equal(await purgeAccountDb(USER, idb), true);
+    assert.equal(idb.databasesByName.has(NAME), false);
+    assert.equal(storage.status(), "unavailable");
   });
 });
 
