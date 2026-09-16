@@ -10,6 +10,8 @@
 
 import type { NavigationMemory } from "../lib/navigation.ts";
 import { emptyNavigationMemory, remember } from "../lib/navigation.ts";
+import type { Notice, NoticeKind } from "./notices.ts";
+import { addNotice, findDuplicate, removeNotice } from "./notices.ts";
 import type { Route } from "../router/route.ts";
 import type { Store } from "./store.ts";
 import { createStore } from "./store.ts";
@@ -23,6 +25,8 @@ export interface UiState {
   readonly openPanes: readonly string[];
   /** Scroll position and last-focused element, per history entry (item 3.3). */
   readonly navigationMemory: NavigationMemory;
+  /** After-the-fact lines shown in the notice region, newest first (item 4.3). */
+  readonly notices: readonly Notice[];
 }
 
 export const initialUiState: UiState = {
@@ -30,6 +34,7 @@ export const initialUiState: UiState = {
   selectedTaskId: null,
   openPanes: [],
   navigationMemory: emptyNavigationMemory,
+  notices: [],
 };
 
 export type UiStore = Store<UiState>;
@@ -52,4 +57,41 @@ export function rememberPlace(
     ...state,
     navigationMemory: remember(state.navigationMemory, key, where),
   }));
+}
+
+export interface NoticeInput {
+  readonly kind: NoticeKind;
+  readonly message: string;
+  readonly title?: string;
+  /** Supply one to make a notice replaceable (and to make tests deterministic). */
+  readonly id?: string;
+}
+
+let noticeSeq = 0;
+
+/**
+ * Shows a notice and returns its id, so the caller can dismiss the exact one it
+ * raised. A message already showing is not raised twice — the id that comes
+ * back is the showing one's.
+ */
+export function pushNotice(store: UiStore, input: NoticeInput): string {
+  const existing = findDuplicate(store.get().notices, input.kind, input.message);
+  if (existing !== null) return existing.id;
+
+  noticeSeq += 1;
+  const notice: Notice = {
+    id: input.id ?? `notice-${noticeSeq}`,
+    kind: input.kind,
+    title: input.title ?? null,
+    message: input.message,
+  };
+  store.set((state) => ({ ...state, notices: addNotice(state.notices, notice) }));
+  return notice.id;
+}
+
+export function dismissNotice(store: UiStore, id: string): void {
+  store.set((state) => {
+    const notices = removeNotice(state.notices, id);
+    return notices === state.notices ? state : { ...state, notices };
+  });
 }
