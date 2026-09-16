@@ -20,7 +20,7 @@
 //                 replaces it and owns dialogs, toasts and menus beyond this.
 
 import type { ReactNode, RefObject } from "react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Link } from "../router/link.tsx";
 import { HOME_PATH } from "../router/route.ts";
@@ -31,6 +31,7 @@ import { NAV_ITEMS, isCurrentNav } from "./nav_model.ts";
 import { NavButton } from "./nav_button.tsx";
 import type { PaneControl } from "./pane.tsx";
 import { PaneProvider } from "./pane.tsx";
+import { addTenant, paneVisible, removeTenant } from "./pane_slot.ts";
 import { SignOut } from "./sign_out.tsx";
 import { ThemeToggle } from "./theme_toggle.tsx";
 
@@ -52,16 +53,34 @@ export interface AppFrameProps {
 
 export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps) {
   const route = useRoute();
-  const [pane, setPane] = useState<ReactNode | null>(null);
-  const paneControl = useMemo<PaneControl>(() => ({ setPane }), []);
+  // How many routes are filling the pane, and the element they portal into. The
+  // frame learns nothing about WHAT is in the pane, so a tenant re-rendering its
+  // own content never re-renders the frame (see `pane.tsx`).
+  const [paneTenants, setPaneTenants] = useState(0);
+  const [paneHost, setPaneHost] = useState<HTMLElement | null>(null);
 
-  // The pane's column only exists when the pane does — an empty slot is no
+  const acquirePane = useCallback(() => {
+    setPaneTenants(addTenant);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      setPaneTenants(removeTenant);
+    };
+  }, []);
+  const paneControl = useMemo<PaneControl>(
+    () => ({ acquire: acquirePane, host: paneHost }),
+    [acquirePane, paneHost],
+  );
+  const hasPane = paneVisible(paneTenants);
+
+  // The pane's column only exists when a tenant does — an empty slot is no
   // slot, not an empty gutter.
   const grid = [
     "lg:grid lg:items-start lg:gap-6",
-    pane === null
-      ? "lg:grid-cols-[15rem_minmax(0,1fr)]"
-      : "lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_24rem]",
+    hasPane
+      ? "lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_24rem]"
+      : "lg:grid-cols-[15rem_minmax(0,1fr)]",
   ].join(" ");
 
   return (
@@ -83,7 +102,7 @@ export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps
             <Link
               id="client-wordmark"
               to={HOME_PATH}
-              className="flex flex-none items-center gap-2 rounded font-semibold text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:text-zinc-100 dark:focus-visible:ring-emerald-400"
+              className="flex min-h-11 flex-none items-center gap-2 rounded-lg px-1 font-semibold text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:text-zinc-100 dark:focus-visible:ring-emerald-400 sm:min-h-9"
             >
               <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" />
               Do It List
@@ -144,14 +163,13 @@ export function AppFrame({ stores, scrollRef, notices, children }: AppFrameProps
                 {children}
               </main>
 
-              {pane !== null && (
+              {hasPane && (
                 <aside
                   id="client-pane"
+                  ref={setPaneHost}
                   aria-label="Details"
                   className="mt-8 xl:sticky xl:top-8 xl:mt-0 xl:self-start"
-                >
-                  {pane}
-                </aside>
+                />
               )}
             </div>
           </div>

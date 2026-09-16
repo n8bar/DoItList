@@ -13,8 +13,8 @@
 import { useRef, useState } from "react";
 
 import { useServices } from "../services.tsx";
-import { signOutPurge } from "../storage/account.ts";
 import { controlClass } from "./button_styles.ts";
+import { runSignOut } from "./sign_out_flow.ts";
 
 export interface SignOutProps {
   /** Prefix for this instance's ids — the header and the menu each render one. */
@@ -22,7 +22,11 @@ export interface SignOutProps {
   /** Extra classes on the form, e.g. the breakpoint that hides this instance. */
   className?: string;
   block?: boolean;
-  /** Ran the moment the press is accepted — the menu closes itself with this. */
+  /**
+   * UI tidy-up — the menu closes itself with this. It runs AFTER the request has
+   * gone, never before: closing the menu unmounts this form, and a submit on a
+   * detached form is a silent no-op (see `sign_out_flow.ts`).
+   */
   onSubmitted?: () => void;
 }
 
@@ -42,8 +46,11 @@ export function SignOut({ idPrefix, className, block, onSubmitted }: SignOutProp
         event.preventDefault();
         if (signingOut) return;
         setSigningOut(true);
-        onSubmitted?.();
-        void signOutPurge(cache, () => form.current?.submit());
+        void runSignOut({
+          cache,
+          submit: () => form.current?.submit(),
+          ...(onSubmitted === undefined ? {} : { afterSubmit: onSubmitted }),
+        });
       }}
     >
       <input type="hidden" name="_method" value="delete" />

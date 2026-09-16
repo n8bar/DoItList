@@ -24,10 +24,18 @@ export interface Reservation {
   readonly label: string;
 }
 
+/**
+ * The height of one Initiatives row, in px. THE source of truth: the skeleton
+ * row and the real row both render exactly this, so a skeleton row and the row
+ * that replaces it are the same size and the list cannot collapse when the data
+ * lands (item 4.6). Change it here or not at all.
+ */
+export const LIST_ROW_HEIGHT = 48;
+
 const BUDGET: Record<AsyncRegion, Reservation> = {
   // A row is a name line plus the progress bar under it, matching the real row
-  // in `InitiativesScreen`.
-  "initiatives-list": { rows: 6, rowHeight: 56, label: "Loading…" },
+  // in `InitiativesScreen` — which renders `LIST_ROW_HEIGHT` too.
+  "initiatives-list": { rows: 6, rowHeight: LIST_ROW_HEIGHT, label: "Loading…" },
   // The heading, the subtitle line and the progress line, stacked.
   "initiative-header": { rows: 1, rowHeight: 80, label: "Loading…" },
 };

@@ -126,6 +126,81 @@ export async function checkNoLayoutShift(ctx) {
   return `${settled} (${rows} rows), header, nav and rail did not move`;
 }
 
+/**
+ * Item 4.6, MEASURED rather than declared: a skeleton row and the real row that
+ * replaces it must be the same height, and the list must start where the
+ * skeleton started. Both come from `LIST_ROW_HEIGHT`, and this is the check that
+ * notices when they stop.
+ *
+ * The skeleton is short-lived on a fast link, so the read is deliberately slowed
+ * to make it observable, then unslowed to let the rows land.
+ */
+export async function checkSkeletonMatchesRow(ctx) {
+  const { session } = ctx;
+  const fast = {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: -1,
+  };
+
+  await session.send("Network.enable");
+  try {
+    await session.send("Network.emulateNetworkConditions", { ...fast, latency: 1200 });
+    await session.send("Page.navigate", { url: `${APP_URL}/app/initiatives` });
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come up on a slow link",
+    });
+
+    const busy = await waitFor(
+      session,
+      `
+      const skeleton = document.getElementById("initiatives-skeleton");
+      if (skeleton === null) return null;
+      const row = skeleton.querySelector('div[aria-hidden="true"]');
+      if (row === null) return null;
+      if (skeleton.getAttribute("aria-busy") !== "true") return null;
+      return {
+        row: Math.round(row.getBoundingClientRect().height),
+        top: Math.round(skeleton.getBoundingClientRect().top),
+        rows: skeleton.querySelectorAll('div[aria-hidden="true"]').length,
+      };
+    `,
+      { timeoutMs: READY_TIMEOUT_MS, what: "the Initiatives skeleton" },
+    );
+
+    await session.send("Network.emulateNetworkConditions", fast);
+
+    const real = await waitFor(
+      session,
+      `
+      const list = document.getElementById("initiatives-list");
+      const first = document.querySelector("#initiatives-list li");
+      if (list === null || first === null) return null;
+      if (document.getElementById("initiatives-skeleton") !== null) return null;
+      return {
+        row: Math.round(first.getBoundingClientRect().height),
+        top: Math.round(list.getBoundingClientRect().top),
+        rows: list.children.length,
+      };
+    `,
+      { timeoutMs: READY_TIMEOUT_MS, what: "the Initiatives rows" },
+    );
+
+    if (Math.abs(busy.row - real.row) > 1) {
+      throw new Error(`a skeleton row is ${busy.row}px but a real row is ${real.row}px`);
+    }
+    if (Math.abs(busy.top - real.top) > 1) {
+      throw new Error(`the list starts at ${real.top}px, the skeleton started at ${busy.top}px`);
+    }
+    return `row ${busy.row}px both ways, list top held at ${real.top}px (${busy.rows} reserved, ${real.rows} arrived)`;
+  } finally {
+    await session.send("Network.emulateNetworkConditions", fast).catch(() => {});
+    await session.send("Network.disable").catch(() => {});
+  }
+}
+
 /** ONE real interaction: click the Account nav link like a person would. */
 export async function checkNavClickToAccount(ctx) {
   const { session } = ctx;
@@ -218,7 +293,7 @@ export async function checkNarrowMenu(ctx) {
     `
     const panel = document.getElementById("client-menu");
     const trigger = document.getElementById("client-menu-button");
-    if (panel === null) return null;
+    if (panel === null || panel.hasAttribute("hidden")) return null;
     if (trigger.getAttribute("aria-expanded") !== "true") return null;
     const items = [...panel.querySelectorAll("a, button")];
     const short = items.filter((el) => Math.round(el.getBoundingClientRect().height) < 44);
@@ -237,7 +312,8 @@ export async function checkNarrowMenu(ctx) {
   const closed = await waitFor(
     session,
     `
-    if (document.getElementById("client-menu") !== null) return null;
+    const panel = document.getElementById("client-menu");
+    if (panel === null || !panel.hasAttribute("hidden")) return null;
     const trigger = document.getElementById("client-menu-button");
     if (trigger.getAttribute("aria-expanded") !== "false") return null;
     return { focused: document.activeElement === null ? null : document.activeElement.id };
@@ -249,20 +325,87 @@ export async function checkNarrowMenu(ctx) {
     throw new Error(`focus went to "${closed.focused ?? "(none)"}", not back to the trigger`);
   }
 
-  await session.send("Emulation.setDeviceMetricsOverride", {
-    ...VIEWPORT,
-    deviceScaleFactor: 1,
-    mobile: false,
-  });
   return `${opened.items} menu items, all >=44px; Escape closed it and returned focus`;
+}
+
+/**
+ * The regression from fix round 1: Sign out in the narrow menu purged the local
+ * cache, closed the menu (unmounting its form) and then "submitted" a form that
+ * was no longer in the document — so the session never ended and the user was
+ * told nothing.
+ *
+ * We do NOT sign the operator out: `form.submit` is replaced with a counter for
+ * the duration of the check and restored afterwards. The purge itself is real,
+ * so this tab's local snapshot cache for the signed-in account is emptied — it
+ * is a disposable cache and refills from the server; no server data is touched.
+ */
+export async function checkMenuSignOutSubmits(ctx) {
+  const { session } = ctx;
+
+  await clickElement(session, "#client-menu-button");
+  await waitFor(
+    session,
+    `
+    const panel = document.getElementById("client-menu");
+    return panel !== null && !panel.hasAttribute("hidden");
+  `,
+    { timeoutMs: 5_000, what: "the menu to reopen" },
+  );
+
+  const stubbed = await evaluate(
+    session,
+    `
+    const form = document.getElementById("client-menu-sign-out-form");
+    if (form === null) return { ok: false, why: "the menu has no sign-out form" };
+    window.__doitSubmits = 0;
+    form.submit = function () { window.__doitSubmits += 1; };
+    return { ok: true };
+  `,
+  );
+  if (!stubbed.ok) throw new Error(stubbed.why);
+
+  try {
+    await clickElement(session, "#client-menu-sign-out");
+    const sent = await waitFor(
+      session,
+      `
+      if (window.__doitSubmits !== 1) return null;
+      const form = document.getElementById("client-menu-sign-out-form");
+      return { mounted: form !== null, submits: window.__doitSubmits };
+    `,
+      { timeoutMs: 5_000, what: "the menu's Sign out to reach the form" },
+    );
+
+    if (!sent.mounted) {
+      throw new Error("the sign-out form left the document before the request went");
+    }
+    return `Sign out submitted once, form still mounted (${sent.submits} submit)`;
+  } finally {
+    await evaluate(
+      session,
+      `
+      const form = document.getElementById("client-menu-sign-out-form");
+      if (form !== null) delete form.submit;
+      delete window.__doitSubmits;
+      return true;
+    `,
+    ).catch(() => {});
+    await session.send("Emulation.setDeviceMetricsOverride", {
+      ...VIEWPORT,
+      deviceScaleFactor: 1,
+      mobile: false,
+    });
+  }
 }
 
 const CHECKS = [
   ["client ready", checkClientReady],
   ["no layout shift", checkNoLayoutShift],
+  ["skeleton row == real row", checkSkeletonMatchesRow],
   ["nav click \u2192 Account", checkNavClickToAccount],
   ["no shift across routes", checkNoShiftAcrossRoutes],
   ["narrow viewport menu", checkNarrowMenu],
+  ["menu sign out reaches the form", checkMenuSignOutSubmits],
 ];
 
 // ---------------------------------------------------------------------------

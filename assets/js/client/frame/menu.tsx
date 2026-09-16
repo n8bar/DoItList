@@ -8,7 +8,14 @@
 //
 // Closing rules live in `menu_state.ts`, where they are unit-tested: Escape
 // closes AND gives focus back to the trigger; clicking outside or following a
-// link closes without taking focus off wherever the user chose to go.
+// link closes without taking focus off wherever the user chose to go; and
+// growing past the breakpoint that collapsed the nav in the first place closes
+// it too, so `aria-expanded` cannot be left claiming an open menu nobody can see.
+//
+// The panel stays MOUNTED and is hidden with the `hidden` attribute rather than
+// being conditionally rendered. Two reasons: `aria-controls` on the trigger then
+// always points at something real, and — the one that bit us — the Sign out form
+// inside it is never yanked out of the document mid-request.
 
 import { useEffect, useReducer, useRef } from "react";
 
@@ -57,6 +64,19 @@ export function NavMenu({ stores, route }: { stores: Stores; route: Route }) {
     };
   }, [state.open]);
 
+  // Past `sm:` the inline nav is back and this control is gone; a menu still
+  // claiming to be open would be a lie told to assistive tech.
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const wide = window.matchMedia("(min-width: 640px)");
+    const onChange = () => {
+      if (wide.matches) dispatch({ kind: "close", reason: "wide" });
+    };
+    onChange();
+    wide.addEventListener("change", onChange);
+    return () => wide.removeEventListener("change", onChange);
+  }, []);
+
   const close = () => dispatch({ kind: "close", reason: "navigate" });
 
   return (
@@ -73,32 +93,31 @@ export function NavMenu({ stores, route }: { stores: Stores; route: Route }) {
         Menu
       </button>
 
-      {state.open && (
-        <div
-          id="client-menu"
-          ref={panel}
-          className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
-        >
-          <nav aria-label="Menu" className="flex flex-col gap-1">
-            {NAV_ITEMS.map((item) => (
-              <NavButton
-                key={item.key}
-                id={`client-menu-nav-${item.key}`}
-                to={item.to}
-                label={item.label}
-                current={isCurrentNav(route, item.key)}
-                block
-                onNavigate={close}
-              />
-            ))}
-          </nav>
-          <div className="my-2 border-t border-zinc-200 dark:border-zinc-700" />
-          <div className="flex flex-col gap-1">
-            <ThemeToggle stores={stores} id="client-menu-theme-toggle" block />
-            <SignOut idPrefix="client-menu" block onSubmitted={close} />
-          </div>
+      <div
+        id="client-menu"
+        ref={panel}
+        hidden={!state.open}
+        className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-700 dark:bg-zinc-900"
+      >
+        <nav aria-label="Menu" className="flex flex-col gap-1">
+          {NAV_ITEMS.map((item) => (
+            <NavButton
+              key={item.key}
+              id={`client-menu-nav-${item.key}`}
+              to={item.to}
+              label={item.label}
+              current={isCurrentNav(route, item.key)}
+              block
+              onNavigate={close}
+            />
+          ))}
+        </nav>
+        <div className="my-2 border-t border-zinc-200 dark:border-zinc-700" />
+        <div className="flex flex-col gap-1">
+          <ThemeToggle stores={stores} id="client-menu-theme-toggle" block />
+          <SignOut idPrefix="client-menu" block onSubmitted={close} />
         </div>
-      )}
+      </div>
     </div>
   );
 }

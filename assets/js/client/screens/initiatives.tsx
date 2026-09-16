@@ -13,7 +13,7 @@ import { useCallback } from "react";
 
 import type { InitiativeSummary, Role } from "../api/types.ts";
 import { controlClass } from "../frame/button_styles.ts";
-import { COUNT_MIN_WIDTH } from "../frame/layout_budget.ts";
+import { COUNT_MIN_WIDTH, LIST_ROW_HEIGHT } from "../frame/layout_budget.ts";
 import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
@@ -77,6 +77,9 @@ export function InitiativesScreen() {
                 id={`initiative-link-${initiative.id}`}
                 to={`/app/initiatives/${initiative.id}`}
                 className={controlClass({ stack: true })}
+                // The skeleton row renders the same number, from the same
+                // constant — that is what makes the swap free of movement.
+                style={{ minHeight: `${LIST_ROW_HEIGHT}px` }}
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <span className="min-w-0 flex-1 truncate text-zinc-900 dark:text-zinc-100">
