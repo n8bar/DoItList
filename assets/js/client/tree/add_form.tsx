@@ -19,13 +19,20 @@ import { placeholderText, slotKey, submissionFor } from "./add_form_model.ts";
 export interface AddFormProps {
   model: TreeModel;
   slot: AddSlot;
+  /**
+   * The typed title. Owned above the form, because walking to another slot
+   * re-parents this element and React remounts it — an uncontrolled box would
+   * hand the user back an empty field halfway through a sentence.
+   */
+  title: string;
+  onTitleChange: (title: string) => void;
   /** ↑ / ↓ moved the insertion point. `null` means there is nowhere to go. */
   onMove: (dir: -1 | 1) => void;
   onClose: () => void;
   onAdd: (request: AddRequest) => void;
 }
 
-export function AddForm({ model, slot, onMove, onClose, onAdd }: AddFormProps) {
+export function AddForm({ model, slot, title, onTitleChange, onMove, onClose, onAdd }: AddFormProps) {
   const input = useRef<HTMLInputElement | null>(null);
   const key = slotKey(slot);
 
@@ -42,14 +49,11 @@ export function AddForm({ model, slot, onMove, onClose, onAdd }: AddFormProps) {
       data-add-slot={key}
       onSubmit={(event) => {
         event.preventDefault();
-        const value = input.current?.value ?? "";
-        const request = submissionFor(model, slot, value);
+        const request = submissionFor(model, slot, title);
         if (request === null) return;
         onAdd(request);
-        if (input.current !== null) {
-          input.current.value = "";
-          input.current.focus();
-        }
+        onTitleChange("");
+        input.current?.focus();
       }}
       onClick={(event) => event.stopPropagation()}
       className="flex items-center gap-2 rounded border border-emerald-500/40 bg-white dark:bg-zinc-900 px-3 py-2"
@@ -59,6 +63,8 @@ export function AddForm({ model, slot, onMove, onClose, onAdd }: AddFormProps) {
         type="text"
         name="title"
         required
+        value={title}
+        onChange={(event) => onTitleChange(event.target.value)}
         aria-label="Task title"
         placeholder={placeholderText(slot)}
         onKeyDown={(event) => {

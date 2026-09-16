@@ -14,28 +14,35 @@
 //     the rows into a column of wrapped words (ProductSpec §6.2). Measured off
 //     the rendered rows, because the indent is CSS padding, not a number the
 //     model knows.
-//   * TreeScrollFade — the top/bottom gradients that say "there is more above
-//     / below". The CSS reads `data-scrolled` / `data-at-end` off the frame.
+// The workspace's other tree hook, TreeScrollFade, has no counterpart here on
+// purpose: it fades the top and bottom of the tree's OWN vertical scroll box,
+// and the client has exactly one vertical scrolling region (`#client-scroll`).
+// Nesting a second one inside it would trap the wheel and give the page two
+// scrollbars, so the tree scrolls sideways only and the frame owns the rest.
 //
-// Both arithmetic halves live in `tree_model.ts` and are tested there; what is
-// left here is reading the DOM and writing the result back, which no unit test
-// could reach anyway.
+// The arithmetic half lives in `tree_model.ts` and is tested there; what is left
+// here is reading the DOM and writing the result back, which no unit test could
+// reach anyway.
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 import { childIdsOf } from "./model.ts";
+import { resolveSort } from "./sort.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { sameSlot } from "./add_form_model.ts";
 import { AddForm } from "./add_form.tsx";
 import type { TreeContext } from "./context.ts";
+import { Icon } from "../ui/icon.tsx";
 import { Row } from "./row.tsx";
-import { scrollEdges, treeMinWidthStyle } from "./tree_model.ts";
+import { treeMinWidthStyle } from "./tree_model.ts";
 
 export interface TreeProps {
   ctx: TreeContext;
   /** The one open add form, or null. One at a time, like the LiveView. */
   addSlot: AddSlot | null;
+  addTitle: string;
+  onAddTitleChange: (title: string) => void;
   onAddMove: (dir: -1 | 1) => void;
   onAddClose: () => void;
   onAdd: (request: AddRequest) => void;
@@ -71,35 +78,6 @@ function useTreeWidth(ref: React.RefObject<HTMLUListElement | null>): void {
   }, [recompute]);
 }
 
-/** Flips the frame's fade attributes from the scroll box's geometry. */
-function useScrollFades(
-  box: React.RefObject<HTMLDivElement | null>,
-  frame: React.RefObject<HTMLDivElement | null>,
-): void {
-  const recompute = useCallback(() => {
-    const el = box.current;
-    const parent = frame.current;
-    if (el === null || parent === null) return;
-
-    const edges = scrollEdges(el);
-    parent.toggleAttribute("data-scrolled", edges.scrolled);
-    parent.toggleAttribute("data-at-end", edges.atEnd);
-  }, [box, frame]);
-
-  useLayoutEffect(recompute);
-
-  useEffect(() => {
-    const el = box.current;
-    if (el === null) return;
-    el.addEventListener("scroll", recompute, { passive: true });
-    window.addEventListener("resize", recompute);
-    return () => {
-      el.removeEventListener("scroll", recompute);
-      window.removeEventListener("resize", recompute);
-    };
-  }, [box, recompute]);
-}
-
 /** One branch's children, or nothing at all when it has none. */
 function Children({
   ctx,
@@ -122,6 +100,7 @@ function Children({
       id={`children-${parentId}`}
       data-task-id={parentId}
       data-initiative-id={ctx.initiativeId}
+      data-sort-mode={resolveSort(ctx.model, parentId)[0]}
       className={[
         "pl-1.5 sm:pl-6 space-y-1",
         // The 6px sliver that says "there is work under me" — the same class
@@ -168,43 +147,57 @@ function Branch({
   );
 }
 
-export function Tree({ ctx, addSlot, onAddMove, onAddClose, onAdd }: TreeProps) {
-  const frame = useRef<HTMLDivElement | null>(null);
+export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAddClose, onAdd }: TreeProps) {
   const box = useRef<HTMLDivElement | null>(null);
   const list = useRef<HTMLUListElement | null>(null);
 
   useTreeWidth(list);
-  useScrollFades(box, frame);
 
   const form = useCallback(
     (anchor: AddSlot) => (
       <AddForm
         model={ctx.model}
         slot={anchor}
+        title={addTitle}
+        onTitleChange={onAddTitleChange}
         onMove={onAddMove}
         onClose={onAddClose}
         onAdd={onAdd}
       />
     ),
-    [ctx.model, onAdd, onAddClose, onAddMove],
+    [addTitle, ctx.model, onAdd, onAddClose, onAddMove, onAddTitleChange],
   );
 
   const rootIds = childIdsOf(ctx.model, ctx.model.rootId);
   const rootSlot: AddSlot = { kind: "root" };
 
   return (
-    <div ref={frame} className="relative lg:flex-1 lg:min-h-0 group/treescroll" data-at-end>
-      <div
-        ref={box}
-        id="tree-scroll"
-        className="min-w-0 overflow-x-auto lg:h-full lg:overflow-y-auto"
-      >
-        {/* Sticky inside the scroll box, so the scrollport bounds it past both
-            scrollbars with no measurement. Decorative and click-through. */}
-        <div
-          aria-hidden="true"
-          className="hidden lg:block pointer-events-none sticky top-0 left-0 -mb-24 w-full h-24 z-10 bg-gradient-to-b from-white dark:from-zinc-950 to-transparent opacity-0 transition-opacity duration-150 group-data-scrolled/treescroll:opacity-100"
-        />
+    <div className="relative">
+      {/* Horizontal scroll only. The client has ONE vertical scrolling region —
+          `#client-scroll` in the frame — and a second one nested inside it would
+          trap the wheel, break the router's scroll restoration and give the page
+          two scrollbars. Deep indentation still scrolls sideways here, which is
+          what ProductSpec §6.2 asks for. */}
+      <div ref={box} id="tree-scroll" className="min-w-0 overflow-x-auto">
+        {/* The workspace's New List control, same wording and same
+            `data-add-root` hook. Without it a tree with no rows — and a tree
+            whose only row is selected-less — has no way in at all: N and S both
+            need a selection, and the root slot would be unreachable. */}
+        {ctx.permissions.canEdit && (
+          <div className="mb-3 flex">
+            <button
+              type="button"
+              data-add-root
+              onClick={() => ctx.onOpenAdd(rootSlot)}
+              aria-label="New list"
+              title="New list"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+            >
+              <Icon name="plus" className="w-4 h-4" />
+              <span>New List</span>
+            </button>
+          </div>
+        )}
 
         {sameSlot(addSlot, rootSlot) && <div className="mb-3">{form(rootSlot)}</div>}
 
@@ -227,10 +220,6 @@ export function Tree({ ctx, addSlot, onAddMove, onAddClose, onAdd }: TreeProps) 
           ))}
         </ul>
 
-        <div
-          aria-hidden="true"
-          className="hidden lg:block pointer-events-none sticky bottom-0 left-0 -mt-24 w-full h-24 z-10 bg-gradient-to-t from-white dark:from-zinc-950 to-transparent opacity-100 transition-opacity duration-150 group-data-at-end/treescroll:opacity-0"
-        />
       </div>
     </div>
   );

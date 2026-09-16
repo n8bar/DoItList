@@ -13,7 +13,7 @@
 // nothing a user does to a row waits on the network.
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Icon } from "../ui/icon.tsx";
 import { childIdsOf } from "./model.ts";
@@ -75,6 +75,15 @@ function Prose({ parts }: { parts: readonly RefPart[] }) {
 
 function CopyIndexButton({ label }: { label: string }) {
   const [copied, setCopied] = useState(false);
+  // The tick clears itself after a beat. If the row goes away first — a delete,
+  // a collapse, a route change — the timer has to go with it.
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    },
+    [],
+  );
 
   return (
     <button
@@ -90,7 +99,8 @@ function CopyIndexButton({ label }: { label: string }) {
           ?.writeText(label)
           .then(() => {
             setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
+            if (timer.current !== null) clearTimeout(timer.current);
+            timer.current = setTimeout(() => setCopied(false), 1200);
           })
           .catch(() => undefined);
       }}
