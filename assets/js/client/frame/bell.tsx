@@ -84,7 +84,7 @@ export function Bell({ className }: { className?: string }) {
     void api.post("/operations", markAllReadRequest()).then((result) => {
       if (result.ok || !alive.current) return;
       // Never leave the user believing something happened that didn't.
-      updateNotifications(stores.domain, (state) => restoreUnread(state, quietened));
+      updateNotifications(stores.domain, (state) => restoreUnread(state, quietened, before.unread));
       pushNotice(stores.ui, {
         kind: "error",
         message: "Couldn’t mark your notifications read. They’re still waiting for you.",

@@ -142,7 +142,7 @@ describe("putting the dot back when the write failed", () => {
   it("restores only the rows that were unread", () => {
     const before = loaded(emptyNotifications, [row(2), row(1, true)], 1);
     const optimistic = markAllRead(before);
-    const rolledBack = restoreUnread(optimistic, [2]);
+    const rolledBack = restoreUnread(optimistic, [2], before.unread);
 
     assert.equal(rolledBack.unread, 1);
     assert.equal(rolledBack.recent.find((n) => n.id === 2)?.read, false);
@@ -153,7 +153,7 @@ describe("putting the dot back when the write failed", () => {
     const before = loaded(emptyNotifications, [row(2)], 1);
     const optimistic = markAllRead(before);
     const during = prepend(optimistic, row(7, false, "2026-09-16T11:00:00Z"));
-    const rolledBack = restoreUnread(during, [2]);
+    const rolledBack = restoreUnread(during, [2], before.unread);
 
     assert.deepEqual(
       rolledBack.recent.map((n) => n.id),
@@ -164,8 +164,24 @@ describe("putting the dot back when the write failed", () => {
     assert.equal(rolledBack.unread, 2);
   });
 
+  it("restores the real total when more was unread than MAX_RECENT shows", () => {
+    // 25 unread, but `recent` only ever holds the newest MAX_RECENT: the ids
+    // the bell quietens are exactly those visible rows, and the count that
+    // comes back must be 25, not the 10 `recent` alone could ever prove.
+    const rows = Array.from({ length: MAX_RECENT }, (_, i) => row(i + 1));
+    const before = loaded(emptyNotifications, rows, 25);
+    assert.equal(before.unread, 25);
+
+    const quietened = before.recent.filter((n) => !n.read).map((n) => n.id);
+    const optimistic = markAllRead(before);
+    const rolledBack = restoreUnread(optimistic, quietened, before.unread);
+
+    assert.equal(rolledBack.unread, 25);
+    assert.ok(rolledBack.recent.every((n) => !n.read));
+  });
+
   it("changes nothing when nothing was unread to begin with", () => {
     const state = loaded(emptyNotifications, [row(1, true)], 0);
-    assert.equal(restoreUnread(state, []), state);
+    assert.equal(restoreUnread(state, [], state.unread), state);
   });
 });

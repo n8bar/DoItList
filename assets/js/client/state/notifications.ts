@@ -105,10 +105,17 @@ export function markAllRead(state: NotificationsState): NotificationsState {
  * socket during the round trip, and restoring a value from before the request
  * would erase them. Only the read flags we set are unset, and only for the rows
  * that were unread when we set them.
+ *
+ * `previousUnread` — the count from BEFORE the optimistic write — carries the
+ * total, because `recent` only ever holds `MAX_RECENT` rows: a user with 25
+ * unread has just 10 of them visible here, and counting `recent` alone would
+ * hand back 10. Anything that arrived since (and is still unread) is added on
+ * top, the same way `prepend` would have counted it.
  */
 export function restoreUnread(
   state: NotificationsState,
   unreadIds: readonly number[],
+  previousUnread: number,
 ): NotificationsState {
   const wasUnread = new Set(unreadIds);
   if (!state.recent.some((row) => wasUnread.has(row.id) && row.read)) return state;
@@ -116,5 +123,6 @@ export function restoreUnread(
   const recent = state.recent.map((row) =>
     wasUnread.has(row.id) && row.read ? { ...row, read: false } : row,
   );
-  return { recent, unread: unreadCount(recent), loaded: state.loaded };
+  const arrivedSinceUnread = recent.filter((row) => !wasUnread.has(row.id) && !row.read).length;
+  return { recent, unread: previousUnread + arrivedSinceUnread, loaded: state.loaded };
 }
