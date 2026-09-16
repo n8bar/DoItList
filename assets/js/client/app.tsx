@@ -18,7 +18,7 @@ import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
 import { initConnection } from "./live/connection.ts";
 import { phoenixTransport } from "./live/phoenix_transport.ts";
-import { createChangedHandler, createRevokedHandler } from "./live/refresh.ts";
+import { createInitiativeSync } from "./live/refresh.ts";
 import { Link } from "./router/link.tsx";
 import type { Route } from "./router/route.ts";
 import { matchRoute } from "./router/route.ts";
@@ -136,18 +136,23 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   // The tab's one live connection. A route change must never recreate it — and
   // it opens no socket until the effect below says we have an identity, so a
   // signed-out tab never hammers a handshake it cannot pass.
-  const [connection] = useState(() =>
-    initConnection({
+  const [connection] = useState(() => {
+    // One unit: a refetch in flight when access is taken away must not land
+    // after the forget and put the tree back.
+    const sync = createInitiativeSync({
+      api,
+      domain: stores.domain,
+      ui: stores.ui,
+      onForbidden: () => setState({ kind: "forbidden" }),
+    });
+
+    return initConnection({
       transport: (options) => phoenixTransport(options, () => api.csrfToken()),
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
-      onChanged: createChangedHandler({ api, domain: stores.domain }),
-      onAccessRevoked: createRevokedHandler({
-        domain: stores.domain,
-        ui: stores.ui,
-        onForbidden: () => setState({ kind: "forbidden" }),
-      }),
-    }),
-  );
+      onChanged: sync.onChanged,
+      onAccessRevoked: sync.onAccessRevoked,
+    });
+  });
 
   const mainRef = useRef<HTMLElement | null>(null);
   const scrollContainer = useCallback(() => mainRef.current, []);

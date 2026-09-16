@@ -197,6 +197,22 @@ describe("connection status", () => {
     assert.deepEqual(statuses, ["live", "reconnecting", "offline", "connecting", "live"]);
   });
 
+  it("does not kill a connection the user retried before the teardown fired", () => {
+    const { connection, socket, clock } = live();
+    for (let i = 0; i <= RECONNECT_BUDGET; i += 1) socket.get().fail();
+    assert.equal(connection.status(), "offline");
+
+    // Retry lands in the same tick as the deferred teardown: the teardown must
+    // not take down the connection the user just asked for.
+    connection.retry();
+    clock.flush();
+
+    assert.equal(socket.get().disconnects, 0, "the fresh connection was torn down");
+    assert.equal(socket.get().connects, 2);
+    socket.get().open();
+    assert.equal(connection.status(), "live");
+  });
+
   it("does not resurrect itself on a route change after giving up", () => {
     const { connection, socket } = live();
     for (let i = 0; i <= RECONNECT_BUDGET; i += 1) socket.get().fail();

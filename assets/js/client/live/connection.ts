@@ -144,8 +144,12 @@ export function createConnection(deps: ConnectionDeps): Connection {
         // Stop Phoenix's retry loop rather than let it spin behind a screen
         // that says we have stopped — but not from inside this hook, which
         // runs *while* the next attempt is being scheduled and would have its
-        // teardown undone by the scheduling that follows.
-        timers.setTimeout(() => transport.disconnect(), 0);
+        // teardown undone by the scheduling that follows. By the time this
+        // fires the user may already have hit Retry, and tearing down the
+        // connection they just asked for would be the worst of both.
+        timers.setTimeout(() => {
+          if (gaveUp) transport.disconnect();
+        }, 0);
       }
       return reconnectDelayMs(tries, deps.random);
     },

@@ -10,6 +10,11 @@
 // Initiative the tab is watching also refreshes the list — but only when the
 // list has actually been read, so a deep link never fetches a screen nobody
 // asked for.
+//
+// Refetching and revocation are ONE unit (`createInitiativeSync`), because they
+// race: a read already in flight when access is taken away would otherwise
+// resolve afterwards and quietly write the tree back. They share a sequence, so
+// revoking is also an invalidation.
 
 import type { ApiClient } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
@@ -18,65 +23,110 @@ import { forgetInitiative, putInitiativeTree } from "../state/domain.ts";
 import type { UiStore } from "../state/ui.ts";
 import type { ChangedEvent } from "./connection.ts";
 
-export interface RefreshDeps {
-  api: ApiClient;
-  domain: DomainStore;
+/**
+ * Who is allowed to write what a read came back with.
+ *
+ * Every read claims a sequence before it starts and must still hold the newest
+ * one to land. Anything that makes older reads wrong — a newer read, or access
+ * being taken away — bumps the sequence, and the loser is dropped on arrival
+ * rather than written over the truth. A read begun *after* a revocation (the
+ * user was let back in) claims a fresh sequence and lands normally, so nothing
+ * needs to be un-revoked.
+ */
+export interface SyncGuard {
+  /** Claim a sequence for a read of `id`'s tree. */
+  beginTree(id: number): number;
+  /** Claim a sequence for a read of the Initiatives index. */
+  beginList(): number;
+  /** May a tree read holding `seq` still write? */
+  currentTree(id: number, seq: number): boolean;
+  /** May a list read holding `seq` still write? */
+  currentList(seq: number): boolean;
+  /** Access to `id` is gone: every read in flight for it, and for the index. */
+  revoke(id: number): void;
 }
 
-/**
- * The `onChanged` handler the connection calls. Never throws, never rejects.
- *
- * Two changes in quick succession start two reads, and the network is free to
- * answer them out of order — so each read carries a per-Initiative sequence
- * number and a stale answer is dropped rather than written over a newer tree.
- */
-export function createChangedHandler(deps: RefreshDeps): (event: ChangedEvent) => void {
-  const { api, domain } = deps;
-  const latestTree = new Map<number, number>();
-  let latestList = 0;
+export function createSyncGuard(): SyncGuard {
+  const trees = new Map<number, number>();
+  let list = 0;
 
-  return (event: ChangedEvent) => {
-    void (async () => {
-      const { initiativeId } = event;
+  const bumpTree = (id: number): number => {
+    const seq = (trees.get(id) ?? 0) + 1;
+    trees.set(id, seq);
+    return seq;
+  };
 
-      if (domain.get().initiativeTrees[initiativeId] !== undefined) {
-        const seq = (latestTree.get(initiativeId) ?? 0) + 1;
-        latestTree.set(initiativeId, seq);
-        const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
-        if (tree.ok && latestTree.get(initiativeId) === seq) putInitiativeTree(domain, tree.data);
-      }
-
-      if (domain.get().initiativeSummaries !== null) {
-        latestList += 1;
-        const seq = latestList;
-        const list = await api.get<InitiativeSummary[]>("/initiatives");
-        if (list.ok && latestList === seq) {
-          domain.set((state) => ({ ...state, initiativeSummaries: list.data }));
-        }
-      }
-    })();
+  return {
+    beginTree: bumpTree,
+    beginList: () => (list += 1),
+    currentTree: (id, seq) => trees.get(id) === seq,
+    currentList: (seq) => list === seq,
+    revoke(id) {
+      // The index carries a row for `id` too, so a list read from before the
+      // revocation would put it straight back.
+      bumpTree(id);
+      list += 1;
+    },
   };
 }
 
-export interface RevokedDeps {
+export interface SyncDeps {
+  api: ApiClient;
   domain: DomainStore;
   ui: UiStore;
   /** Hands the app the "you don't have access" screen. */
   onForbidden(): void;
+  /** Injected in tests; one is made per client otherwise. */
+  guard?: SyncGuard;
+}
+
+export interface InitiativeSync {
+  /** For `Connection.onChanged`. Never throws, never rejects. */
+  onChanged(event: ChangedEvent): void;
+  /** For `Connection.onAccessRevoked`. */
+  onAccessRevoked(initiativeId: number): void;
 }
 
 /**
- * What the client does when access to an Initiative is taken away mid-session
- * (m04.01 1.5). The copy it is holding goes — including the row in the index —
- * and, if that Initiative is the screen the user is on, the app says so rather
- * than leaving a tree on the glass that the server would now refuse.
+ * The client's two answers to the live channel, built together so they cannot
+ * be wired up with separate state (m04.01 1.5).
+ *
+ *   * a change — re-read what we are holding, newest answer wins;
+ *   * access taken away — forget the copy we hold, including the row in the
+ *     index, invalidate anything still in flight for it, and, if that
+ *     Initiative is the screen the user is on, say so rather than leaving a
+ *     tree on the glass that the server would now refuse.
  */
-export function createRevokedHandler(deps: RevokedDeps): (initiativeId: number) => void {
-  const { domain, ui, onForbidden } = deps;
+export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
+  const { api, domain, ui, onForbidden } = deps;
+  const guard = deps.guard ?? createSyncGuard();
 
-  return (initiativeId: number) => {
-    forgetInitiative(domain, initiativeId);
-    const route = ui.get().route;
-    if (route.kind === "initiative" && route.id === initiativeId) onForbidden();
+  return {
+    onChanged(event: ChangedEvent) {
+      void (async () => {
+        const { initiativeId } = event;
+
+        if (domain.get().initiativeTrees[initiativeId] !== undefined) {
+          const seq = guard.beginTree(initiativeId);
+          const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
+          if (tree.ok && guard.currentTree(initiativeId, seq)) putInitiativeTree(domain, tree.data);
+        }
+
+        if (domain.get().initiativeSummaries !== null) {
+          const seq = guard.beginList();
+          const list = await api.get<InitiativeSummary[]>("/initiatives");
+          if (list.ok && guard.currentList(seq)) {
+            domain.set((state) => ({ ...state, initiativeSummaries: list.data }));
+          }
+        }
+      })();
+    },
+
+    onAccessRevoked(initiativeId: number) {
+      guard.revoke(initiativeId);
+      forgetInitiative(domain, initiativeId);
+      const route = ui.get().route;
+      if (route.kind === "initiative" && route.id === initiativeId) onForbidden();
+    },
   };
 }

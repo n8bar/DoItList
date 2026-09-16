@@ -5,7 +5,7 @@ import type { ApiClient, Result } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
 import { createDomainStore } from "../state/domain.ts";
 import { createUiStore } from "../state/ui.ts";
-import { createChangedHandler, createRevokedHandler } from "./refresh.ts";
+import { createInitiativeSync } from "./refresh.ts";
 
 const tree = (id: number, name: string): InitiativeTree =>
   ({ id, name, progress: 50, unit_count: 2, root: null }) as unknown as InitiativeTree;
@@ -60,12 +60,27 @@ function fakeApi(responses: Record<string, unknown>) {
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+/** The unit under test, with whatever the case doesn't care about filled in. */
+function sync(parts: {
+  api?: ApiClient;
+  domain?: ReturnType<typeof createDomainStore>;
+  ui?: ReturnType<typeof createUiStore>;
+  onForbidden?: () => void;
+}) {
+  return createInitiativeSync({
+    api: parts.api ?? fakeApi({}).api,
+    domain: parts.domain ?? createDomainStore(),
+    ui: parts.ui ?? createUiStore(),
+    onForbidden: parts.onForbidden ?? (() => {}),
+  });
+}
+
 describe("what a `changed` event makes the client do (item 1.5)", () => {
   it("re-reads the Initiative it is holding", async () => {
     const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
     const { api, calls } = fakeApi({ "/initiatives/12": tree(12, "New") });
 
-    createChangedHandler({ api, domain })({ initiativeId: 12, kind: "task_updated", id: 5 });
+    sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
     await settle();
 
     assert.deepEqual(calls, ["/initiatives/12"]);
@@ -76,7 +91,7 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
     const domain = createDomainStore();
     const { api, calls } = fakeApi({ "/initiatives/12": tree(12, "New") });
 
-    createChangedHandler({ api, domain })({ initiativeId: 12, kind: "task_moved", id: 5 });
+    sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_moved", id: 5 });
     await settle();
 
     assert.deepEqual(calls, []);
@@ -92,7 +107,7 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
       "/initiatives": [summary(12, "New")],
     });
 
-    createChangedHandler({ api, domain })({ initiativeId: 12, kind: "task_updated", id: 5 });
+    sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
     await settle();
 
     assert.deepEqual(calls, ["/initiatives/12", "/initiatives"]);
@@ -105,7 +120,7 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
     fake.answers("/initiatives/12", [tree(12, "First"), tree(12, "Second")]);
     fake.hold();
 
-    const onChanged = createChangedHandler({ api: fake.api, domain });
+    const { onChanged } = sync({ api: fake.api, domain });
     onChanged({ initiativeId: 12, kind: "task_updated", id: 1 });
     onChanged({ initiativeId: 12, kind: "task_updated", id: 2 });
     await settle();
@@ -125,7 +140,7 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
     const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
     const { api } = fakeApi({});
 
-    createChangedHandler({ api, domain })({ initiativeId: 12, kind: "task_deleted", id: 5 });
+    sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_deleted", id: 5 });
     await settle();
 
     assert.equal(domain.get().initiativeTrees[12]?.name, "Old");
@@ -133,6 +148,90 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
 });
 
 describe("what losing access makes the client do (item 1.5)", () => {
+  it("a refetch still in flight cannot put back what a revocation removed", async () => {
+    // The race: `changed` starts a read, access is taken away while it is out,
+    // and the answer arrives last. It must be dropped, not written.
+    const domain = createDomainStore({
+      initiativeTrees: { 12: tree(12, "Old") },
+      initiativeSummaries: [summary(12, "Old"), summary(13, "Other")],
+    });
+    const ui = createUiStore({ route: { kind: "initiative", id: 12 } });
+    const fake = fakeApi({
+      "/initiatives/12": tree(12, "Back from the dead"),
+      // What the server really says once the user is out: no row for 12.
+      "/initiatives": [summary(13, "Other")],
+    });
+    fake.hold();
+    let forbidden = 0;
+
+    const unit = sync({ api: fake.api, domain, ui, onForbidden: () => (forbidden += 1) });
+    unit.onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
+    await settle();
+    assert.equal(fake.parked(), 1, "the tree read is in flight");
+
+    unit.onAccessRevoked(12);
+    assert.equal(domain.get().initiativeTrees[12], undefined);
+    assert.equal(forbidden, 1);
+
+    fake.release(0);
+    await settle();
+    await settle();
+
+    assert.equal(domain.get().initiativeTrees[12], undefined, "the stale read wrote it back");
+
+    if (fake.parked() > 1) fake.release(1);
+    await settle();
+    assert.deepEqual(
+      domain.get().initiativeSummaries?.map((s) => s.id),
+      [13],
+    );
+  });
+
+  it("a list read in flight cannot put the row back either", async () => {
+    // No tree held, so the handler goes straight to the index read — and that
+    // read is the one carrying a row the user may no longer have.
+    const domain = createDomainStore({
+      initiativeSummaries: [summary(12, "Old"), summary(13, "Other")],
+    });
+    const ui = createUiStore({ route: { kind: "initiatives" } });
+    const fake = fakeApi({ "/initiatives": [summary(12, "Old"), summary(13, "Other")] });
+    fake.hold();
+
+    const unit = sync({ api: fake.api, domain, ui });
+    unit.onChanged({ initiativeId: 12, kind: "members_changed", id: 12 });
+    await settle();
+    assert.equal(fake.parked(), 1, "the index read is in flight");
+
+    unit.onAccessRevoked(12);
+    fake.release(0);
+    await settle();
+
+    assert.deepEqual(
+      domain.get().initiativeSummaries?.map((s) => s.id),
+      [13],
+      "a stale index read put the revoked row back",
+    );
+  });
+
+  it("lets a read begun after the revocation land (access given back)", async () => {
+    const domain = createDomainStore({ initiativeTrees: { 12: tree(12, "Old") } });
+    const ui = createUiStore({ route: { kind: "initiatives" } });
+    const fake = fakeApi({ "/initiatives/12": tree(12, "Fresh") });
+
+    const unit = sync({ api: fake.api, domain, ui });
+    unit.onAccessRevoked(12);
+
+    // The user is let back in, the screen reloads the tree, and a change lands.
+    domain.set((state) => ({
+      ...state,
+      initiativeTrees: { ...state.initiativeTrees, 12: tree(12, "Old") },
+    }));
+    unit.onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
+    await settle();
+
+    assert.equal(domain.get().initiativeTrees[12]?.name, "Fresh");
+  });
+
   it("forgets the Initiative, tree and index row alike", () => {
     const domain = createDomainStore({
       initiativeTrees: { 12: tree(12, "Gone"), 13: tree(13, "Kept") },
@@ -140,7 +239,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
     });
     const ui = createUiStore({ route: { kind: "initiatives" } });
 
-    createRevokedHandler({ domain, ui, onForbidden: () => {} })(12);
+    sync({ domain, ui }).onAccessRevoked(12);
 
     assert.equal(domain.get().initiativeTrees[12], undefined);
     assert.equal(domain.get().initiativeTrees[13]?.name, "Kept");
@@ -155,7 +254,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
     const ui = createUiStore({ route: { kind: "initiative", id: 12 } });
     let forbidden = 0;
 
-    createRevokedHandler({ domain, ui, onForbidden: () => (forbidden += 1) })(12);
+    sync({ domain, ui, onForbidden: () => (forbidden += 1) }).onAccessRevoked(12);
 
     assert.equal(forbidden, 1);
   });
@@ -165,7 +264,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
     const ui = createUiStore({ route: { kind: "initiative", id: 13 } });
     let forbidden = 0;
 
-    createRevokedHandler({ domain, ui, onForbidden: () => (forbidden += 1) })(12);
+    sync({ domain, ui, onForbidden: () => (forbidden += 1) }).onAccessRevoked(12);
 
     assert.equal(forbidden, 0);
     assert.equal(domain.get().initiativeTrees[12], undefined, "the copy still goes");
