@@ -59,3 +59,36 @@ export function searchWithTask(search: string, id: number | null): string {
   const next = params.toString();
   return next === "" ? "" : `?${next}`;
 }
+
+/**
+ * The task an Initiative screen opens with, decided before anything renders.
+ *
+ * Selection is per Initiative. `ui.selectedTaskId` is one flat field that
+ * outlives the screen, so the task the user selected in the Initiative they came
+ * from is still sitting in it when this one mounts. Inheriting it would clear the
+ * row a `?task=` link just revealed — the link wins, a selection this tree
+ * actually contains is kept, and anything else is dropped.
+ */
+export function initialSelection(
+  model: TreeModel,
+  deepLinkTaskId: number | null,
+  storedSelectedId: number | null,
+): number | null {
+  if (deepLinkTaskId !== null && model.tasks[deepLinkTaskId] !== undefined) return deepLinkTaskId;
+  if (storedSelectedId !== null && model.tasks[storedSelectedId] !== undefined) {
+    return storedSelectedId;
+  }
+  return null;
+}
+
+/**
+ * The search string the screen should write on arrival, or `null` for "leave the
+ * address bar alone". A link that already names the task we resolved needs no
+ * write at all — which is the point: a strip now and a restore a commit later is
+ * two entries' worth of churn for no change, and if anything goes wrong in
+ * between the parameter is gone for good.
+ */
+export function firstUrlWrite(search: string, resolved: number | null): string | null {
+  const next = searchWithTask(search, resolved);
+  return next === search || (search === "" && next === "") ? null : next;
+}

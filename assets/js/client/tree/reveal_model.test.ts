@@ -4,7 +4,14 @@ import { describe, it } from "node:test";
 
 import { buildTree } from "./gen.ts";
 import { fromSnapshot } from "./model.ts";
-import { revealPlan, searchWithTask, taskParam } from "./reveal_model.ts";
+import {
+  firstUrlWrite,
+  initialSelection,
+  revealPlan,
+  searchWithTask,
+  taskParam,
+} from "./reveal_model.ts";
+import { keptSelection } from "./selection_model.ts";
 
 const model = () =>
   fromSnapshot(
@@ -75,5 +82,70 @@ describe("keeping the address bar in step", () => {
       live.includes('"task" => '),
       "the workspace no longer reads a `task` parameter",
     );
+  });
+});
+
+describe("which task an Initiative screen opens with", () => {
+  // Selection is per Initiative. `ui.selectedTaskId` is one flat field that
+  // outlives the screen, so a task selected in Initiative A is still sitting
+  // there when Initiative B mounts — and B must not inherit it.
+  it("prefers the task the link names", () => {
+    assert.equal(initialSelection(model(), 13, 4321), 13);
+  });
+
+  it("drops a selection that belongs to another Initiative", () => {
+    assert.equal(initialSelection(model(), null, 4321), null);
+  });
+
+  it("keeps a selection this tree does have", () => {
+    assert.equal(initialSelection(model(), null, 12), 12);
+  });
+
+  it("falls back to a kept selection when the link names nothing real", () => {
+    assert.equal(initialSelection(model(), 4321, 12), 12);
+  });
+
+  it("opens with nothing when neither the link nor the store fits", () => {
+    assert.equal(initialSelection(model(), 4321, 4322), null);
+  });
+});
+
+describe("the first write to the address bar", () => {
+  it("writes nothing when the link already names the resolved task", () => {
+    assert.equal(firstUrlWrite("?task=13", 13), null);
+  });
+
+  it("clears a parameter naming a task this tree does not have", () => {
+    assert.equal(firstUrlWrite("?task=4321", null), "");
+  });
+
+  it("leaves the rest of the query alone when it does write", () => {
+    assert.equal(firstUrlWrite("?from=bell&task=4321", 12), "?from=bell&task=12");
+  });
+});
+
+describe("arriving at a deep link with a task already selected elsewhere", () => {
+  // The re-review's scenario, end to end in the pure decisions: task 4321 is
+  // selected (Initiative A), the user follows `?task=13` into this tree.
+  it("selects the link's task, keeps the parameter, and writes nothing on the way in", () => {
+    const tree = model();
+    const stale = 4321;
+
+    const resolved = initialSelection(tree, taskParam("?task=13"), stale);
+    assert.equal(resolved, 13);
+
+    // No strip-then-restore pair: the one parameter we own already says 13.
+    assert.equal(firstUrlWrite("?task=13", resolved), null);
+
+    // Reveal opens 12, the one collapsed branch between the root and 13.
+    const plan = revealPlan(tree, resolved, closedSet(12));
+    assert.deepEqual(plan.expand, [12]);
+    assert.equal(plan.select, 13);
+
+    // And pruning, reading the RESOLVED value rather than the stale one it
+    // would have captured, leaves the reveal standing.
+    assert.equal(keptSelection(resolved, [10, 11, 12, 13, 20], true), 13);
+    // The stale id is what the old wiring saw, and it would have cleared it.
+    assert.equal(keptSelection(stale, [10, 11, 12, 13, 20], true), null);
   });
 });

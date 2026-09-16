@@ -31,7 +31,7 @@ import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { permissionsFor } from "../tree/permissions.ts";
-import { searchWithTask, taskParam } from "../tree/reveal_model.ts";
+import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
 import { Tree } from "../tree/tree.tsx";
 import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
@@ -265,16 +265,35 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
 
   // Kept in step without navigating: same history entry, same key, same scroll —
   // only the one parameter we own changes, so a copied link reopens what the
-  // user is looking at. The first pass writes nothing: `?task=` is an answer
-  // arriving, not a selection leaving.
+  // user is looking at.
+  //
+  // The arrival pass is measured against the selection the tree RESOLVED, not
+  // against the one that happened to be in the store when this screen mounted —
+  // that one can belong to the Initiative the user came from, and comparing
+  // against it stripped the link's own `?task=` and put it back a commit later.
+  // Usually a link already says what we resolved, and then nothing is written at
+  // all.
   const selected = tree.ctx.selectedTaskId;
+  const resolvedSelection = tree.initialSelectedId;
   const written = useRef<number | null>(deepLinkTaskId);
+  const arriving = useRef(true);
   useEffect(() => {
+    const replace = (search: string): void => {
+      window.history.replaceState(window.history.state, "", window.location.pathname + search);
+    };
+
+    if (arriving.current) {
+      arriving.current = false;
+      written.current = resolvedSelection;
+      const first = firstUrlWrite(window.location.search, resolvedSelection);
+      if (first !== null) replace(first);
+      return;
+    }
+
     if (written.current === selected) return;
     written.current = selected;
-    const url = window.location.pathname + searchWithTask(window.location.search, selected);
-    window.history.replaceState(window.history.state, "", url);
-  }, [selected]);
+    replace(searchWithTask(window.location.search, selected));
+  }, [resolvedSelection, selected]);
 
   return (
     <div className="mt-4">

@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { SelectionState } from "./selection_model.ts";
-import { keptSelection, noSelection, rememberSelection } from "./selection_model.ts";
+import {
+  forgetMissing,
+  keptSelection,
+  noSelection,
+  rememberSelection,
+  stillClosed,
+} from "./selection_model.ts";
 
 describe("what Enter reopens", () => {
   it("remembers the last task that was actually selected", () => {
@@ -38,5 +44,41 @@ describe("a selection that has gone off screen", () => {
 
   it("leaves an empty selection empty", () => {
     assert.equal(keptSelection(null, visible, true), null);
+  });
+});
+
+describe("a remembered task that no longer exists", () => {
+  const alive = (id: number) => id === 10 || id === 11;
+
+  it("is forgotten, so Enter falls back to the first visible row", () => {
+    const state = forgetMissing({ selectedId: null, lastSelectedId: 12 }, alive);
+    assert.equal(state.lastSelectedId, null);
+  });
+
+  it("leaves a remembered task that is still there", () => {
+    const state: SelectionState = { selectedId: null, lastSelectedId: 11 };
+    assert.equal(forgetMissing(state, alive), state);
+  });
+
+  it("forgets a task selected in another Initiative", () => {
+    const state = forgetMissing({ selectedId: 4321, lastSelectedId: 4321 }, alive);
+    assert.deepEqual(state, { selectedId: 4321, lastSelectedId: null });
+  });
+});
+
+describe("pruning while a reveal is still opening branches", () => {
+  // The reveal asks for branches to open; the list of visible rows only catches
+  // up on the next render. Pruning in between looks at a tree where the revealed
+  // task is still buried and clears the very selection the link asked for.
+  it("waits while any branch it asked for is still closed", () => {
+    assert.deepEqual(stillClosed([10, 12], (id) => id === 12), [12]);
+  });
+
+  it("is done once they have all opened", () => {
+    assert.deepEqual(stillClosed([10, 12], () => false), []);
+  });
+
+  it("has nothing to wait for when no branch had to open", () => {
+    assert.deepEqual(stillClosed([], () => true), []);
   });
 });

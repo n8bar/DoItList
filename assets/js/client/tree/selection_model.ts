@@ -38,3 +38,36 @@ export function keptSelection(
   if (!settled) return selectedId;
   return visible.includes(selectedId) ? selectedId : null;
 }
+
+/**
+ * Forgets a remembered task that is not in the tree any more — a collaborator
+ * deleted it and the refetch dropped it, or it belongs to the Initiative the
+ * user came from. Enter with nothing selected then falls back to the first
+ * visible row, as the workspace does when `DoitSelection.lastId` names a row
+ * that is no longer there (`…live.ex:3338`), instead of selecting a ghost and
+ * appearing to do nothing.
+ */
+export function forgetMissing(
+  state: SelectionState,
+  exists: (id: number) => boolean,
+): SelectionState {
+  const id = state.lastSelectedId;
+  if (id === null || exists(id)) return state;
+  return { selectedId: state.selectedId, lastSelectedId: null };
+}
+
+/**
+ * Which of the branches a reveal asked to open are still closed.
+ *
+ * Opening them is a state change, so the list of visible rows only catches up on
+ * the next render — and in between, the task the link named is still buried.
+ * Pruning then reads a tree that does not contain it yet and clears the
+ * selection the reveal had just made. So pruning waits for this to come back
+ * empty.
+ */
+export function stillClosed(
+  expanding: readonly number[],
+  collapsed: (id: number) => boolean,
+): readonly number[] {
+  return expanding.filter(collapsed);
+}

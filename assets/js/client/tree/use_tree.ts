@@ -23,8 +23,14 @@ import type { RowUser } from "./row_model.ts";
 import { canProgress } from "./permissions.ts";
 import type { CollapseStore } from "./tree_model.ts";
 import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
-import { revealPlan } from "./reveal_model.ts";
-import { keptSelection, noSelection, rememberSelection } from "./selection_model.ts";
+import { initialSelection, revealPlan } from "./reveal_model.ts";
+import {
+  forgetMissing,
+  keptSelection,
+  noSelection,
+  rememberSelection,
+  stillClosed,
+} from "./selection_model.ts";
 import type { SelectionState } from "./selection_model.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
 
@@ -68,6 +74,12 @@ export interface TreeState {
   onAdd: (request: AddRequest) => void;
   shortcutsOpen: boolean;
   closeShortcuts: () => void;
+  /**
+   * The selection this screen resolved on arrival, before anything rendered —
+   * the link's task, a kept selection, or nothing. The address bar is written
+   * against this, not against the value that was in the store on the way in.
+   */
+  initialSelectedId: number | null;
   /** Opens the branches between the root and `id`, then selects it. */
   reveal: (id: number) => void;
 }
@@ -127,12 +139,39 @@ export function useTree(options: UseTreeOptions): TreeState {
     [collapsedIds, setCollapsed],
   );
 
+  const deepLinkTaskId = options.deepLinkTaskId ?? null;
+
+  // Decided on the first render, before any effect can act on the selection:
+  // selection is per Initiative, and `ui.selectedTaskId` is one field that
+  // outlives the screen. Arriving from another Initiative with a task selected
+  // there, the stale id used to reach the pruning effect first and clear the row
+  // the link had just revealed.
+  const resolved = useRef<number | null>(null);
+  const first = useRef(true);
+  if (first.current) {
+    first.current = false;
+    resolved.current = initialSelection(model, deepLinkTaskId, selectedId);
+  }
+  // The selection as it stands RIGHT NOW, for effects already scheduled for
+  // this commit: they hold the value from the render that scheduled them, and
+  // the reveal moves the selection out from under them.
+  const live = useRef<number | null>(resolved.current);
+  // Branches a reveal has asked to open and is still waiting on.
+  const expanding = useRef<readonly number[]>(EMPTY_EXPANDING);
+
   const reveal = useCallback(
     (id: number) => {
       const plan = revealPlan(model, id, (other) => collapsedIds.has(other));
+      // Pruning must not act until these have actually opened: until then the
+      // task the link named is still buried, and a prune would clear it.
+      expanding.current = plan.expand;
       for (const branchId of plan.expand) setCollapsed(branchId, false);
       if (plan.select === null) return;
       setSelectedId(plan.select);
+      // The store is written synchronously, but this render's `selectedId` is
+      // not. Effects already scheduled for this commit still hold the old
+      // value, so keep the live one somewhere they can read it.
+      live.current = plan.select;
       // Deferred a frame, like the LiveView's `deep-link-task` handler, so the
       // rows that were just expanded are laid out before anything measures.
       const target = plan.select;
@@ -144,16 +183,22 @@ export function useTree(options: UseTreeOptions): TreeState {
   // One reveal per `?task=` value. Keyed on the id rather than on `reveal`,
   // whose identity changes every time a branch opens or closes — key it on the
   // callback and collapsing an ancestor of the selected row snaps it open again.
-  const deepLinkTaskId = options.deepLinkTaskId ?? null;
   const revealRef = useRef(reveal);
   revealRef.current = reveal;
   const settled = useRef(false);
 
+
   useEffect(() => {
+    // Applied before anything else runs: what was selected elsewhere is not a
+    // selection here.
+    setSelectedId(resolved.current);
+    live.current = resolved.current;
     if (deepLinkTaskId !== null) revealRef.current(deepLinkTaskId);
     // Only now may an off-screen selection be cleared: before this the branch
     // the link points into has not been expanded yet.
     settled.current = true;
+    // Once per arrival. `setSelectedId` is a stable store writer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkTaskId]);
 
   const visible = useMemo(() => visibleRows(model, collapsed), [model, collapsed]);
@@ -162,18 +207,31 @@ export function useTree(options: UseTreeOptions): TreeState {
   // A selected task that has been deleted, or hidden by a collapse, is not a
   // selection any more — otherwise the arrows navigate from a row nobody sees.
   useEffect(() => {
+    // `live.current`, not the captured `selectedId`: on the arrival commit the
+    // reveal effect has already moved the selection, and pruning a value that
+    // was true one effect ago would undo it.
+    expanding.current = stillClosed(expanding.current, (id) => collapsedIds.has(id));
+    if (expanding.current.length > 0) return;
+
+    const current = live.current;
     const kept = keptSelection(
-      selectedId,
+      current,
       visible.map((row) => row.id),
       settled.current,
     );
-    if (kept !== selectedId) setSelectedId(kept);
-  }, [selectedId, setSelectedId, visible]);
+    if (kept !== current) {
+      live.current = kept;
+      setSelectedId(kept);
+    }
+  }, [collapsedIds, selectedId, setSelectedId, visible]);
 
   // "Enter with nothing selected reopens the last task" means the task the user
   // was last on, not the last row in the tree.
   const selection = useRef<SelectionState>(noSelection);
-  selection.current = rememberSelection(selection.current, selectedId);
+  selection.current = forgetMissing(
+    rememberSelection(selection.current, selectedId),
+    (id) => model.tasks[id] !== undefined,
+  );
   const lastSelectedId = selection.current.lastSelectedId;
 
   const openAdd = useCallback(
@@ -278,12 +336,14 @@ export function useTree(options: UseTreeOptions): TreeState {
     }, []),
     onAdd,
     shortcutsOpen,
+    initialSelectedId: resolved.current,
     closeShortcuts: useCallback(() => setShortcutsOpen(false), []),
     reveal,
   };
 }
 
 const EMPTY_IDS: ReadonlySet<number> = new Set<number>();
+const EMPTY_EXPANDING: readonly number[] = [];
 
 /** Brings a row the keyboard just selected into view, gently. */
 function scrollRowIntoView(id: number): void {
