@@ -173,32 +173,33 @@ export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAd
 
   return (
     <div className="relative">
+      {/* The workspace's New List control, same wording and same `data-add-root`
+          hook. Outside the scroll box, as the LiveView keeps it (it lives in
+          `initiative_header/1`): scrolling a deep tree sideways must not carry
+          the only way in off the screen with it. Without this control a tree
+          with no rows has no way in at all — N and S both need a selection. */}
+      {ctx.permissions.canEdit && (
+        <div className="mb-3 flex">
+          <button
+            type="button"
+            data-add-root
+            onClick={() => ctx.onOpenAdd(rootSlot)}
+            aria-label="New list"
+            title="New list"
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+          >
+            <Icon name="plus" className="w-4 h-4" />
+            <span>New List</span>
+          </button>
+        </div>
+      )}
+
       {/* Horizontal scroll only. The client has ONE vertical scrolling region —
           `#client-scroll` in the frame — and a second one nested inside it would
           trap the wheel, break the router's scroll restoration and give the page
           two scrollbars. Deep indentation still scrolls sideways here, which is
           what ProductSpec §6.2 asks for. */}
       <div ref={box} id="tree-scroll" className="min-w-0 overflow-x-auto">
-        {/* The workspace's New List control, same wording and same
-            `data-add-root` hook. Without it a tree with no rows — and a tree
-            whose only row is selected-less — has no way in at all: N and S both
-            need a selection, and the root slot would be unreachable. */}
-        {ctx.permissions.canEdit && (
-          <div className="mb-3 flex">
-            <button
-              type="button"
-              data-add-root
-              onClick={() => ctx.onOpenAdd(rootSlot)}
-              aria-label="New list"
-              title="New list"
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
-            >
-              <Icon name="plus" className="w-4 h-4" />
-              <span>New List</span>
-            </button>
-          </div>
-        )}
-
         {sameSlot(addSlot, rootSlot) && <div className="mb-3">{form(rootSlot)}</div>}
 
         {rootIds.length === 0 && (
