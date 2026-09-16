@@ -7,7 +7,6 @@ import {
   ASYNC_REGIONS,
   COUNT_MIN_WIDTH,
   LIST_ROW_HEIGHT,
-  ROW_GAP,
   reservation,
   reservedHeight,
 } from "./layout_budget.ts";
@@ -86,17 +85,16 @@ describe("the layout budget", () => {
     );
   });
 
-  it("reserves the rows plus the gaps between them", () => {
-    for (const region of ASYNC_REGIONS) {
-      const { rows, rowHeight } = reservation(region);
-      assert.equal(reservedHeight(region), `${rows * rowHeight + (rows - 1) * ROW_GAP}px`);
-    }
+  // Concrete numbers, not the formula restated: six 48px rows plus five 8px
+  // gaps between them is 328px, full stop.
+  it("reserves the Initiatives list's six rows plus the gaps between them", () => {
+    assert.equal(reservation("initiatives-list").rows, 6);
+    assert.equal(reservedHeight("initiatives-list"), "328px");
   });
 
-  it("gives a single row no gap to pay for", () => {
-    const single = ASYNC_REGIONS.find((region) => reservation(region).rows === 1);
-    if (single === undefined) return;
-    assert.equal(reservedHeight(single), `${reservation(single).rowHeight}px`);
+  it("gives the single-row Initiative header no gap to pay for", () => {
+    assert.equal(reservation("initiative-header").rows, 1, "this only tests a single row if the fixture stays one");
+    assert.equal(reservedHeight("initiative-header"), "80px");
   });
 
   it("holds a width open for numbers that have not arrived", () => {
