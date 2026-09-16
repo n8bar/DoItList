@@ -100,7 +100,10 @@ export function initials(user: AvatarUser): string {
   return ((letters[0] as string) + (letters[letters.length - 1] as string)).toUpperCase();
 }
 
+// `initials_from_username/1` in `core_components.ex`: the username's first two
+// characters, upper-cased — "dana" is DA, not D. A username is never blank in
+// practice; if one ever were, a "?" says so rather than drawing an empty disc.
 function fromUsername(username: string): string {
-  const first = username.trim()[0];
-  return first === undefined ? "?" : first.toUpperCase();
+  const trimmed = username.trim().slice(0, 2);
+  return trimmed === "" ? "?" : trimmed.toUpperCase();
 }

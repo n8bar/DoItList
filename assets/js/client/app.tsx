@@ -36,6 +36,7 @@ import {
   setSnapshotMeta,
   setStorageHealth,
 } from "./state/recovery.ts";
+import { rowPreferencesFrom, setRowPreferences } from "./state/preferences.ts";
 import { fatalMessage } from "./state/fatal.ts";
 import { updateNotifications } from "./state/domain.ts";
 import { prepend } from "./state/notifications.ts";
@@ -209,6 +210,9 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       if (!alive.current) return;
       if (result.ok) {
         stores.domain.set((domain) => ({ ...domain, user: result.data.user }));
+        // The account's row-display choices, read once. The tree draws its rows
+        // from these, so they arrive before any tree does.
+        setRowPreferences(stores.preferences, rowPreferencesFrom(result.data.preferences));
         // The session belongs to somebody else — a re-login in another tab,
         // say. Their cache is not ours to read: the old one goes before this
         // one is opened (spec §12).

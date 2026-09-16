@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { createStore } from "./store.ts";
-import { createDomainStore, initialDomainState, putTree, tree as loadedTree } from "./domain.ts";
+import {
+  createDomainStore,
+  forgetInitiative,
+  initialDomainState,
+  members as loadedMembers,
+  putMembers,
+  putTree,
+  tree as loadedTree,
+} from "./domain.ts";
 import {
   createRecoveryStore,
   initialRecoveryState,
@@ -139,6 +147,34 @@ describe("domain store", () => {
 
   it("reports an unread tree as undefined rather than a blank one", () => {
     assert.equal(loadedTree(createDomainStore().get(), 7), undefined);
+  });
+
+  it("files members per Initiative, and reads an unread list as empty", () => {
+    const store = createDomainStore();
+    assert.deepEqual(loadedMembers(store.get(), 1), []);
+
+    putMembers(store, 1, [{ user_id: 5, role: "owner", name: "Ada L", username: "ada" }]);
+    putMembers(store, 2, [{ user_id: 6, role: "viewer", name: null, username: "bo" }]);
+
+    assert.deepEqual(
+      loadedMembers(store.get(), 1).map((m) => m.username),
+      ["ada"],
+    );
+    assert.deepEqual(
+      loadedMembers(store.get(), 2).map((m) => m.username),
+      ["bo"],
+    );
+  });
+
+  it("drops an Initiative's members with its tree when access goes away", () => {
+    const store = createDomainStore();
+    putTree(store, tree(1, "Q3"));
+    putMembers(store, 1, [{ user_id: 5, role: "owner", name: "Ada L", username: "ada" }]);
+
+    forgetInitiative(store, 1);
+
+    assert.equal(loadedTree(store.get(), 1), undefined);
+    assert.deepEqual(loadedMembers(store.get(), 1), []);
   });
 });
 

@@ -78,6 +78,19 @@ export interface TaskNode {
   children: TaskNode[];
 }
 
+/**
+ * One row of `GET /app/api/initiatives/:id/members` (`Serializer.member/1`).
+ * Only the fields the tree draws are declared: who they are, and what they may
+ * do. The avatar's colour comes from `user_id`, the same way the server derives
+ * it (`frame/avatar_model.ts`).
+ */
+export interface Member {
+  user_id: number;
+  role: Role;
+  name: string | null;
+  username: string;
+}
+
 /** `GET /app/api/initiatives/:id` — header plus the nested tree. */
 export interface InitiativeTree {
   id: number;

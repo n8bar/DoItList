@@ -1,0 +1,57 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import {
+  createPreferencesStore,
+  initialRowPreferences,
+  rowPreferencesFrom,
+  setRowPreferences,
+} from "./preferences.ts";
+
+describe("the row preferences", () => {
+  it("start with everything shown, as the server's defaults do", () => {
+    assert.deepEqual(initialRowPreferences, {
+      priority: true,
+      assignee: true,
+      progress: true,
+      count: true,
+    });
+    assert.deepEqual(createPreferencesStore().get().rows, initialRowPreferences);
+  });
+
+  it("read the session payload's four flags", () => {
+    const rows = rowPreferencesFrom({
+      show_task_priority: false,
+      show_task_assignee: true,
+      show_task_progress: false,
+      show_task_count: true,
+    });
+
+    assert.deepEqual(rows, { priority: false, assignee: true, progress: false, count: true });
+  });
+
+  it("falls back to shown for anything the payload did not carry", () => {
+    assert.deepEqual(rowPreferencesFrom({ show_task_count: false }), {
+      priority: true,
+      assignee: true,
+      progress: true,
+      count: false,
+    });
+    assert.deepEqual(rowPreferencesFrom({ show_task_priority: "no" }), initialRowPreferences);
+    assert.deepEqual(rowPreferencesFrom(null), initialRowPreferences);
+    assert.deepEqual(rowPreferencesFrom(undefined), initialRowPreferences);
+  });
+
+  it("does not wake the store when the flags did not change", () => {
+    const store = createPreferencesStore();
+    let woken = 0;
+    store.subscribe(() => (woken += 1));
+
+    setRowPreferences(store, rowPreferencesFrom({}));
+    assert.equal(woken, 0);
+
+    setRowPreferences(store, rowPreferencesFrom({ show_task_assignee: false }));
+    assert.equal(woken, 1);
+    assert.equal(store.get().rows.assignee, false);
+  });
+});

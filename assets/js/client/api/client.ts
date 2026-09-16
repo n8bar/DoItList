@@ -33,6 +33,17 @@ export type Result<T> = { ok: true; data: T } | { ok: false; error: ApiError };
 
 export interface SessionData {
   user: { id: number; email: string; username: string; name: string | null };
+  /**
+   * The account's row-display choices. Optional on the type, because a client
+   * that outlives a server without them must still start — `rowPreferencesFrom`
+   * reads a missing object as the defaults.
+   */
+  preferences?: {
+    show_task_priority: boolean;
+    show_task_assignee: boolean;
+    show_task_progress: boolean;
+    show_task_count: boolean;
+  };
   csrf_token: string;
 }
 

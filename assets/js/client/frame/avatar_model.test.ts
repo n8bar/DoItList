@@ -19,8 +19,9 @@ describe("initials (mirrors DoItWeb.CoreComponents.initials/1)", () => {
   });
 
   it("falls back to the username when there is no name", () => {
-    assert.equal(initials({ name: null, username: "dana" }), "D");
-    assert.equal(initials({ name: "   ", username: "dana" }), "D");
+    // Two letters, exactly as `initials_from_username/1` slices them.
+    assert.equal(initials({ name: null, username: "dana" }), "DA");
+    assert.equal(initials({ name: "   ", username: "dana" }), "DA");
   });
 
   it("never comes back empty", () => {
