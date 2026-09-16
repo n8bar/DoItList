@@ -100,9 +100,14 @@ tests.
 
 `bin/cdp/check_client.mjs` drives a real Chrome/Brave over the DevTools
 Protocol: it opens its own tab, loads `/app/initiatives`, waits for the client
-to report ready, checks that the header and nav don't shift when the list
-lands, and performs one real mouse click on the **Account** nav link (hit-tested
-first, so a covered or inert control can't pass).
+to report ready, and then works through the things only a browser can answer —
+real mouse clicks (hit-tested first, so a covered or inert control can't pass),
+the frame holding its place when content and routes change, the theme both
+ways, tab order and the skip link, reduced motion asked for as the OS
+preference, deep links with back and forward, the confirm dialog's focus
+return, a press acknowledged inside 100 ms on a two-second link, a boot with
+nothing to talk to, and the connection summary going offline and back. The last
+check reports whether the run left anything on the machine it ran on.
 
 Run it from the **host** (the container can't reach the DevTools bridge), with
 a browser listening on `CDP_URL` (default `http://localhost:9222`) and the app
@@ -114,7 +119,7 @@ because that navigates a tab you are using. It is deliberately outside
 
 ```bash
 APP_URL=http://localhost:4000 node bin/cdp/check_client.mjs   # Node 22+; add --experimental-websocket on Node 20
-docker compose exec -T web node --test "bin/cdp/*.test.mjs"   # the harness's own unit tests
+docker compose exec -T web node --test "bin/cdp/*.test.mjs"   # the harness's own unit tests (also run by `mix test`)
 ```
 
 ## Terminology

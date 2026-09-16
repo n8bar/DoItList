@@ -741,18 +741,751 @@ export async function checkDialogFocusReturn(ctx) {
   }
 }
 
+/**
+ * The theme, driven both ways in a real browser (items 2.5, 4.2 — audit 6.3).
+ *
+ * The toggle is a local action: the label, the `data-theme` attribute and the
+ * saved preference all move on the click, with nothing in between (§6.7). Then
+ * the preference is reloaded, because a theme that does not survive a refresh
+ * is a theme the user has to set again every morning.
+ *
+ * The preference lives in the operator's own profile, so whatever was there
+ * when we arrived is put back before we leave.
+ */
+export async function checkThemeBothWays(ctx) {
+  const { session } = ctx;
+
+  const before = await evaluate(
+    session,
+    `return { saved: localStorage.getItem("phx:theme") };`,
+  );
+
+  try {
+    // Start from a known place: click until the control reads "Light".
+    for (let i = 0; i < 4; i += 1) {
+      const label = await evaluate(
+        session,
+        `const b = document.getElementById("client-theme-toggle"); return b === null ? null : b.textContent.trim();`,
+      );
+      if (label === "Light") break;
+      if (label === null) throw new Error("no theme control in the header");
+      await clickElement(session, "#client-theme-toggle");
+      await new Promise((r) => setTimeout(r, 60));
+    }
+
+    const light = await readTheme(session);
+    if (light.label !== "Light") throw new Error(`could not reach Light (at ${light.label})`);
+    if (light.attr !== "light") throw new Error(`label says Light, <html> says ${light.attr}`);
+    if (light.saved !== "light") throw new Error(`Light was not saved (${light.saved})`);
+
+    await clickElement(session, "#client-theme-toggle");
+    const dark = await waitFor(
+      session,
+      `
+      const b = document.getElementById("client-theme-toggle");
+      if (b === null || b.textContent.trim() !== "Dark") return null;
+      return {
+        label: "Dark",
+        attr: document.documentElement.getAttribute("data-theme"),
+        saved: localStorage.getItem("phx:theme"),
+        headerBg: getComputedStyle(document.getElementById("client-header")).backgroundColor,
+        name: b.getAttribute("aria-label"),
+      };
+    `,
+      { timeoutMs: 5_000, what: "the theme to go dark" },
+    );
+
+    if (dark.attr !== "dark") throw new Error(`label says Dark, <html> says ${dark.attr}`);
+    if (dark.saved !== "dark") throw new Error(`Dark was not saved (${dark.saved})`);
+    if (dark.headerBg === light.headerBg) {
+      throw new Error(`the header is ${dark.headerBg} in both themes — the label lied`);
+    }
+    if (!/dark/i.test(dark.name ?? "")) {
+      throw new Error(`the control is named "${dark.name}" — it does not say which theme is on`);
+    }
+
+    // Dark survives a refresh, and it is on the document from the first paint:
+    // the sample is taken the moment <html> exists, and it already carries the
+    // attribute whether or not the client has said it is ready.
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` });
+    const firstPaint = await waitFor(
+      session,
+      `
+      const root = document.documentElement;
+      const attr = root.getAttribute("data-theme");
+      if (attr === null) return null;
+      return { attr, ready: window.__doit_client_ready === true };
+    `,
+      { timeoutMs: READY_TIMEOUT_MS, everyMs: 5, what: "<html> to carry a theme" },
+    );
+    if (firstPaint.attr !== "dark") {
+      throw new Error(`a refresh painted ${firstPaint.attr}, not the saved dark`);
+    }
+
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come back up",
+    });
+    const afterReload = await readTheme(session);
+    if (afterReload.label !== "Dark") {
+      throw new Error(`the control reads "${afterReload.label}" after a refresh, not Dark`);
+    }
+
+    // And back to System: the preference is stored as ABSENCE, and the document
+    // still carries an explicit light/dark resolved against the OS.
+    await clickElement(session, "#client-theme-toggle");
+    const system = await waitFor(
+      session,
+      `
+      const b = document.getElementById("client-theme-toggle");
+      if (b === null || b.textContent.trim() !== "System") return null;
+      return {
+        saved: localStorage.getItem("phx:theme"),
+        attr: document.documentElement.getAttribute("data-theme"),
+        prefersDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+      };
+    `,
+      { timeoutMs: 5_000, what: "the theme to go back to System" },
+    );
+    if (system.saved !== null) throw new Error(`System was saved as "${system.saved}"`);
+    const resolved = system.prefersDark ? "dark" : "light";
+    if (system.attr !== resolved) {
+      throw new Error(`System resolved to ${system.attr}, but the OS asks for ${resolved}`);
+    }
+
+    return `Light → Dark (${dark.headerBg} vs ${light.headerBg}), dark held across a refresh${
+      firstPaint.ready ? "" : " before the client was ready"
+    }, System resolved to ${resolved}`;
+  } finally {
+    await evaluate(
+      session,
+      before.saved === null
+        ? `localStorage.removeItem("phx:theme"); return true;`
+        : `localStorage.setItem("phx:theme", ${JSON.stringify(before.saved)}); return true;`,
+    ).catch(() => {});
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` }).catch(() => {});
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come back on the operator's theme",
+    }).catch(() => {});
+  }
+}
+
+async function readTheme(session) {
+  return evaluate(
+    session,
+    `
+    const b = document.getElementById("client-theme-toggle");
+    return {
+      label: b === null ? null : b.textContent.trim(),
+      attr: document.documentElement.getAttribute("data-theme"),
+      saved: localStorage.getItem("phx:theme"),
+      headerBg: getComputedStyle(document.getElementById("client-header")).backgroundColor,
+      name: b === null ? null : b.getAttribute("aria-label"),
+    };
+  `,
+  );
+}
+
+/**
+ * The frame by keyboard alone (audit 6.4, guardrails §3).
+ *
+ * Tab from the top of the document and the frame has to hand itself over in
+ * reading order — the skip link first, then the wordmark, then the nav — and
+ * every stop has to be a control you can see and name. Then the skip link is
+ * used for what it is for: one press and the caret is in `<main>`.
+ */
+export async function checkKeyboardTraversal(ctx) {
+  const { session } = ctx;
+
+  await evaluate(
+    session,
+    `
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+    window.scrollTo(0, 0);
+    return true;
+  `,
+  );
+
+  const expected = [
+    "client-skip-link",
+    "client-wordmark",
+    "client-nav-initiatives",
+    "client-nav-assigned",
+    "client-nav-account",
+    "client-theme-toggle",
+    "client-sign-out",
+  ];
+
+  const seen = [];
+  for (let i = 0; i < expected.length; i += 1) {
+    await pressKey(session, "Tab", { windowsVirtualKeyCode: 9 });
+    const stop = await evaluate(
+      session,
+      `
+      const el = document.activeElement;
+      if (el === null || el === document.body) return null;
+      const r = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return {
+        id: el.id,
+        name: (el.getAttribute("aria-label") ?? el.textContent ?? "").trim(),
+        visible: r.width > 0 && r.height > 0 && style.visibility !== "hidden",
+      };
+    `,
+    );
+    if (stop === null) throw new Error(`Tab ${i + 1} left focus on nothing (body)`);
+    seen.push(stop);
+  }
+
+  const order = seen.map((s) => s.id);
+  if (order.join(",") !== expected.join(",")) {
+    throw new Error(`tab order is ${order.join(" → ")}, expected ${expected.join(" → ")}`);
+  }
+  const nameless = seen.filter((s) => s.name.length === 0);
+  if (nameless.length > 0) {
+    throw new Error(`a focus stop with no accessible name: #${nameless.map((s) => s.id).join(", #")}`);
+  }
+  const invisible = seen.filter((s) => !s.visible);
+  if (invisible.length > 0) {
+    throw new Error(`focus went somewhere invisible: #${invisible.map((s) => s.id).join(", #")}`);
+  }
+
+  // The skip link, used: focus it again and press it.
+  await evaluate(session, `document.getElementById("client-skip-link").focus(); return true;`);
+  await pressKey(session, "Enter", { windowsVirtualKeyCode: 13 });
+  const skipped = await waitFor(
+    session,
+    `
+    const main = document.getElementById("client-main");
+    const active = document.activeElement;
+    if (main === null) return null;
+    if (active !== main && !main.contains(active)) return null;
+    return { id: active === null ? null : active.id, hash: location.hash };
+  `,
+    { timeoutMs: 5_000, what: "the skip link to put focus in the main column" },
+  );
+
+  return `${order.length} stops in order, all named; skip link landed on #${skipped.id || "(inside main)"}`;
+}
+
+/**
+ * Reduced motion, asked for the way a real user asks for it (audit 6.4,
+ * guardrails §1.2) — the OS preference, emulated, not a class name read off a
+ * string in a unit test.
+ */
+export async function checkReducedMotion(ctx) {
+  const { session } = ctx;
+  const fast = { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+
+  const motion = async () =>
+    evaluate(
+      session,
+      `
+      const el = document.getElementById("client-nav-initiatives");
+      if (el === null) return null;
+      const s = getComputedStyle(el);
+      return {
+        duration: s.transitionDuration,
+        property: s.transitionProperty,
+        reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      };
+    `,
+    );
+
+  // `transition-none` turns the transition off by taking away the PROPERTY, so
+  // that is what has to change; a duration left on a transition of nothing
+  // animates nothing.
+  const off = (m) => m.property === "none" || parseFloat(m.duration) === 0;
+
+  await session.send("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
+  });
+  const moving = await motion();
+  if (moving === null) throw new Error("no nav control to measure");
+  if (off(moving)) {
+    throw new Error("the nav control has no transition to guard in the first place");
+  }
+
+  await session.send("Network.enable");
+  try {
+    await session.send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    const still = await motion();
+    if (!still.reduced) throw new Error("the page does not see the reduced-motion preference");
+    if (!off(still)) {
+      throw new Error(
+        `transitions still run under reduced motion (${still.property} for ${still.duration})`,
+      );
+    }
+
+    // The loading skeleton is the one thing that animates on its own, so it is
+    // the one that has to stop. It is short-lived, so the read is slowed to
+    // make it observable.
+    await session.send("Network.emulateNetworkConditions", { ...fast, latency: 1200 });
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` });
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come up on a slow link",
+    });
+
+    const skeleton = await waitFor(
+      session,
+      `
+      const row = document.querySelector('#initiatives-skeleton div[aria-hidden="true"]');
+      if (row === null) return null;
+      const s = getComputedStyle(row);
+      return { animation: s.animationName, iteration: s.animationIterationCount };
+    `,
+      { timeoutMs: READY_TIMEOUT_MS, what: "the loading skeleton" },
+    );
+
+    if (skeleton.animation !== "none") {
+      throw new Error(`the skeleton still pulses (${skeleton.animation}) under reduced motion`);
+    }
+
+    return `transition-property ${moving.property} (${moving.duration}) → ${still.property}, skeleton animation ${skeleton.animation}`;
+  } finally {
+    await session.send("Network.emulateNetworkConditions", fast).catch(() => {});
+    await session.send("Network.disable").catch(() => {});
+    await session.send("Emulation.setEmulatedMedia", { features: [] }).catch(() => {});
+    await waitFor(
+      session,
+      `return document.querySelector("#initiatives-list li") !== null ? true : null;`,
+      { timeoutMs: READY_TIMEOUT_MS, what: "the rows to land" },
+    ).catch(() => {});
+  }
+}
+
+/**
+ * A deep link, then the browser's own back and forward (audit 6.2).
+ *
+ * `/app/account` typed straight into the address bar has to resolve to the
+ * Account screen — the document is the same for every path, so the client is
+ * the one doing the resolving. Then back and forward have to return the user to
+ * where they were, scroll position included, because a list you have to scroll
+ * again is a list you have lost your place in.
+ */
+export async function checkDeepLinkAndHistory(ctx) {
+  const { session } = ctx;
+
+  await session.send("Page.navigate", { url: `${ctx.appUrl}/app/account` });
+  await waitFor(session, "return window.__doit_client_ready === true;", {
+    timeoutMs: READY_TIMEOUT_MS,
+    what: "the client to come up on a deep link",
+  });
+
+  const deep = await waitFor(
+    session,
+    `
+    const heading = document.getElementById("route-heading");
+    if (heading === null || heading.textContent.trim() !== "Account") return null;
+    return {
+      path: location.pathname,
+      current: document.getElementById("client-nav-account").getAttribute("aria-current"),
+    };
+  `,
+    { timeoutMs: READY_TIMEOUT_MS, what: "the Account screen on a direct load" },
+  );
+  if (deep.path !== "/app/account") throw new Error(`landed on ${deep.path}`);
+  if (deep.current !== "page") throw new Error("the deep-linked route is not marked in the nav");
+
+  // To the list, scrolled down, then away again.
+  await clickElement(session, "#client-nav-initiatives");
+  const scrolled = await waitFor(
+    session,
+    `
+    const scroller = document.getElementById("client-scroll");
+    if (scroller === null) return null;
+    if (document.querySelector("#initiatives-list li") === null) return null;
+    const room = scroller.scrollHeight - scroller.clientHeight;
+    if (room <= 0) return { top: 0, room: 0 };
+    const top = Math.min(240, room);
+    scroller.scrollTop = top;
+    return { top: Math.round(scroller.scrollTop), room: Math.round(room) };
+  `,
+    { timeoutMs: READY_TIMEOUT_MS, what: "the Initiatives list to scroll" },
+  );
+
+  await clickElement(session, "#client-nav-account");
+  await waitFor(
+    session,
+    `
+    const heading = document.getElementById("route-heading");
+    return heading !== null && heading.textContent.trim() === "Account" ? true : null;
+  `,
+    { timeoutMs: 5_000, what: "the Account route again" },
+  );
+
+  await evaluate(session, `history.back(); return true;`);
+  const back = await waitFor(
+    session,
+    `
+    const heading = document.getElementById("route-heading");
+    if (location.pathname !== "/app/initiatives") return null;
+    if (heading === null || heading.textContent.trim() !== "Initiatives") return null;
+    const scroller = document.getElementById("client-scroll");
+    if (document.querySelector("#initiatives-list li") === null) return null;
+    return { top: Math.round(scroller.scrollTop) };
+  `,
+    { timeoutMs: 10_000, what: "back to the Initiatives list" },
+  );
+
+  if (scrolled.top > 0) {
+    const restored = await waitFor(
+      session,
+      `
+      const scroller = document.getElementById("client-scroll");
+      return Math.abs(scroller.scrollTop - ${scrolled.top}) <= 2 ? Math.round(scroller.scrollTop) : null;
+    `,
+      { timeoutMs: 10_000, what: "the remembered scroll position" },
+    ).catch(() => {
+      throw new Error(`back restored scroll to ${back.top}px, not the ${scrolled.top}px left behind`);
+    });
+    if (restored === null) throw new Error("scroll was not restored");
+  }
+
+  await evaluate(session, `history.forward(); return true;`);
+  const forward = await waitFor(
+    session,
+    `
+    const heading = document.getElementById("route-heading");
+    if (location.pathname !== "/app/account") return null;
+    return heading !== null && heading.textContent.trim() === "Account" ? true : null;
+  `,
+    { timeoutMs: 10_000, what: "forward to Account" },
+  );
+
+  return `deep link → Account, back restored ${scrolled.top}px of scroll${
+    scrolled.room === 0 ? " (list fits, nothing to restore)" : ""
+  }, forward returned (${forward})`;
+}
+
+/**
+ * §6 under latency (audit 6.5). A slow server must not slow the ANSWER: the
+ * press is acknowledged on the spot and the wait is shown as a wait.
+ *
+ * Measured in the page, between the click landing and the new route being on
+ * the glass, with two seconds of latency on every request.
+ */
+export async function checkAckUnderLatency(ctx) {
+  const { session } = ctx;
+  const fast = { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+  const BUDGET_MS = 100;
+
+  await session.send("Network.enable");
+  try {
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/app/account` });
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come up",
+    });
+
+    await session.send("Network.emulateNetworkConditions", { ...fast, latency: 2000 });
+
+    // The stopwatch lives in the page: t0 on the click itself (capture, so it
+    // is stamped before any handler runs), t1 on the first frame that shows
+    // the new route.
+    await evaluate(
+      session,
+      `
+      window.__ack = { t0: null, route: null, busy: null };
+      document.addEventListener("click", () => { window.__ack.t0 = performance.now(); }, { capture: true, once: true });
+      const tick = () => {
+        const a = window.__ack;
+        if (a.t0 !== null) {
+          const heading = document.getElementById("route-heading");
+          const showing = location.pathname === "/app/initiatives" &&
+            heading !== null && heading.textContent.trim() === "Initiatives";
+          if (showing && a.route === null) a.route = performance.now();
+          const skeleton = document.getElementById("initiatives-skeleton");
+          if (a.busy === null && skeleton !== null && skeleton.getAttribute("aria-busy") === "true") {
+            a.busy = performance.now();
+          }
+        }
+        if (a.route === null || a.busy === null) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      return true;
+    `,
+    );
+
+    await clickElement(session, "#client-nav-initiatives");
+
+    const ack = await waitFor(
+      session,
+      `
+      const a = window.__ack;
+      if (a === undefined || a.t0 === null || a.route === null) return null;
+      return {
+        routeMs: Math.round(a.route - a.t0),
+        busyMs: a.busy === null ? null : Math.round(a.busy - a.t0),
+        stillBusy: document.getElementById("initiatives-skeleton") !== null,
+      };
+    `,
+      { timeoutMs: 10_000, what: "the route to appear" },
+    );
+
+    if (ack.routeMs > BUDGET_MS) {
+      throw new Error(`the route took ${ack.routeMs}ms to acknowledge a click on a 2s link`);
+    }
+    if (ack.busyMs === null) {
+      throw new Error("the wait was never shown — no in-flight signifier while the read ran");
+    }
+    if (ack.busyMs > BUDGET_MS) {
+      throw new Error(`the in-flight signifier took ${ack.busyMs}ms to appear`);
+    }
+
+    // The theme toggle is entirely local: it must not know the link is slow.
+    // Timed in the page, the same way — a stopwatch run over CDP would be
+    // measuring this harness's round trips, not the client.
+    const theme = await evaluate(
+      session,
+      `
+      const b = document.getElementById("client-theme-toggle");
+      const was = b.textContent.trim();
+      window.__theme = { t0: null, at: null, was };
+      document.addEventListener("click", () => { window.__theme.t0 = performance.now(); }, { capture: true, once: true });
+      const tick = () => {
+        const t = window.__theme;
+        if (t.t0 !== null && t.at === null &&
+            document.getElementById("client-theme-toggle").textContent.trim() !== t.was) {
+          t.at = performance.now();
+          return;
+        }
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+      return was;
+    `,
+    );
+    await clickElement(session, "#client-theme-toggle");
+    const themeMs = await waitFor(
+      session,
+      `
+      const t = window.__theme;
+      if (t === undefined || t.t0 === null || t.at === null) return null;
+      return Math.round(t.at - t.t0);
+    `,
+      { timeoutMs: 5_000, everyMs: 10, what: "the theme to flip on a slow link" },
+    );
+    if (themeMs > BUDGET_MS) {
+      throw new Error(`the theme toggle took ${themeMs}ms on a 2s link — nothing about it is remote`);
+    }
+    // Put the operator's theme back the way the toggle found it.
+    for (let i = 0; i < 3; i += 1) {
+      const label = await evaluate(
+        session,
+        `return document.getElementById("client-theme-toggle").textContent.trim();`,
+      );
+      if (label === theme) break;
+      await clickElement(session, "#client-theme-toggle");
+      await new Promise((r) => setTimeout(r, 60));
+    }
+
+    await session.send("Network.emulateNetworkConditions", fast);
+    return `route on the glass in ${ack.routeMs}ms and the wait shown in ${ack.busyMs}ms on a 2s link; theme flipped in ${themeMs}ms`;
+  } finally {
+    await session.send("Network.emulateNetworkConditions", fast).catch(() => {});
+    await session.send("Network.disable").catch(() => {});
+    await evaluate(session, `delete window.__ack; delete window.__theme; return true;`).catch(
+      () => {},
+    );
+  }
+}
+
+/**
+ * Disconnected startup (audit 6.5, guardrails §6.8, spec §7).
+ *
+ * The client boots with its data surface and its socket unreachable: the frame
+ * still paints, its controls still work, the screen says so in place with a way
+ * to try again, and — once the machine itself reports no network — the
+ * connection summary says offline and offers Retry.
+ *
+ * The document and the bundle are allowed through, because a browser with no
+ * network at all never gets as far as running this client; everything the
+ * client would talk to afterwards is blocked.
+ */
+export async function checkDisconnectedStartup(ctx) {
+  const { session } = ctx;
+  const fast = { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 };
+
+  await session.send("Network.enable");
+  try {
+    await session.send("Network.setBlockedURLs", {
+      urls: ["*/app/api/*", "*/socket/*", "*/socket"],
+    });
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` });
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come up with nothing to talk to",
+    });
+
+    const painted = await waitFor(
+      session,
+      `
+      const ids = ["client-header", "client-nav-initiatives", "client-rail", "client-main",
+                   "client-theme-toggle", "client-sign-out", "client-connection"];
+      const missing = ids.filter((id) => document.getElementById(id) === null);
+      if (missing.length > 0) return null;
+      const error = document.getElementById("screen-error");
+      if (error === null) return null;
+      const retry = [...error.querySelectorAll("button")].map((b) => b.textContent.trim());
+      return {
+        retry,
+        conn: document.getElementById("client-connection").getAttribute("data-conn-state"),
+      };
+    `,
+      { timeoutMs: READY_TIMEOUT_MS, what: "the frame and the in-place read failure" },
+    );
+
+    if (painted.retry.length === 0) {
+      throw new Error("the read failed and the screen offered no way to try again");
+    }
+
+    // The controls respond with no network behind them: a route change is
+    // entirely local, and it must be instant.
+    await clickElement(session, "#client-nav-account");
+    await waitFor(
+      session,
+      `
+      const heading = document.getElementById("route-heading");
+      return location.pathname === "/app/account" && heading !== null &&
+        heading.textContent.trim() === "Account" ? true : null;
+    `,
+      { timeoutMs: 5_000, what: "a route change with no network" },
+    );
+
+    // What the summary said while only the SERVER was unreachable — the machine
+    // still claims to have a network here. Recorded, not asserted: see the
+    // matrix's known gap on connect-time online checks.
+    const beforeOffline = await evaluate(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      return badge === null ? null : badge.getAttribute("data-conn-state");
+    `,
+    );
+
+    await session.send("Network.emulateNetworkConditions", { ...fast, offline: true });
+    const offline = await waitFor(
+      session,
+      `
+      const badge = document.getElementById("client-connection");
+      if (badge === null) return null;
+      const state = badge.getAttribute("data-conn-state");
+      if (!String(state).startsWith("offline")) return null;
+      const text = badge.querySelector("[data-conn-text]");
+      return {
+        state,
+        text: text === null ? "" : text.textContent.trim(),
+        retry: document.getElementById("client-connection-retry") !== null,
+      };
+    `,
+      { timeoutMs: 15_000, what: "the summary to say we are offline" },
+    );
+
+    if (!offline.retry) throw new Error("offline, and no Retry to get back");
+    if (!/offline/i.test(offline.text)) {
+      throw new Error(`the summary reads "${offline.text}" with no network`);
+    }
+
+    return `frame painted, route changed, read failed in place with "${painted.retry.join(
+      " / ",
+    )}"; summary ${beforeOffline} → ${offline.state} ("${offline.text}") with Retry`;
+  } finally {
+    await session.send("Network.setBlockedURLs", { urls: [] }).catch(() => {});
+    await session.send("Network.emulateNetworkConditions", fast).catch(() => {});
+    await session.send("Network.disable").catch(() => {});
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` }).catch(() => {});
+    await waitFor(session, "return window.__doit_client_ready === true;", {
+      timeoutMs: READY_TIMEOUT_MS,
+      what: "the client to come back with its network",
+    }).catch(() => {});
+    // The give-up state does not heal itself — Retry is the way back, and the
+    // next check expects a live tab.
+    await evaluate(
+      session,
+      `
+      const retry = document.getElementById("client-connection-retry");
+      if (retry !== null) retry.click();
+      return true;
+    `,
+    ).catch(() => {});
+  }
+}
+
+/**
+ * Nothing this harness did is still on the operator's device.
+ *
+ * The dialog check seeds one queued op into this profile's client cache to make
+ * the confirm real. It deletes it again — and this is the check that says so
+ * out loud, because a phantom pending write would tell the operator their work
+ * never reached the server.
+ */
+export async function checkNoHarnessResidue(ctx) {
+  const { session } = ctx;
+
+  const residue = await evaluate(
+    session,
+    `
+    return (async () => {
+      if (typeof indexedDB.databases !== "function") return { skipped: true };
+      const dbs = await indexedDB.databases();
+      const found = dbs.find((d) => /^doit:v\\d+:\\d+$/.test(d.name ?? ""));
+      if (found === undefined) return { skipped: true };
+      const db = await new Promise((resolve, reject) => {
+        const req = indexedDB.open(found.name);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+      if (!db.objectStoreNames.contains("pending_ops")) {
+        db.close();
+        return { skipped: true };
+      }
+      const keys = await new Promise((resolve, reject) => {
+        const req = db.transaction("pending_ops", "readonly").objectStore("pending_ops").getAllKeys();
+        req.onsuccess = () => resolve(req.result ?? []);
+        req.onerror = () => reject(req.error);
+      });
+      db.close();
+      return { skipped: false, db: found.name, keys: keys.map(String) };
+    })();
+  `,
+  );
+
+  if (residue.skipped) return "no client cache in this profile to check";
+  const ours = residue.keys.filter((key) => key.startsWith("cdp-"));
+  if (ours.length > 0) {
+    throw new Error(`the harness left queued writes behind: ${ours.join(", ")}`);
+  }
+  if (residue.keys.length > 0) {
+    return `${residue.keys.length} queued write(s) in ${residue.db}, none of them ours`;
+  }
+  return `pending_ops is empty in ${residue.db}`;
+}
+
 const CHECKS = [
   ["client ready", checkClientReady],
   ["no layout shift", checkNoLayoutShift],
   ["skeleton row == real row", checkSkeletonMatchesRow],
+  ["theme both ways", checkThemeBothWays],
+  ["keyboard traversal of the frame", checkKeyboardTraversal],
+  ["reduced motion", checkReducedMotion],
   ["nav click \u2192 Account", checkNavClickToAccount],
   ["no shift across routes", checkNoShiftAcrossRoutes],
+  ["deep link, back and forward", checkDeepLinkAndHistory],
+  ["acknowledgement under latency", checkAckUnderLatency],
   ["narrow viewport menu", checkNarrowMenu],
   ["menu sign out reaches the form", checkMenuSignOutSubmits],
   ["dialog focus return", checkDialogFocusReturn],
-  // Last: it takes the network away and back, so nothing after it inherits a
-  // throttled tab.
+  ["disconnected startup", checkDisconnectedStartup],
+  // Near-last: it takes the network away and back, so nothing after it inherits
+  // a throttled tab.
   ["connection summary", checkConnectionSummary],
+  // Truly last: it reports what the run left on the operator's device.
+  ["no harness residue", checkNoHarnessResidue],
 ];
 
 // ---------------------------------------------------------------------------
