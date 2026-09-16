@@ -122,7 +122,7 @@ defmodule DoItWeb.Api.Operations do
   without a refetch:
 
       {"type": "history", "action": "undo", "kind": "child_deleted",
-       "upserts": [<task_result>, ...], "removed": [<task id>, ...]}
+       "upserts": [<record>, ...], "removed": [<task id>, ...], "refetch": false}
 
   `kind` is the activity event that was reversed. `upserts` are the current
   records of every task the reversal changed and that is still live — the
@@ -130,8 +130,23 @@ defmodule DoItWeb.Api.Operations do
   and `removed` lists tasks that stopped being live (an undone create, a redone
   delete, a whole subtree). Both are computed by comparing the Initiative's
   live tasks either side of the reversal, so no kind is special-cased into
-  being wrong. Nothing to reverse is an `unprocessable_entity` per-op error
-  ("nothing to undo" / "nothing to redo").
+  being wrong.
+
+  A record is the `task_result/1` shape plus `position` (its 0-based slot among
+  its siblings) and `description` — the two fields a reversal can change that
+  the op result doesn't otherwise carry, and without which an undone
+  `reordered`, `parent_changed`, or `description_changed` would be a delta the
+  caller can't apply. `refetch` is true for a reversal the task delta cannot
+  express at all (undoing a `commented` event restores a Comment, so both lists
+  come back empty) — read that task's comments again rather than trusting the
+  empty delta.
+
+  A dead entry (its target is gone since) is skipped inside the op: the context
+  marks it undone so the stack never stalls, and the next entry is tried, up to
+  the stack's depth. Reporting the conflict instead would roll the batch back
+  along with that marker, and every retry would wedge on the same entry.
+  Nothing left to reverse is an `unprocessable_entity` per-op error ("nothing
+  to undo" / "nothing to redo").
 
   Per-op **authorization** (no privilege escalation — the token only identifies
   the user): the affected Initiative is resolved for each op and the acting user
@@ -1918,6 +1933,11 @@ defmodule DoItWeb.Api.Operations do
 
   # --- history (undo / redo) helpers -----------------------------------------
 
+  # Reversals the tree delta can't express: undoing a comment touches a Comment,
+  # not a task, so `upserts`/`removed` come back empty and the caller is told to
+  # re-read that task's comments instead of trusting an empty delta.
+  @opaque_reversal_kinds ~w(commented)
+
   defp fetch_history_action(%{"action" => action}) when action in ~w(undo redo),
     do: {:ok, action}
 
@@ -1934,10 +1954,25 @@ defmodule DoItWeb.Api.Operations do
   # Snapshot the live tree, reverse, snapshot again, and report the difference.
   # The candidate is read first because the context answers with a description,
   # not the event, and the caller needs the KIND it reversed.
-  defp apply_history(%User{} = user, %Initiative{} = initiative, action) do
+  #
+  # A dead entry (its target is gone) is a CONFLICT, not a failure: the context
+  # marks it undone so the stack can never stall, then we try the next one in
+  # the same op. Reporting the conflict instead would roll the batch back —
+  # including that marker — and every retry would wedge on the same entry
+  # forever. Bounded by the stack's own depth window, and each pass consumes
+  # one entry, so the loop always terminates.
+  defp apply_history(user, initiative, action, attempts \\ nil)
+
+  defp apply_history(_user, _initiative, action, 0),
+    do: {:error, nothing_to_reverse(action)}
+
+  defp apply_history(%User{} = user, %Initiative{} = initiative, action, nil),
+    do: apply_history(user, initiative, action, Tasks.undo_depth())
+
+  defp apply_history(%User{} = user, %Initiative{} = initiative, action, attempts) do
     case history_candidate(user, initiative.id, action) do
       nil ->
-        {:error, err(:unprocessable_entity, "nothing to #{action}", 422, "action")}
+        {:error, nothing_to_reverse(action)}
 
       event ->
         before = live_task_results(initiative)
@@ -1959,18 +1994,16 @@ defmodule DoItWeb.Api.Operations do
             )
 
           {:error, reason} when reason in [:nothing_to_undo, :nothing_to_redo] ->
-            {:error, err(:unprocessable_entity, "nothing to #{action}", 422, "action")}
+            {:error, nothing_to_reverse(action)}
 
-          {:error, {:conflict, description}} ->
-            {:error,
-             err(
-               :unprocessable_entity,
-               "Couldn't #{action} the #{description}: what it targets is gone.",
-               422
-             )}
+          {:error, {:conflict, _description}} ->
+            apply_history(user, initiative, action, attempts - 1)
         end
     end
   end
+
+  defp nothing_to_reverse(action),
+    do: err(:unprocessable_entity, "nothing to #{action}", 422, "action")
 
   defp history_candidate(user, initiative_id, "undo"),
     do: Tasks.undo_candidate(user, initiative_id)
@@ -1981,12 +2014,34 @@ defmodule DoItWeb.Api.Operations do
   defp reverse_history(user, initiative_id, "undo"), do: Tasks.undo(user, initiative_id)
   defp reverse_history(user, initiative_id, "redo"), do: Tasks.redo(user, initiative_id)
 
-  # Every live task in the Initiative by id, as the op result shape — the system
-  # root excluded, since it is never a node in anyone's tree.
+  # Every live task in the Initiative by id, as the history record shape — the
+  # system root excluded, since it is never a node in anyone's tree. Siblings
+  # are numbered in the order the tree read presents them, so `position` is the
+  # same 0-based slot an `add`/`update task` op takes.
   defp live_task_results(%Initiative{id: id, root_task_id: root_id}) do
-    from(t in Task, where: t.initiative_id == ^id and is_nil(t.deleted_at) and t.id != ^root_id)
+    from(t in Task,
+      where: t.initiative_id == ^id and is_nil(t.deleted_at) and t.id != ^root_id,
+      order_by: [asc: t.sort_order, asc: t.inserted_at, asc: t.id]
+    )
     |> Repo.all()
-    |> Map.new(&{&1.id, task_result(&1)})
+    |> Enum.group_by(& &1.parent_id)
+    |> Enum.flat_map(fn {_parent_id, siblings} ->
+      Enum.with_index(siblings, fn task, position ->
+        {task.id, history_task_result(task, position)}
+      end)
+    end)
+    |> Map.new()
+  end
+
+  # The op result record plus the two fields a reversal can change that
+  # `task_result/1` doesn't carry: `position` (a `reordered` undo moves NOTHING
+  # else, and a `parent_changed` undo needs the slot as well as the parent) and
+  # `description`. Local to the history delta — the other ops' result shape is
+  # unchanged.
+  defp history_task_result(%Task{} = task, position) do
+    task
+    |> task_result()
+    |> Map.merge(%{position: position, description: task.description})
   end
 
   defp history_result(action, kind, before, now) do
@@ -2001,7 +2056,8 @@ defmodule DoItWeb.Api.Operations do
       action: action,
       kind: kind,
       upserts: upserts,
-      removed: Enum.sort(Map.keys(before) -- Map.keys(now))
+      removed: Enum.sort(Map.keys(before) -- Map.keys(now)),
+      refetch: kind in @opaque_reversal_kinds
     }
   end
 

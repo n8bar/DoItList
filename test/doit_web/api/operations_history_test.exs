@@ -13,7 +13,8 @@ defmodule DoItWeb.Api.OperationsHistoryTest do
   """
   use DoItWeb.ConnCase, async: true
 
-  alias DoIt.{Accounts, Initiatives, Tasks}
+  alias DoIt.{Accounts, Initiatives, Repo, Tasks}
+  alias DoIt.Tasks.ActivityEvent
 
   defp user(name) do
     n = System.unique_integer([:positive])
@@ -143,6 +144,94 @@ defmodule DoItWeb.Api.OperationsHistoryTest do
 
       assert upsert(body, leaf.id)["manual_progress"] == 0
       assert upsert(body, phase.id)["progress"] == 0
+    end
+
+    test "a reorder comes back to the slot it started in", ctx do
+      first = task(ctx.owner, ctx.ini, "First")
+      second = task(ctx.owner, ctx.ini, "Second")
+      third = task(ctx.owner, ctx.ini, "Third")
+
+      {:ok, _} = Tasks.move_task(third, ctx.owner, %{"position" => 0, "reorder" => true})
+
+      {200, body} = post_ops(ctx.owner, [history_op(ctx.ini, "undo")])
+
+      assert %{"results" => [%{"data" => data}]} = body
+      assert data["kind"] == "reordered"
+      assert upsert(body, third.id)["position"] == 2
+      assert upsert(body, first.id)["position"] == 0
+      assert upsert(body, second.id)["position"] == 1
+    end
+
+    test "a reparent comes back with both the parent and the slot", ctx do
+      phase = task(ctx.owner, ctx.ini, "Phase 1")
+      other = task(ctx.owner, ctx.ini, "Other")
+      _mate = task(ctx.owner, ctx.ini, "Mate", other.id)
+
+      {:ok, _} = Tasks.move_task(phase, ctx.owner, %{"parent_id" => other.id})
+
+      {200, body} = post_ops(ctx.owner, [history_op(ctx.ini, "undo")])
+
+      assert %{"results" => [%{"data" => data}]} = body
+      assert data["kind"] == "parent_changed"
+      record = upsert(body, phase.id)
+      assert record["parent_id"] == ctx.ini.root_task_id
+      assert record["position"] == 0
+    end
+
+    test "a description change comes back in the record", ctx do
+      phase = task(ctx.owner, ctx.ini, "Phase 1")
+      {:ok, _} = Tasks.update_task(phase, ctx.owner, %{"description" => "the long version"})
+
+      {200, body} = post_ops(ctx.owner, [history_op(ctx.ini, "undo")])
+
+      assert %{"results" => [%{"data" => data}]} = body
+      assert data["kind"] == "description_changed"
+      assert upsert(body, phase.id)["description"] in [nil, ""]
+    end
+
+    test "a comment reversal asks for a refetch instead of a hollow delta", ctx do
+      phase = task(ctx.owner, ctx.ini, "Phase 1")
+      {:ok, _} = Tasks.add_comment(phase, ctx.owner, "worth saying")
+
+      {200, body} = post_ops(ctx.owner, [history_op(ctx.ini, "undo")])
+
+      assert %{"results" => [%{"data" => data}]} = body
+      assert data["kind"] == "commented"
+      assert data["refetch"] == true
+      assert data["upserts"] == []
+      assert data["removed"] == []
+    end
+
+    test "a tree reversal does not ask for a refetch", ctx do
+      phase = task(ctx.owner, ctx.ini, "Phase 1")
+      {:ok, _} = Tasks.update_task(phase, ctx.owner, %{"title" => "Phase one"})
+
+      {200, body} = post_ops(ctx.owner, [history_op(ctx.ini, "undo")])
+
+      assert %{"results" => [%{"data" => %{"refetch" => false}}]} = body
+    end
+
+    test "a dead entry is stepped past, not wedged on", ctx do
+      phase = task(ctx.owner, ctx.ini, "Phase 1")
+      {:ok, _} = Tasks.update_task(phase, ctx.owner, %{"title" => "Phase one"})
+
+      # A comment event whose comment is unreachable — the reversal conflicts,
+      # and the stack has to step past it rather than stall there forever.
+      dead =
+        Repo.insert!(%ActivityEvent{
+          task_id: phase.id,
+          initiative_id: ctx.ini.id,
+          user_id: ctx.owner.id,
+          kind: "commented",
+          data: %{}
+        })
+
+      {200, body} = post_ops(ctx.owner, [history_op(ctx.ini, "undo")])
+
+      assert %{"results" => [%{"data" => data}]} = body
+      assert data["kind"] == "title_changed"
+      assert upsert(body, phase.id)["title"] == "Phase 1"
+      assert Repo.get!(ActivityEvent, dead.id).undone_at
     end
 
     test "an empty stack is a per-op error naming what it can't do", ctx do

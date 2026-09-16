@@ -1036,6 +1036,12 @@ defmodule DoIt.Tasks do
   @undo_depth 500
 
   @doc """
+  How far back the shared undo stack reaches — the ceiling on how many events
+  a caller walking it (e.g. skipping dead entries) can ever consume.
+  """
+  def undo_depth, do: @undo_depth
+
+  @doc """
   The next event `user` could undo on `initiative_id` — the Initiative's newest
   applied undoable event, by any member (m02.06 item 11), or nil. Gated on
   whether `user` may undo that op: owner/editor may undo any task op; a viewer+
@@ -1174,13 +1180,14 @@ defmodule DoIt.Tasks do
   end
 
   defp apply_reversal(event, user, direction) do
-    outcome =
-      Repo.transaction(fn ->
-        case reverse(event, direction) do
-          :ok -> :ok
-          {:error, reason} -> Repo.rollback(reason)
-        end
-      end)
+    # A conflict is REPORTED, never rolled back: every reverse/2 clause that can
+    # fail does so before it writes anything, so there is nothing to undo, and
+    # Repo.rollback here would take the CALLER's transaction down with it —
+    # undo also runs inside the operations batch (m04.02 item 3.1.2), where
+    # that would discard the dead-entry marker written below and wedge the
+    # stack on the same entry forever. The transaction still gives a
+    # multi-write reversal its all-or-nothing on a raise.
+    outcome = Repo.transaction(fn -> reverse(event, direction) end)
 
     case outcome do
       {:ok, :ok} ->
@@ -1189,7 +1196,7 @@ defmodule DoIt.Tasks do
         broadcast_reversal(event, direction)
         {:ok, describe_event(event)}
 
-      {:error, _reason} ->
+      {:ok, {:error, _reason}} ->
         # Conflict (target deleted, parent gone…): step past the dead entry so
         # the stack never stalls (item 7).
         set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
