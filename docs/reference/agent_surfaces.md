@@ -55,6 +55,8 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 `add history` reverses the Initiative's newest reversible action: `data` takes an `initiative_id` and an `action` of `undo` or `redo`. The stack is shared, and reversing is role-gated like the original write, so an action you may not reverse reads as nothing to undo. The result names the kind it reversed and carries a delta: `upserts` for the tasks still live, each with its slot and description, `removed` for the ones gone, and `refetch` when the reversal changed something a delta can't carry, like a comment.
 
+`update task` with `ids` in place of `id` moves many tasks as one block: `data` carries `parent_id` (or `parent_lid`) and an optional `position`, nothing else. The tasks land under that parent in list order, from `position` or the top when omitted, as one undo step and one activity line. The result's `id` is the first moved task and `records` carries every moved record in order. Every listed task must be reachable with edit rights and share the destination's Initiative; one bad entry fails the op with nothing moved. Both `id` and `ids`, an empty list, or a non-integer entry is rejected at `ids`.
+
 A response carries `results`, one entry per operation, in order. Each names a `status` — `ok`, `error`, or `not_applied` — and a failure's `pointer` names the field at fault. One failure rolls the whole batch back, so every other entry reads `not_applied`.
 
 <!-- generated: DoItWeb.Api.Operations -->
@@ -106,7 +108,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | add | parent title | --out, --numbered | add a Task under a parent |
 | done | task | --out, --reopen, --mirror, --section, --initiative | complete a Task |
 | progress | task percent | --out | set a Task's Progress |
-| move | task parent [position] | --out | reparent or reorder a Task |
+| move | task parent [position] | --out | reparent or reorder Tasks |
 | comment | task text | --out | comment on a Task |
 | retitle | task title | --out, --numbered | change a Task's title |
 | describe | task text | --out | set a Task's description |
@@ -115,6 +117,8 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | diff | file initiative | --out, --under | compare a document with an existing Initiative |
 | retry | [key] | --out | resend writes whose outcome is unknown |
 <!-- /generated: scripts/doitlist.py -->
+
+`move` takes one Task or a comma-separated list: `move %12,%15,%9 %7 0` lands the three under Task 7 in that order as one write. A single Task still sends its `expected_version`; a list cannot.
 
 ### Walkthrough
 
@@ -160,7 +164,7 @@ A write whose outcome is unknown prints the command that settles it. Run it firs
 | get_task_comments | Read one task's comments, including soft-delete tombstones |
 | import_text | Import one document into a Task tree |
 | list_initiatives | List the acting user's Initiatives |
-| move_task | Move one task to a new parent and/or sibling position |
+| move_task | Move one task, or many as one block, to a new parent and/or sibling position; reorder, reparent, promote, and demote are all this tool |
 | remove_link | Remove one directed task-to-task cross-reference link, identified by its exact `source_task_id` and `target_task_id` pair |
 | set_initiative_state | Change one Initiative's lifecycle state |
 | update_initiative | Update one Initiative's name, description, subtitle, progress calculation, task numbering, co-assignee auto-promotion, or viewer+ access |

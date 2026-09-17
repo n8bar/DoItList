@@ -49,6 +49,15 @@ defmodule DoitMcp.Tools.GranularOpsTest do
      %{"op" => "update", "type" => "comment", "id" => 4, "data" => %{"body" => "edited body"}}},
     {DoitMcp.Tools.MoveTask, %{task_id: 6, parent_id: 2},
      %{"op" => "update", "type" => "task", "id" => 6, "data" => %{"parent_id" => 2}}},
+    # m04.02 2.1.3 — many tasks move as one block: `ids` at op level, `data`
+    # holds only the destination.
+    {DoitMcp.Tools.MoveTask, %{task_ids: [12, 15, 9], parent_id: 7, position: 0},
+     %{
+       "op" => "update",
+       "type" => "task",
+       "ids" => [12, 15, 9],
+       "data" => %{"parent_id" => 7, "position" => 0}
+     }},
     {DoitMcp.Tools.RemoveLink, %{source_task_id: 10, target_task_id: 20},
      %{"op" => "remove", "type" => "link", "data" => %{"source_id" => 10, "target_id" => 20}}},
     {DoitMcp.Tools.SetInitiativeState, %{initiative_id: 3, state: "archived"},
@@ -95,6 +104,28 @@ defmodule DoitMcp.Tools.GranularOpsTest do
     # The setting moves only via update_initiative.
     update_schema = DoitMcp.Tools.UpdateInitiative.input_schema()
     assert %{"type" => "string"} = update_schema["properties"]["progress_calc"]
+  end
+
+  # m04.02 2.1.3 — the multi-task shape is validated before any request.
+  test "move_task rejects a bad task_id/task_ids combination without a request" do
+    Req.Test.stub(DoitMcp.Client, fn _conn -> flunk("move_task sent a request") end)
+
+    frame = %{test: true}
+
+    for params <- [
+          %{parent_id: 2},
+          %{task_id: 6, task_ids: [12, 15], parent_id: 2},
+          %{task_ids: [], parent_id: 2},
+          %{task_ids: [12, 15]},
+          %{task_ids: [12, 15], parent_id: 2, reorder: true},
+          %{task_ids: [12, 15], parent_id: 2, expected_version: 3}
+        ] do
+      assert {:reply, %Anubis.Server.Response{} = response, ^frame} =
+               DoitMcp.Tools.MoveTask.execute(params, frame)
+
+      assert Anubis.Server.Response.to_protocol(response)["isError"] == true,
+             "#{inspect(params)} was not rejected"
+    end
   end
 
   test "each granular tool builds its expected single op and relays the reply/frame through" do

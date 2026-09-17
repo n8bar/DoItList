@@ -291,9 +291,10 @@ defmodule DoitMcp.HttpTransportTest do
   # Raised 14_000 -> 15_000 at m03.04 3.4.3, when `expected_version` landed on
   # four more write tools (13.3 KB -> 14.2 KB); the headroom above the measured
   # surface is unchanged. 3.6's reply-format clauses cost 14.2 -> 14.4 KB, still
-  # under the same ceiling, so it stands.
+  # under the same ceiling, so it stands. Raised 15_000 -> 15_500 at m04.02
+  # 2.1.3, when `task_ids` landed on `move_task` (measured 14.8 KB after).
   @tool_count 21
-  @tools_list_ceiling_bytes 15_000
+  @tools_list_ceiling_bytes 15_500
 
   test "tools/list holds its tool count and stays under the session byte ceiling" do
     tools = live_tools_list()

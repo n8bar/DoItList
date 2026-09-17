@@ -11,7 +11,7 @@ defmodule DoitMcp.Server do
   @instructions """
   ## Restructuring
 
-  Read the Initiative with `get_initiative_tree` immediately before a restructuring pass and pass each task's `version` as `expected_version` on every write. Reorder, reparent, promote, and demote are all `move_task`: `parent_id` names the new parent and `position` the slot among its children; to promote, pass the grandparent; to demote, pass the preceding sibling. To split a task, add the parts as its children with `apply_operations`. To merge, `move_task` the children onto the surviving task, then `delete_task` the emptied one. To retitle, pass `title` to `update_task`. A `conflict` error applied nothing: re-read from its `current` record and retry against that version.
+  Read the Initiative with `get_initiative_tree` immediately before a restructuring pass and pass each task's `version` as `expected_version` on every write. Reorder, reparent, promote, and demote are all `move_task`: `parent_id` names the new parent and `position` the slot among its children; to promote, pass the grandparent; to demote, pass the preceding sibling. To split a task, add the parts as its children with `apply_operations`. To merge, `move_task` the children onto the surviving task with `task_ids`, then `delete_task` the emptied one. To retitle, pass `title` to `update_task`. A `conflict` error applied nothing: re-read from its `current` record and retry against that version.
 
   ## User content
 

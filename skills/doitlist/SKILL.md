@@ -11,7 +11,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 
 1. A file on disk goes through the CLI: `doitlist.py import <file> [--into INITIATIVE] [--under TASK] [--section HEADING] [--as NAME] [--preview] [--no-ids]`. An index doc is the Initiative, not a level: name it from the index, add one top-level Task per linked action doc, and import each doc's action section under its Task with `--section`; none dropped.
 2. Text the user pastes or types in chat goes through `import_text`.
-3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`, `delete`. Multiple CLI changes can run as one shell call.
+3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`, `delete`. Multiple CLI changes can run as one shell call. Several Tasks going to the same parent are one `move` (`move %12,%15 %7`; `task_ids` in the tool), never one call each.
 4. Read with `list`, `tree <initiative> [--under TASK] [--depth N]`, `comments <task>`, `activity <initiative>`; compare a document against a tree with `diff <file> <initiative>`.
 
 ## 2. Reading

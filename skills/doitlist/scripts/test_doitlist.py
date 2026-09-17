@@ -942,6 +942,83 @@ class WriteRequestShapeTest(WriteCase):
         )
         self.assertEqual(out, "moved  %101  Write the controller  under %105 at 2\n")
 
+    def test_move_of_one_task_still_sends_id_and_expected_version(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "POST /api/v1/operations": ops_ok(task_data(parent_id=105, progress=0, done=False)),
+        }
+        code, out, err, transport = self.cli(["move", "%101", "%105"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0],
+            {
+                "op": "update",
+                "type": "task",
+                "id": 101,
+                "data": {"parent_id": 105, "expected_version": 7},
+            },
+        )
+
+    def test_move_of_many_tasks_sends_ids_in_order_without_a_version(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "GET /api/v1/tasks/103": read_task(id=103, title="Write the view"),
+            "GET /api/v1/tasks/102": read_task(id=102, title="Write the model"),
+            "POST /api/v1/operations": ops_ok(
+                {
+                    "id": 101,
+                    "type": "task",
+                    "records": [
+                        task_data(parent_id=105, progress=0, done=False),
+                        task_data(id=103, title="Write the view", parent_id=105, progress=0, done=False),
+                        task_data(id=102, title="Write the model", parent_id=105, progress=0, done=False),
+                    ],
+                }
+            ),
+        }
+        code, out, err, transport = self.cli(["move", "%101,%103,%102", "%105", "0"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(
+            body["operations"][0],
+            {
+                "op": "update",
+                "type": "task",
+                "ids": [101, 103, 102],
+                "data": {"parent_id": 105, "position": 0},
+            },
+        )
+        self.assertEqual(
+            out,
+            "moved  %101  Write the controller, Write the view, Write the model  under %105 at 0\n",
+        )
+
+    def test_move_of_many_tasks_to_the_top_level_uses_the_initiative_root_task(self):
+        routes = {
+            "GET /api/v1/tasks/101": read_task(),
+            "GET /api/v1/tasks/102": read_task(id=102, title="Write the model"),
+            "GET /api/v1/initiatives/12": (200, _json(TREE)),
+            "POST /api/v1/operations": ops_ok(
+                {
+                    "id": 101,
+                    "type": "task",
+                    "records": [
+                        task_data(progress=0, done=False),
+                        task_data(id=102, title="Write the model", progress=0, done=False),
+                    ],
+                }
+            ),
+        }
+        code, out, err, transport = self.cli(["move", "%101,%102", "12"], routes)
+        self.assertEqual(code, 0, out + err)
+        body, _ = self.posted(transport)[0]
+        self.assertEqual(body["operations"][0]["ids"], [101, 102])
+        self.assertEqual(body["operations"][0]["data"], {"parent_id": 100})
+        self.assertEqual(
+            out, "moved  %101  Write the controller, Write the model  top level of Q3 Launch\n"
+        )
+
     def test_move_to_the_top_level_uses_the_initiative_root_task(self):
         routes = {
             "GET /api/v1/tasks/101": read_task(),

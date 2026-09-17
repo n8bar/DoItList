@@ -1081,11 +1081,11 @@ def cmd_progress(client, args, out, err):
 
 
 def cmd_move(client, args, out, err):
-    task_id = parse_task_ref(args.task)
+    task_ids = [parse_task_ref(entry) for entry in args.task.split(",")]
     kind, ref_id = parse_parent_ref(args.parent)
     position = None if args.position is None else require_int(args.position, "position", 0)
 
-    task = read_task(client, task_id)
+    tasks = [read_task(client, task_id) for task_id in task_ids]
     if kind == "task":
         parent_id = ref_id
         where = "under %{0}".format(ref_id)
@@ -1100,19 +1100,31 @@ def cmd_move(client, args, out, err):
             )
         where = "top level of {0}".format(initiative.get("name") or ref_id)
 
-    data = {"parent_id": parent_id, "expected_version": task["version"]}
+    data = {"parent_id": parent_id}
     if position is not None:
         data["position"] = position
         where += " at {0}".format(position)
+
+    # Many Tasks move as one block, one undo step, no expected_version (m04.02
+    # 2.1.3); one Task keeps the versioned single-id shape.
+    if len(task_ids) == 1:
+        task_id = task_ids[0]
+        data["expected_version"] = tasks[0]["version"]
+        operation = {"op": "update", "type": "task", "id": task_id, "data": data}
+        summary = "move %{0} {1}".format(task_id, where)
+    else:
+        operation = {"op": "update", "type": "task", "ids": task_ids, "data": data}
+        summary = "move {0} tasks {1}".format(len(task_ids), where)
+    titles = ", ".join(task.get("title") or "" for task in tasks)
 
     return run_write(
         client,
         args,
         out,
         verb="move",
-        operation={"op": "update", "type": "task", "id": task_id, "data": data},
-        summary="move %{0} {1}".format(task_id, where),
-        display={"label": "moved", "title": task.get("title"), "suffix": where},
+        operation=operation,
+        summary=summary,
+        display={"label": "moved", "title": titles, "suffix": where},
     )
 
 
@@ -2054,8 +2066,11 @@ def build_parser():
     progress.add_argument("percent", help="whole number, {0}-{1}".format(PROGRESS_MIN, PROGRESS_MAX))
     progress.set_defaults(handler=cmd_progress)
 
-    move = subparsers.add_parser("move", parents=[saving], help="reparent or reorder a Task")
-    move.add_argument("task", help="Task id or %%<id>")
+    move = subparsers.add_parser("move", parents=[saving], help="reparent or reorder Tasks")
+    move.add_argument(
+        "task",
+        help="Task id or %%<id>; a comma-separated list (%%12,%%15) moves as one block in that order",
+    )
     move.add_argument("parent", help="%%<id> for the new parent Task, or an Initiative id/URL for the top level")
     move.add_argument("position", nargs="?", help="zero-based position among the new siblings")
     move.set_defaults(handler=cmd_move)
