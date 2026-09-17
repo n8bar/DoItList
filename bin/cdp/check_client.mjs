@@ -71,7 +71,7 @@ export async function checkClientReady(ctx) {
     `
     const ids = [
       "client-header", "client-nav-initiatives", "client-nav-assigned",
-      "client-rail", "client-rail-nav-initiatives", "client-main", "client-menu-button",
+      "client-main", "client-menu-button",
       "client-skip-link", "client-theme-toggle", "client-bell-button",
       "client-account-menu-button",
     ];
@@ -82,14 +82,12 @@ export async function checkClientReady(ctx) {
       missing,
       path: location.pathname,
       heading: heading === null ? null : heading.textContent.trim(),
-      railVisible: shown(document.getElementById("client-rail")),
       narrowNavVisible: shown(document.getElementById("client-menu-button")),
     };
   `,
   );
 
   if (chrome.missing.length > 0) throw new Error(`chrome missing: #${chrome.missing.join(", #")}`);
-  if (!chrome.railVisible) throw new Error("the left rail is not in the layout at 1280px");
   if (chrome.narrowNavVisible) throw new Error("the hamburger is showing at 1280px");
   if (chrome.path !== "/app/initiatives") throw new Error(`path is ${chrome.path}`);
   if (chrome.heading !== "Initiatives") throw new Error(`heading is ${chrome.heading}`);
@@ -101,8 +99,7 @@ export async function checkClientReady(ctx) {
 }
 
 /**
- * The chrome must not move when the content lands underneath it. Worklist 4
- * extends this to the rail.
+ * The chrome must not move when the content lands underneath it.
  */
 export async function checkNoLayoutShift(ctx) {
   const { session } = ctx;
@@ -132,7 +129,7 @@ export async function checkNoLayoutShift(ctx) {
     session,
     `return document.querySelectorAll("#initiatives-list li").length;`,
   );
-  return `${settled} (${rows} rows), header, nav and rail did not move`;
+  return `${settled} (${rows} rows), header, nav and main column did not move`;
 }
 
 /**
@@ -240,7 +237,7 @@ export async function checkNavClickToAssigned(ctx) {
 /**
  * Changing route must not move the frame either (item 4.6). The baseline here
  * is the Assigned route the previous check landed on; we go back to Initiatives
- * and the header, nav, rail and main column must all be exactly where they were.
+ * and the header, nav and main column must all be exactly where they were.
  */
 export async function checkNoShiftAcrossRoutes(ctx) {
   const { session } = ctx;
@@ -259,11 +256,11 @@ export async function checkNoShiftAcrossRoutes(ctx) {
 
   const moved = shifted(before, await measureChrome(session));
   if (moved.length > 0) throw new Error(`the frame moved on a route change: ${moved.join("; ")}`);
-  return "header, nav, rail and main column all held their place";
+  return "header, nav and main column all held their place";
 }
 
 /**
- * Narrow viewport (item 4.1): the inline nav and the rail step aside, one menu
+ * Narrow viewport (item 4.1): the inline nav steps aside, one menu
  * control takes over, and it opens and closes the way a keyboard user expects —
  * Escape closes it and hands focus back to the trigger (UX_GUARDRAILS §3).
  * Opening it must not move the header (item 4.6).
@@ -284,7 +281,6 @@ export async function checkNarrowMenu(ctx) {
     const trigger = document.getElementById("client-menu-button");
     if (!shown(trigger)) return null;
     if (shown(document.getElementById("client-nav"))) return null;
-    if (shown(document.getElementById("client-rail"))) return null;
     const r = trigger.getBoundingClientRect();
     return { w: Math.round(r.width), h: Math.round(r.height) };
   `,
@@ -1430,7 +1426,7 @@ export async function checkDisconnectedStartup(ctx) {
     const painted = await waitFor(
       session,
       `
-      const ids = ["client-header", "client-nav-initiatives", "client-rail", "client-main",
+      const ids = ["client-header", "client-nav-initiatives", "client-main",
                    "client-theme-toggle", "client-bell-button", "client-account-menu-button",
                    "client-connection"];
       const missing = ids.filter((id) => document.getElementById(id) === null);
@@ -1837,7 +1833,6 @@ async function measureChrome(session) {
     return {
       header: box(document.getElementById("client-header")),
       nav: box(document.getElementById("client-nav")),
-      rail: box(document.getElementById("client-rail")),
       main: column(document.getElementById("client-main")),
     };
   `,

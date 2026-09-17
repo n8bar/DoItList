@@ -1,7 +1,7 @@
 // Every navigation action looks like a control (m04.01 item 4.4, spec §10).
 //
 // One place decides what a nav control looks like in each of its states, so the
-// header link, the rail link, the hamburger item, the theme toggle and Sign out
+// header link, the hamburger item, the theme toggle and Sign out
 // cannot end up with five different ideas of "pressed". Returning a class
 // string (rather than each component assembling its own) is what makes the
 // state rules testable without a DOM.
@@ -18,7 +18,7 @@ export interface ControlStateOptions {
   readonly open?: boolean;
   /** Present but not actionable. Reduced contrast, no pointer. */
   readonly disabled?: boolean;
-  /** Fill the width and left-align — the rail and menu shape. */
+  /** Fill the width and left-align — the menu shape. */
   readonly block?: boolean;
   /** Fill the width and stack its content — the list-row shape. */
   readonly stack?: boolean;

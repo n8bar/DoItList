@@ -5,9 +5,8 @@
 // page moves when it lands. A failure is recoverable in place.
 //
 // Each row is a navigation action that looks like one (item 4.4): a real link,
-// with a visible boundary, a name, the user's role and rolled-up progress. Arc
-// 6 gives the screen its full design — the shape is the product's, though, so
-// the list reads the same here as it does in the rail.
+// with a visible boundary, a name, the user's role and rolled-up progress. This
+// is the Arc 1 stand-in; m04.02 worklist 3 replaces it with the M02 page.
 
 import { useCallback } from "react";
 

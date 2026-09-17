@@ -1,7 +1,7 @@
 // What the primary nav is, in one place (m04.01 items 4.1, 4.4).
 //
-// The header, the desktop rail and the narrow hamburger all render the SAME
-// list from here, so they cannot drift into three slightly different products.
+// The header and the narrow hamburger both render the SAME list from here, so
+// they cannot drift into two slightly different products.
 // Which entry is current is a question about the route, not about the URL
 // string, so it is answered once and unit-tested.
 

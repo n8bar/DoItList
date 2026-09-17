@@ -1,7 +1,7 @@
 // The application frame (m04.01 items 4.1, 4.4, 4.6).
 //
-// Rendered ONCE, outside the route switch, so the header, the nav and the rail
-// are the same DOM on every route: a navigation replaces the contents of
+// Rendered ONCE, outside the route switch, so the header and the nav are the
+// same DOM on every route: a navigation replaces the contents of
 // `<main>` and touches nothing else. That is not a performance nicety, it is
 // the no-layout-shift rule (item 4.6) — chrome that is re-created per route is
 // chrome that can come back a pixel different.
@@ -14,7 +14,6 @@
 // Regions, and who owns them:
 //   header      — wordmark, primary nav, theme, bell, account menu, narrow
 //                 menu (here)
-//   rail        — the same nav as a desktop column (here)
 //   main        — the route outlet, with the `<h1>` focus contract (Task 4)
 //   pane        — right-hand slot routes fill; Arc 2's Details pane (pane.tsx)
 //   summary     — the connection summary (ui/connection_summary.tsx), in the
@@ -43,8 +42,7 @@ import { ThemeToggle } from "./theme_toggle.tsx";
 
 /**
  * `Layouts.app`'s `:wide` cap, verbatim: the header mirrors the body so the two
- * stay aligned at every width, and the 3xl step is what makes the rail *added*
- * width rather than width stolen from the main column.
+ * stay aligned at every width.
  */
 const CONTAINER = "mx-auto w-full max-w-6xl xl:max-w-7xl 2xl:max-w-[90rem] 3xl:max-w-[140rem]";
 
@@ -89,13 +87,10 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
   const hasPane = paneVisible(paneTenants);
 
   // The pane's column only exists when a tenant does — an empty slot is no
-  // slot, not an empty gutter.
-  const grid = [
-    "lg:grid lg:items-start lg:gap-6",
-    hasPane
-      ? "lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_24rem]"
-      : "lg:grid-cols-[15rem_minmax(0,1fr)]",
-  ].join(" ");
+  // slot, not an empty gutter. There is no left rail: the LiveView page has
+  // none below ultrawide, and a column repeating the header's nav was a
+  // scaffold, not the product (item 6.8).
+  const grid = hasPane ? "xl:grid xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-start xl:gap-6" : "";
 
   return (
     <PaneProvider value={paneControl}>
@@ -175,7 +170,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
           </div>
         </header>
 
-        {/* The one scrolling region. `scrollbar-gutter: stable` keeps the rail
+        {/* The one scrolling region. `scrollbar-gutter: stable` keeps the content
             from sliding sideways when a long route brings a scrollbar with it. */}
         <div
           id="client-scroll"
@@ -184,27 +179,6 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
         >
           <div className={`${CONTAINER} px-4 py-8 sm:px-6`}>
             <div className={grid}>
-              <aside
-                id="client-rail"
-                className="hidden lg:sticky lg:top-8 lg:block lg:self-start"
-              >
-                <h2 className="mb-2 px-2 text-xs font-semibold uppercase tracking-wide text-zinc-400 dark:text-zinc-500">
-                  Sections
-                </h2>
-                <nav aria-label="Sections" className="flex flex-col gap-1">
-                  {NAV_ITEMS.map((item) => (
-                    <NavButton
-                      key={item.key}
-                      id={`client-rail-nav-${item.key}`}
-                      to={item.to}
-                      label={item.label}
-                      current={isCurrentNav(route, item.key)}
-                      block
-                    />
-                  ))}
-                </nav>
-              </aside>
-
               <main id="client-main" tabIndex={-1} className="min-w-0 outline-none">
                 {children}
               </main>
