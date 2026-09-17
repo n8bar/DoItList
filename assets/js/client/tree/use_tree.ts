@@ -19,7 +19,8 @@ import type { AddAnchor, TreeContext, TreeIntent } from "./context.ts";
 import type { KeyOutcome } from "./keyboard_model.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
-import type { RowUser } from "./row_model.ts";
+import type { RowPresence, RowUser } from "./row_model.ts";
+import { noPresence } from "./row_model.ts";
 import { canProgress } from "./permissions.ts";
 import type { CollapseStore } from "./tree_model.ts";
 import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
@@ -47,6 +48,8 @@ export interface UseTreeOptions {
   model: TreeModel;
   initiativeId: number;
   members: ReadonlyMap<number, RowUser>;
+  /** Who else is here and what they have selected. Nobody, by default. */
+  presence?: RowPresence;
   permissions: Permissions;
   rows: RowPreferences;
   /** A write the user asked for. Read-only until the operation adapter lands. */
@@ -304,6 +307,7 @@ export function useTree(options: UseTreeOptions): TreeState {
     permissions,
     rows,
     members,
+    presence: options.presence ?? noPresence,
     selectedTaskId: selectedId,
     // Nothing is in flight until the operation adapter lands (Arc 3).
     savingIds: EMPTY_IDS,

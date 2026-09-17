@@ -8,8 +8,13 @@
 export interface LiveChannel {
   /** Register a handler for a server push. */
   on(event: string, callback: (payload: unknown) => void): void;
-  /** Join the topic. `callback` is called once with the outcome. */
+  /**
+   * Join the topic. `callback` is called with the outcome of every join —
+   * Phoenix re-sends the join after a reconnect, and the callback fires again.
+   */
   join(callback: (result: { ok: boolean; response: unknown }) => void): void;
+  /** Send an event to the server. Buffered by Phoenix until the join lands. */
+  push(event: string, payload: unknown): void;
   /** Leave the topic. Leaving something already left is a no-op. */
   leave(): void;
 }

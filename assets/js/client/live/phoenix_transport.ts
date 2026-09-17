@@ -51,6 +51,9 @@ export function phoenixTransport(
             .receive("error", (response: unknown) => callback({ ok: false, response }))
             .receive("timeout", (response: unknown) => callback({ ok: false, response }));
         },
+        push: (event, payload) => {
+          channel.push(event, payload as object);
+        },
         leave: () => {
           channel.leave();
         },

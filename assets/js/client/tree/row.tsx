@@ -27,12 +27,15 @@ import {
   avatarStyle,
   badgeIcon,
   badgeIconClass,
+  badgeTitle,
   botanicalColor,
   botanicalKind,
   branchUnitTitle,
+  chipOnline,
   initials,
   progressValue,
   refParts,
+  rowBadges,
 } from "./row_model.ts";
 import type { TreeContext } from "./context.ts";
 
@@ -128,7 +131,7 @@ function Avatar({ user, className }: { user: RowUser; className: string }) {
       aria-hidden="true"
     >
       {initials(user)}
-      {/* The online dot's slot. Presence fills it in item 2.4.2. */}
+      {/* No online dot here: the LiveView lights the primary assignee's disc only. */}
     </span>
   );
 }
@@ -149,6 +152,11 @@ export function Row({ ctx, id, depth, children }: RowProps) {
   const assignee = assigneeView(record, ctx.members);
   const selected = ctx.selectedTaskId === id;
   const display = ctx.rows;
+  const badges = rowBadges(ctx.presence, id);
+  // The dot rides the primary assignee's disc only, as `applyPresenceBadges`
+  // paints it: the CSS keys off `[data-pill-avatar].chip-online`, which the
+  // co-assignee discs do not carry.
+  const online = chipOnline(ctx.presence, record.assignee_id);
 
   return (
     <li
@@ -257,7 +265,12 @@ export function Row({ ctx, id, depth, children }: RowProps) {
                 data-pill-avatar
                 data-assignee-id={record.assignee_id ?? undefined}
                 hidden={assignee.user === null}
-                className="avatar-emboss relative inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold select-none"
+                className={[
+                  "avatar-emboss relative inline-flex flex-none items-center justify-center w-3.5 h-3.5 mr-1 rounded-full text-[8px] font-semibold select-none",
+                  online ? "chip-online" : "",
+                ]
+                  .filter((part) => part !== "")
+                  .join(" ")}
                 style={assignee.user === null ? undefined : avatarStyle(assignee.user)}
                 aria-hidden="true"
               >
@@ -297,12 +310,25 @@ export function Row({ ctx, id, depth, children }: RowProps) {
             </button>
           )}
 
-          {/* Other members' selection-presence avatars land here (item 2.4.2). */}
+          {/* Other members' selection-presence avatars (item 3.4.2): the same
+              disc `applyPresenceBadges` builds, from the store instead of the
+              DOM. Ready-made colours — the meta carries them, so no lookup. */}
           <span
             data-presence-slot={id}
             className="inline-flex items-center gap-0.5 flex-none"
             aria-hidden="true"
-          />
+          >
+            {badges.map((badge) => (
+              <span
+                key={badge.user_id}
+                className="avatar-emboss inline-flex flex-none items-center justify-center w-4 h-4 rounded-full text-[8px] font-semibold select-none"
+                style={{ backgroundImage: badge.bg, color: badge.fg }}
+                title={badgeTitle(badge)}
+              >
+                {badge.initials}
+              </span>
+            ))}
+          </span>
         </div>
 
         {/* Row 1, pinned right: the new-task control. */}

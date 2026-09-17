@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
-import type { ChangedEvent, ConnectionDeps } from "./connection.ts";
+import type { ChangedEvent, ConnectionDeps, PresenceEvent } from "./connection.ts";
 import { createConnection, getConnection, initConnection, parseChanged, resetConnection } from "./connection.ts";
 import type { ConnectionStatus } from "../state/recovery.ts";
 import { RECONNECT_BUDGET } from "./connection_state.ts";
@@ -15,12 +15,14 @@ function harness(overrides: Partial<ConnectionDeps> = {}) {
   const statuses: ConnectionStatus[] = [];
   const changes: ChangedEvent[] = [];
   const revoked: number[] = [];
+  const presence: Array<{ initiativeId: number; event: PresenceEvent }> = [];
 
   const connection = createConnection({
     transport: socket.factory,
     onStatus: (status) => statuses.push(status),
     onChanged: (event) => changes.push(event),
     onAccessRevoked: (id) => revoked.push(id),
+    onPresence: (initiativeId, event) => presence.push({ initiativeId, event }),
     // Mid-jitter, so the delays a test reads back are the scheduled ones.
     random: () => 0.5,
     timers: clock.timers,
@@ -28,7 +30,7 @@ function harness(overrides: Partial<ConnectionDeps> = {}) {
     ...overrides,
   });
 
-  return { connection, socket, clock, statuses, changes, revoked };
+  return { connection, socket, clock, statuses, changes, revoked, presence };
 }
 
 /** A connection that is up, with the socket open. */
@@ -273,6 +275,76 @@ describe("losing access mid-session", () => {
     assert.deepEqual(revoked, [12]);
     assert.deepEqual(connection.subscriptions(), [13]);
     assert.equal(connection.status(), "live");
+  });
+});
+
+describe("selection presence (item 3.4.2)", () => {
+  it("hands presence_state and presence_diff up as they arrive, on the Initiative that carried them", () => {
+    const { connection, socket, presence } = live();
+    connection.subscribeInitiative(12);
+    const channel = socket.get().channels.find((c) => c.topic === "initiative:12");
+    const state = { "7": { metas: [] } };
+    const diff = { joins: {}, leaves: {} };
+    channel?.emit("presence_state", state);
+    channel?.emit("presence_diff", diff);
+
+    assert.deepEqual(presence, [
+      { initiativeId: 12, event: { kind: "state", payload: state } },
+      { initiativeId: 12, event: { kind: "diff", payload: diff } },
+    ]);
+  });
+
+  it("announces a selection on the joined channel, once per value", () => {
+    const { connection, socket } = live();
+    connection.subscribeInitiative(12);
+    connection.select(12, 44);
+    connection.select(12, 44);
+    connection.select(12, null);
+
+    assert.deepEqual(socket.get().channels[0]?.pushes, [
+      { event: "select", payload: { task_id: 44 } },
+      { event: "select", payload: { task_id: null } },
+    ]);
+  });
+
+  it("remembers a selection made before the channel exists and sends it on join", () => {
+    // A screen's effects run before its parent's: the tree announces before
+    // the screen subscribes. The join must carry what was said.
+    const { connection, socket } = live();
+    connection.select(12, 44);
+    assert.equal(socket.get().channels.length, 0);
+
+    connection.subscribeInitiative(12);
+    assert.deepEqual(socket.get().channels[0]?.pushes, [{ event: "select", payload: { task_id: 44 } }]);
+  });
+
+  it("says nothing on join when nothing is selected", () => {
+    const { connection, socket } = live();
+    connection.subscribeInitiative(12);
+    assert.deepEqual(socket.get().channels[0]?.pushes, []);
+  });
+
+  it("re-announces the selection when Phoenix re-joins after a drop", () => {
+    const { connection, socket } = live();
+    connection.subscribeInitiative(12);
+    connection.select(12, 44);
+    socket.get().channels[0]?.rejoin();
+
+    assert.deepEqual(socket.get().channels[0]?.pushes, [
+      { event: "select", payload: { task_id: 44 } },
+      { event: "select", payload: { task_id: 44 } },
+    ]);
+  });
+
+  it("keeps each Initiative's selection apart", () => {
+    const { connection, socket } = live();
+    connection.subscribeInitiative(12);
+    connection.subscribeInitiative(13);
+    connection.select(12, 1);
+    connection.select(13, 2);
+
+    assert.deepEqual(socket.get().channels[0]?.pushes, [{ event: "select", payload: { task_id: 1 } }]);
+    assert.deepEqual(socket.get().channels[1]?.pushes, [{ event: "select", payload: { task_id: 2 } }]);
   });
 });
 

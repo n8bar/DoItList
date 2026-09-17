@@ -9,8 +9,12 @@ export interface FakeChannel extends LiveChannel {
   readonly topic: string;
   joins: number;
   leaves: number;
+  /** What the client sent, in order. */
+  readonly pushes: Array<{ event: string; payload: unknown }>;
   /** Push a server event at whoever is listening. */
   emit(event: string, payload: unknown): void;
+  /** The socket came back and Phoenix re-sent the join: the callback fires again. */
+  rejoin(): void;
 }
 
 export interface FakeTransport extends LiveTransport {
@@ -61,10 +65,12 @@ export function fakeTransport(): { factory: (o: TransportOptions) => LiveTranspo
       onError: (callback) => handlers.error.push(callback),
       channel(topic) {
         const listeners = new Map<string, Array<(payload: unknown) => void>>();
+        let joined: ((result: { ok: boolean; response: unknown }) => void) | null = null;
         const channel: FakeChannel = {
           topic,
           joins: 0,
           leaves: 0,
+          pushes: [],
           on(event, callback) {
             const list = listeners.get(event) ?? [];
             list.push(callback);
@@ -72,10 +78,18 @@ export function fakeTransport(): { factory: (o: TransportOptions) => LiveTranspo
           },
           join(callback) {
             channel.joins += 1;
+            joined = callback;
             callback({ ok: true, response: { initiative_id: topic } });
+          },
+          push(event, payload) {
+            channel.pushes.push({ event, payload });
           },
           leave() {
             channel.leaves += 1;
+          },
+          rejoin() {
+            channel.joins += 1;
+            joined?.({ ok: true, response: { initiative_id: topic } });
           },
           emit(event, payload) {
             for (const callback of listeners.get(event) ?? []) callback(payload);

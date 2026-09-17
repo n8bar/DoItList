@@ -11,14 +11,20 @@ import {
   avatarStyle,
   badgeIcon,
   badgeIconClass,
+  badgeTitle,
   botanicalColor,
   botanicalKind,
   branchUnitTitle,
+  chipOnline,
   memberIndex,
+  noPresence,
   progressValue,
   refLabelOf,
   refParts,
+  rowBadges,
 } from "./row_model.ts";
+import type { RowPresence } from "./row_model.ts";
+import type { Selection } from "../live/presence_model.ts";
 
 const model = () =>
   fromSnapshot(
@@ -193,5 +199,42 @@ describe("reference chips", () => {
   it("uses the one parser, not a second copy", () => {
     const source = readFileSync(new URL("./row_model.ts", import.meta.url), "utf8");
     assert.match(source, /import \{ segments \} from "\.\.\/\.\.\/refs\.js";/);
+  });
+});
+
+describe("presence on a row (item 3.4.2)", () => {
+  const selection = (user_id: number, task_id: number): Selection => ({
+    user_id,
+    task_id,
+    name: `User ${user_id}`,
+    initials: `U${user_id}`,
+    bg: `bg-${user_id}`,
+    fg: `fg-${user_id}`,
+  });
+  const presence: RowPresence = {
+    selections: [selection(2, 10), selection(3, 11), selection(4, 10)],
+    online: new Set([1, 2]),
+  };
+
+  it("wears one badge per other member with this row selected, in arrival order", () => {
+    assert.deepEqual(
+      rowBadges(presence, 10).map((s) => s.user_id),
+      [2, 4],
+    );
+    assert.deepEqual(rowBadges(presence, 11).map((s) => s.user_id), [3]);
+    assert.deepEqual(rowBadges(presence, 12), []);
+    assert.deepEqual(rowBadges(noPresence, 10), []);
+  });
+
+  it("names who has it selected", () => {
+    assert.equal(badgeTitle(selection(2, 10)), "User 2 has this task selected");
+  });
+
+  it("lights the assignee chip only when that user is on the channel", () => {
+    assert.equal(chipOnline(presence, 1), true);
+    assert.equal(chipOnline(presence, 2), true);
+    assert.equal(chipOnline(presence, 3), false);
+    assert.equal(chipOnline(presence, null), false);
+    assert.equal(chipOnline(noPresence, 1), false);
   });
 });

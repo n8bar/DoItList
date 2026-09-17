@@ -9,7 +9,7 @@ import type { ProgressCalc } from "../api/types.ts";
 import type { RowPreferences } from "../state/preferences.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
-import type { RowUser } from "./row_model.ts";
+import type { RowPresence, RowUser } from "./row_model.ts";
 
 /** A write the user asked for. Arc 3's adapter is what eventually answers one. */
 export type TreeIntent =
@@ -40,6 +40,8 @@ export interface TreeContext {
   readonly rows: RowPreferences;
   /** Members by user id, for the avatars. */
   readonly members: ReadonlyMap<number, RowUser>;
+  /** Other members' selections and who is online, for the badges and dots. */
+  readonly presence: RowPresence;
   readonly selectedTaskId: number | null;
   /** Rows with a write in flight — painted pink. Arc 3 fills these. */
   readonly savingIds: ReadonlySet<number>;

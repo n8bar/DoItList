@@ -21,6 +21,7 @@ import { initialState, loginPath, stateForErrorCode } from "./boot.ts";
 import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
 import { initConnection } from "./live/connection.ts";
+import { applyDiff, applyState } from "./live/presence_model.ts";
 import { phoenixTransport } from "./live/phoenix_transport.ts";
 import { createInitiativeSync } from "./live/refresh.ts";
 import { AppFrame } from "./frame/app_frame.tsx";
@@ -38,7 +39,7 @@ import {
 } from "./state/recovery.ts";
 import { rowPreferencesFrom, setRowPreferences } from "./state/preferences.ts";
 import { fatalMessage } from "./state/fatal.ts";
-import { updateNotifications } from "./state/domain.ts";
+import { updateNotifications, updatePresence } from "./state/domain.ts";
 import { prepend } from "./state/notifications.ts";
 import { pushNotice } from "./state/ui.ts";
 import type { Stores } from "./state/stores.ts";
@@ -111,6 +112,12 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
       onChanged: sync.onChanged,
       onAccessRevoked: sync.onAccessRevoked,
+      // Who else is on the Initiative and what they have selected. Filed as
+      // the server sends it; the tree reads its badges and dots from here.
+      onPresence: (initiativeId, event) =>
+        updatePresence(stores.domain, initiativeId, (state) =>
+          event.kind === "state" ? applyState(state, event.payload) : applyDiff(state, event.payload),
+        ),
       // What happened to YOU, wherever you are in the client: the row arrives
       // ready to render, so the bell only has to put it on top.
       onNotification: (row) => updateNotifications(stores.domain, (state) => prepend(state, row)),

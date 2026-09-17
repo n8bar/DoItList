@@ -10,6 +10,13 @@
 // The transport is injected (`transport.ts`), so everything here — the
 // refcounting, the grace, the state mapping, the refetch fan-out — is exercised
 // by `node --test` against a fake socket. `phoenix_transport.ts` is the real one.
+//
+// Presence (m04.02 item 3.4.2) rides the same channel: the server's
+// `presence_state` / `presence_diff` are handed up as they arrive, and the
+// user's own selection is announced with `select`. The last selection announced
+// per Initiative is remembered here and re-sent on every join — a screen that
+// mounts before its channel is up, and a socket that comes back after a drop,
+// both end with the server knowing what this window has selected.
 
 import type { ConnectionStatus } from "../state/recovery.ts";
 import type { LinkState } from "./connection_state.ts";
@@ -52,6 +59,13 @@ export interface NotificationPush {
   readonly inserted_at: string;
 }
 
+/** A presence push on a joined Initiative, as Phoenix sent it. */
+export type PresenceEvent =
+  /** Everyone here now — `{[user_id]: {metas: [...]}}`. */
+  | { readonly kind: "state"; readonly payload: unknown }
+  /** Who came and went — `{joins, leaves}` in the same shape. */
+  | { readonly kind: "diff"; readonly payload: unknown };
+
 export interface ConnectionDeps {
   transport: TransportFactory;
   /** Called whenever the reported status changes. */
@@ -64,6 +78,8 @@ export interface ConnectionDeps {
    * cue to stop showing what it has.
    */
   onAccessRevoked(initiativeId: number): void;
+  /** Called for every `presence_state` / `presence_diff` on a joined Initiative. */
+  onPresence?(initiativeId: number, event: PresenceEvent): void;
   /**
    * Called for every notification the server pushes on the user's own channel
    * (item 4.6.2). Malformed pushes never get here.
@@ -94,6 +110,13 @@ export interface Connection {
   subscribeInitiative(id: number): void;
   /** Releases one hold. The channel is left after the grace period. */
   unsubscribeInitiative(id: number): void;
+  /**
+   * Announces what this window has selected in an Initiative (`null` for
+   * nothing). Sent at once when the channel is joined, and remembered either
+   * way, so a join that lands later — or again, after a reconnect — carries it.
+   * Never waited on: the selection has already painted (§6.5).
+   */
+  select(initiativeId: number, taskId: number | null): void;
   /** Currently held Initiative ids, in subscribe order. */
   subscriptions(): readonly number[];
   /** Initiative ids whose channel is still joined (held or still in grace). */
@@ -153,6 +176,9 @@ export function createConnection(deps: ConnectionDeps): Connection {
   };
 
   const subscriptions = new Map<number, Subscription>();
+  // What this window last said it had selected, per Initiative. Kept apart
+  // from `subscriptions`: a screen can announce before its channel exists.
+  const selections = new Map<number, number | null>();
   // The user's own channel. Not in `subscriptions`: it is not refcounted, not
   // released on a route change, and it carries a different event.
   let userChannel: { id: number; channel: LiveChannel } | null = null;
@@ -256,9 +282,20 @@ export function createConnection(deps: ConnectionDeps): Connection {
       if (entry) leave(initiativeId, entry);
       deps.onAccessRevoked(initiativeId);
     });
-    channel.join(() => {
+    channel.on("presence_state", (payload) => {
+      deps.onPresence?.(initiativeId, { kind: "state", payload });
+    });
+    channel.on("presence_diff", (payload) => {
+      deps.onPresence?.(initiativeId, { kind: "diff", payload });
+    });
+    channel.join((result) => {
       // Arc 3 owns what a refused or timed-out join tells the user; today the
       // reads still work, so a failed join must not take the screen down.
+      if (!result.ok) return;
+      // Every join — the first, and each one Phoenix re-sends after a drop —
+      // tracks this window afresh with nothing selected. Say again what it has.
+      const selected = selections.get(initiativeId) ?? null;
+      if (selected !== null) channel.push("select", { task_id: selected });
     });
     return { channel, refs: 0, leaveHandle: null };
   };
@@ -320,6 +357,12 @@ export function createConnection(deps: ConnectionDeps): Connection {
           subscriptions.delete(initiativeId);
         }
       }, grace);
+    },
+
+    select(initiativeId, taskId) {
+      if (selections.get(initiativeId) === taskId) return;
+      selections.set(initiativeId, taskId);
+      subscriptions.get(initiativeId)?.channel.push("select", { task_id: taskId });
     },
 
     subscriptions: () =>

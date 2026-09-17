@@ -8,6 +8,7 @@
 import type { Member, ProgressCalc } from "../api/types.ts";
 import { segments } from "../../refs.js";
 import { avatarBackground, avatarForeground, initials } from "../frame/avatar_model.ts";
+import type { Selection } from "../live/presence_model.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
 import { childIdsOf } from "./model.ts";
 
@@ -147,6 +148,36 @@ export function avatarStyle(user: RowUser): { backgroundImage: string; color: st
 }
 
 export { initials };
+
+// --- Presence (item 3.4.2) ------------------------------------------------
+//
+// `applyPresenceBadges` in `app.js`, as decisions: which badges a row wears
+// and whether its assignee chip gets the online dot.
+
+/** What the tree knows about everyone else on the Initiative. */
+export interface RowPresence {
+  /** Other members' selections, unique per (user, task). */
+  readonly selections: readonly Selection[];
+  /** Everyone on the channel, self included. */
+  readonly online: ReadonlySet<number>;
+}
+
+export const noPresence: RowPresence = { selections: [], online: new Set<number>() };
+
+/** The badges a row wears — one per other member with it selected, in arrival order. */
+export function rowBadges(presence: RowPresence, taskId: number): readonly Selection[] {
+  return presence.selections.filter((selection) => selection.task_id === taskId);
+}
+
+/** `title` on a badge. */
+export function badgeTitle(selection: Selection): string {
+  return `${selection.name} has this task selected`;
+}
+
+/** Whether the assignee chip's disc gets the online dot. Unassigned never does. */
+export function chipOnline(presence: RowPresence, assigneeId: number | null): boolean {
+  return assigneeId !== null && presence.online.has(assigneeId);
+}
 
 // --- References -----------------------------------------------------------
 //

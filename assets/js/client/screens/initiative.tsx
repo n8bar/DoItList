@@ -24,14 +24,16 @@ import { COUNT_MIN_WIDTH, reservedHeight } from "../frame/layout_budget.ts";
 import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
+import { onlineIds, selectionsOf } from "../live/presence_model.ts";
 import type { DomainState } from "../state/domain.ts";
-import { members as membersOf, putMembers, putTree } from "../state/domain.ts";
+import { members as membersOf, presence as presenceOf, putMembers, putTree } from "../state/domain.ts";
 import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { permissionsFor } from "../tree/permissions.ts";
 import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.ts";
+import type { RowPresence } from "../tree/row_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
 import { Tree } from "../tree/tree.tsx";
 import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
@@ -195,7 +197,7 @@ const READ_ONLY_MESSAGE =
 
 /** The tree, and everything that is true only once there is a tree. */
 function TreeSection({ id, model }: { id: number; model: TreeModel }) {
-  const { api, stores, escalate } = useServices();
+  const { api, stores, connection, escalate } = useServices();
   const rows = useStoreValue(
     stores.preferences,
     useCallback((state: PreferencesState) => state.rows, []),
@@ -228,6 +230,23 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   });
 
   const members = useMemo(() => memberIndex(memberList), [memberList]);
+
+  // Who else is here and what they have selected (item 3.4.2). Read from the
+  // store the channel writes; the row badges and the online dots are painted
+  // from this and nothing else, so presence changes re-render only the rows
+  // whose badges changed.
+  const me = useStoreValue(
+    stores.domain,
+    useCallback((state: DomainState) => state.user?.id ?? null, []),
+  );
+  const presenceState = useStoreValue(
+    stores.domain,
+    useCallback((state: DomainState) => presenceOf(state, id), [id]),
+  );
+  const presence = useMemo<RowPresence>(
+    () => ({ selections: selectionsOf(presenceState, me), online: onlineIds(presenceState) }),
+    [presenceState, me],
+  );
   // `viewer_plus` is not in the tree read, so the client assumes it is off and
   // a viewer sees no Progress control it cannot use (item 1.2.3).
   const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
@@ -247,6 +266,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     model,
     initiativeId: id,
     members,
+    presence,
     permissions,
     rows,
     selectedId,
@@ -281,6 +301,16 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   // Usually a link already says what we resolved, and then nothing is written at
   // all.
   const selected = tree.ctx.selectedTaskId;
+
+  // Tell the others what this window has selected — after it has painted,
+  // never before (§6.5). Every change goes out, including the one the screen
+  // resolved on arrival; leaving clears it. The connection remembers the value,
+  // so a channel that joins later, or again, carries it.
+  useEffect(() => () => connection.select(id, null), [connection, id]);
+  useEffect(() => {
+    connection.select(id, selected);
+  }, [connection, id, selected]);
+
   const resolvedSelection = tree.initialSelectedId;
   const written = useRef<number | null>(deepLinkTaskId);
   const arriving = useRef(true);

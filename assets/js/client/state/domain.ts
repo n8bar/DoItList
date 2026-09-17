@@ -13,6 +13,8 @@
 
 import type { BootstrapUser } from "../boot.ts";
 import type { InitiativeSummary, Member } from "../api/types.ts";
+import type { PresenceState } from "../live/presence_model.ts";
+import { emptyPresence } from "../live/presence_model.ts";
 import type { TreeModel } from "../tree/model.ts";
 import type { NotificationsState } from "./notifications.ts";
 import { emptyNotifications } from "./notifications.ts";
@@ -36,6 +38,13 @@ export interface DomainState {
    * own schedule, and a tree refetch must not blank the avatars (item 1.2.2).
    */
   readonly members: Readonly<Record<number, readonly Member[]>>;
+  /**
+   * Who is on each Initiative's channel and what they have selected, keyed by
+   * Initiative id (item 3.4.2). The server's record of the moment, not the
+   * screen's: it changes when someone else acts, so it lives with the rest of
+   * what the server said, and goes with the Initiative when access does.
+   */
+  readonly presence: Readonly<Record<number, PresenceState>>;
   /** The bell's rows and unread count — server records, like the rest (4.6). */
   readonly notifications: NotificationsState;
 }
@@ -45,6 +54,7 @@ export const initialDomainState: DomainState = {
   initiativeSummaries: null,
   trees: {},
   members: {},
+  presence: {},
   notifications: emptyNotifications,
 };
 
@@ -68,6 +78,23 @@ export function putMembers(store: DomainStore, id: number, members: readonly Mem
 }
 
 /**
+ * Applies a pure presence change (`live/presence_model.ts`) to one
+ * Initiative's copy. The rules live there; this only files the result, and
+ * leaves the store untouched when the change was a no-op.
+ */
+export function updatePresence(
+  store: DomainStore,
+  id: number,
+  change: (state: PresenceState) => PresenceState,
+): void {
+  store.set((state) => {
+    const before = state.presence[id] ?? emptyPresence;
+    const after = change(before);
+    return after === before ? state : { ...state, presence: { ...state.presence, [id]: after } };
+  });
+}
+
+/**
  * Forgets everything the client holds about one Initiative — the loaded tree
  * and its row in the index. Used when the server says the user may no longer
  * see it (m04.01 1.5): access that has been taken away must not leave a copy
@@ -79,11 +106,14 @@ export function forgetInitiative(store: DomainStore, id: number): void {
     delete trees[id];
     const members = { ...state.members };
     delete members[id];
+    const presence = { ...state.presence };
+    delete presence[id];
     const summaries = state.initiativeSummaries;
     return {
       ...state,
       trees,
       members,
+      presence,
       initiativeSummaries:
         summaries === null ? null : summaries.filter((summary) => summary.id !== id),
     };
@@ -110,6 +140,11 @@ export function members(state: DomainState, id: number): readonly Member[] {
 }
 
 const EMPTY_MEMBERS: readonly Member[] = [];
+
+/** One Initiative's presence, or nobody before the channel has said. */
+export function presence(state: DomainState, id: number): PresenceState {
+  return state.presence[id] ?? emptyPresence;
+}
 
 /** The loaded tree for `id`, or `undefined` if it has not been read yet. */
 export function tree(state: DomainState, id: number): TreeModel | undefined {
