@@ -38,6 +38,10 @@ export const ICON_CLASS = {
   "check-micro": "hero-check-micro",
   "clipboard-document": "hero-clipboard-document",
   "ellipsis-vertical": "hero-ellipsis-vertical",
+  // The Details pane (m04.02 item 3.4.3): link a task, reorder a co-assignee, delete.
+  link: "hero-link",
+  "chevron-up": "hero-chevron-up",
+  trash: "hero-trash",
 } as const;
 
 export type IconName = keyof typeof ICON_CLASS;

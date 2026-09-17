@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InitiativeTree, Member } from "../api/types.ts";
 import { COUNT_MIN_WIDTH, reservedHeight } from "../frame/layout_budget.ts";
+import { Pane } from "../frame/pane.tsx";
 import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
@@ -31,6 +32,7 @@ import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
+import { TaskDetails } from "../tree/details.tsx";
 import { permissionsFor } from "../tree/permissions.ts";
 import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.ts";
 import type { RowPresence } from "../tree/row_model.ts";
@@ -344,6 +346,14 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
         onAdd={tree.onAdd}
       />
       <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
+      {/* The Details pane (item 3.4.3): opens with the selection, from the
+          model alone — nothing here waits on the network (§6). A selected id
+          the model no longer holds (deleted under us) opens nothing. */}
+      {selected !== null && model.tasks[selected] !== undefined && (
+        <Pane>
+          <TaskDetails ctx={tree.ctx} id={selected} onClose={() => select(null)} />
+        </Pane>
+      )}
     </div>
   );
 }

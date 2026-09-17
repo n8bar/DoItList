@@ -5,9 +5,9 @@
 // data plus callbacks — no React, no DOM — so `row_model.ts` and
 // `tree_model.ts` can be tested against the same shape the screen builds.
 
-import type { ProgressCalc } from "../api/types.ts";
+import type { ProgressCalc, SortMode } from "../api/types.ts";
 import type { RowPreferences } from "../state/preferences.ts";
-import type { TreeModel } from "./model.ts";
+import type { TaskRecord, TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
 import type { RowPresence, RowUser } from "./row_model.ts";
 
@@ -23,7 +23,21 @@ export type TreeIntent =
   | { kind: "step"; id: number; field: "priority" | "assignee"; back: boolean }
   | { kind: "delete"; id: number }
   /** A drop: `parentId` / `position` as `drag_model.ts` planned them. */
-  | { kind: "move"; id: number; parentId: number; position: number | null; reorder: boolean };
+  | { kind: "move"; id: number; parentId: number; position: number | null; reorder: boolean }
+  /** The Details pane committed one field (item 3.4.3). */
+  | {
+      kind: "edit";
+      id: number;
+      fields: Partial<
+        Pick<TaskRecord, "title" | "description" | "priority" | "assignee_id" | "manual_progress">
+      >;
+    }
+  /** The whole co-assignee list, in promotion order. */
+  | { kind: "coAssignees"; id: number; ids: number[] }
+  /** `null` mode is Inherit. */
+  | { kind: "setSort"; id: number; mode: SortMode | null; reverse: boolean }
+  /** "Make descendants inherit" — `cascade_sort`. */
+  | { kind: "cascadeSort"; id: number };
 
 /** Where an add form is being opened from. */
 export type AddAnchor =
