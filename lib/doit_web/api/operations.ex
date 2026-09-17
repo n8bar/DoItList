@@ -24,6 +24,8 @@ defmodule DoItWeb.Api.Operations do
         "op":   "add" | "update" | "remove",   // the verb
         "type": "task" | "initiative" | "comment" | "member" | "notification" | "link",
         "id":   123,        // target of an update/remove (an EXISTING resource)
+        "ids":  [12, 15],   // `update task` only: an ordered list of targets
+                            // moved together (instead of `id`; see the table)
         "lid":  "t1",       // on `add`: the client-assigned local id (see below)
                             // on update/remove: a reference to a prior add's lid
         "data": { ... }     // the op's payload (per op, see the table)
@@ -60,6 +62,7 @@ defmodule DoItWeb.Api.Operations do
   | `update` | `task`         | field edits: `title`/`description`/`priority`/`assignee_id`/`manual_progress`, `numbered_title` | `Tasks.update_task/3`                    | edit              |
   | `update` | `task`         | `done: true`/`false`                           | `Tasks.cascade_complete/2` / `…incomplete/2` | edit         |
   | `update` | `task`         | `parent_id`/`parent_lid` and/or `position`/`reorder` | `Tasks.move_task/3`                | edit              |
+  | `update` | `task`         | op-level `ids: [..]` + `parent_id`/`parent_lid`, `position` — moves the list as one block; result carries `records` | `Tasks.move_tasks/3` | edit (every task) |
   | `update` | `task`         | `co_assignee_ids: [..]`                         | `Tasks.add/remove/reorder_co_assignee(s)` | edit            |
   | `remove` | `task`         | —                                              | `Tasks.delete_task/2` (soft, undoable)  | edit              |
   | `add`    | `initiative`   | `name`, `subtitle`, `progress_calc`, `index_style`, … | `Initiatives.create_initiative/2`  | (any authed user) |
@@ -694,6 +697,13 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
+  # Op-level `ids` (m04.02 2.1.2): the list moves under one parent as ONE
+  # action through Tasks.move_tasks/3 — one event, one undo step. Every listed
+  # task is fetched and authorized exactly like a single `update task` target,
+  # so an unreachable id fails the same way and confirms nothing.
+  defp dispatch(user, "update", "task", %{"ids" => _} = op, changes),
+    do: move_many_op(user, op, changes)
+
   defp dispatch(user, "update", "task", op, changes) do
     data = data(op)
 
@@ -1158,6 +1168,124 @@ defmodule DoItWeb.Api.Operations do
         {:error, reason} -> {:error, context_error(reason)}
       end
     end
+  end
+
+  # With `ids`, `data` is a move and nothing else: a parent reference and an
+  # optional position. Field edits, done, reorder, co-assignees, and
+  # expected_version have no many-task meaning and are refused by name.
+  @move_many_data_keys ~w(parent_id parent_lid parent position)
+
+  defp move_many_op(user, op, changes) do
+    data = data(op)
+
+    with {:ok, ids} <- fetch_target_ids(op),
+         :ok <- validate_move_many_keys(data),
+         {:ok, tasks} <- load_tasks(ids),
+         :ok <- authorize_tasks(user, tasks),
+         {:ok, parent_id} <- resolve_ref_field(data, "parent", changes, "task", required: true) do
+      attrs =
+        %{"parent_id" => parent_id}
+        |> maybe_put("position", normalize_int(data["position"]))
+
+      case Tasks.move_tasks(tasks, user, attrs) do
+        {:ok, [first | _] = moved} ->
+          ok(nil, first.id, "task", %{
+            id: first.id,
+            type: "task",
+            records: Enum.map(moved, &task_result/1)
+          })
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
+      end
+    end
+  end
+
+  # `ids` is the op-level plural of `id`: a non-empty list of integer task ids,
+  # never alongside `id`.
+  defp fetch_target_ids(%{"ids" => ids} = op) do
+    cond do
+      Map.has_key?(op, "id") ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "Give either \"id\" (one task) or \"ids\" (a list to move together), not both.",
+           422,
+           "ids"
+         )}
+
+      not is_list(ids) or ids == [] ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "\"ids\" must be a non-empty list of integer task ids (got #{inspect(ids)}).",
+           422,
+           "ids"
+         )}
+
+      true ->
+        Enum.reduce_while(ids, {:ok, []}, fn raw, {:ok, acc} ->
+          case normalize_int(raw) do
+            nil ->
+              {:halt,
+               {:error,
+                err(
+                  :unprocessable_entity,
+                  "Each entry in \"ids\" must be an integer task id (got #{inspect(raw)}).",
+                  422,
+                  "ids"
+                )}}
+
+            n ->
+              {:cont, {:ok, [n | acc]}}
+          end
+        end)
+        |> case do
+          {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+          error -> error
+        end
+    end
+  end
+
+  defp validate_move_many_keys(data) do
+    case Map.keys(data) -- @move_many_data_keys do
+      [] ->
+        :ok
+
+      [key | _] ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "A many-task update only moves: with \"ids\", data may carry only parent_id" <>
+             " (or parent_lid) and position. Field #{inspect(key)} needs its own single-task op.",
+           422,
+           key
+         )}
+    end
+  end
+
+  # Load every listed task in list order; the first unreachable id fails the op
+  # the way a single `update task` target would.
+  defp load_tasks(ids) do
+    Enum.reduce_while(ids, {:ok, []}, fn id, {:ok, acc} ->
+      case load_task(id) do
+        {:ok, task} -> {:cont, {:ok, [task | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, reversed} -> {:ok, Enum.reverse(reversed)}
+      error -> error
+    end
+  end
+
+  defp authorize_tasks(user, tasks) do
+    Enum.reduce_while(tasks, :ok, fn task, :ok ->
+      case authorize(user, task.initiative_id, :edit, task_not_found(task.id)) do
+        {:ok, _initiative} -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   # A move op may carry parent (reparent) or just position/reorder (sibling
@@ -2087,6 +2215,22 @@ defmodule DoItWeb.Api.Operations do
 
   defp context_error(:cycle),
     do: err(:unprocessable_entity, "That move would create a cycle.", 422, "parent_id")
+
+  # Tasks.move_tasks/3 (op-level `ids`).
+  defp context_error(:empty),
+    do: err(:unprocessable_entity, "\"ids\" must name at least one task.", 422, "ids")
+
+  defp context_error(:duplicate),
+    do: err(:unprocessable_entity, "\"ids\" lists the same task twice.", 422, "ids")
+
+  defp context_error(:mixed_initiatives),
+    do: err(:unprocessable_entity, "Every task in \"ids\" must be in one Initiative.", 422, "ids")
+
+  defp context_error(:parent_required),
+    do: err(:unprocessable_entity, "A move needs a parent_id (or parent_lid).", 422, "parent_id")
+
+  defp context_error(:parent_deleted),
+    do: err(:not_found, "The destination parent was not found.", 422, "parent_id")
 
   defp context_error(:is_primary),
     do:
