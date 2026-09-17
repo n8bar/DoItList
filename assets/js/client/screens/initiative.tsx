@@ -261,6 +261,13 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
         message: "This task is already as far that way as it goes.",
       });
     }, [stores.ui]),
+    onDragHint: useCallback(() => {
+      pushNotice(stores.ui, {
+        kind: "info",
+        title: "Hold to drag",
+        message: "Tap and hold a task's handle to drag it to a different position.",
+      });
+    }, [stores.ui]),
   });
 
   // Kept in step without navigating: same history entry, same key, same scroll —

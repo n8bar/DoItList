@@ -21,7 +21,9 @@ export type TreeIntent =
   | { kind: "outdent"; id: number }
   /** P / A stepped a value; `back` is the Shift direction. */
   | { kind: "step"; id: number; field: "priority" | "assignee"; back: boolean }
-  | { kind: "delete"; id: number };
+  | { kind: "delete"; id: number }
+  /** A drop: `parentId` / `position` as `drag_model.ts` planned them. */
+  | { kind: "move"; id: number; parentId: number; position: number | null; reorder: boolean };
 
 /** Where an add form is being opened from. */
 export type AddAnchor =
@@ -50,4 +52,6 @@ export interface TreeContext {
   onSelect(id: number): void;
   onOpenAdd(anchor: AddAnchor): void;
   onIntent(intent: TreeIntent): void;
+  /** A touch swiped the handle instead of holding it: teach the gesture. */
+  onDragHint?(): void;
 }

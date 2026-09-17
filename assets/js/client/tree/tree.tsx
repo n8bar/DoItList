@@ -1,4 +1,4 @@
-// The task tree (m04.02 items 2.2.1, 2.2.2, 2.2.6).
+// The task tree (m04.02 items 2.2.1, 2.2.2, 2.2.6, 3.3.2, 3.3.3).
 //
 // Nested `<ul>/<li>` built from the model's `childIds`, keyed by task id: the
 // root's children are the top level, and every branch's children are a list
@@ -14,6 +14,9 @@
 //     the rows into a column of wrapped words (ProductSpec §6.2). Measured off
 //     the rendered rows, because the indent is CSS padding, not a number the
 //     model knows.
+//   * DragReorder — `drag.tsx` owns the gesture; this file only mounts the
+//     drop zones it needs (root top / bottom, each open branch's tail) while
+//     a drag is on, so they cost nothing the rest of the time.
 // The workspace's other tree hook, TreeScrollFade, has no counterpart here on
 // purpose: it fades the top and bottom of the tree's OWN vertical scroll box,
 // and the client has exactly one vertical scrolling region (`#client-scroll`).
@@ -33,6 +36,7 @@ import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { sameSlot } from "./add_form_model.ts";
 import { AddForm } from "./add_form.tsx";
 import type { TreeContext } from "./context.ts";
+import { RootZone, TailZone, useTreeDrag } from "./drag.tsx";
 import { Icon } from "../ui/icon.tsx";
 import { Row } from "./row.tsx";
 import { treeMinWidthStyle } from "./tree_model.ts";
@@ -85,12 +89,14 @@ function Children({
   depth,
   slot,
   form,
+  dragging,
 }: {
   ctx: TreeContext;
   parentId: number;
   depth: number;
   slot: AddSlot | null;
   form: (anchor: AddSlot) => ReactNode;
+  dragging: boolean;
 }) {
   const childIds = childIdsOf(ctx.model, parentId);
   if (childIds.length === 0) return null;
@@ -111,8 +117,11 @@ function Children({
         .join(" ")}
     >
       {childIds.map((id) => (
-        <Branch key={id} ctx={ctx} id={id} depth={depth} slot={slot} form={form} />
+        <Branch key={id} ctx={ctx} id={id} depth={depth} slot={slot} form={form} dragging={dragging} />
       ))}
+      {/* "Last child of this branch" — only reachable while the branch is open,
+          so a closed one gets no strip at all. */}
+      {dragging && !ctx.collapsed(parentId) && <TailZone branchId={parentId} />}
     </ul>
   );
 }
@@ -124,12 +133,14 @@ function Branch({
   depth,
   slot,
   form,
+  dragging,
 }: {
   ctx: TreeContext;
   id: number;
   depth: number;
   slot: AddSlot | null;
   form: (anchor: AddSlot) => ReactNode;
+  dragging: boolean;
 }) {
   const childSlot: AddSlot = { kind: "child", taskId: id };
   const siblingSlot: AddSlot = { kind: "sibling", taskId: id };
@@ -138,7 +149,7 @@ function Branch({
     <>
       <Row ctx={ctx} id={id} depth={depth}>
         {sameSlot(slot, childSlot) && <div className="px-3 pb-3">{form(childSlot)}</div>}
-        <Children ctx={ctx} parentId={id} depth={depth + 1} slot={slot} form={form} />
+        <Children ctx={ctx} parentId={id} depth={depth + 1} slot={slot} form={form} dragging={dragging} />
       </Row>
       {/* "Add sibling" opens BELOW the row it was opened from, as its own list
           item, so the new task appears where it will actually land. */}
@@ -152,6 +163,7 @@ export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAd
   const list = useRef<HTMLUListElement | null>(null);
 
   useTreeWidth(list);
+  const dragging = useTreeDrag(ctx, list);
 
   const form = useCallback(
     (anchor: AddSlot) => (
@@ -216,9 +228,11 @@ export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAd
           data-progress-calc={ctx.progressCalc}
           className="space-y-2"
         >
+          {dragging && <RootZone zone="top" />}
           {rootIds.map((id) => (
-            <Branch key={id} ctx={ctx} id={id} depth={0} slot={addSlot} form={form} />
+            <Branch key={id} ctx={ctx} id={id} depth={0} slot={addSlot} form={form} dragging={dragging} />
           ))}
+          {dragging && <RootZone zone="bottom" />}
         </ul>
 
       </div>

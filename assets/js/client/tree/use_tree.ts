@@ -55,6 +55,8 @@ export interface UseTreeOptions {
   onAdd: (request: AddRequest) => void;
   /** A key that asked for something this tree cannot do. */
   onBlocked: () => void;
+  /** A touch swiped a drag handle instead of holding it. */
+  onDragHint?: () => void;
   /** The selected task id, from the `ui` store, and the writer for it. */
   selectedId: number | null;
   select: (id: number | null) => void;
@@ -85,7 +87,8 @@ export interface TreeState {
 }
 
 export function useTree(options: UseTreeOptions): TreeState {
-  const { model, initiativeId, members, permissions, rows, onIntent, onAdd, onBlocked } = options;
+  const { model, initiativeId, members, permissions, rows, onIntent, onAdd, onBlocked, onDragHint } =
+    options;
   // Selection lives in the `ui` store, not in this hook: it is view state with a
   // session's lifetime, and it has to survive this component re-rendering or
   // remounting (guardrails §7.3). The hook only reads and writes it.
@@ -311,6 +314,7 @@ export function useTree(options: UseTreeOptions): TreeState {
     onSelect: setSelectedId,
     onOpenAdd: openAdd,
     onIntent,
+    ...(onDragHint === undefined ? {} : { onDragHint }),
   };
 
   return {

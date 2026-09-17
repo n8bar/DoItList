@@ -178,16 +178,15 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           .join(" ")}
       >
         {ctx.permissions.canEdit ? (
-          // The drag handle's geometry, held open so the row's anatomy matches
-          // the LiveView's. The gesture itself is item 2.3; until it lands the
-          // handle deliberately does NOT claim a grab cursor it cannot honour.
+          // The drag handle, same anatomy as the LiveView's. The gesture is
+          // bound by `drag.tsx` on the tree, not here, so the row stays markup.
           <span
             data-drag-handle
             aria-hidden="true"
             data-task-id={id}
             data-parent-id={record.parent_id}
             data-depth={depth}
-            className="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-600 dark:text-zinc-600 touch-none"
+            className="flex-none -my-2 w-11 h-11 flex items-center justify-center gap-0.5 text-zinc-600 dark:text-zinc-600 hover:text-zinc-800 dark:hover:text-zinc-400 cursor-grab active:cursor-grabbing touch-none"
           >
             <Icon name="ellipsis-vertical" className="w-3 h-3" />
             <span className={botanicalColor(kind)}>
