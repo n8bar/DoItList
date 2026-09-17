@@ -20,16 +20,16 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 
 ## Optional / Future
 
-Small follow-ups noticed while building a milestone, kept out of its arc docs so the arcs can close. Each names the arc it came from.
+Small follow-ups noticed while building a milestone, kept out of its arc docs so the arcs can close.
 
-- **M04.01:** Rate-limit the browser API by client address.
-- **M04.01:** Notice a dead socket faster than the default heartbeat does.
-- **M04.01:** Wire the client's fatal error state to a real caller, or remove it.
-- **M04.01:** Guard the recovery card markup against drift between the bootstrap page and the client.
-- **M04.01:** Stop the browser harness purging the signed-in account's local cache on every run.
-- **M04.01:** Give the wordmark link the navigation button vocabulary and a 44px target.
-- **M04.01:** Drop the second copy of the current route from the UI store.
-- **M04.01:** Stop recomputing the repository marker and URL per row in the browser Initiatives read.
-- **M04.01:** Add a garbage-token CSRF test beside the missing-token one.
-- **M04.01:** Move the fake socket transport out of the shipped client tree.
-- **M04.01:** Clear the forgotten-Initiative generation map on purge.
+- Rate-limit the browser API by client address.
+- Notice a dead socket faster than the default heartbeat does.
+- Wire the client's fatal error state to a real caller, or remove it.
+- Guard the recovery card markup against drift between the bootstrap page and the client.
+- Stop the browser harness purging the signed-in account's local cache on every run.
+- Give the wordmark link the navigation button vocabulary and a 44px target.
+- Drop the second copy of the current route from the UI store.
+- Stop recomputing the repository marker and URL per row in the browser Initiatives read.
+- Add a garbage-token CSRF test beside the missing-token one.
+- Move the fake socket transport out of the shipped client tree.
+- Clear the forgotten-Initiative generation map on purge.
