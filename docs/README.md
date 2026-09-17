@@ -80,9 +80,10 @@ A Worklist is an actionable, checkable parent. Its checkbox records whether the 
 5.2 The tag prefixes the subitem text. Define them only here — don't repeat the key in arc docs.
 5.3 An arc that adds an endpoint, op, field, or tool carries a Testing subitem confirming its prose entry landed in [`reference/agent_surfaces.md`](reference/agent_surfaces.md).
 
-### 6. Omissions & Corrections
-6.1 An arc doc may carry an `## Omissions & Corrections` section for bigger-than-tweak gaps whose home arc has closed — bugs and accidental omissions from earlier arcs. Any arc may pick such work up; the section is where the work gets documented first.
-6.2 Small tweaks never go here — those are fixed on the spot with a CHANGELOG line only.
-6.3 It's a work section, not a parking lot: its items are done within that arc. If the arc closes with one unfinished, the item moves to another arc explicitly.
+### 6. Omissions and Corrections
+6.1 An arc doc may carry a Worklist named **Omissions and Corrections** — features and fixes that should have been in previous milestones and arcs. Any arc may pick such work up; the Worklist is where the work gets documented first.
+6.2 It is a numbered Worklist like any other, placed where it should run — usually ahead of the arc's own open Worklists. Each gap is one Item, with its HOW nested beneath; its verification goes under the arc's Testing Worklist.
+6.3 Small tweaks never go here — those are fixed on the spot with a CHANGELOG line only.
+6.4 It's a work list, not a parking lot: its Items are done within that arc. If the arc closes with one unfinished, the Item moves to another arc explicitly.
 
 > Branch naming and repo workflow rules (specs-first, don't-merge-dirty, `main` canonical) live in [`../CLAUDE.md`](../CLAUDE.md) since they apply regardless of doc context.
