@@ -693,3 +693,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-16  M04.02 worklist 3 added (Initiatives index parity): the Arc 1 stand-in redesigned the page nobody asked to change; the port moves up from M04.07 1.1.1 so the operator stops living with the stand-in. Later worklists renumbered.
 2026-09-16  Client frame (M04.01 6.8 finding): dropped the Sections rail — a column repeating the header's nav; the M02 page has no rail below ultrawide. M04.02 3.7 retired with it.
 2026-09-16  Docs: M04.01's Optional / Future list moved to BACKLOG.md under an Optional / Future section, so arc docs close on their worklists alone.
+2026-09-16  M04.01 complete. The "one product, not a scaffold" check moved to M04.07 5.3.1: it cannot be answered while the screens are stand-ins. The header-width check stays in M04.01 as 6.8, done.
