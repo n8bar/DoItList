@@ -204,8 +204,9 @@ defmodule DoItWeb.Api.Serializer do
       }
 
   `kind` is the event verb (`created`, `title_changed`, `progress_changed`,
-  `parent_changed`, `reordered`, `child_deleted`, `assignee_changed`,
-  `commented`, `status_changed`, …); `data` carries that verb's from/to payload
+  `parent_changed`, `reordered`, `moved_many`, `child_deleted`,
+  `assignee_changed`, `commented`, `status_changed`, …); `data` carries that
+  verb's from/to payload
   (the "review-as-diff" content). The activity endpoint wraps a list of these in
   `data` with a sibling `meta` pagination object — see
   `DoItWeb.Api.InitiativeController`.

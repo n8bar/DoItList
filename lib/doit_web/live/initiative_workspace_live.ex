@@ -7558,7 +7558,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             </span>
             · {event_label(e, @members)}
             <span
-              :if={(Map.get(e.data, "from") || Map.get(e.data, "to")) && e.kind != "status_changed"}
+              :if={
+                (Map.get(e.data, "from") || Map.get(e.data, "to")) &&
+                  e.kind not in ["status_changed", "moved_many"]
+              }
               class="text-zinc-500 dark:text-zinc-400"
             >
               ({inspect(Map.get(e.data, "from"))} → {inspect(Map.get(e.data, "to"))})
@@ -7668,6 +7671,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
   defp event_label(%{kind: "status_changed", data: %{"to" => "done"}}, _members), do: "completed"
   defp event_label(%{kind: "status_changed", data: %{"to" => "open"}}, _members), do: "reopened"
   defp event_label(%{kind: "status_changed"}, _members), do: "changed status"
+  # A block move (m04.02 2.1.1) reads as its count — ids are plumbing.
+  defp event_label(%{kind: "moved_many", data: %{"count" => 1}}, _members), do: "moved 1 task"
+  defp event_label(%{kind: "moved_many", data: d}, _members), do: "moved #{d["count"]} tasks"
   defp event_label(%{kind: kind}, _members), do: kind
 
   # How many other tasks a status_changed's cascade flipped (m03.04 2.10.3);

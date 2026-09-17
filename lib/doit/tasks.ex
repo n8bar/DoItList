@@ -642,6 +642,169 @@ defmodule DoIt.Tasks do
   end
 
   @doc """
+  Move an ordered list of Tasks under one parent as ONE action (m04.02 2.1.1).
+
+  `tasks` is a non-empty list of `%Task{}` structs from one Initiative, no
+  duplicates. `attrs` (string or atom keys) carries `"parent_id"` (required)
+  and an optional 0-based `"position"`; nil lands the block at the top, like a
+  single reparent. The list lands as one contiguous block in list order —
+  tasks already under the destination are pulled into the block too.
+
+  Every task is validated before anything is written; one failure means
+  nothing moves. Records exactly ONE `moved_many` event on the destination
+  parent (undone as a whole) and fires exactly ONE `{:task_moved, id}`
+  broadcast carrying the first moved task's id.
+
+  Returns `{:ok, [moved_tasks_in_list_order]}` or `{:error, reason}` where
+  `reason` is `:empty`, `:duplicate`, `:mixed_initiatives`, `:parent_required`,
+  `:cycle`, `:cross_initiative`, or `:parent_deleted`.
+  """
+  def move_tasks(tasks, %User{} = actor, attrs) when is_list(tasks) do
+    attrs = stringify_keys(attrs)
+
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        # The caller's structs may be stale — re-read so the prior slots and
+        # the source renumbers see the live parents.
+        tasks = Enum.map(tasks, &Repo.get!(Task, &1.id))
+
+        with {:ok, parent_id} <- block_parent(attrs),
+             :ok <- validate_block(tasks, parent_id) do
+          position = normalize_position(Map.get(attrs, "position")) || 0
+          initiative_id = hd(tasks).initiative_id
+          old_parent_ids = tasks |> Enum.map(& &1.parent_id) |> Enum.uniq()
+
+          # Prior slots BEFORE any write, so undo puts each task back exactly.
+          moves = block_inverse(tasks)
+
+          moved = land_block(tasks, parent_id, position, actor)
+          reconcile_after_moves(moved, old_parent_ids, parent_id, actor)
+          moved = Enum.map(moved, &Repo.get!(Task, &1.id))
+
+          maybe_resort_children(parent_id)
+          for pid <- old_parent_ids, pid != parent_id, do: maybe_resort_children(pid)
+
+          record_event_for(
+            parent_id,
+            initiative_id,
+            actor,
+            "moved_many",
+            %{
+              to: parent_id,
+              position: position,
+              task_ids: Enum.map(moved, & &1.id),
+              count: length(moved)
+            },
+            %{"moves" => moves}
+          )
+
+          broadcast_change(initiative_id, {:task_moved, hd(moved).id})
+          moved
+        else
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+    end)
+  end
+
+  defp block_parent(attrs) do
+    case normalize_id(Map.get(attrs, "parent_id")) do
+      nil -> {:error, :parent_required}
+      id -> {:ok, id}
+    end
+  end
+
+  defp validate_block([], _parent_id), do: {:error, :empty}
+
+  defp validate_block(tasks, parent_id) do
+    ids = Enum.map(tasks, & &1.id)
+    initiatives = tasks |> Enum.map(& &1.initiative_id) |> Enum.uniq()
+
+    cond do
+      ids != Enum.uniq(ids) ->
+        {:error, :duplicate}
+
+      length(initiatives) > 1 ->
+        {:error, :mixed_initiatives}
+
+      true ->
+        Enum.reduce_while(tasks, :ok, fn task, :ok ->
+          case validate_move(task, parent_id) do
+            :ok -> {:cont, :ok}
+            {:error, _} = err -> {:halt, err}
+          end
+        end)
+    end
+  end
+
+  # Each task's prior slot (old parent + index among its live siblings), in
+  # list order — the `moved_many` undo payload.
+  defp block_inverse(tasks) do
+    parent_ids = tasks |> Enum.map(& &1.parent_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    by_parent = ordered_child_ids_by_parent(parent_ids)
+
+    Enum.map(tasks, fn task ->
+      siblings = Map.get(by_parent, task.parent_id, [])
+
+      %{
+        "task_id" => task.id,
+        "parent_id" => task.parent_id,
+        "position" => Enum.find_index(siblings, &(&1 == task.id))
+      }
+    end)
+  end
+
+  # Land `tasks` under `parent_id` as one contiguous block at `position`, in
+  # list order, then recompute every touched chain. Shared by the forward move
+  # and its redo. Tasks already under the destination first step to the END so
+  # the per-task slotting below is exact: at step i the block's earlier members
+  # sit at insert_at..insert_at+i-1 and nothing unplaced sits before them.
+  defp land_block(tasks, parent_id, position, actor) do
+    mode = progress_calc_mode(hd(tasks).initiative_id)
+    ids = MapSet.new(tasks, & &1.id)
+    old_parent_ids = tasks |> Enum.map(& &1.parent_id) |> Enum.uniq()
+
+    others = parent_id |> live_child_ids() |> Enum.reject(&MapSet.member?(ids, &1))
+    insert_at = position |> max(0) |> min(length(others))
+
+    tasks =
+      Enum.map(tasks, fn task ->
+        if task.parent_id == parent_id, do: perform_move(task, parent_id, nil, actor), else: task
+      end)
+
+    moved =
+      tasks
+      |> Enum.with_index()
+      |> Enum.map(fn {task, i} -> perform_move(task, parent_id, insert_at + i, actor) end)
+
+    for pid <- old_parent_ids, pid && pid != parent_id, do: recompute_ancestors(pid, mode)
+    recompute_ancestors(parent_id, mode)
+    moved
+  end
+
+  defp live_child_ids(parent_id) do
+    from(t in Task,
+      where: is_nil(t.deleted_at),
+      order_by: [asc: t.sort_order, asc: t.inserted_at],
+      select: t.id
+    )
+    |> with_parent(parent_id)
+    |> Repo.all()
+  end
+
+  # `reconcile_after_move/4` for a block: every source chain may gain
+  # completeness; the destination loses it if any moved task is open.
+  defp reconcile_after_moves(moved, old_parent_ids, parent_id, actor) do
+    for pid <- old_parent_ids, pid && pid != parent_id, do: check_completed_ancestors(pid, actor)
+
+    if Enum.all?(moved, &(&1.status == "done")),
+      do: check_completed_ancestors(parent_id, actor),
+      else: uncheck_done_ancestors(parent_id, actor)
+
+    :ok
+  end
+
+  @doc """
   Dry-run a move. Runs `move_task_body` in a transaction, snapshots the
   ancestor chain progress before and after, rolls the transaction back, and
   classifies any completion-state flips it *would* cause.
@@ -1029,7 +1192,7 @@ defmodule DoIt.Tasks do
   # The mutations a v1 undo reverses. Completion is `status_changed` — one atomic
   # event per flip covering the whole cascade (item 14). The co-assignee set
   # events are still out of scope.
-  @undoable_kinds ~w(parent_changed reordered child_deleted created title_changed description_changed progress_changed priority_changed assignee_changed commented status_changed)
+  @undoable_kinds ~w(parent_changed reordered moved_many child_deleted created title_changed description_changed progress_changed priority_changed assignee_changed commented status_changed)
 
   # Bounded depth (m02.06 items 6 + 11.4): only the most recent N undoable events
   # on an Initiative are reversible; older history drops off the shared stack.
@@ -1213,7 +1376,7 @@ defmodule DoIt.Tasks do
        when kind in ~w(title_changed description_changed progress_changed priority_changed assignee_changed),
        do: :task_updated
 
-  defp reversal_broadcast(kind, _direction) when kind in ~w(parent_changed reordered),
+  defp reversal_broadcast(kind, _direction) when kind in ~w(parent_changed reordered moved_many),
     do: :task_moved
 
   defp reversal_broadcast("created", :undo), do: :task_deleted
@@ -1266,6 +1429,60 @@ defmodule DoIt.Tasks do
           recompute_ancestors(parent_id, mode)
           :ok
         end
+    end
+  end
+
+  # A block move (m04.02 2.1.1) reverses as a whole. Undo puts each task back
+  # in its prior slot from the inverse payload; redo re-runs the forward
+  # landing from `data`. A task that no longer exists is skipped; a parent
+  # that is gone is a conflict, reported before anything is written.
+  defp reverse(%{kind: "moved_many"} = event, :undo) do
+    moves =
+      for m <- event.inverse_payload["moves"] || [],
+          task = live_task(m["task_id"]),
+          do: {task, normalize_id(m["parent_id"]), m["position"]}
+
+    with :ok <- validate_slots(moves) do
+      actor = event_actor(event)
+      mode = progress_calc_mode(event.initiative_id)
+      dest = event.task_id
+
+      # Tasks leaving the destination go first, each source restored in
+      # ascending slot order (exact, since those tasks were absent). The
+      # destination's own tasks then step to the end and slot back the same
+      # way, once nothing foreign is left in front of them.
+      {own, foreign} = Enum.split_with(moves, fn {task, pid, _} -> task.parent_id == pid end)
+
+      Enum.each(slot_order(foreign), fn {task, pid, pos} ->
+        perform_move(task, pid, pos, actor)
+      end)
+
+      evicted =
+        Enum.map(own, fn {task, pid, pos} -> {perform_move(task, pid, nil, actor), pid, pos} end)
+
+      Enum.each(slot_order(evicted), fn {task, pid, pos} ->
+        perform_move(task, pid, pos, actor)
+      end)
+
+      moves
+      |> Enum.map(fn {_task, pid, _} -> pid end)
+      |> Enum.concat([dest])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> Enum.each(&recompute_ancestors(&1, mode))
+
+      :ok
+    end
+  end
+
+  defp reverse(%{kind: "moved_many", data: data} = event, :redo) do
+    parent_id = normalize_id(data["to"])
+    tasks = (data["task_ids"] || []) |> Enum.map(&live_task/1) |> Enum.reject(&is_nil/1)
+    moves = Enum.map(tasks, &{&1, parent_id, nil})
+
+    with :ok <- validate_slots(moves) do
+      land_block(tasks, parent_id, data["position"] || 0, event_actor(event))
+      :ok
     end
   end
 
@@ -1396,6 +1613,35 @@ defmodule DoIt.Tasks do
     :ok
   end
 
+  defp live_task(id) do
+    case get_task(id) do
+      %Task{deleted_at: nil} = task -> task
+      _ -> nil
+    end
+  end
+
+  # Every landing must be possible before any write: nothing to land is a
+  # dead entry; a missing/deleted parent is `:parent_gone`; a cycle or a
+  # cross-Initiative parent keeps `validate_move/2`'s reason.
+  defp validate_slots([]), do: {:error, :task_gone}
+
+  defp validate_slots(moves) do
+    Enum.reduce_while(moves, :ok, fn {task, parent_id, _}, :ok ->
+      cond do
+        parent_id && live_task(parent_id) == nil ->
+          {:halt, {:error, :parent_gone}}
+
+        true ->
+          case validate_move(task, parent_id) do
+            :ok -> {:cont, :ok}
+            {:error, _} = err -> {:halt, err}
+          end
+      end
+    end)
+  end
+
+  defp slot_order(moves), do: Enum.sort_by(moves, fn {_task, pid, pos} -> {pid, pos || 0} end)
+
   defp undo_field("title_changed"), do: :title
   defp undo_field("description_changed"), do: :description
   defp undo_field("progress_changed"), do: :manual_progress
@@ -1454,6 +1700,8 @@ defmodule DoIt.Tasks do
   """
   def describe_event(%{kind: "parent_changed"}), do: "move"
   def describe_event(%{kind: "reordered"}), do: "reorder"
+  def describe_event(%{kind: "moved_many", data: %{"count" => 1}}), do: "move 1 task"
+  def describe_event(%{kind: "moved_many", data: data}), do: "move #{data["count"]} tasks"
   def describe_event(%{kind: "child_deleted", data: data}), do: "delete \"#{data["title"]}\""
   def describe_event(%{kind: "created", data: data}), do: "create \"#{data["title"]}\""
   def describe_event(%{kind: "title_changed"}), do: "rename"
