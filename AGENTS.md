@@ -23,6 +23,7 @@ For doc-structure conventions (hierarchy, numbering, doc layout, deadlines), see
 
 ## Engineering Style
 - Boring, understandable code; small, reviewable changes.
+- The existing layouts are the design. A screen that replaces one is built against the template it replaces — same structure, controls, and copy — never redesigned. The only visual change is one an arc item names.
 - Business logic in domain/service modules with tests, not views. Progress math stays in pure modules with unit tests.
 - A new endpoint, op, field, or tool isn't done until its prose entry lands in [`docs/reference/agent_surfaces.md`](docs/reference/agent_surfaces.md). The generated tables cover the mechanical half; the prose is the half that needs a person.
 - State lives where its lifetime is: ephemeral UI state (selection, expand/collapse, focus) stays client-side; the server owns durable data. Writes get optimistic feedback (UX_GUARDRAILS §6); renders and broadcasts update incrementally — cost proportional to the change, not the tree.
