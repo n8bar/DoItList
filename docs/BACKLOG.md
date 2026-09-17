@@ -1,5 +1,5 @@
 # BACKLOG
-_Last updated: 2026-09-14_
+_Last updated: 2026-09-16_
 
 Work for releases _after_ the upcoming one. The currently-targeted release and its milestones live in [`PLAN.md`](PLAN.md); this file is for everything beyond that.
 
@@ -17,3 +17,19 @@ Work for releases _after_ the upcoming one. The currently-targeted release and i
 - **Progress measurements behind the percentage.** Store the measurement with manual progress — numerator, denominator, label (e.g. remaining/total files) — distinguish measured, estimated, and derived sources, and coalesce high-frequency progress events in the activity feed. From the Initiative 64 migration feedback (2026-08): a filesystem watcher's one-point updates were useful on the task, noisy in the feed.
 - **Lightweight execution-order semantics.** An Initiative option declaring sibling order the intended execution order, a blocked/dependency signal, and a next-actionable read (completion + blocking + tree order) — explicitly not a scheduling engine. From the Initiative 64 feedback: an agent skipped past an inactionable task where the operator expected it moved into place.
 - **Name the progress-calc method at aggregate surfaces.** Show which calculation produced a rolled-up percentage wherever aggregate progress appears, so Initiative 64's 99% under `leaf_average` — with one consequential cutover leaf still open — reads as what it is. The method stays the user's choice; this only labels it.
+
+## Optional / Future
+
+Small follow-ups noticed while building a milestone, kept out of its arc docs so the arcs can close. Each names the arc it came from.
+
+- **M04.01:** Rate-limit the browser API by client address.
+- **M04.01:** Notice a dead socket faster than the default heartbeat does.
+- **M04.01:** Wire the client's fatal error state to a real caller, or remove it.
+- **M04.01:** Guard the recovery card markup against drift between the bootstrap page and the client.
+- **M04.01:** Stop the browser harness purging the signed-in account's local cache on every run.
+- **M04.01:** Give the wordmark link the navigation button vocabulary and a 44px target.
+- **M04.01:** Drop the second copy of the current route from the UI store.
+- **M04.01:** Stop recomputing the repository marker and URL per row in the browser Initiatives read.
+- **M04.01:** Add a garbage-token CSRF test beside the missing-token one.
+- **M04.01:** Move the fake socket transport out of the shipped client tree.
+- **M04.01:** Clear the forgotten-Initiative generation map on purge.
