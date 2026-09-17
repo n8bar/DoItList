@@ -696,3 +696,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-16  M04.01 complete. The "one product, not a scaffold" check moved to M04.07 5.3.1: it cannot be answered while the screens are stand-ins. The header-width check stays in M04.01 as 6.8, done.
 2026-09-17  M04.02 worklist 6 added (Multi-task move): agents using the skill move Tasks one call each; the batch already moves many atomically but leaves one undo entry and one activity line per Task. Testing renumbered to 7.
 2026-09-17  M04.02 Multi-task move moved from worklist 6 to 2; later worklists renumbered.
+2026-09-17  M04.02 worklist 2 is now Omissions and Corrections; Multi-task move nests under it as 2.1.
