@@ -689,3 +689,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-16  M04.02 3.1.5 added: sort and cascade-sort need an operation in the shared engine before the client can submit them through the adapter.
 2026-09-16  Client header (M04.01 6.8 findings): the narrow menu control is the hamburger glyph again, not the word; controls stay on the right edge below lg (justify-between came off with the summary slot); the quiet Live badge sits in the header from md, loud states still from lg; the narrow menu carries the avatar, Account and User Preferences rows the account menu has above sm.
 2026-09-16  Client header: the theme toggle no longer shows twice at phone width — its `hidden` lost to the group's own display class, so the breakpoint moved to a wrapper.
+2026-09-16  M04.03 3.3 added: a socket reopen resyncs every joined Initiative — the client today refetches nothing on reconnect, and ProductSpec §7 needs reconnection to reconcile.
