@@ -634,6 +634,43 @@ class CommentsTest(unittest.TestCase):
         self.assertEqual(out.splitlines(), ["Bob  2026-06-26 21:30  [deleted]"])
 
 
+class ShowTest(unittest.TestCase):
+    """2.3 — `show` prints the outline line, then the description verbatim."""
+
+    def _routes(self, tree):
+        return {
+            "GET /api/v1/tasks/101": (200, '{"data":{"id":101,"initiative_id":12,"version":5}}'),
+            "GET /api/v1/initiatives/12": (200, _json(tree)),
+        }
+
+    def test_prints_the_outline_line_then_the_description(self):
+        task = node(101, "Build the API", index="1", progress=50, leaf=False)
+        task["description"] = "Ship the parser first.\nThen the lexer."
+        tree = dict(TREE, tasks=[task])
+        code, out, err, transport = run(["show", "%101"], self._routes(tree))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "1 Build the API  %101  50%  [ ]  branch",
+                "",
+                "Ship the parser first.",
+                "Then the lexer.",
+            ],
+        )
+        self.assertEqual([call["method"] for call in transport.calls], ["GET", "GET"])
+
+    def test_no_description_says_so(self):
+        task = node(101, "Build the API", index="1", progress=50)
+        tree = dict(TREE, tasks=[task])
+        code, out, err, _ = run(["show", "101"], self._routes(tree))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(
+            out.splitlines(),
+            ["1 Build the API  %101  50%  [ ]  leaf", "", "(no description)"],
+        )
+
+
 class ActivityTest(unittest.TestCase):
     def test_prints_time_actor_kind_and_compact_data(self):
         routes = {

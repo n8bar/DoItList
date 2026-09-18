@@ -13,6 +13,7 @@ Do It List holds work as Task trees whose Progress rolls up from the leaves. Thi
 2. Text the user pastes or types in chat goes through `import_text`.
 3. An individual change goes through one granular tool or verb: `add`, `done`, `progress`, `move`, `comment`, `retitle`, `describe`, `delete`. Multiple CLI changes can run as one shell call. Several Tasks going to the same parent are one `move` (`move %12,%15 %7`; `task_ids` in the tool), never one call each.
 4. Read with `list`, `tree <initiative> [--under TASK] [--depth N]`, `comments <task>`, `activity <initiative>`; compare a document against a tree with `diff <file> <initiative>`.
+5. Read a Task's description with `show <task>` before rewriting it with `describe`.
 
 ## 2. Reading
 

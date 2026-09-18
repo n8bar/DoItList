@@ -116,6 +116,7 @@ An Initiative list item also carries its `description` and `created_at`, so a li
 | list | — | — | list the Initiatives you can reach |
 | tree | initiative | --under, --depth | print an Initiative's outline |
 | comments | task | — | print a Task's comments |
+| show | task | — | print a Task's outline line and its description |
 | activity | initiative | --task, --limit | print an Initiative's activity |
 | add | parent title | --out, --numbered | add a Task under a parent |
 | done | task | --out, --reopen, --mirror, --section, --initiative | complete a Task |
@@ -131,6 +132,8 @@ An Initiative list item also carries its `description` and `created_at`, so a li
 <!-- /generated: scripts/doitlist.py -->
 
 `move` takes one Task or a comma-separated list: `move %12,%15,%9 %7 0` lands the three under Task 7 in that order as one write. A single Task still sends its `expected_version`; a list cannot.
+
+`show <task>` prints a Task's outline line, then its description or `(no description)`.
 
 ### Walkthrough
 

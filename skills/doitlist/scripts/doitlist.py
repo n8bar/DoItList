@@ -677,6 +677,25 @@ def cmd_comments(client, args, out, err):
     return EXIT_OK
 
 
+def cmd_show(client, args, out, err):
+    """The Task's outline line, then its description verbatim (2.3)."""
+    task_id = parse_task_ref(args.task)
+    ref = _data(client.get("/api/v1/tasks/{0}".format(task_id)))
+    payload = _data(client.get("/api/v1/initiatives/{0}".format(ref.get("initiative_id"))))
+    task = find_task(payload.get("tasks") or [], task_id)
+    if task is None:
+        raise ApiError(
+            200,
+            "unexpected_response",
+            "Task %{0} came back without a matching node in its own Initiative.".format(task_id),
+        )
+    out.write(task_row(task, 0) + "\n")
+    out.write("\n")
+    description = task.get("description")
+    out.write((description if description else "(no description)") + "\n")
+    return EXIT_OK
+
+
 def cmd_activity(client, args, out, err):
     initiative_id = parse_initiative_ref(args.initiative)
     params = {}
@@ -2017,6 +2036,10 @@ def build_parser():
     comments.add_argument("task", help="Task id or %%<id>")
     comments.set_defaults(handler=cmd_comments)
 
+    show = subparsers.add_parser("show", help="print a Task's outline line and its description")
+    show.add_argument("task", help="Task id or %%<id>")
+    show.set_defaults(handler=cmd_show)
+
     activity = subparsers.add_parser("activity", help="print an Initiative's activity")
     activity.add_argument("initiative", help="Initiative id or URL")
     activity.add_argument("--task", metavar="TASK", help="only this Task's events (id or %%<id>)")
@@ -2152,7 +2175,7 @@ def build_parser():
 
 
 VERBS = (
-    "list, tree, comments, activity, add, done, progress, move, comment, "
+    "list, tree, comments, show, activity, add, done, progress, move, comment, "
     "retitle, describe, delete, import, diff, retry"
 )
 
