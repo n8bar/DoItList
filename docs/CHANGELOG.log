@@ -732,3 +732,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-18  Tweak (badge): the plural "s" on the unit count is normal weight, not bold, in both trees.
 2026-09-18  Tweak (badge): a colon follows the unit count's "s" ("🍃s: 934"; "🍃: 1" when singular) in both trees.
 2026-09-18  Tweak (client frame): the client's nav bar and its narrow-screen menu are emerald (50 light, 950 dark) so the new UI is tellable from the workspace at a glance while the two look ever more alike.
+2026-09-18  Tweak (client frame): the dark-mode nav green is half as bright (oklch 14% vs emerald-950's 26%).

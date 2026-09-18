@@ -117,7 +117,7 @@ export function NavMenu({ stores, route, user }: NavMenuProps) {
         id="client-menu"
         ref={panel}
         hidden={!state.open}
-        className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-emerald-200 bg-emerald-50 p-2 shadow-lg dark:border-emerald-900 dark:bg-emerald-950"
+        className="absolute right-0 z-50 mt-2 w-64 rounded-lg border border-emerald-200 bg-emerald-50 p-2 shadow-lg dark:border-emerald-900 dark:bg-[oklch(14%_0.04_172)]"
       >
         {/* The account menu is `sm:` and up, so below it the avatar and its
             links live here — as the LiveView's mobile menu has them. */}

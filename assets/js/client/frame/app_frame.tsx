@@ -118,7 +118,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
 
         <header
           id="client-header"
-          className="flex-none border-b border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950"
+          className="flex-none border-b border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-[oklch(14%_0.04_172)]"
         >
           <div className={`${CONTAINER} flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}>
             <Link
