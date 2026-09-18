@@ -1,16 +1,17 @@
-// The three confirms that sit between an intent and the adapter (m04.02 item
-// 5.1.4, UX_GUARDRAILS 6.5/6.6).
+// The confirms that sit between an intent and the adapter (m04.02 items
+// 5.1.4 and 7.6, UX_GUARDRAILS 6.5/6.6).
 //
 // Each one is a question the client can already answer from the model, so it
 // opens with no round trip: which ancestors a completion flips, how many
-// branches a sort cascade rewrites, whether a done toggle is a whole branch.
-// The copy is the LiveView's, word for word, so the instant path and the
-// server's backstop read the same.
+// branches a sort cascade rewrites, whether a done toggle is a whole branch,
+// which task a delete takes with its subtasks. The copy is the LiveView's,
+// word for word, so the instant path and the server's backstop read the same.
 //
 // "Don't show this again" is one localStorage key per class, the same keys the
 // LiveView's `ConfirmSkips` hook reads, so a choice made on either screen holds
 // on the other. The client keeps only the key; the server-side sync is the
-// LiveView's own.
+// LiveView's own. The delete confirm has no such key: the workspace's never
+// did, and "can't be undone" is not a question to stop asking.
 
 import type { KeyValueStore } from "../storage/last_user.ts";
 import type { TreeWrite } from "./adapter.ts";
@@ -19,13 +20,21 @@ import type { TreeModel } from "./model.ts";
 import { ancestors, isBranch, subtreeIds } from "./model.ts";
 import { wouldMoveFlipAncestors } from "./ops.ts";
 
-export type ConfirmClass = "cascade-complete" | "completion-flip" | "cascade-sort";
+export type ConfirmClass = "cascade-complete" | "completion-flip" | "cascade-sort" | "delete";
 
 export const CONFIRM_CLASSES: readonly ConfirmClass[] = [
   "cascade-complete",
   "completion-flip",
   "cascade-sort",
+  "delete",
 ];
+
+/** The classes with a "don't show this again" box. */
+export type SkippableClass = Exclude<ConfirmClass, "delete">;
+
+export function skippable(confirmClass: ConfirmClass): confirmClass is SkippableClass {
+  return confirmClass !== "delete";
+}
 
 export interface Confirm {
   readonly class: ConfirmClass;
@@ -33,13 +42,18 @@ export interface Confirm {
   readonly body: string;
   /** The tasks a completion flip would change, for the list under the body. */
   readonly titles: readonly string[];
-  readonly checkboxLabel: string;
+  /** The "don't show this again" box's label, or `null` when the class has no box. */
+  readonly checkboxLabel: string | null;
+  /** The yes control's label — a verb (guardrails §4.1). */
+  readonly confirmLabel: string;
+  /** The yes destroys something: the control is red, and never the default. */
+  readonly danger: boolean;
 }
 
 /** More descendant branches than this and "Make descendants inherit" asks first. */
 export const CASCADE_SORT_THRESHOLD = 10;
 
-const CHECKBOX_LABEL: Record<ConfirmClass, string> = {
+const CHECKBOX_LABEL: Record<SkippableClass, string> = {
   "cascade-complete": "Don't show this again for branch completion changes",
   "completion-flip": "Don't show this again for completion changes",
   "cascade-sort": "Don't show this again for large branch reorgs",
@@ -76,6 +90,9 @@ export function confirmFor(model: TreeModel, write: TreeWrite): Confirm | null {
     case "cascadeSort":
       return cascadeSortConfirm(model, write.id);
 
+    case "delete":
+      return deleteConfirm(model, write.id);
+
     default:
       return null;
   }
@@ -94,6 +111,8 @@ function cascadeCompleteConfirm(model: TreeModel, id: number, done: boolean): Co
       : `Reopen "${record.title}" and all its subtasks?`,
     titles: [],
     checkboxLabel: CHECKBOX_LABEL["cascade-complete"],
+    confirmLabel: "Proceed",
+    danger: false,
   };
 }
 
@@ -119,6 +138,8 @@ function completionFlipConfirm(
     body,
     titles: flips.map((id) => model.tasks[id]?.title ?? "").filter((title) => title !== ""),
     checkboxLabel: CHECKBOX_LABEL["completion-flip"],
+    confirmLabel: "Proceed",
+    danger: false,
   };
 }
 
@@ -141,6 +162,25 @@ function cascadeSortConfirm(model: TreeModel, id: number): Confirm | null {
       `follow this branch from now on; reversible only via Undo (Arc 5).`,
     titles: [],
     checkboxLabel: CHECKBOX_LABEL["cascade-sort"],
+    confirmLabel: "Proceed",
+    danger: false,
+  };
+}
+
+// `delete_task_confirm/1`: a delete takes the subtask tree with it. The copy is
+// the workspace's, word for word. A task the model no longer holds asks
+// nothing; the adapter sends nothing for it either.
+function deleteConfirm(model: TreeModel, id: number): Confirm | null {
+  const record = model.tasks[id];
+  if (record === undefined) return null;
+  return {
+    class: "delete",
+    title: "Delete task",
+    body: `Delete "${record.title}" and all its subtasks? This can't be undone.`,
+    titles: [],
+    checkboxLabel: null,
+    confirmLabel: "Delete",
+    danger: true,
   };
 }
 
@@ -149,7 +189,7 @@ function cascadeSortConfirm(model: TreeModel, id: number): Confirm | null {
 const SKIP_NAMESPACE = "doit:confirm-skip";
 const SKIP_VERSION = "1";
 
-export function skipKey(confirmClass: ConfirmClass): string {
+export function skipKey(confirmClass: SkippableClass): string {
   return `${SKIP_NAMESPACE}:${confirmClass}`;
 }
 
@@ -163,7 +203,9 @@ export function ensureSkipVersion(store: KeyValueStore | null): void {
   try {
     const sentinel = `${SKIP_NAMESPACE}:_v`;
     if (store.getItem(sentinel) === SKIP_VERSION) return;
-    for (const confirmClass of CONFIRM_CLASSES) store.removeItem(skipKey(confirmClass));
+    for (const confirmClass of CONFIRM_CLASSES) {
+      if (skippable(confirmClass)) store.removeItem(skipKey(confirmClass));
+    }
     store.setItem(sentinel, SKIP_VERSION);
   } catch {
     // Blocked storage: every confirm asks, which is the safe default.
@@ -171,7 +213,7 @@ export function ensureSkipVersion(store: KeyValueStore | null): void {
 }
 
 export function suppressed(store: KeyValueStore | null, confirmClass: ConfirmClass): boolean {
-  if (store === null) return false;
+  if (store === null || !skippable(confirmClass)) return false;
   try {
     return store.getItem(skipKey(confirmClass)) === "1";
   } catch {
@@ -180,7 +222,7 @@ export function suppressed(store: KeyValueStore | null, confirmClass: ConfirmCla
 }
 
 export function suppress(store: KeyValueStore | null, confirmClass: ConfirmClass): void {
-  if (store === null) return;
+  if (store === null || !skippable(confirmClass)) return;
   try {
     store.setItem(skipKey(confirmClass), "1");
   } catch {
@@ -197,5 +239,7 @@ export function dialogIdFor(confirmClass: ConfirmClass): string {
       return "move-flip-confirm";
     case "cascade-sort":
       return "cascade-sort-confirm";
+    case "delete":
+      return "delete-confirm";
   }
 }

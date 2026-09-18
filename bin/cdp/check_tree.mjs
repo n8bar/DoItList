@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // The tree harness (m04.02 items 7.3, 7.4): drive a REAL browser through the
 // client's own tree at `/app/initiatives/:id` and report PASS/FAIL for add,
-// edit, completion, the cascade confirm, delete, undo and redo (7.3), then
+// edit, completion, the cascade confirm, the delete confirm and delete, undo
+// and redo (7.3, 7.6), then
 // reorder, reparent, the forbidden drop, the root and tail zones, the
 // move-flip confirm and sort (7.4). Drags are real mouse gestures over the
 // row handles — press, glide past the threshold, release.
@@ -314,8 +315,9 @@ export async function checkCascadeConfirmCancel(ctx) {
 }
 
 /**
- * Delete from the Details pane: the row is gone at once. The client asks no
- * question of its own today; if one ever opens, it is answered and said.
+ * Delete from the Details pane asks first (item 7.6, §6.5): the delete confirm
+ * opens at once with nothing sent; Cancel leaves the tree as it was; asked
+ * again, Delete takes the row away before the reply.
  */
 export async function checkDelete(ctx) {
   const { session } = ctx;
@@ -327,28 +329,47 @@ export async function checkDelete(ctx) {
     what: "the Delete button",
   });
 
-  await armStopwatch(session, "click", `return __tree.rowEl(${childId}) === null;`);
+  const confirmOpen = `
+    const dialog = document.getElementById("delete-confirm");
+    return dialog !== null && dialog.open ? { title: dialog.querySelector("h2")?.textContent.trim() } : false;
+  `;
+  const before = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
+  await armStopwatch(session, "click", confirmOpen, { transient: true });
   await clickElement(session, "#delete-task-btn");
+  const asked = await readStopwatch(session, "the delete confirm", { expectReply: false });
+  if (asked.ackMs > ACK_BUDGET_MS) throw new Error(`the confirm took ${asked.ackMs}ms to open`);
+  if (asked.detail.title !== "Delete task") throw new Error(`the confirm is titled "${asked.detail.title}"`);
+  const noBox = await evaluate(session, `return document.getElementById("delete-confirm-dont-show") === null;`);
+  if (!noBox) throw new Error('the delete confirm offers "don\'t show this again"; the workspace\'s does not');
 
-  // A confirm, if the client opens one, is the acknowledgement.
-  const asked = await waitFor(
-    session,
-    `
-    const dialog = document.querySelector("dialog[open]");
-    if (dialog !== null) return { dialog: dialog.id };
-    return __sw.at !== null ? { dialog: null } : null;
-  `,
-    { timeoutMs: 5_000, everyMs: 10, what: "the row to go, or a confirm to open" },
-  );
-  if (asked.dialog !== null) {
-    await clickElement(session, `#${asked.dialog} button[id$="-confirm"]`);
-  }
+  const held = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
+  if (held.sent !== before.sent) throw new Error("an operation was sent while the question was open");
+  if (held.tree !== before.tree) throw new Error("the tree changed while the question was open");
 
+  await clickElement(session, "#delete-confirm-cancel");
+  await waitFor(session, `return document.getElementById("delete-confirm")?.open === false;`, {
+    timeoutMs: 5_000,
+    what: "the confirm to close",
+  });
+  // Nothing was queued, so there is nothing to wait for — but give a wrongly
+  // sent operation the time it would need to show up.
+  await new Promise((done) => setTimeout(done, LINK_LATENCY_MS));
+  const after = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
+  if (after.sent !== before.sent) throw new Error("Cancel sent an operation");
+  if (after.tree !== before.tree) throw new Error("Cancel changed the tree");
+  const stillThere = await evaluate(session, `return __tree.rowEl(${childId}) !== null;`);
+  if (!stillThere) throw new Error("Cancel took the row away");
+
+  // Asked again; this time Delete. The row leaves on the click, not the reply.
+  await armStopwatch(session, "click", confirmOpen, { transient: true });
+  await clickElement(session, "#delete-task-btn");
+  const askedAgain = await readStopwatch(session, "the delete confirm, again", { expectReply: false });
+  if (askedAgain.ackMs > ACK_BUDGET_MS) throw new Error(`the second confirm took ${askedAgain.ackMs}ms to open`);
+
+  await armStopwatch(session, "click", `return __tree.rowEl(${childId}) === null;`);
+  await clickElement(session, "#delete-confirm-confirm");
   const ack = await readStopwatch(session, "the row to go");
-  if (asked.dialog === null) assertAcknowledged(ack, "the deleted row");
-  else if (ack.replyMs !== null && ack.at > ack.replyAt) {
-    throw new Error("the row waited for the reply after the confirm");
-  }
+  assertAcknowledged(ack, "the deleted row");
 
   const settled = await settle(session);
   const gone = await evaluate(session, `return __tree.rowEl(${childId}) === null;`);
@@ -356,8 +377,7 @@ export async function checkDelete(ctx) {
   const paneOpen = await evaluate(session, `return document.getElementById("task-field-title") !== null;`);
   if (paneOpen) throw new Error("the Details pane is still open on a deleted task");
 
-  const via = asked.dialog === null ? "no confirm asked" : `confirmed in #${asked.dialog}`;
-  return `${via}; row gone ${ack.ackMs}ms after the click, ${ack.replyMs - ack.ackMs}ms before the reply; settled with ${settled.note}`;
+  return `confirm open ${asked.ackMs}ms after the click, nothing sent, Cancel left the tree as it was; asked again, row gone ${ack.ackMs}ms after Delete, ${ack.replyMs - ack.ackMs}ms before the reply; settled with ${settled.note}`;
 }
 
 /**
@@ -738,7 +758,7 @@ const CHECKS = [
   ["edit a title in the pane", checkEditTitle],
   ["complete a leaf, parent rolls up", checkCompleteLeaf],
   ["cascade confirm, Cancel", checkCascadeConfirmCancel],
-  ["delete", checkDelete],
+  ["delete confirm, Cancel then Delete", checkDelete],
   ["undo", checkUndo],
   ["redo", checkRedo],
   ["reorder by drag, before band", checkReorder],
@@ -1285,8 +1305,8 @@ async function acquireSession() {
 
 /**
  * The operator's "don't show this again" choices, set aside for the run:
- * `skipKey/1` in `tree/confirm_model.ts`, one per confirm class (a `.ts` this
- * Node cannot import).
+ * `skipKey/1` in `tree/confirm_model.ts`, one per skippable confirm class (a
+ * `.ts` this Node cannot import). The delete confirm has no key.
  */
 const SKIP_KEYS = ["cascade-complete", "completion-flip", "cascade-sort"].map(
   (confirmClass) => `doit:confirm-skip:${confirmClass}`,

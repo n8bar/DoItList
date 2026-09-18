@@ -38,7 +38,7 @@ import { fromSnapshot } from "../tree/model.ts";
 import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
 import { createAdapter, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
-import { CONFIRM_CLASSES, dialogIdFor } from "../tree/confirm_model.ts";
+import { CONFIRM_CLASSES, dialogIdFor, skippable } from "../tree/confirm_model.ts";
 import type { EditRejection, TreeIntent } from "../tree/context.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { TaskDetails } from "../tree/details.tsx";
@@ -452,7 +452,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
 
   const saving = useMemo(() => savingIds(pending), [pending]);
   const recomputing = useMemo(() => recomputingIds(pending), [pending]);
-  // The three confirms (item 5.1.4) sit between an intent and the adapter:
+  // The confirms (items 5.1.4, 7.6) sit between an intent and the adapter:
   // asked from the model, client-side, before anything is sent (§6.5).
   const storage = useMemo(browserKeyValueStore, []);
   const confirm = useConfirm({ model, submit, storage });
@@ -552,7 +552,9 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
       />
       <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
       {/* One dialog per confirm class, under the id the LiveView's modal had.
-          Only Proceed submits; Escape, the backdrop and Cancel drop the write. */}
+          Only the yes control submits; Escape, the backdrop and Cancel drop
+          the write. The delete confirm has no "don't show this again", like
+          the workspace's. */}
       {CONFIRM_CLASSES.map((confirmClass) => {
         const shown = confirm.open !== null && confirm.open.confirm.class === confirmClass;
         const current = shown ? confirm.open?.confirm : undefined;
@@ -563,7 +565,8 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
             id={dialogId}
             open={shown}
             title={current?.title ?? ""}
-            confirmLabel="Proceed"
+            confirmLabel={current?.confirmLabel ?? "Proceed"}
+            danger={current?.danger ?? false}
             onConfirm={confirm.proceed}
             onCancel={confirm.cancel}
           >
@@ -577,16 +580,18 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
                 ))}
               </ul>
             )}
-            <label className="mt-4 flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:min-h-9">
-              <input
-                type="checkbox"
-                id={`${dialogId}-dont-show`}
-                checked={shown && confirm.dontAsk}
-                className="size-5 flex-none rounded border-zinc-300 text-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:border-zinc-600 dark:focus-visible:ring-emerald-400"
-                onChange={(event) => confirm.setDontAsk(event.target.checked)}
-              />
-              {current?.checkboxLabel ?? ""}
-            </label>
+            {skippable(confirmClass) && (
+              <label className="mt-4 flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:min-h-9">
+                <input
+                  type="checkbox"
+                  id={`${dialogId}-dont-show`}
+                  checked={shown && confirm.dontAsk}
+                  className="size-5 flex-none rounded border-zinc-300 text-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:border-zinc-600 dark:focus-visible:ring-emerald-400"
+                  onChange={(event) => confirm.setDontAsk(event.target.checked)}
+                />
+                {current?.checkboxLabel ?? ""}
+              </label>
+            )}
           </ConfirmDialog>
         );
       })}

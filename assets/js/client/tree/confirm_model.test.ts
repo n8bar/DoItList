@@ -9,6 +9,7 @@ import {
   dialogIdFor,
   ensureSkipVersion,
   skipKey,
+  skippable,
   suppress,
   suppressed,
 } from "./confirm_model.ts";
@@ -138,12 +139,41 @@ describe("confirmFor: cascade-sort", () => {
   });
 });
 
+describe("confirmFor: delete", () => {
+  it("asks before every delete, leaf or branch, with the workspace's copy and a red Delete", () => {
+    const branch = confirmFor(base(), { kind: "delete", id: 10 });
+    assert.equal(branch?.class, "delete");
+    assert.equal(branch?.title, "Delete task");
+    assert.equal(branch?.body, 'Delete "Cabinets" and all its subtasks? This can\'t be undone.');
+    assert.equal(branch?.confirmLabel, "Delete");
+    assert.equal(branch?.danger, true);
+    assert.deepEqual(branch?.titles, []);
+
+    const leaf = confirmFor(base(), { kind: "delete", id: 30 });
+    assert.equal(leaf?.body, 'Delete "Trim" and all its subtasks? This can\'t be undone.');
+  });
+
+  it("has no \"don't show this again\", and a stray key never silences it", () => {
+    assert.equal(confirmFor(base(), { kind: "delete", id: 10 })?.checkboxLabel, null);
+    assert.equal(skippable("delete"), false);
+    assert.equal(skippable("cascade-sort"), true);
+
+    const store = memoryStore({ "doit:confirm-skip:delete": "1" });
+    assert.equal(suppressed(store, "delete"), false);
+    suppress(store, "delete");
+    assert.deepEqual([...store.data.keys()], ["doit:confirm-skip:delete"]);
+  });
+
+  it("a task the model no longer holds asks nothing", () => {
+    assert.equal(confirmFor(base(), { kind: "delete", id: 99 }), null);
+  });
+});
+
 describe("other writes", () => {
-  it("edits, steps, sort changes, and deletes never open one of these", () => {
+  it("edits, steps, and sort changes never open one of these", () => {
     assert.equal(confirmFor(base(), { kind: "edit", id: 11, fields: { title: "x" } }), null);
     assert.equal(confirmFor(base(), { kind: "step", id: 11, field: "priority", back: false }), null);
     assert.equal(confirmFor(base(), { kind: "setSort", id: 10, mode: "alphabetical", reverse: false }), null);
-    assert.equal(confirmFor(base(), { kind: "delete", id: 10 }), null);
   });
 });
 
@@ -191,5 +221,6 @@ describe("don't show this again", () => {
     assert.equal(dialogIdFor("cascade-complete"), "cascade-confirm");
     assert.equal(dialogIdFor("completion-flip"), "move-flip-confirm");
     assert.equal(dialogIdFor("cascade-sort"), "cascade-sort-confirm");
+    assert.equal(dialogIdFor("delete"), "delete-confirm");
   });
 });
