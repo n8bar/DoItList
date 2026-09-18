@@ -2268,6 +2268,14 @@ defmodule DoIt.Tasks do
     end
   end
 
+  @doc """
+  Every live descendant of `task_id` that has children of its own — the set
+  `cascade_sort/2` re-sorts — as full task structs ordered by id.
+  """
+  def list_descendant_branches(task_id) when is_integer(task_id) do
+    task_id |> descendant_branches() |> Enum.sort_by(& &1.id)
+  end
+
   @doc "Count branch descendants of `task_id` (descendants that themselves have children)."
   def count_descendant_branches(task_id) when is_integer(task_id) do
     length(descendant_branches(task_id))

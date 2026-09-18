@@ -64,6 +64,7 @@ defmodule DoItWeb.Api.Operations do
   | `update` | `task`         | `parent_id`/`parent_lid` and/or `position`/`reorder` | `Tasks.move_task/3`                | edit              |
   | `update` | `task`         | op-level `ids: [..]` + `parent_id`/`parent_lid`, `position` — moves the list as one block; result carries `records` | `Tasks.move_tasks/3` | edit (every task) |
   | `update` | `task`         | `co_assignee_ids: [..]`                         | `Tasks.add/remove/reorder_co_assignee(s)` | edit            |
+  | `update` | `task`         | `sort_mode`/`sort_reverse` and/or `cascade_sort: true` — sets how the branch orders its children (`null` inherits), then makes every descendant branch inherit; result carries `records` | `Tasks.set_sort/4` / `cascade_sort/2` | edit |
   | `remove` | `task`         | —                                              | `Tasks.delete_task/2` (soft, undoable)  | edit              |
   | `add`    | `initiative`   | `name`, `subtitle`, `progress_calc`, `index_style`, … | `Initiatives.create_initiative/2`  | (any authed user) |
   | `update` | `initiative`   | content: `name`/`subtitle`/`progress_calc`/`index_style`/… | `Initiatives.update_initiative/2` + `update_subtitle/2` | edit |
@@ -285,7 +286,7 @@ defmodule DoItWeb.Api.Operations do
     {"add", "task"} =>
       ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done numbered_title),
     {"update", "task"} =>
-      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version numbered_title),
+      ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version numbered_title sort_mode sort_reverse cascade_sort),
     {"remove", "task"} => ~w(expected_version),
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
     {"update", "initiative"} =>
@@ -301,6 +302,9 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target),
     {"add", "history"} => ~w(initiative_id action)
   }
+
+  # The sort concern's keys (m04.02 5.1.5); see sort_task_op/3.
+  @sort_data_keys ~w(sort_mode sort_reverse cascade_sort)
 
   # --- doc generation (m03.05 worklist 2) ------------------------------------
   #
@@ -1096,15 +1100,16 @@ defmodule DoItWeb.Api.Operations do
     structural? = Enum.any?(~w(parent_id parent_lid position reorder), &Map.has_key?(data, &1))
     done? = Map.has_key?(data, "done")
     co? = Map.has_key?(data, "co_assignee_ids")
+    sort? = Enum.any?(@sort_data_keys, &Map.has_key?(data, &1))
     field_keys = ~w(title description priority assignee_id manual_progress)
     fields? = Enum.any?(field_keys, &Map.has_key?(data, &1))
 
-    case Enum.count([structural?, done?, co?, fields?], & &1) do
+    case Enum.count([structural?, done?, co?, sort?, fields?], & &1) do
       0 ->
         {:error,
          err(
            :unprocessable_entity,
-           "A task update must carry at least one of: field edits, done, a move, or co_assignee_ids.",
+           "A task update must carry at least one of: field edits, done, a move, co_assignee_ids, or a sort.",
            422
          )}
 
@@ -1113,6 +1118,7 @@ defmodule DoItWeb.Api.Operations do
           structural? -> move_task_op(user, task, data, changes)
           done? -> complete_task_op(user, task, data)
           co? -> co_assignee_op(user, task, data)
+          sort? -> sort_task_op(user, task, data)
           fields? -> update_task_fields(user, task, data)
         end
 
@@ -1120,10 +1126,125 @@ defmodule DoItWeb.Api.Operations do
         {:error,
          err(
            :unprocessable_entity,
-           "A task update addresses one concern at a time (field edits, done, a move, or co_assignee_ids) — split them into separate ops.",
+           "A task update addresses one concern at a time (field edits, done, a move, co_assignee_ids, or a sort) — split them into separate ops.",
            422
          )}
     end
+  end
+
+  # Sort (m04.02 5.1.5): `sort_mode` / `sort_reverse` set how this branch orders
+  # its children through Tasks.set_sort/4 — a missing key keeps the current
+  # value, and `sort_mode: null` means inherit. `cascade_sort: true` then makes
+  # every descendant branch inherit through Tasks.cascade_sort/2. Both in one op
+  # is set first, then cascade. The result's `records` carry the target and
+  # every branch the cascade re-sorted, each with its sort pair, so the caller
+  # can show the new selection without a read.
+  defp sort_task_op(user, task, data) do
+    with {:ok, mode} <- fetch_sort_mode(data, task),
+         {:ok, reverse} <- fetch_sort_reverse(data, task),
+         {:ok, cascade?} <- fetch_cascade_sort(data),
+         {:ok, task} <- maybe_set_sort(user, task, data, mode, reverse),
+         {:ok, branches} <- maybe_cascade_sort(user, task, cascade?) do
+      records = Enum.map([Tasks.get_task!(task.id) | branches], &sort_task_result/1)
+
+      ok(nil, task.id, "task", %{id: task.id, type: "task", records: records})
+    end
+  end
+
+  defp fetch_sort_mode(data, task) do
+    case Map.fetch(data, "sort_mode") do
+      :error ->
+        {:ok, task.sort_mode}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, mode} when is_binary(mode) ->
+        if mode in Task.sort_modes() do
+          {:ok, mode}
+        else
+          {:error, sort_mode_error(mode)}
+        end
+
+      {:ok, other} ->
+        {:error, sort_mode_error(other)}
+    end
+  end
+
+  defp sort_mode_error(given) do
+    err(
+      :unprocessable_entity,
+      "sort_mode must be one of #{Enum.join(Task.sort_modes(), ", ")}, or null to inherit (got #{inspect(given)}).",
+      422,
+      "sort_mode"
+    )
+  end
+
+  defp fetch_sort_reverse(data, task) do
+    case Map.fetch(data, "sort_reverse") do
+      :error ->
+        {:ok, task.sort_reverse}
+
+      {:ok, flag} when is_boolean(flag) ->
+        {:ok, flag}
+
+      {:ok, other} ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "sort_reverse must be true or false (got #{inspect(other)}).",
+           422,
+           "sort_reverse"
+         )}
+    end
+  end
+
+  defp fetch_cascade_sort(data) do
+    case Map.fetch(data, "cascade_sort") do
+      :error ->
+        {:ok, false}
+
+      {:ok, flag} when is_boolean(flag) ->
+        {:ok, flag}
+
+      {:ok, other} ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "cascade_sort must be true or false (got #{inspect(other)}).",
+           422,
+           "cascade_sort"
+         )}
+    end
+  end
+
+  defp maybe_set_sort(user, task, data, mode, reverse) do
+    if Map.has_key?(data, "sort_mode") or Map.has_key?(data, "sort_reverse") do
+      case Tasks.set_sort(task, user, mode, reverse) do
+        {:ok, updated} -> {:ok, updated}
+        {:error, reason} -> {:error, context_error(reason)}
+      end
+    else
+      {:ok, task}
+    end
+  end
+
+  # The branches cascade_sort/2 re-sorted are every live descendant that has
+  # children — the same set the context walks — reloaded after the write.
+  defp maybe_cascade_sort(_user, _task, false), do: {:ok, []}
+
+  defp maybe_cascade_sort(user, task, true) do
+    case Tasks.cascade_sort(task, user) do
+      {:ok, %{root_id: root_id}} -> {:ok, Tasks.list_descendant_branches(root_id)}
+      {:error, reason} -> {:error, context_error(reason)}
+    end
+  end
+
+  # task_result/1 plus the branch's own sort pair — what the op just wrote.
+  defp sort_task_result(%Task{} = task) do
+    task
+    |> task_result()
+    |> Map.merge(%{sort_mode: task.sort_mode, sort_reverse: task.sort_reverse})
   end
 
   defp update_task_fields(user, task, data) do
