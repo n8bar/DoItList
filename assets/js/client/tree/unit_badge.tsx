@@ -34,11 +34,9 @@ export function UnitBadge({ calc, total, done, id, doneId, className }: UnitBadg
         .join(" ")}
     >
       <BotanicalIcon kind={badgeIcon(calc)} className={badgeIconClass(calc)} />
-      {total !== 1 && (
-        <span data-unit-plural className="-ml-0.5 text-[1.2em] font-normal leading-none">
-          s
-        </span>
-      )}
+      <span data-unit-plural className="-ml-0.5 text-[1.2em] font-normal leading-none">
+        {total !== 1 ? "s:" : ":"}
+      </span>
       {done === undefined ? (
         total
       ) : (
