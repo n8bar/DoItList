@@ -21,10 +21,10 @@
 // on mount and unsubscribes on unmount, while the connection object itself
 // outlives both (guardrail §7.4).
 
+import type { RefObject } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InitiativeTree, Member } from "../api/types.ts";
-import { COUNT_MIN_WIDTH, reservedHeight } from "../frame/layout_budget.ts";
 import { Pane } from "../frame/pane.tsx";
 import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
@@ -33,7 +33,7 @@ import { onlineIds, selectionsOf } from "../live/presence_model.ts";
 import type { DomainState } from "../state/domain.ts";
 import { members as membersOf, presence as presenceOf, putMembers, putTree } from "../state/domain.ts";
 import type { PreferencesState } from "../state/preferences.ts";
-import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
+import type { InitiativeHeader as HeaderRecord, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
 import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
 import { createAdapter, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
@@ -43,7 +43,7 @@ import type { EditRejection, TreeIntent } from "../tree/context.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { TaskDetails } from "../tree/details.tsx";
 import type { OptimisticState } from "../tree/optimistic.ts";
-import { alias, begin as beginFlight, idle, reject, succeed } from "../tree/optimistic.ts";
+import { alias, begin as beginFlight, idle, reject, shown as shownModel, succeed } from "../tree/optimistic.ts";
 import type { PendingMap } from "../tree/pending_model.ts";
 import {
   NO_PENDING,
@@ -72,7 +72,9 @@ import { browserKeyValueStore } from "../storage/last_user.ts";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
 import { ConfirmDialog } from "../ui/dialog.tsx";
 import { InlineError } from "../ui/feedback.tsx";
-import { Heading } from "./chrome.tsx";
+import { InitiativeHeader } from "./initiative_header.tsx";
+import type { HeaderFields } from "./initiative_header_model.ts";
+import { adoptHeaderReply, headerCounts, headerEdit, revertHeader } from "./initiative_header_model.ts";
 import { useResource } from "./use_resource.ts";
 
 export function InitiativeScreen({ id }: { id: number }) {
@@ -141,50 +143,35 @@ export function InitiativeScreen({ id }: { id: number }) {
   });
 
   // The server's copy always wins; the cache only fills the gap before it lands.
-  const shown: InitiativeHeader | InitiativeSnapshot | null = model?.header ?? cached;
+  const shown: HeaderRecord | InitiativeSnapshot | null = model?.header ?? cached;
   const fromCache = model === undefined && cached !== null;
+
+  // What the header can do once there is a tree — New List and the
+  // click-to-edit writes — is the tree section's, which owns the writes'
+  // truth; it hands them up here, where the header is drawn from the first
+  // paint on (a cached header has none of them).
+  const headerActions = useRef<HeaderActions | null>(null);
+  const counts = useMemo(() => (model === undefined ? null : headerCounts(model)), [model]);
+  const canEdit = model !== undefined && permissionsFor(model.header.role).canEdit;
 
   return (
     <section aria-labelledby={ROUTE_HEADING_ID}>
       {/* The header's space is held open whether or not its content exists. */}
-      <div
-        id="initiative-header"
-        className="flex flex-col justify-center"
-        style={{ minHeight: reservedHeight("initiative-header") }}
-      >
-        <Heading>{shown?.name ?? "Initiative"}</Heading>
-
-        {shown === null ? (
-          // Sized line for line against the real header below, so the box does
-          // not change height when the read lands (item 4.6).
-          <div id="initiative-header-skeleton" role="status" aria-busy="true">
-            <span className="sr-only">Loading…</span>
-            <div
-              aria-hidden="true"
-              className="mt-1 h-5 w-48 animate-pulse rounded bg-zinc-100 motion-reduce:animate-none dark:bg-zinc-800"
-            />
-            <div
-              aria-hidden="true"
-              className="mt-2 h-5 w-32 animate-pulse rounded bg-zinc-100 motion-reduce:animate-none dark:bg-zinc-800"
-            />
-          </div>
-        ) : (
-          <>
-            <p className="mt-1 truncate text-sm text-zinc-500 dark:text-zinc-400">
-              {shown.subtitle ?? " "}
-            </p>
-            <p id="initiative-progress" className="mt-2 text-sm text-zinc-600 dark:text-zinc-300">
-              <span
-                className="inline-block text-right font-medium tabular-nums text-zinc-900 dark:text-zinc-100"
-                style={{ minWidth: COUNT_MIN_WIDTH }}
-              >
-                {shown.progress}%
-              </span>{" "}
-              across {shown.unit_count} {shown.unit_count === 1 ? "unit" : "units"}
-            </p>
-          </>
-        )}
-      </div>
+      <InitiativeHeader
+        name={shown?.name ?? "Initiative"}
+        subtitle={shown?.subtitle ?? null}
+        progress={shown?.progress ?? 0}
+        counts={counts}
+        calc={model?.progressCalc ?? null}
+        canEdit={canEdit}
+        loading={shown === null}
+        {...(model === undefined
+          ? {}
+          : {
+              onAddRoot: () => headerActions.current?.addRoot(),
+              onCommit: (fields: HeaderFields) => headerActions.current?.commitHeader(fields),
+            })}
+      />
 
       {fromCache && (
         <p id="initiative-cached" className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
@@ -201,7 +188,7 @@ export function InitiativeScreen({ id }: { id: number }) {
         // and everything under it do not jump when the read lands (§1.1).
         <Skeleton region="initiative-tree" id="initiative-tree-skeleton" />
       ) : (
-        <TreeSection id={id} model={model} />
+        <TreeSection id={id} model={model} actions={headerActions} />
       )}
 
       <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
@@ -218,6 +205,12 @@ export function InitiativeScreen({ id }: { id: number }) {
 }
 
 const REJECTED_TITLE = "That change was not saved";
+
+/** What the header asks of the tree section (item 7.10). */
+interface HeaderActions {
+  addRoot(): void;
+  commitHeader(fields: HeaderFields): void;
+}
 
 /**
  * What is true about writes in flight and nowhere else (item 5.2.1): which rows
@@ -242,7 +235,15 @@ const NOTHING_IN_FLIGHT: InFlightState = {
 };
 
 /** The tree, and everything that is true only once there is a tree. */
-function TreeSection({ id, model }: { id: number; model: TreeModel }) {
+function TreeSection({
+  id,
+  model,
+  actions,
+}: {
+  id: number;
+  model: TreeModel;
+  actions: RefObject<HeaderActions | null>;
+}) {
   const { api, stores, connection, escalate } = useServices();
   const rows = useStoreValue(
     stores.preferences,
@@ -464,6 +465,50 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   const onIntent = useCallback((intent: TreeIntent) => request(intent), [request]);
   const onAdd = useCallback((added: AddRequest) => request({ kind: "add", request: added }), [request]);
 
+  // A header edit (7.10.1, 7.10.3): predicted on the header at once and sent
+  // as one `update initiative`, outside the tree's queue — it touches no row.
+  // While task writes are in flight the prediction goes on canonical, so the
+  // next reply's rebase keeps it; a refusal puts the field back and says so.
+  const patchHeader = useCallback(
+    (patch: (header: HeaderRecord) => HeaderRecord): void => {
+      const state = flights.current;
+      if (state !== null && state.flights.length > 0) {
+        const canonical = { ...state.canonical, header: patch(state.canonical.header) };
+        flights.current = { canonical, flights: state.flights };
+        putTree(stores.domain, shownModel(flights.current));
+        return;
+      }
+      const current = stores.domain.get().trees[id];
+      if (current !== undefined) putTree(stores.domain, { ...current, header: patch(current.header) });
+    },
+    [id, stores.domain],
+  );
+  const commitHeader = useCallback(
+    (fields: HeaderFields): void => {
+      const current = stores.domain.get().trees[id];
+      if (current === undefined) return;
+      const edit = headerEdit(current.header, fields);
+      if (edit === null) return;
+      const prior = current.header;
+      patchHeader(() => edit.next);
+      void api
+        .post<unknown>("/operations", edit.request, { "idempotency-key": crypto.randomUUID() })
+        .then((result) => {
+          if (result.ok) {
+            patchHeader((header) => adoptHeaderReply(header, result.data));
+            return;
+          }
+          patchHeader((header) => revertHeader(header, prior, fields));
+          pushNotice(stores.ui, {
+            kind: "error",
+            title: REJECTED_TITLE,
+            message: rejectionMessage(result.error),
+          });
+        });
+    },
+    [api, id, patchHeader, stores],
+  );
+
   // Read once, off the address bar the screen arrived on.
   const [deepLinkTaskId] = useState(() => taskParam(window.location.search));
 
@@ -500,6 +545,14 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
       });
     }, [stores.ui]),
   });
+
+  const { onOpenAdd } = tree.ctx;
+  useEffect(() => {
+    actions.current = { addRoot: () => onOpenAdd({ kind: "root" }), commitHeader };
+    return () => {
+      actions.current = null;
+    };
+  }, [actions, commitHeader, onOpenAdd]);
 
   // Kept in step without navigating: same history entry, same key, same scroll —
   // only the one parameter we own changes, so a copied link reopens what the

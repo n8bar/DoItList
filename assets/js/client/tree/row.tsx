@@ -20,18 +20,16 @@ import { childIdsOf } from "./model.ts";
 import { doneUnitCount, unitCount } from "./progress.ts";
 import { afterPaint } from "./after_paint.ts";
 import { BotanicalIcon, Chevron } from "./botanical.tsx";
+import { UnitBadge } from "./unit_badge.tsx";
 import type { RefPart, RowUser } from "./row_model.ts";
 import {
   REF_DEAD_CLASS,
   REF_LINK_CLASS,
   assigneeView,
   avatarStyle,
-  badgeIcon,
-  badgeIconClass,
   badgeTitle,
   botanicalColor,
   botanicalKind,
-  branchUnitTitle,
   chipOnline,
   initials,
   progressValue,
@@ -241,29 +239,13 @@ export function Row({ ctx, id, depth, children }: RowProps) {
             but the title is left on the title line's edge. A tiny "s" after
             the icon says plural when the count is not 1 (7.8.7). */}
         {branch && display.count && (
-          <span
-            data-unit-count
-            title={branchUnitTitle(ctx.progressCalc)}
-            className="flex-none inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
-          >
-            <BotanicalIcon
-              kind={badgeIcon(ctx.progressCalc)}
-              className={badgeIconClass(ctx.progressCalc)}
-            />
-            {unitCount(ctx.model, id) !== 1 && (
-              <span data-unit-plural className="-ml-0.5 text-[1.2em] leading-none">
-                s
-              </span>
-            )}
-            {depth === 0 ? (
-              <BranchCount
-                done={doneUnitCount(ctx.model, id)}
-                total={unitCount(ctx.model, id)}
-              />
-            ) : (
-              unitCount(ctx.model, id)
-            )}
-          </span>
+          <UnitBadge
+            calc={ctx.progressCalc}
+            total={unitCount(ctx.model, id)}
+            // A top-level branch stacks its completed count above the total.
+            {...(depth === 0 ? { done: doneUnitCount(ctx.model, id) } : {})}
+            className="flex-none group-data-done/row:text-emerald-500"
+          />
         )}
 
         {/* The positional label. Empty under the "none" style = no element. */}
@@ -555,19 +537,5 @@ export function Row({ ctx, id, depth, children }: RowProps) {
 
       {children}
     </li>
-  );
-}
-
-/** A top-level branch stacks its completed count above the total, faded. */
-function BranchCount({ done, total }: { done: number; total: number }) {
-  return (
-    <span className="inline-flex flex-col items-center leading-none">
-      {done > 0 && done < total && (
-        <span data-done-count className="text-[0.7em] opacity-50">
-          {done}
-        </span>
-      )}
-      <span>{total}</span>
-    </span>
   );
 }

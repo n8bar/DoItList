@@ -259,11 +259,12 @@ export function Tree({
 
   return (
     <div className="relative">
-      {/* The workspace's New List control, same wording and same `data-add-root`
-          hook. Outside the scroll box, as the LiveView keeps it (it lives in
-          `initiative_header/1`): scrolling a deep tree sideways must not carry
-          the only way in off the screen with it. Without this control a tree
-          with no rows has no way in at all — N and S both need a selection. */}
+      {/* The workspace's New List control below lg, same wording and same
+          `data-add-root` hook; from lg up the header's title row carries it
+          (7.10.4), as `initiative_header/1` does. Outside the scroll box:
+          scrolling a deep tree sideways must not carry the only way in off
+          the screen with it. Without this control a tree with no rows has no
+          way in at all — N and S both need a selection. */}
       {ctx.permissions.canEdit && (
         <div className="mb-3 flex">
           <button
@@ -272,7 +273,7 @@ export function Tree({
             onClick={() => ctx.onOpenAdd(rootSlot)}
             aria-label="New list"
             title="New list"
-            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+            className="lg:hidden inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
           >
             <Icon name="plus" className="w-4 h-4" />
             <span>New List</span>

@@ -1464,7 +1464,8 @@ export async function checkThemes(ctx) {
  * paints the reach — the control's own box or an invisible pseudo-element).
  */
 const REACH_JS = `
-  const el = document.querySelector(SELECTOR);
+  const all = [...document.querySelectorAll(SELECTOR)];
+  const el = all.find((e) => e.getClientRects().length > 0) ?? all[0] ?? null;
   if (el === null) return { missing: true };
   el.scrollIntoView({ block: "center", inline: "center" });
   const r = el.getBoundingClientRect();

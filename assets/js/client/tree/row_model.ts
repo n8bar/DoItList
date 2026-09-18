@@ -13,7 +13,7 @@ import type { TaskRecord, TreeModel } from "./model.ts";
 import { childIdsOf } from "./model.ts";
 
 /** The row's type glyph. `botanical_kind/2`: tree at the top, branch, leaf. */
-export type BotanicalKind = "tree" | "branch" | "leaf";
+export type BotanicalKind = "grove" | "tree" | "branch" | "leaf";
 
 export function botanicalKind(model: TreeModel, id: number, depth: number): BotanicalKind {
   if (depth === 0) return "tree";

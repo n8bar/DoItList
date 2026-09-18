@@ -45,7 +45,7 @@ const BUDGET: Record<AsyncRegion, Reservation> = {
   // A card is a name line plus the progress bar under it, matching the real
   // card in `InitiativesScreen` — which renders `LIST_ROW_HEIGHT` too.
   "initiatives-list": { rows: 6, rowHeight: LIST_ROW_HEIGHT, label: "Loading…" },
-  // The heading, the subtitle line and the progress line, stacked.
+  // The title row, the subtitle line and the roll-up bar, stacked.
   "initiative-header": { rows: 1, rowHeight: 80, label: "Loading…" },
   // The tree under the header. A task row is a two-line row plus its progress
   // bar; six of them is a screenful, so the first paint holds open roughly what

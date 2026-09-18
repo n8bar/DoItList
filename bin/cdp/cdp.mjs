@@ -220,7 +220,10 @@ export async function clickElement(session, selector) {
   const hit = await evaluate(
     session,
     `
-    const el = document.querySelector(${JSON.stringify(selector)});
+    // The first match with a box: a control the layout draws once per
+    // breakpoint (New List, 7.10.4) matches twice, one of them hidden.
+    const all = [...document.querySelectorAll(${JSON.stringify(selector)})];
+    const el = all.find((e) => e.getClientRects().length > 0) ?? all[0] ?? null;
     if (!el) return { ok: false, why: "no element matches " + ${JSON.stringify(selector)} };
     el.scrollIntoView({ block: "center", inline: "center" });
     const r = el.getBoundingClientRect();
