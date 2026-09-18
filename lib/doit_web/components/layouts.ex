@@ -152,6 +152,7 @@ defmodule DoItWeb.Layouts do
               </details>
               <span class="h-5 w-px bg-zinc-300 dark:bg-zinc-700" aria-hidden="true"></span>
               <.theme_toggle variant={:group} current_user={@current_user} />
+              <.touch_switch id="touch-switch" />
             </div>
 
             <%!-- Bell sits immediately LEFT of the avatar at every breakpoint:
@@ -292,6 +293,10 @@ defmodule DoItWeb.Layouts do
                 <li class="flex items-center justify-between px-2 py-1.5">
                   <span class="text-zinc-600 dark:text-zinc-300">Theme</span>
                   <.theme_toggle variant={:group} current_user={@current_user} />
+                </li>
+                <li class="flex items-center justify-between px-2 py-1.5">
+                  <span class="text-zinc-600 dark:text-zinc-300">Touch layout</span>
+                  <.touch_switch id="mobile-touch-switch" />
                 </li>
                 <li>
                   <.link
@@ -1072,6 +1077,36 @@ defmodule DoItWeb.Layouts do
         <.icon name="hero-moon" class="w-4 h-4" />
       </button>
     </div>
+    """
+  end
+
+  @doc """
+  The touch layout switch (m04.02 item 7.8): 👆, a two-state switch beside the
+  theme toggle that gives the tree's completion box and chevron a 44×44 tap
+  (`app.css` `[data-touch]`). A DEVICE choice, held the way the theme is —
+  `phx:touch` in localStorage, `data-touch` on `<html>`, applied by the
+  first-paint script — never the account's and never pushed to the server.
+  The `TouchSwitch` hook in app.js reads the device state into `aria-checked`
+  (the server cannot know it), so the button is `phx-update="ignore"`.
+  """
+  attr :id, :string, required: true
+
+  def touch_switch(assigns) do
+    ~H"""
+    <button
+      type="button"
+      id={@id}
+      phx-hook="TouchSwitch"
+      phx-update="ignore"
+      data-touch-switch
+      role="switch"
+      aria-checked="false"
+      aria-label="Touch layout"
+      title="Touch layout: off"
+      class="btn btn-xs aria-checked:bg-emerald-600 aria-checked:border-emerald-600 aria-checked:text-white"
+    >
+      <span aria-hidden="true" class="text-base leading-none">👆</span>
+    </button>
     """
   end
 

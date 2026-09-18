@@ -5621,6 +5621,9 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             kind={badge_icon(@initiative.progress_calc)}
             class={badge_icon_class(@initiative.progress_calc)}
           />
+          <span :if={@unit_count != 1} data-unit-plural class="-ml-0.5 text-[1.2em] leading-none">
+            s
+          </span>
           <span class="inline-flex flex-col items-center leading-none">
             <span
               :if={@done_count > 0 && @done_count < @unit_count}
@@ -5784,6 +5787,52 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
              app.js, data-copy-index) writes the label to the clipboard; it's
              revealed on row hover / keyboard focus, and always shown on touch
              devices (no hover) so it stays tappable. --%>
+        <%!-- The unit-count badge, on the pill line between the handle and the
+             index label (7.8.6): with the chevron on the border line, nothing
+             but the title is left on the title line's edge. Outside the
+             chevron's phx-update="ignore" so the server keeps it live. A tiny
+             "s" after the icon says plural when the count is not 1 (7.8.7). --%>
+        <span
+          :if={@task.children != [] && @display.count}
+          data-unit-count
+          title={branch_unit_title(@progress_calc)}
+          class="flex-none inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
+        >
+          <%!-- The unit's icon: green leaf (leaf_average) / amber branch
+               (single_level) — mode tellable at a glance. Leaf inherits
+               the count's emerald via currentColor. --%>
+          <.botanical_icon
+            kind={badge_icon(@progress_calc)}
+            class={badge_icon_class(@progress_calc)}
+          />
+          <span
+            :if={branch_unit_count(@task, @progress_calc) != 1}
+            data-unit-plural
+            class="-ml-0.5 text-[1.2em] leading-none"
+          >
+            s
+          </span>
+          <%!-- Lists (depth 0) stack their completed count above, faded. --%>
+          <%= if @depth == 0 do %>
+            <span
+              :for={
+                {done, total} <- [
+                  {Progress.done_unit_count(@task, Progress.mode(@progress_calc)),
+                   branch_unit_count(@task, @progress_calc)}
+                ]
+              }
+              class="inline-flex flex-col items-center leading-none"
+            >
+              <span :if={done > 0 && done < total} data-done-count class="text-[0.7em] opacity-50">
+                {done}
+              </span>
+              <span>{total}</span>
+            </span>
+          <% else %>
+            {branch_unit_count(@task, @progress_calc)}
+          <% end %>
+        </span>
+
         <span
           :if={@index_label != ""}
           data-task-index
@@ -5945,7 +5994,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
         <%!-- Row 1, pinned right: the new-task button. --%>
         <div :if={@can_edit} class="relative flex-none ml-auto">
-          <div class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
+          <div
+            data-add-group
+            class="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden"
+          >
             <button
               type="button"
               data-add-child={@task.id}
@@ -5989,68 +6041,38 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
         <%!-- Row 2: title with its glued chevron. --%>
         <div class="w-full flex items-baseline gap-1 min-w-0">
-          <button
-            :if={@task.children != []}
-            type="button"
-            id={"collapse-#{@task.id}"}
-            phx-hook="CollapseToggle"
-            phx-update="ignore"
-            data-task-id={@task.id}
-            data-initiative-id={@initiative_id}
-            aria-controls={"children-#{@task.id}"}
-            aria-label="Toggle children"
-            class="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 drop-shadow-[0_1px_1px_rgb(0,0,0)] dark:drop-shadow-none transition-colors motion-reduce:transition-none"
-          >
-            <%!-- Custom inline chevron: heroicons' micro was the boldest stock
+          <%!-- The chevron hangs off a zero-width, full-height item of its own
+               (never row 2 itself: the completion box below is positioned
+               against the row) and app.css moves it onto the parent's left
+               border line (7.8.1); -mr-1 cancels the gap the empty item earns. --%>
+          <span :if={@task.children != []} class="relative flex-none w-0 -mr-1 self-stretch">
+            <button
+              type="button"
+              id={"collapse-#{@task.id}"}
+              phx-hook="CollapseToggle"
+              phx-update="ignore"
+              data-task-id={@task.id}
+              data-initiative-id={@initiative_id}
+              aria-controls={"children-#{@task.id}"}
+              aria-label="Toggle children"
+              class="group flex-none inline-flex items-center justify-center w-6 h-6 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 drop-shadow-[0_1px_1px_rgb(0,0,0)] dark:drop-shadow-none transition-colors motion-reduce:transition-none"
+            >
+              <%!-- Custom inline chevron: heroicons' micro was the boldest stock
                  glyph and still read thin — a raw stroke lets the weight be
                  dialed directly (3.5 of a 16 viewBox ≈ 2x micro). --%>
-            <svg
-              viewBox="0 0 16 16"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="3.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-              class="w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
-            >
-              <path d="M3 5.5 L8 10.5 L13 5.5" />
-            </svg>
-          </button>
-
-          <%!-- Leaf count lives OUTSIDE the phx-update="ignore" button so the
-               server keeps it live — inside, it froze at its mount-time value. --%>
-          <span
-            :if={@task.children != [] && @display.count}
-            title={branch_unit_title(@progress_calc)}
-            class="flex-none relative top-[-0.4em] inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
-          >
-            <%!-- The unit's icon: green leaf (leaf_average) / amber branch
-                 (single_level) — mode tellable at a glance. Leaf inherits
-                 the count's emerald via currentColor. --%>
-            <.botanical_icon
-              kind={badge_icon(@progress_calc)}
-              class={badge_icon_class(@progress_calc)}
-            />
-            <%!-- Lists (depth 0) stack their completed count above, faded. --%>
-            <%= if @depth == 0 do %>
-              <span
-                :for={
-                  {done, total} <- [
-                    {Progress.done_unit_count(@task, Progress.mode(@progress_calc)),
-                     branch_unit_count(@task, @progress_calc)}
-                  ]
-                }
-                class="inline-flex flex-col items-center leading-none"
+              <svg
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="3.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+                class="w-5 h-5 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
               >
-                <span :if={done > 0 && done < total} data-done-count class="text-[0.7em] opacity-50">
-                  {done}
-                </span>
-                <span>{total}</span>
-              </span>
-            <% else %>
-              {branch_unit_count(@task, @progress_calc)}
-            <% end %>
+                <path d="M3 5.5 L8 10.5 L13 5.5" />
+              </svg>
+            </button>
           </span>
 
           <%!-- No phx-click: app.js owns the click (.03.07.22) — it flips the
@@ -6072,7 +6094,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             aria-pressed={to_string(@task.status == "done")}
             class={
               [
-                "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+                "group/check absolute bottom-0.5 left-3 z-10 w-6 h-6 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
                 "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400",
                 "drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]",
                 # Dark mode: one drop-shadow can't get denser past full black,
@@ -6123,7 +6145,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           :if={@display.progress}
           class={[
             "absolute bottom-1 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden",
-            if(@can_edit, do: "left-9", else: "left-2")
+            if(@can_edit, do: "left-10", else: "left-2")
           ]}
           role="progressbar"
           aria-valuenow={progress_value(@task)}

@@ -4,6 +4,11 @@ root layout and the React client's bootstrap document (m04.01 item 2.5) — so
 the two can never drift. It must run before first paint: it resolves the saved
 preference (localStorage `phx:theme`) to an explicit light/dark and puts it on
 `<html data-theme>` while the body is still unpainted.
+
+The touch layout (m04.02 item 7.8) rides along the same way: `phx:touch` on
+the device — "on" / "off", a first visit following `(pointer: coarse)` — puts
+`data-touch` on `<html>` before first paint so the tree never re-lays after
+it renders. Never on the account, never in ai_knobs.
 --%>
 <script>
   (() => {
@@ -37,6 +42,19 @@ preference (localStorage `phx:theme`) to an explicit light/dark and puts it on
       // server-side push_event puts it in e.detail. Handle both.
       const theme = (e.detail && e.detail.theme) || (e.target && e.target.dataset && e.target.dataset.phxTheme);
       if (theme) setTheme(theme);
+    });
+
+    const resolveTouch = (saved) =>
+      saved === "on" ? true : saved === "off" ? false : matchMedia("(pointer: coarse)").matches;
+    const applyTouch = (saved) => document.documentElement.toggleAttribute("data-touch", resolveTouch(saved));
+    applyTouch(localStorage.getItem("phx:touch"));
+    window.addEventListener("storage", (e) => e.key === "phx:touch" && applyTouch(e.newValue));
+    // The switch (client `frame/touch_switch.tsx`, LiveView `Layouts.touch_switch`
+    // via app.js) dispatches this with `{on}`; nothing else writes the key.
+    window.addEventListener("phx:set-touch", (e) => {
+      const on = Boolean(e.detail && e.detail.on);
+      localStorage.setItem("phx:touch", on ? "on" : "off");
+      applyTouch(on ? "on" : "off");
     });
   })();
 </script>

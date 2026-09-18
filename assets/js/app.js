@@ -1624,6 +1624,30 @@ document.addEventListener("click", (e) => {
   }
 })
 
+// The touch layout switch (m04.02 item 7.8) — 👆 beside the theme toggle. A
+// DEVICE choice like the theme: the click dispatches phx:set-touch, which the
+// first-paint script applies (localStorage phx:touch + <html data-touch>);
+// nothing is pushed to the server. This delegated click is the dead-view /
+// pre-connect fallback, mirroring the theme cycle above; the TouchSwitch hook
+// takes over once mounted and marks its element so the two never both fire.
+function touchLayoutOn() {
+  return document.documentElement.hasAttribute("data-touch")
+}
+function syncTouchSwitch(el) {
+  const on = touchLayoutOn()
+  el.setAttribute("aria-checked", String(on))
+  el.setAttribute("title", `Touch layout: ${on ? "on" : "off"}`)
+}
+function flipTouchLayout() {
+  window.dispatchEvent(new CustomEvent("phx:set-touch", {detail: {on: !touchLayoutOn()}}))
+  document.querySelectorAll("[data-touch-switch]").forEach(syncTouchSwitch)
+}
+document.addEventListener("click", (e) => {
+  const sw = e.target.closest("[data-touch-switch]")
+  if (sw && !sw.dataset.touchHooked) flipTouchLayout()
+})
+document.querySelectorAll("[data-touch-switch]").forEach(syncTouchSwitch)
+
 // Notifications "mark read" (§6.7): the "Mark all read" button AND opening the
 // bell both mark notifications read, but they rode JS.push("mark_notifications_read")
 // — no optimistic clear (the unread state lingered until the server round-trip)
@@ -4916,6 +4940,28 @@ Hooks.ThemeCycle = {
   },
 }
 
+// The touch layout switch, live (m04.02 7.8): reads the device state into
+// aria-checked on mount (the server renders it unchecked — it cannot know),
+// flips it on click, and follows a flip made elsewhere (the other switch on
+// this page, or another tab via storage).
+Hooks.TouchSwitch = {
+  mounted() {
+    this.el.dataset.touchHooked = "true"
+    syncTouchSwitch(this.el)
+    this.onClick = () => flipTouchLayout()
+    this.el.addEventListener("click", this.onClick)
+    this.onSync = () => syncTouchSwitch(this.el)
+    window.addEventListener("storage", this.onSync)
+    window.addEventListener("phx:set-touch", this.onSync)
+  },
+  destroyed() {
+    delete this.el.dataset.touchHooked
+    this.el.removeEventListener("click", this.onClick)
+    window.removeEventListener("storage", this.onSync)
+    window.removeEventListener("phx:set-touch", this.onSync)
+  },
+}
+
 // Drag-and-drop reorganization for tasks. Attached to each row's drag handle.
 // Uses pointer events (not HTML5 drag-and-drop) so the same gesture loop
 // works for mobile (item 8) and the cross-pane gesture in Arc 4 item 11.
@@ -5834,9 +5880,14 @@ Hooks.CollapseToggle = {
       const ce = this.childrenEl()
       if (!ce) return
       const collapsed = !ce.classList.contains("collapsed-peek")
-      ce.classList.toggle("collapsed-peek", collapsed)
+      // The glyph flips in this very task (m04.02 7.8.8); the collapse — a
+      // relayout of the whole branch — follows once the browser has painted
+      // it, so the click is acknowledged before the heavy part (§6.7).
       this.el.setAttribute("aria-expanded", String(!collapsed))
-      localStorage.setItem(this.storageKey(), collapsed ? "1" : "0")
+      requestAnimationFrame(() => setTimeout(() => {
+        ce.classList.toggle("collapsed-peek", collapsed)
+        localStorage.setItem(this.storageKey(), collapsed ? "1" : "0")
+      }, 0))
     })
   },
 }

@@ -31,6 +31,7 @@ import { NAV_ITEMS, isCurrentNav } from "./nav_model.ts";
 import { NavButton } from "./nav_button.tsx";
 import { SignOut } from "./sign_out.tsx";
 import { ThemeToggle } from "./theme_toggle.tsx";
+import { TouchSwitch } from "./touch_switch.tsx";
 
 export interface NavMenuProps {
   stores: Stores;
@@ -160,6 +161,7 @@ export function NavMenu({ stores, route, user }: NavMenuProps) {
         <div className="my-2 border-t border-zinc-200 dark:border-zinc-700" />
         <div className="flex flex-col gap-1">
           <ThemeToggle stores={stores} id="client-menu-theme-toggle" block />
+          <TouchSwitch stores={stores} id="client-menu-touch-switch" block />
           <SignOut idPrefix="client-menu" block onSubmitted={close} />
         </div>
       </div>

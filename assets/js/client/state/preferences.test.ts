@@ -8,7 +8,21 @@ import {
   rowPreferencesFrom,
   setIndexSort,
   setRowPreferences,
+  setTouchPreference,
 } from "./preferences.ts";
+
+describe("the touch layout preference (m04.02 item 7.8)", () => {
+  it("starts off and flips in place, without touching the rest", () => {
+    const store = createPreferencesStore();
+    assert.equal(store.get().touch, false);
+    const before = store.get();
+    setTouchPreference(store, true);
+    assert.equal(store.get().touch, true);
+    assert.equal(store.get().rows, before.rows);
+    setTouchPreference(store, true);
+    assert.equal(store.get().touch, true);
+  });
+});
 
 describe("the row preferences", () => {
   it("start with everything shown, as the server's defaults do", () => {

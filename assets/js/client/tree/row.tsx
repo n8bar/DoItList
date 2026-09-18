@@ -18,6 +18,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Icon } from "../ui/icon.tsx";
 import { childIdsOf } from "./model.ts";
 import { doneUnitCount, unitCount } from "./progress.ts";
+import { afterPaint } from "./after_paint.ts";
 import { BotanicalIcon, Chevron } from "./botanical.tsx";
 import type { RefPart, RowUser } from "./row_model.ts";
 import {
@@ -229,6 +230,36 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           </span>
         )}
 
+        {/* The unit-count badge, on the pill line between the handle and the
+            index label (7.8.6): with the chevron on the border line, nothing
+            but the title is left on the title line's edge. A tiny "s" after
+            the icon says plural when the count is not 1 (7.8.7). */}
+        {branch && display.count && (
+          <span
+            data-unit-count
+            title={branchUnitTitle(ctx.progressCalc)}
+            className="flex-none inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
+          >
+            <BotanicalIcon
+              kind={badgeIcon(ctx.progressCalc)}
+              className={badgeIconClass(ctx.progressCalc)}
+            />
+            {unitCount(ctx.model, id) !== 1 && (
+              <span data-unit-plural className="-ml-0.5 text-[1.2em] leading-none">
+                s
+              </span>
+            )}
+            {depth === 0 ? (
+              <BranchCount
+                done={doneUnitCount(ctx.model, id)}
+                total={unitCount(ctx.model, id)}
+              />
+            ) : (
+              unitCount(ctx.model, id)
+            )}
+          </span>
+        )}
+
         {/* The positional label. Empty under the "none" style = no element. */}
         {record.index !== "" && (
           <span
@@ -355,7 +386,10 @@ export function Row({ ctx, id, depth, children }: RowProps) {
         {/* Row 1, pinned right: the new-task control. */}
         {ctx.permissions.canEdit && (
           <div className="relative flex-none ml-auto">
-            <div className="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden">
+            <div
+              data-add-group
+              className="inline-flex rounded border border-emerald-600 dark:border-emerald-500 overflow-hidden"
+            >
               <button
                 type="button"
                 data-add-child={id}
@@ -413,7 +447,12 @@ export function Row({ ctx, id, depth, children }: RowProps) {
 
         {/* Row 2: the title with its glued chevron. */}
         <div className="w-full flex items-baseline gap-1 min-w-0">
+          {/* The chevron hangs off a zero-width, full-height item of its own
+              (never row 2 itself: the completion box below is positioned
+              against the row) and app.css moves it onto the parent's left
+              border line (7.8.1); -mr-1 cancels the gap the empty item earns. */}
           {branch && (
+            <span className="relative flex-none w-0 -mr-1 self-stretch">
             <button
               type="button"
               id={`collapse-${id}`}
@@ -422,31 +461,17 @@ export function Row({ ctx, id, depth, children }: RowProps) {
               aria-label="Toggle children"
               onClick={(event) => {
                 event.stopPropagation();
-                ctx.onToggleCollapse(id);
+                // The glyph flips in this very task (7.8.8); the collapse —
+                // a whole-tree render today, item 7.9 — follows once the
+                // browser has painted it. React re-applies the same value
+                // when the state catches up, so nothing fights over it.
+                event.currentTarget.setAttribute("aria-expanded", String(!expanded));
+                afterPaint(() => ctx.onToggleCollapse(id));
               }}
-              className="group flex-none inline-flex items-center justify-center w-5 h-5 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 drop-shadow-[0_1px_1px_rgb(0,0,0)] dark:drop-shadow-none transition-colors motion-reduce:transition-none"
+              className="group flex-none inline-flex items-center justify-center w-6 h-6 rounded-full dark:border-2 dark:border-black text-black bg-emerald-400 hover:bg-emerald-300 group-data-done/row:bg-emerald-500 group-data-done/row:hover:bg-emerald-400 drop-shadow-[0_1px_1px_rgb(0,0,0)] dark:drop-shadow-none transition-colors motion-reduce:transition-none"
             >
               <Chevron />
             </button>
-          )}
-
-          {branch && display.count && (
-            <span
-              title={branchUnitTitle(ctx.progressCalc)}
-              className="flex-none relative top-[-0.4em] inline-flex items-center gap-0.5 text-sm font-bold tabular-nums text-emerald-400 group-data-done/row:text-emerald-500"
-            >
-              <BotanicalIcon
-                kind={badgeIcon(ctx.progressCalc)}
-                className={badgeIconClass(ctx.progressCalc)}
-              />
-              {depth === 0 ? (
-                <BranchCount
-                  done={doneUnitCount(ctx.model, id)}
-                  total={unitCount(ctx.model, id)}
-                />
-              ) : (
-                unitCount(ctx.model, id)
-              )}
             </span>
           )}
 
@@ -461,7 +486,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
                 ctx.onIntent({ kind: branch ? "cascadeComplete" : "toggleComplete", id, done: !done });
               }}
               className={[
-                "group/check absolute bottom-0.5 left-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
+                "group/check absolute bottom-0.5 left-3 z-10 w-6 h-6 rounded border-2 flex items-center justify-center transition-colors motion-reduce:transition-none",
                 "border-emerald-500 bg-transparent text-emerald-500 hover:border-emerald-400",
                 "drop-shadow-[0_1px_1px_rgba(0,0,0,0.65)]",
                 "dark:[filter:drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))_drop-shadow(0_1px_1px_rgb(0,0,0))]",
@@ -502,7 +527,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           <div
             className={[
               "absolute bottom-1 right-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden",
-              ctx.permissions.canEdit ? "left-9" : "left-2",
+              ctx.permissions.canEdit ? "left-10" : "left-2",
             ].join(" ")}
             role="progressbar"
             aria-valuenow={progress}

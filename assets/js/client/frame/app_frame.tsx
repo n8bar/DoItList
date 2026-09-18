@@ -44,6 +44,7 @@ import { Icon } from "../ui/icon.tsx";
 import type { CloseTenant, Tenants } from "./pane_slot.ts";
 import { NO_TENANTS, addTenant, closeTenants, paneOpenMarker, paneVisible, removeTenant } from "./pane_slot.ts";
 import { ThemeToggle } from "./theme_toggle.tsx";
+import { TouchSwitch } from "./touch_switch.tsx";
 
 /**
  * `Layouts.app`'s `:wide` cap, verbatim: the header mirrors the body so the two
@@ -171,6 +172,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
                   wrapper that is no box at all above it. */}
               <div className="hidden sm:contents">
                 <ThemeToggle stores={stores} />
+                <TouchSwitch stores={stores} />
               </div>
               {/* The bell is a top-level item at EVERY breakpoint — never
                   folded into the hamburger — exactly as the LiveView header

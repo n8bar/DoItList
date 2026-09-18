@@ -110,7 +110,7 @@ test("a throwaway that could not be created is never trashed and never run in", 
 
 // --- 8.6: the pure halves of the layout, touch and motion checks ---------
 
-import { motionOff, shortfalls, uniformWidths } from "./check_tree.mjs";
+import { centredOn, motionOff, shortfalls, touchFloor, uniformWidths } from "./check_tree.mjs";
 
 test("uniformWidths: one width within a pixel is uniform, a ragged stack is not, nothing is not", () => {
   assert.deepEqual(uniformWidths([640, 640, 641]), { uniform: true, min: 640, max: 641 });
@@ -135,4 +135,18 @@ test("shortfalls: names each target under the floor in either direction, and not
   ];
   assert.deepEqual(shortfalls(measured, 44), ["chevron 44×24", "New List 94×28"]);
   assert.deepEqual(shortfalls(measured.slice(0, 1), 44), []);
+});
+
+// --- 7.8: the touch layout ---------------------------------------------------
+
+test("touchFloor: 44 with the touch layout on, 24 in the default layout (guardrail 5.1)", () => {
+  assert.equal(touchFloor(true), 44);
+  assert.equal(touchFloor(false), 24);
+});
+
+test("centredOn: within a pixel of the line counts, further does not", () => {
+  assert.equal(centredOn(100.4, 100.5), true);
+  assert.equal(centredOn(101.5, 100.5), true);
+  assert.equal(centredOn(102, 100.5), false);
+  assert.equal(centredOn(98, 100.5, 3), true);
 });

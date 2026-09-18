@@ -705,68 +705,111 @@ input.doit-reveal-busy ~ .doit-reveal-slot .doit-reveal-spinner { visibility: vi
   }
 }
 
-/* Touch targets (UX_GUARDRAILS 5.1). On a touch surface, or in a window under
-   `sm:`, the tree's small controls take a tap anywhere in 44×44 about their
-   centre through an invisible ::before, so what is drawn stays exactly the
-   workspace's. `min(0px, calc(50% - 22px))` reaches only as far as 44px needs
-   and never shrinks a control already past it. Unlayered: `position` here
-   beats the utilities, so the completion box (already `absolute`) is left out
-   of that list; the handle is in it only so it paints over the title line,
-   whose box overlaps the handle's negative margin. The Add child button is not positioned either: its wrapper
-   clips overflow for its rounded corners, so the reach is anchored on the
-   `relative` box outside it and kept 44px wide from the left, clear of the
-   Add-sibling chevron that joins the group from `sm:` up.
+/* The chevron on its parent's left border line (m04.02 item 7.8.1), in both
+   layouts and both trees. Row 2 (the title line) is positioned; the chevron
+   hangs off it, pulled left past the row's padding, the li's border and the
+   children gutter to centre on the line the parent's border draws — for a
+   top-level row, the thin rule the tree itself draws. The gutter's padding is
+   untouched: where it is narrower than the chevron the chevron floats over the
+   ancestor borders. The variables mirror the templates' `px-3 xl:px-5 2xl:px-6`
+   and `pl-1.5 sm:pl-6` exactly; change one, change the other. */
+#task-tree {
+  --doit-row-px: calc(var(--spacing) * 3);
+  --doit-gutter: 0px;
+  --doit-title-line: calc(var(--spacing) * 7);
+  /* The rule, and room left of it for the chevron (12px) and its touch reach
+     (22px) inside #tree-scroll's clip. */
+  margin-left: calc(var(--spacing) * 6);
+  border-left: 1px solid var(--color-zinc-400);
+  @variant dark {
+    border-left-color: var(--color-zinc-700);
+  }
+}
+#task-tree ul {
+  --doit-gutter: calc(var(--spacing) * 1.5);
+  --doit-title-line: calc(var(--spacing) * 5);
+}
+@media (width >= 40rem) {
+  #task-tree ul {
+    --doit-gutter: calc(var(--spacing) * 6);
+  }
+}
+@media (width >= 80rem) {
+  #task-tree {
+    --doit-row-px: calc(var(--spacing) * 5);
+  }
+}
+@media (width >= 96rem) {
+  #task-tree {
+    --doit-row-px: calc(var(--spacing) * 6);
+    --doit-title-line: calc(var(--spacing) * 8);
+  }
+}
+#task-tree [id^="collapse-"] {
+  position: absolute;
+  z-index: 1;
+  top: calc(var(--doit-title-line) / 2);
+  left: calc(-1 * (var(--doit-row-px) + 1px + var(--doit-gutter) + 0.5px));
+  transform: translate(-50%, -50%);
+}
 
-   The row's left column stacks the handle, the chevron and the completion box
-   in less than three targets' worth of height, so under the handle the reach
-   is sideways: the chevron keeps to the room down to the box; the box, on a
-   branch, to the room up to the chevron; on a leaf, where nothing sits above
-   it, the box reaches the full 44px — up to the handle, and 4px into the gap
-   below the row, short of the next row's handle. */
-@media (pointer: coarse), (max-width: 639px) {
-  [data-add-root],
-  #task-tree [data-drag-handle],
-  #task-tree [id^="collapse-"],
-  #details-rail button[data-close-panel] {
-    position: relative;
+/* The touch layout (UX_GUARDRAILS 5.1, m04.02 item 7.8.5): on when `<html>`
+   carries `data-touch` — the 👆 switch beside the theme toggle, a device
+   choice the first-paint script applies. The tree's small controls take a tap
+   anywhere in 44×44 about their centre through an invisible ::before, so what
+   is drawn stays exactly the workspace's; `min(0px, calc(50% - 22px))` reaches
+   only as far as 44px needs and never shrinks a control already past it. The
+   one thing that grows is the progress line: 44px, so the completion box's
+   reach fits inside the row. Unlayered: `position` here must beat the utility
+   classes on the same elements. The default layout is 7.8.1 and 7.8.2 only. */
+:root[data-touch] [data-add-root],
+:root[data-touch] #task-tree [data-drag-handle],
+:root[data-touch] #details-rail button[data-close-panel] {
+  position: relative;
+}
+:root[data-touch] [data-add-root]::before,
+:root[data-touch] #task-tree [id^="collapse-"]::before,
+:root[data-touch] #task-tree [data-complete-toggle]::before,
+:root[data-touch] #task-tree [data-add-child]::before,
+:root[data-touch] #details-rail button[data-close-panel]::before {
+  content: "";
+  position: absolute;
+  left: min(0px, calc(50% - 22px));
+  right: min(0px, calc(50% - 22px));
+  top: min(0px, calc(50% - 22px));
+  bottom: min(0px, calc(50% - 22px));
+}
+/* The add button's reach is anchored on the button itself — never on its
+   group, whose caret it must not cover — so the group's corner clip lets it
+   out and the buttons keep the group's corners themselves. */
+:root[data-touch] #task-tree [data-add-group] {
+  overflow: visible;
+}
+:root[data-touch] #task-tree [data-add-child] {
+  position: relative;
+  border-top-left-radius: inherit;
+  border-bottom-left-radius: inherit;
+}
+:root[data-touch] #task-tree [data-add-child] + button {
+  border-top-right-radius: inherit;
+  border-bottom-right-radius: inherit;
+}
+@media (width < 40rem) {
+  :root[data-touch] #task-tree [data-add-child] {
+    border-radius: inherit;
   }
-  [data-add-root]::before,
-  #task-tree [id^="collapse-"]::before,
-  #task-tree [data-complete-toggle]::before,
-  #task-tree [data-add-child]::before,
-  #details-rail button[data-close-panel]::before {
-    content: "";
-    position: absolute;
-    left: min(0px, calc(50% - 22px));
-    right: min(0px, calc(50% - 22px));
-    top: min(0px, calc(50% - 22px));
-    bottom: min(0px, calc(50% - 22px));
-  }
-  #task-tree [data-add-child]::before {
-    right: auto;
-    width: 44px;
-  }
-  /* Over the count badge beside it, which is positioned and only decorative. */
-  #task-tree [id^="collapse-"] {
-    z-index: 1;
-  }
-  #task-tree [id^="collapse-"]::before {
-    top: 0;
-    bottom: -4px;
-  }
-  /* The box's offsets count from its padding box, inside its 2px border, so
-     each is 2px more than the reach past the drawn edge: 18px up and 6px down
-     on a leaf. */
-  #task-tree [data-complete-toggle]::before {
-    top: -20px;
-    bottom: -8px;
-  }
-  /* The chevron precedes the box on the same line, so a sibling selector tells
-     a branch from a leaf — no `:has()`, which cost every row toggle dearly. */
-  #task-tree [id^="collapse-"] ~ [data-complete-toggle]::before {
-    top: -6px;
-    bottom: -4px;
-  }
+}
+/* The progress line: 44 for the box's reach plus the 4 it keeps below the
+   title line. The bar stays where it is, at the bottom. */
+:root[data-touch] #task-tree [data-task-row] {
+  padding-bottom: calc(var(--spacing) * 12);
+}
+/* The box's offsets count from its padding box, inside its 2px border, so each
+   is 2px more than the reach past the drawn edge: 18px up to the line's top,
+   2px down to the row's edge. */
+:root[data-touch] #task-tree [data-complete-toggle]::before {
+  top: -20px;
+  bottom: -4px;
 }
 
 /* This file is for your main application CSS */

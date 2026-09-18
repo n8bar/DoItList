@@ -51,6 +51,7 @@ import { openClientCache } from "./storage/client_cache.ts";
 import { browserIdb } from "./storage/idb.ts";
 import { browserKeyValueStore } from "./storage/last_user.ts";
 import { browserThemeEnv, currentPreference } from "./lib/theme.ts";
+import { browserTouchEnv, currentTouch } from "./lib/touch.ts";
 
 const CARD =
   "max-w-md w-full rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-6 shadow-sm";
@@ -76,7 +77,10 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   const [stores] = useState<Stores>(() =>
     createStores({
       domain: { user: bootstrap.user },
-      preferences: { theme: currentPreference(browserThemeEnv()) },
+      preferences: {
+        theme: currentPreference(browserThemeEnv()),
+        touch: currentTouch(browserTouchEnv()),
+      },
       ui: { route: matchRoute(bootstrap.path) },
     }),
   );

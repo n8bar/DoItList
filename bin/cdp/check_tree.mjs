@@ -6,8 +6,9 @@
 // reorder, reparent, the forbidden drop, the root and tail zones, the
 // move-flip confirm and sort (7.4), then selection, the Details pane and its
 // flyout, references, presence and the deep link (8.5), then readable width,
-// wrapping, sideways and pane scrolling, responsive panes, themes, touch
-// targets and reduced motion (8.6). Drags are real mouse
+// wrapping, sideways and pane scrolling, responsive panes, themes and reduced
+// motion (8.6), then the chevron on its parent's border line, touch targets
+// in both layouts, the touch switch and the LiveView workspace (7.8). Drags are real mouse
 // gestures over the row handles — press, glide past the threshold, release.
 //
 // Opt-in, like `check_client.mjs`: NOT part of `mix test` or `mix precommit`.
@@ -1132,6 +1133,8 @@ export async function checkDeepLink(ctx) {
 
 /** The touch-target floor (UX_GUARDRAILS 5.1). */
 const TOUCH_TARGET_PX = 44;
+/** What the default layout may lower that to, because the touch layout offers 44 (7.8.2). */
+const DEFAULT_TARGET_PX = 24;
 /**
  * How deep the layout rows nest. Deep enough that the deepest visible indent
  * plus the row floor (`TREE_WIDTH_FLOOR_PX`, 240) exceeds the tree column at
@@ -1461,72 +1464,307 @@ const REACH_JS = `
   const name = (at) => at === null ? "nothing" : at.tagName.toLowerCase() + (at.id ? "#" + at.id : "") + [...at.attributes].filter((a) => a.name.startsWith("data-")).slice(0, 2).map((a) => "[" + a.name + "]").join("");
   const walk = (dx, dy) => { let n = 0; while (n < 60 && hits(c.x + dx * (n + 0.5), c.y + dy * (n + 0.5))) n += 1; return { n, then: name(document.elementFromPoint(c.x + dx * (n + 0.5), c.y + dy * (n + 0.5))) }; };
   const left = walk(-1, 0), right = walk(1, 0), up = walk(0, -1), down = walk(0, 1);
+  const b = getComputedStyle(el, "::before");
+  const pseudo = b.content === "none" ? "no ::before" : "::before " + b.position + " top " + b.top + " bottom " + b.bottom + " left " + b.left + " right " + b.right + " " + b.width + "×" + b.height;
   return {
     box: { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top * 10) / 10 },
     width: left.n + right.n, height: up.n + down.n,
-    reach: "left " + left.n + " (" + left.then + "), right " + right.n + " (" + right.then + "), up " + up.n + " (" + up.then + "), down " + down.n + " (" + down.then + ")",
+    reach: "left " + left.n + " (" + left.then + "), right " + right.n + " (" + right.then + "), up " + up.n + " (" + up.then + "), down " + down.n + " (" + down.then + "); drawn " + Math.round(r.width) + "×" + Math.round(r.height) + "; " + pseudo,
   };
 `;
 
-/** Measures every named target at phone width; throws naming all that fall short of 44×44. */
-async function measureTargets(session, targets) {
+/** Measures every named target; throws naming all that fall short of `floor`. */
+async function measureTargets(session, targets, floor, where) {
   const measured = [];
   for (const [name, selector] of targets) {
     const reach = await evaluate(session, REACH_JS.replace("SELECTOR", JSON.stringify(selector)));
-    if (reach.missing) throw new Error(`no ${name} (${selector}) at phone width`);
+    if (reach.missing) throw new Error(`no ${name} (${selector}) ${where}`);
     measured.push({ name, ...reach });
   }
-  const short = shortfalls(measured, TOUCH_TARGET_PX);
-  if (short.length > 0) throw new Error(`under ${TOUCH_TARGET_PX}×${TOUCH_TARGET_PX} at phone width: ${short.join("; ")}`);
+  const short = shortfalls(measured, floor);
+  if (short.length > 0) throw new Error(`under ${floor}×${floor} ${where}: ${short.join("; ")}`);
   return measured.map((m) => `${m.name} ${m.width}×${m.height} (drawn ${m.box.w}×${m.box.h})`).join(", ");
 }
 
+/** The device's touch layout as the page holds it: the attribute, the key, the switch. */
+const TOUCH_STATE_JS = `
+  const sw = document.getElementById("client-touch-switch");
+  return {
+    on: document.documentElement.hasAttribute("data-touch"),
+    saved: localStorage.getItem("phx:touch"),
+    checked: sw === null ? null : sw.getAttribute("aria-checked"),
+  };
+`;
+
 /**
- * UX_GUARDRAILS 5.1 at phone width: the New List button, a row's handle and
- * Add child, a leaf's completion box and the flyout's X each take a tap
- * anywhere in 44×44 about their centre, whatever paints the reach.
+ * Puts the touch layout `on` through the header switch (7.8.4) — the control,
+ * never the key — and waits for the document to carry it. Needs the switch on
+ * screen, i.e. `sm:` and up.
+ */
+async function setTouchLayout(session, on) {
+  const state = await evaluate(session, TOUCH_STATE_JS);
+  if (state.checked === null) throw new Error("no touch switch in the header at this width");
+  if (state.on === on) return;
+  await clickElement(session, "#client-touch-switch");
+  await waitFor(session, `return document.documentElement.hasAttribute("data-touch") === ${on};`, { timeoutMs: 2_000, what: `the touch layout to go ${on ? "on" : "off"}` });
+}
+
+/** Puts the device's saved choice back exactly, through the switch and then the key. */
+async function restoreTouchLayout(session, saved) {
+  await setTouchLayout(session, saved.on);
+  await evaluate(session, `
+    if (${JSON.stringify(saved.saved)} === null) localStorage.removeItem("phx:touch");
+    else localStorage.setItem("phx:touch", ${JSON.stringify(saved.saved)});
+    return true;
+  `);
+}
+
+/** The floor a layout must clear (UX_GUARDRAILS 5.1): 44 in the touch layout, 24 in the default. */
+export function touchFloor(touchOn) {
+  return touchOn ? TOUCH_TARGET_PX : DEFAULT_TARGET_PX;
+}
+
+/**
+ * UX_GUARDRAILS 5.1 in both layouts (7.8.6): with the touch layout switched on
+ * through its control, the New List button, a row's handle and Add child, a
+ * leaf's completion box, a branch's chevron and box, and the flyout's X each
+ * take a tap anywhere in 44×44 about their centre, at desktop and at phone
+ * width alike; switched off, the same targets clear 24 — the chevron and the
+ * box drawn 24×24 exactly (7.8.2).
  */
 export async function checkTouchTargets(ctx) {
   const { session } = ctx;
+  if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
   const { hotel, hotelDeepest, india } = ctx.ids;
+  const saved = await evaluate(session, TOUCH_STATE_JS);
+  const targets = [
+    ["New List", "[data-add-root]"],
+    ["drag handle", `[data-drag-handle][data-task-id="${hotel}"]`],
+    ["Add child", `#task-${hotel} > [data-task-row] [data-add-child="${hotel}"]`],
+    ["chevron", `#collapse-${hotel}`],
+    ["branch completion box", `#task-${hotel} > [data-task-row] [data-complete-toggle]`],
+    ["leaf completion box", `#task-${hotelDeepest} > [data-task-row] [data-complete-toggle]`],
+  ];
+  const drawn24 = (note) => {
+    const sizes = [...note.matchAll(/(chevron|branch completion box) \d+×\d+ \(drawn (\d+)×(\d+)\)/g)];
+    const off = sizes.filter((m) => Number(m[2]) !== DEFAULT_TARGET_PX || Number(m[3]) !== DEFAULT_TARGET_PX).map((m) => `${m[1]} drawn ${m[2]}×${m[3]}`);
+    if (off.length > 0) throw new Error(`not drawn ${DEFAULT_TARGET_PX}×${DEFAULT_TARGET_PX} in the default layout: ${off.join(", ")}`);
+  };
+  const lines = [];
 
   try {
-    await setViewport(session, PHONE, true);
-    await waitFor(session, `return window.innerWidth === ${PHONE.width};`, { timeoutMs: 2_000, what: "the phone viewport" });
-    const rows = await measureTargets(session, [
-      ["New List", "[data-add-root]"],
-      ["drag handle", `[data-drag-handle][data-task-id="${hotel}"]`],
-      ["Add child", `#task-${hotel} > [data-task-row] [data-add-child="${hotel}"]`],
-      ["leaf completion box", `#task-${hotelDeepest} > [data-task-row] [data-complete-toggle]`],
-    ]);
-    await selectRow(session, india);
-    const flyout = await measureTargets(session, [["flyout X", "#details-rail button[data-close-panel]"]]);
-    await clickElement(session, "#details-rail button[data-close-panel]");
-    await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: "the flyout to close" });
-    return `${rows}, ${flyout}`;
+    // In the default layout the 24 floor is 7.8.2's: the chevron and the box.
+    // The rest is measured and reported as it is (the default layout changes
+    // only by 7.8.1 and 7.8.2), so a shortfall there is a finding, not a fail.
+    const sized = new Set(["chevron", "branch completion box", "leaf completion box"]);
+    const measure = async (on, list, where) => {
+      const floor = touchFloor(on);
+      if (on) return measureTargets(session, list, floor, where);
+      const gated = list.filter(([name]) => sized.has(name));
+      const rest = list.filter(([name]) => !sized.has(name));
+      const parts = [];
+      if (gated.length > 0) parts.push(await measureTargets(session, gated, floor, where));
+      if (rest.length > 0) parts.push(await measureTargets(session, rest, 0, where));
+      return parts.join(", ");
+    };
+    for (const on of [true, false]) {
+      const floor = touchFloor(on);
+      const layout = on ? "touch layout" : "default layout";
+      await setTouchLayout(session, on);
+      const desktop = await measure(on, targets, `at desktop in the ${layout}`);
+      if (!on) drawn24(desktop);
+      await setViewport(session, PHONE, true);
+      await waitFor(session, `return window.innerWidth === ${PHONE.width};`, { timeoutMs: 2_000, what: "the phone viewport" });
+      const phone = await measure(on, targets, `at phone width in the ${layout}`);
+      await selectRow(session, india);
+      const flyout = await measure(on, [["flyout X", "#details-rail button[data-close-panel]"]], `at phone width in the ${layout}`);
+      await clickElement(session, "#details-rail button[data-close-panel]");
+      await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: "the flyout to close" });
+      await setViewport(session, VIEWPORT, false);
+      await waitFor(session, `return window.innerWidth === ${VIEWPORT.width};`, { timeoutMs: 2_000, what: "the desktop viewport" });
+      lines.push(`${layout} (floor ${floor}${on ? "" : " on the chevron and boxes"}) — desktop: ${desktop}; phone: ${phone}, ${flyout}`);
+    }
+    return lines.join(" | ");
   } finally {
     await setViewport(session, VIEWPORT, false);
+    await restoreTouchLayout(session, saved).catch(() => {});
   }
 }
 
 /**
- * UX_GUARDRAILS 5.1 for a branch row's left column at phone width: the
- * chevron and the completion box sit between the handle and the next row,
- * and each must still take a tap anywhere in 44×44 about its centre.
+ * The switch is the device's (7.8.3): pressing it costs no fetch at all, the
+ * choice survives a reload, and no `update account` op is ever sent for it.
  */
-export async function checkTouchTargetsBranchColumn(ctx) {
+export async function checkTouchSwitchPersists(ctx) {
   const { session } = ctx;
-  const { hotel } = ctx.ids;
+  if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
+  const saved = await evaluate(session, TOUCH_STATE_JS);
 
   try {
-    await setViewport(session, PHONE, true);
-    await waitFor(session, `return window.innerWidth === ${PHONE.width};`, { timeoutMs: 2_000, what: "the phone viewport" });
-    return await measureTargets(session, [
-      ["chevron", `#collapse-${hotel}`],
-      ["branch completion box", `#task-${hotel} > [data-task-row] [data-complete-toggle]`],
-    ]);
+    await setTouchLayout(session, false);
+    const before = await evaluate(session, `return __ops.log.length;`);
+    await clickElement(session, "#client-touch-switch");
+    await waitFor(session, `return document.documentElement.hasAttribute("data-touch");`, { timeoutMs: 2_000, what: "the touch layout to go on" });
+    const pressed = await evaluate(session, TOUCH_STATE_JS);
+    if (pressed.saved !== "on" || pressed.checked !== "true") throw new Error(`after the press: saved ${JSON.stringify(pressed.saved)}, switch ${pressed.checked}`);
+    await assertNothingFetched(session, before, "pressing the touch switch");
+
+    await reopenTree(ctx);
+    const back = await evaluate(session, TOUCH_STATE_JS);
+    if (!back.on || back.saved !== "on" || back.checked !== "true") throw new Error(`after a reload: data-touch ${back.on}, saved ${JSON.stringify(back.saved)}, switch ${back.checked}`);
+    const ops = await evaluate(session, `return __ops.log.filter((f) => f.url.includes("/operations")).map((f) => f.method + " " + f.url.replace(/^.*\\/app\\/api/, ""));`);
+    if (ops.length > 0) throw new Error(`operations sent around the reload: ${ops.join(", ")}`);
+    const menu = await evaluate(session, `return document.getElementById("client-menu-touch-switch") !== null || document.querySelector("[data-touch-switch]") !== null;`);
+    if (!menu) throw new Error("no touch switch anywhere on the page");
+    return "press: no fetch, saved on, switch checked; reload: still on, no op sent";
+  } finally {
+    await restoreTouchLayout(session, saved).catch(() => {});
+  }
+}
+
+/** A branch's chevron against the line it should sit on, and the row's title line. */
+const CHEVRON_JS = `
+  const chevron = document.getElementById("collapse-" + ID);
+  const li = chevron.closest("li");
+  const parent = li.parentElement.closest("li") ?? document.getElementById("task-tree");
+  const title = li.querySelector(":scope > [data-task-row] [data-task-title]");
+  const c = chevron.getBoundingClientRect();
+  const p = parent.getBoundingClientRect();
+  const t = title.getBoundingClientRect();
+  const lineHeight = parseFloat(getComputedStyle(title).lineHeight);
+  const tree = getComputedStyle(document.getElementById("task-tree"));
+  return {
+    centre: { x: c.left + c.width / 2, y: c.top + c.height / 2 },
+    line: p.left + parseFloat(getComputedStyle(parent).borderLeftWidth) / 2,
+    titleLine: t.top + lineHeight / 2,
+    drawn: { w: Math.round(c.width), h: Math.round(c.height) },
+    rule: tree.borderLeftWidth + " " + tree.borderLeftStyle,
+    parent: parent.id,
+  };
+`;
+
+/**
+ * 7.8.1: a branch's chevron is centred on its parent's left border line —
+ * the tree's own rule for a top-level row — and level with its title line,
+ * at desktop and at phone width, whichever layout is on.
+ */
+export async function checkChevronOnBorder(ctx) {
+  const { session } = ctx;
+  if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
+  const { hotel } = ctx.ids;
+  const child = await evaluate(session, `return Number(document.querySelector("#children-${hotel} > li")?.dataset.taskId);`);
+  if (!Number.isFinite(child)) throw new Error("Hotel has no first child to measure");
+  const saved = await evaluate(session, TOUCH_STATE_JS);
+  const notes = [];
+
+  try {
+    for (const on of [false, true]) {
+      await setTouchLayout(session, on);
+      for (const [where, viewport, mobile] of [["desktop", VIEWPORT, false], ["phone", PHONE, true]]) {
+        await setViewport(session, viewport, mobile);
+        await waitFor(session, `return window.innerWidth === ${viewport.width};`, { timeoutMs: 2_000, what: `the ${where} viewport` });
+        for (const [name, id] of [["top-level", hotel], ["nested", child]]) {
+          await evaluate(session, `document.getElementById("collapse-${id}").scrollIntoView({ block: "center" }); return true;`);
+          const m = await evaluate(session, CHEVRON_JS.replace("ID", String(id)));
+          // A 1px rule computes as a device-pixel fraction on a 1.5× screen.
+          const rule = parseFloat(m.rule);
+          if (!(rule > 0 && rule <= 1) || !m.rule.endsWith("solid")) throw new Error(`the tree has no thin left rule (${m.rule})`);
+          if (!centredOn(m.centre.x, m.line)) throw new Error(`${name} chevron off its parent's border line by ${(m.centre.x - m.line).toFixed(1)}px (${where}, touch ${on ? "on" : "off"}, parent #${m.parent})`);
+          if (!centredOn(m.centre.y, m.titleLine)) throw new Error(`${name} chevron off its title line by ${(m.centre.y - m.titleLine).toFixed(1)}px (${where}, touch ${on ? "on" : "off"})`);
+          if (!on && where === "desktop") notes.push(`${name} drawn ${m.drawn.w}×${m.drawn.h}`);
+        }
+      }
+      await setViewport(session, VIEWPORT, false);
+      await waitFor(session, `return window.innerWidth === ${VIEWPORT.width};`, { timeoutMs: 2_000, what: "the desktop viewport" });
+    }
+    return `on the line and level with the title in both layouts at desktop and phone; ${notes.join(", ")}; tree rule 1px`;
   } finally {
     await setViewport(session, VIEWPORT, false);
+    await restoreTouchLayout(session, saved).catch(() => {});
+  }
+}
+
+/**
+ * Arms a chevron: when its click handler starts, the first frame that sees
+ * the glyph flipped, and when the branch's children list changes state.
+ */
+const FLIP_JS = `
+  const el = document.getElementById("collapse-" + ID);
+  const list = document.getElementById("children-" + ID);
+  const was = el.getAttribute("aria-expanded");
+  const wasCollapsed = list.classList.contains("collapsed-peek");
+  window.__flip = { was, handler: null, seen: null, moved: null };
+  el.addEventListener("click", () => { window.__flip.handler = performance.now(); }, { capture: true, once: true });
+  window.__flipObs?.disconnect();
+  window.__flipObs = new MutationObserver(() => {
+    if (window.__flip.moved === null && list.classList.contains("collapsed-peek") !== wasCollapsed) window.__flip.moved = performance.now();
+  });
+  window.__flipObs.observe(list, { attributes: true, attributeFilter: ["class"] });
+  const tick = () => {
+    if (window.__flip.handler !== null && el.getAttribute("aria-expanded") !== was) { window.__flip.seen = performance.now(); return; }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  return was;
+`;
+
+/**
+ * 7.8.8 (UX_GUARDRAILS §6.7): the chevron's glyph flips — is on screen —
+ * before the branch collapses or opens, on the 24-deep Hotel branch, whose
+ * collapse is the heaviest the tree has. Order only: how many ms the flipped
+ * frame takes is reported, not judged — today the collapse re-renders every
+ * row from the shared context and can hold a frame back, which is item 7.9.
+ */
+export async function checkChevronFlipsFirst(ctx) {
+  const { session } = ctx;
+  if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
+  const { hotel } = ctx.ids;
+  const times = [];
+  for (const step of ["collapse", "expand"]) {
+    await settle(session);
+    const was = await evaluate(session, FLIP_JS.replace(/\bID\b/g, String(hotel)));
+    await clickElement(session, `#collapse-${hotel}`);
+    await waitFor(session, `return window.__flip.seen !== null && window.__flip.moved !== null;`, { timeoutMs: 10_000, everyMs: 10, what: `the chevron to flip and the branch to ${step}` });
+    const flip = await evaluate(session, `return window.__flip;`);
+    const seen = Math.round(flip.seen - flip.handler);
+    const moved = Math.round(flip.moved - flip.handler);
+    if (flip.seen > flip.moved) throw new Error(`on ${step} the branch moved (${moved}ms) before the glyph was on screen (${seen}ms; was aria-expanded=${was})`);
+    times.push(`${step}: glyph on screen ${seen}ms after the handler, branch moved at ${moved}ms`);
+  }
+  await evaluate(session, `window.__flipObs?.disconnect(); return true;`);
+  return `glyph first on the 24-deep branch — ${times.join("; ")} (frame timing is item 7.9)`;
+}
+
+/**
+ * The LiveView workspace shares app.css and the row markup, so it gets the
+ * same chevron and touch layout: open it once in the tab, measure the
+ * top-level chevron on the tree's rule, press its own switch and see the
+ * document follow, screenshot it, and come back to the client.
+ */
+export async function checkLiveViewWorkspace(ctx) {
+  const { session } = ctx;
+  if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
+  const { hotel } = ctx.ids;
+  const saved = await evaluate(session, TOUCH_STATE_JS);
+
+  try {
+    await session.send("Network.emulateNetworkConditions", FAST_LINK);
+    await session.send("Page.navigate", { url: `${ctx.appUrl}/initiatives/${ctx.initiativeId}` });
+    await waitFor(session, `return document.getElementById("collapse-${hotel}") !== null && document.getElementById("touch-switch")?.dataset.touchHooked === "true";`, { timeoutMs: READY_TIMEOUT_MS, what: "the LiveView workspace" });
+    const m = await evaluate(session, CHEVRON_JS.replace("ID", String(hotel)));
+    if (!centredOn(m.centre.x, m.line)) throw new Error(`LiveView chevron off the tree's rule by ${(m.centre.x - m.line).toFixed(1)}px`);
+    if (!centredOn(m.centre.y, m.titleLine)) throw new Error(`LiveView chevron off its title line by ${(m.centre.y - m.titleLine).toFixed(1)}px`);
+    const wasOn = await evaluate(session, `return document.documentElement.hasAttribute("data-touch");`);
+    await clickElement(session, "#touch-switch");
+    await waitFor(session, `return document.documentElement.hasAttribute("data-touch") === ${!wasOn} && document.getElementById("touch-switch").getAttribute("aria-checked") === "${String(!wasOn)}";`, { timeoutMs: 2_000, what: "the LiveView switch to flip the layout" });
+    const padding = await evaluate(session, `return getComputedStyle(document.querySelector("#task-${hotel} > [data-task-row]")).paddingBottom;`);
+    const shot = await screenshot(session, `liveview-workspace-touch-${wasOn ? "off" : "on"}`);
+    await clickElement(session, "#touch-switch");
+    await waitFor(session, `return document.documentElement.hasAttribute("data-touch") === ${wasOn};`, { timeoutMs: 2_000, what: "the LiveView switch to flip it back" });
+    return `chevron on the rule, drawn ${m.drawn.w}×${m.drawn.h}; switch flips data-touch (row padding ${padding} with touch ${wasOn ? "off" : "on"}); ${shot}`;
+  } finally {
+    await reopenTree(ctx).catch(() => {});
+    await restoreTouchLayout(session, saved).catch(() => {});
   }
 }
 
@@ -1625,6 +1863,11 @@ export function motionOff({ transitionProperty, transitionDuration, animationNam
   const transitionOff = transitionProperty === "none" || zero(transitionDuration);
   const animationOff = animationName === "none" || zero(animationDuration);
   return transitionOff && animationOff;
+}
+
+/** Whether `x` sits on `line`, to within `tolerance` px. */
+export function centredOn(x, line, tolerance = 1) {
+  return Math.abs(x - line) <= tolerance;
 }
 
 /** The targets under `floor` px in either direction, each as "name width×height". */
@@ -1799,8 +2042,11 @@ const CHECKS = [
   ["responsive panes: tree column", checkResponsivePanes],
   ["themes: Light, Dark, System", checkThemes],
   ["reduced motion", checkReducedMotion],
-  ["touch targets at phone width", checkTouchTargets],
-  ["touch targets: a branch row's chevron and box", checkTouchTargetsBranchColumn],
+  ["chevron on its parent's border line", checkChevronOnBorder],
+  ["chevron flips before the branch moves", checkChevronFlipsFirst],
+  ["touch targets in both layouts", checkTouchTargets],
+  ["touch switch: no fetch, survives a reload", checkTouchSwitchPersists],
+  ["LiveView workspace: chevron and switch", checkLiveViewWorkspace],
 ];
 
 // ---------------------------------------------------------------------------

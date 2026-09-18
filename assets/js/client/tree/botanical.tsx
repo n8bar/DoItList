@@ -81,7 +81,7 @@ export function Chevron({ className }: { className?: string }) {
       aria-hidden="true"
       className={
         className ??
-        "w-4 h-4 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
+        "w-5 h-5 transition-transform motion-reduce:transition-none group-aria-[expanded=false]:-rotate-90"
       }
     >
       <path d="M3 5.5 L8 10.5 L13 5.5" />

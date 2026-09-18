@@ -7,7 +7,8 @@
 //
 // `theme` is persisted by `lib/theme.ts`, into the same `phx:theme` key the
 // LiveView and the first-paint script use, so the two clients can't disagree
-// about the user's theme. `rows` and `indexSort` are the account's, read from
+// about the user's theme; `touch` likewise by `lib/touch.ts` (`phx:touch`,
+// m04.02 7.8) — a device choice, never the account's. `rows` and `indexSort` are the account's, read from
 // `GET /app/api/session` at boot; the index sort is the one the client writes
 // back (`update account`, m04.02 7.3). The view preferences below are
 // per-account server state in a later arc; holding them here now means the
@@ -43,6 +44,8 @@ export interface RowPreferences {
 
 export interface PreferencesState {
   readonly theme: ThemePreference;
+  /** The touch layout (7.8): a 44×44 tap on the tree's box and chevron. */
+  readonly touch: boolean;
   readonly view: ViewPreferences;
   readonly rows: RowPreferences;
   /** The Initiatives index's Sort and Reverse choice, as the account saved it (7.3). */
@@ -64,6 +67,7 @@ export const initialRowPreferences: RowPreferences = {
 
 export const initialPreferencesState: PreferencesState = {
   theme: "system",
+  touch: false,
   view: initialViewPreferences,
   rows: initialRowPreferences,
   indexSort: initialSortState,
@@ -77,6 +81,10 @@ export function createPreferencesStore(initial: Partial<PreferencesState> = {}):
 
 export function setThemePreference(store: PreferencesStore, theme: ThemePreference): void {
   store.set((state) => (state.theme === theme ? state : { ...state, theme }));
+}
+
+export function setTouchPreference(store: PreferencesStore, touch: boolean): void {
+  store.set((state) => (state.touch === touch ? state : { ...state, touch }));
 }
 
 /**
