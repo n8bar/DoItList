@@ -594,7 +594,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
           model alone — nothing here waits on the network (§6). A selected id
           the model no longer holds (deleted under us) opens nothing. */}
       {selected !== null && model.tasks[selected] !== undefined && (
-        <Pane>
+        <Pane onClose={() => select(null)}>
           <TaskDetails ctx={tree.ctx} id={selected} onClose={() => select(null)} />
         </Pane>
       )}

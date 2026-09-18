@@ -15,7 +15,10 @@
 //   header      — wordmark, primary nav, theme, bell, account menu, narrow
 //                 menu (here)
 //   main        — the route outlet, with the `<h1>` focus contract (Task 4)
-//   pane        — right-hand slot routes fill; Arc 2's Details pane (pane.tsx)
+//   pane        — right-hand slot routes fill; Arc 2's Details pane (pane.tsx).
+//                 From `lg:` it is the workspace's right column; below `lg:`
+//                 it is the workspace's `#details-rail` flyout over a backdrop,
+//                 with its own Close (m04.02 item 2.3)
 //   summary     — the connection summary (ui/connection_summary.tsx), in the
 //                 header band where the LiveView's connecting signifier sits.
 //                 It is positioned OUT OF FLOW, so it can change from "Live" to
@@ -37,7 +40,9 @@ import { NAV_ITEMS, isCurrentNav } from "./nav_model.ts";
 import { NavButton } from "./nav_button.tsx";
 import type { PaneControl } from "./pane.tsx";
 import { PaneProvider } from "./pane.tsx";
-import { addTenant, paneVisible, removeTenant } from "./pane_slot.ts";
+import { Icon } from "../ui/icon.tsx";
+import type { CloseTenant, Tenants } from "./pane_slot.ts";
+import { NO_TENANTS, addTenant, closeTenants, paneOpenMarker, paneVisible, removeTenant } from "./pane_slot.ts";
 import { ThemeToggle } from "./theme_toggle.tsx";
 
 /**
@@ -65,21 +70,26 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
   // The header draws the signed-in user (the avatar). It comes from the domain
   // store, not a prop: the session read fills it in a moment after boot.
   const user = useStoreValue(stores.domain, selectUser);
-  // How many routes are filling the pane, and the element they portal into. The
-  // frame learns nothing about WHAT is in the pane, so a tenant re-rendering its
-  // own content never re-renders the frame (see `pane.tsx`).
-  const [paneTenants, setPaneTenants] = useState(0);
+  // Which routes are filling the pane (each by the closer it left), and the
+  // element they portal into. The frame learns nothing about WHAT is in the
+  // pane, so a tenant re-rendering its own content never re-renders the frame
+  // (see `pane.tsx`).
+  const [paneTenants, setPaneTenants] = useState<Tenants>(NO_TENANTS);
   const [paneHost, setPaneHost] = useState<HTMLElement | null>(null);
 
-  const acquirePane = useCallback(() => {
-    setPaneTenants(addTenant);
+  const acquirePane = useCallback((close: CloseTenant) => {
+    setPaneTenants((tenants) => addTenant(tenants, close));
     let released = false;
     return () => {
       if (released) return;
       released = true;
-      setPaneTenants(removeTenant);
+      setPaneTenants((tenants) => removeTenant(tenants, close));
     };
   }, []);
+  // The flyout's Close: the rail's X and the backdrop, below `lg:`. The
+  // workspace's `[data-close-panel]` clears the selection; here the tenant
+  // decides what closing means.
+  const closePane = useCallback(() => closeTenants(paneTenants), [paneTenants]);
   const paneControl = useMemo<PaneControl>(
     () => ({ acquire: acquirePane, host: paneHost }),
     [acquirePane, paneHost],
@@ -90,7 +100,9 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
   // slot, not an empty gutter. There is no left rail: the LiveView page has
   // none below ultrawide, and a column repeating the header's nav was a
   // scaffold, not the product (item 6.8).
-  const grid = hasPane ? "xl:grid xl:grid-cols-[minmax(0,1fr)_24rem] xl:items-start xl:gap-6" : "";
+  // The column starts at `lg:`, where the workspace's does; below it the pane
+  // is the flyout, never a block under the tree (item 2.3).
+  const grid = hasPane ? "lg:grid lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start lg:gap-6" : "";
 
   return (
     <PaneProvider value={paneControl}>
@@ -183,13 +195,54 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
                 {children}
               </main>
 
+              {/* Backdrop on mobile when the right-rail flyout is open — the
+                  workspace's `#pane-backdrop`. It exists only while the pane
+                  does, which is the workspace's `hidden` flip. */}
+              {hasPane && (
+                <div
+                  id="pane-backdrop"
+                  className="lg:hidden fixed inset-0 z-20 bg-black/50"
+                  data-close-panel
+                  aria-hidden="true"
+                  onClick={closePane}
+                />
+              )}
+
+              {/* The right pane — the workspace's `#details-rail` (item 2.3.1).
+                  From `lg:` it is the column, sticky in the one scrolling
+                  region as the frame has always kept it. Below `lg:` the
+                  `data-open` variants make it a fixed overlay over the
+                  backdrop, with the rail's own Close at the top; the Details
+                  pane's desktop X is `lg:`-only, as the workspace's is. */}
               {hasPane && (
                 <aside
-                  id="client-pane"
-                  ref={setPaneHost}
+                  id="details-rail"
+                  data-open={paneOpenMarker(paneTenants)}
                   aria-label="Details"
-                  className="mt-8 xl:sticky xl:top-8 xl:mt-0 xl:self-start"
-                />
+                  className={[
+                    "not-data-open:hidden lg:not-data-open:block",
+                    "data-open:block data-open:fixed lg:data-open:sticky data-open:top-0 lg:data-open:top-8 data-open:bottom-0 lg:data-open:bottom-auto data-open:right-0 lg:data-open:right-auto data-open:z-30 lg:data-open:z-auto",
+                    "data-open:w-full sm:data-open:w-96 lg:data-open:w-auto",
+                    "data-open:bg-zinc-50 lg:data-open:bg-transparent dark:data-open:bg-zinc-950 lg:dark:data-open:bg-transparent",
+                    "data-open:shadow-xl lg:data-open:shadow-none data-open:p-4 lg:data-open:p-0",
+                    "data-open:overflow-y-auto lg:data-open:overflow-visible data-open:[scrollbar-gutter:stable] lg:data-open:[scrollbar-gutter:auto]",
+                    "space-y-4 lg:space-y-0 lg:self-start",
+                  ].join(" ")}
+                >
+                  <div className="lg:hidden flex justify-end">
+                    <button
+                      type="button"
+                      data-close-panel
+                      aria-label="Close details panel"
+                      title="Close"
+                      onClick={closePane}
+                      className="inline-flex items-center justify-center w-8 h-8 rounded bg-red-500/30 hover:bg-red-500/50 text-white font-bold"
+                    >
+                      <Icon name="x-mark" className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <div ref={setPaneHost} />
+                </aside>
               )}
             </div>
           </div>
