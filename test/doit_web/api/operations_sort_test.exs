@@ -91,7 +91,8 @@ defmodule DoItWeb.Api.OperationsSortTest do
     test "sort_mode re-sorts the children and the record carries the new pair", ctx do
       %{parent: parent, a: a, b: b, c: c} = branch(ctx.owner, ctx.ini)
 
-      {status, body} = post_ops(ctx.editor, [sort_op(parent.id, %{"sort_mode" => "alphabetical"})])
+      {status, body} =
+        post_ops(ctx.editor, [sort_op(parent.id, %{"sort_mode" => "alphabetical"})])
 
       assert status == 200
       assert [%{"status" => "ok", "data" => data}] = body["results"]
@@ -183,7 +184,8 @@ defmodule DoItWeb.Api.OperationsSortTest do
     test "a viewer is refused and nothing changes", ctx do
       %{parent: parent, c: c, a: a, b: b} = branch(ctx.owner, ctx.ini)
 
-      {status, body} = post_ops(ctx.viewer, [sort_op(parent.id, %{"sort_mode" => "alphabetical"})])
+      {status, body} =
+        post_ops(ctx.viewer, [sort_op(parent.id, %{"sort_mode" => "alphabetical"})])
 
       assert status == 403
       assert [%{"status" => "error", "error" => %{"code" => "forbidden"}}] = body["results"]

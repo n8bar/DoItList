@@ -14,6 +14,7 @@ defmodule DoIt.SkillReferenceTest do
   # line (`doitlist.py <verb>` or a bare verb followed by arguments) is a verb.
 
   @server Path.expand("../mcp_server/lib/doit_mcp/server.ex", __DIR__)
+  @tools Path.wildcard(Path.expand("../mcp_server/lib/doit_mcp/tools/*.ex", __DIR__))
   @cli Path.expand("../skills/doitlist/scripts/doitlist.py", __DIR__)
   @skill Path.expand("../skills/doitlist/SKILL.md", __DIR__)
 
@@ -21,7 +22,7 @@ defmodule DoIt.SkillReferenceTest do
   @interpreters ~w(py python python3)
 
   test "the skill names only real MCP tools/resources" do
-    known = known_component_names()
+    known = MapSet.union(known_component_names(), known_tool_fields())
     referenced = mcp_refs()
 
     assert MapSet.size(known) > 0,
@@ -63,6 +64,17 @@ defmodule DoIt.SkillReferenceTest do
       )
     )
     |> Enum.map(fn [mod] -> Macro.underscore(mod) end)
+    |> MapSet.new()
+  end
+
+  # `field(:task_ids, ...)` in a tool schema -> "task_ids": a tool's own
+  # parameter names are legitimate backticked snake_case tokens in the skill.
+  defp known_tool_fields do
+    @tools
+    |> Enum.flat_map(fn path ->
+      Regex.scan(~r/field\(:(\w+)/, File.read!(path), capture: :all_but_first)
+    end)
+    |> Enum.map(fn [name] -> name end)
     |> MapSet.new()
   end
 

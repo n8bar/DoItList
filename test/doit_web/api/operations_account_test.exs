@@ -56,7 +56,8 @@ defmodule DoItWeb.Api.OperationsAccountTest do
   end
 
   test "mode and reverse land on the preferences row and the result echoes them", ctx do
-    {200, body} = update_account(ctx.user, %{"index_sort" => "name", "index_sort_reverse" => true})
+    {200, body} =
+      update_account(ctx.user, %{"index_sort" => "name", "index_sort_reverse" => true})
 
     assert %{"status" => "ok", "data" => data} = Enum.at(body["results"], 0)
     assert data == %{"type" => "account", "index_sort" => "name", "index_sort_reverse" => true}

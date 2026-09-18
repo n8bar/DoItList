@@ -123,7 +123,12 @@ defmodule DoIt.Tasks.MoveTasksTest do
 
       assert child_ids(c) == [c1.id, a3.id, a1.id, c2.id]
 
-      assert {:ok, _} = Tasks.move_tasks([get(a2.id), get(a3.id)], owner, %{"parent_id" => c.id, "position" => 99})
+      assert {:ok, _} =
+               Tasks.move_tasks([get(a2.id), get(a3.id)], owner, %{
+                 "parent_id" => c.id,
+                 "position" => 99
+               })
+
       assert child_ids(c) == [c1.id, a1.id, c2.id, a2.id, a3.id]
     end
 
