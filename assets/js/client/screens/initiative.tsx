@@ -9,9 +9,10 @@
 // the tree underneath does not get pushed down when the read lands. The tree
 // holds its own height the same way, through the layout budget.
 //
-// The tree is READ-ONLY here. Every control is drawn and every key is bound, but
-// the writes land with the operation adapter (Arc 3). Nothing is silently dead:
-// a control that cannot do its job yet says so (guardrail §6.7).
+// Every write the tree asks for goes out through the operation adapter
+// (`tree/adapter.ts`, item 5.1.1): one batch per intent, in order, under an
+// idempotency key. The reply's delta is merged into the model; a rejection is
+// said out loud. Pending paint and revert are item 5.2's.
 //
 // This is also where the connection seam is exercised — the screen subscribes
 // on mount and unsubscribes on unmount, while the connection object itself
@@ -31,6 +32,10 @@ import { members as membersOf, presence as presenceOf, putMembers, putTree } fro
 import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
+import type { TreeWrite } from "../tree/adapter.ts";
+import { createAdapter, rejectionMessage } from "../tree/adapter.ts";
+import type { AddRequest } from "../tree/add_form_model.ts";
+import type { TreeIntent } from "../tree/context.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { TaskDetails } from "../tree/details.tsx";
 import { permissionsFor } from "../tree/permissions.ts";
@@ -192,10 +197,7 @@ export function InitiativeScreen({ id }: { id: number }) {
   );
 }
 
-/** Read-only for now: every write the tree can ask for gets this back. */
-const READ_ONLY_TITLE = "Not yet";
-const READ_ONLY_MESSAGE =
-  "Editing from this view lands in the next arc. Use the workspace to make changes.";
+const REJECTED_TITLE = "That change was not saved";
 
 /** The tree, and everything that is true only once there is a tree. */
 function TreeSection({ id, model }: { id: number; model: TreeModel }) {
@@ -253,13 +255,45 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   // a viewer sees no Progress control it cannot use (item 1.2.3).
   const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
 
-  const notYet = useCallback(() => {
-    pushNotice(stores.ui, {
-      kind: "info",
-      title: READ_ONLY_TITLE,
-      message: READ_ONLY_MESSAGE,
-    });
-  }, [stores.ui]);
+  // One adapter per mounted tree. It reads the model and the members off the
+  // store at submit time, so a batch is always built from what is current.
+  const adapter = useMemo(
+    () =>
+      createAdapter({
+        api,
+        context: (initiativeId) => {
+          const state = stores.domain.get();
+          const current = state.trees[initiativeId];
+          if (current === undefined) return undefined;
+          return {
+            model: current,
+            memberIds: membersOf(state, initiativeId).map((member) => member.user_id),
+          };
+        },
+      }),
+    [api, stores.domain],
+  );
+
+  const submit = useCallback(
+    (write: TreeWrite) => {
+      void adapter.submit(id, write).then((result) => {
+        if (result.ok) {
+          // Server truth, merged over whatever the model holds by now.
+          const current = stores.domain.get().trees[id];
+          if (current !== undefined) putTree(stores.domain, applyDelta(current, result.delta).model);
+          return;
+        }
+        pushNotice(stores.ui, {
+          kind: "error",
+          title: REJECTED_TITLE,
+          message: rejectionMessage(result.error),
+        });
+      });
+    },
+    [adapter, id, stores.domain, stores.ui],
+  );
+  const onIntent = useCallback((intent: TreeIntent) => submit(intent), [submit]);
+  const onAdd = useCallback((request: AddRequest) => submit({ kind: "add", request }), [submit]);
 
   // Read once, off the address bar the screen arrived on.
   const [deepLinkTaskId] = useState(() => taskParam(window.location.search));
@@ -274,8 +308,8 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     selectedId,
     select,
     deepLinkTaskId,
-    onIntent: notYet,
-    onAdd: notYet,
+    onIntent,
+    onAdd,
     onBlocked: useCallback(() => {
       pushNotice(stores.ui, {
         kind: "info",

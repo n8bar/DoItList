@@ -57,7 +57,8 @@ export interface ApiClientOptions {
 
 export interface ApiClient {
   get<T>(path: string): Promise<Result<T>>;
-  post<T>(path: string, body: unknown): Promise<Result<T>>;
+  /** `headers` are sent verbatim on top of the client's own (e.g. `Idempotency-Key`). */
+  post<T>(path: string, body: unknown, headers?: Record<string, string>): Promise<Result<T>>;
   /** Re-reads `GET /app/api/session`, adopting the fresh CSRF token. */
   refreshSession(): Promise<Result<SessionData>>;
   /** The token writes are currently sending. */
@@ -109,8 +110,9 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     path: string,
     body: unknown,
     allowRetry: boolean,
+    extraHeaders: Record<string, string> = {},
   ): Promise<Result<T>> {
-    const headers: Record<string, string> = { accept: "application/json" };
+    const headers: Record<string, string> = { accept: "application/json", ...extraHeaders };
     if (method !== "GET") {
       headers["content-type"] = "application/json";
       // The CSRF token is the write credential. There is no bearer token.
@@ -159,7 +161,7 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
     // for a fresh one and replay the write exactly once.
     if (error.code === "stale_session" && allowRetry) {
       const refreshed = await refreshSession();
-      if (refreshed.ok) return send<T>(method, path, body, false);
+      if (refreshed.ok) return send<T>(method, path, body, false, extraHeaders);
     }
 
     return { ok: false, error };
@@ -175,7 +177,8 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
 
   return {
     get: <T,>(path: string) => send<T>("GET", path, null, false),
-    post: <T,>(path: string, body: unknown) => send<T>("POST", path, body, true),
+    post: <T,>(path: string, body: unknown, headers?: Record<string, string>) =>
+      send<T>("POST", path, body, true, headers),
     refreshSession,
     csrfToken: () => csrfToken,
   };

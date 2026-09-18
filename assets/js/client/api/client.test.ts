@@ -66,6 +66,15 @@ test("a write sends the csrf header and the JSON body", async () => {
   assert.equal(calls[0]?.body, JSON.stringify({ operations: [] }));
 });
 
+test("a write sends the caller's extra headers beside its own", async () => {
+  const { api, calls } = client([{ status: 200, body: { data: { results: [] } } }]);
+  await api.post("/operations", { operations: [] }, { "idempotency-key": "k-1" });
+
+  assert.equal(calls[0]?.headers["idempotency-key"], "k-1");
+  assert.equal(calls[0]?.headers["x-csrf-token"], "tok");
+  assert.equal(calls[0]?.headers["content-type"], "application/json");
+});
+
 test("error codes decode into typed errors", async () => {
   for (const [status, code] of [
     [401, "unauthorized"],
