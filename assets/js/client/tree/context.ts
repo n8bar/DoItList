@@ -39,6 +39,16 @@ export type TreeIntent =
   /** "Make descendants inherit" — `cascade_sort`. */
   | { kind: "cascadeSort"; id: number };
 
+/**
+ * A Details-pane edit the server refused (item 5.2.3): the fields as the user
+ * typed them, kept in the pane with the server's sentence beside them.
+ */
+export interface EditRejection {
+  readonly id: number;
+  readonly fields: Extract<TreeIntent, { kind: "edit" }>["fields"];
+  readonly message: string;
+}
+
 /** Where an add form is being opened from. */
 export type AddAnchor =
   | { kind: "root" }
@@ -57,10 +67,17 @@ export interface TreeContext {
   /** Other members' selections and who is online, for the badges and dots. */
   readonly presence: RowPresence;
   readonly selectedTaskId: number | null;
-  /** Rows with a write in flight — painted pink. Arc 3 fills these. */
+  /** Rows with a write in flight — painted pink (item 5.2.1). */
   readonly savingIds: ReadonlySet<number>;
   /** Rows whose roll-up is being recomputed — indeterminate bars. */
   readonly recomputingIds: ReadonlySet<number>;
+  /**
+   * Server id → the stand-in id its row was first drawn under, so an added
+   * row keeps its React key when the server names it (item 5.2.2).
+   */
+  readonly rowKeys?: ReadonlyMap<number, number>;
+  /** The most recent refused pane edit, if any (item 5.2.3). */
+  readonly rejection?: EditRejection | null;
 
   canProgress(id: number): boolean;
   collapsed(id: number): boolean;

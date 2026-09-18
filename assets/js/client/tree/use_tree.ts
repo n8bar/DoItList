@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RowPreferences } from "../state/preferences.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { addSlots, moveSlot, sameSlot } from "./add_form_model.ts";
-import type { AddAnchor, TreeContext, TreeIntent } from "./context.ts";
+import type { AddAnchor, EditRejection, TreeContext, TreeIntent } from "./context.ts";
 import type { KeyOutcome } from "./keyboard_model.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
@@ -67,6 +67,13 @@ export interface UseTreeOptions {
   deepLinkTaskId?: number | null;
   /** Where collapse state is kept. Injected so a test can hand it a fake. */
   store?: CollapseStore | null;
+  /** The pending scope (item 5.2): pink rows, indeterminate rows. Nothing, by default. */
+  savingIds?: ReadonlySet<number>;
+  recomputingIds?: ReadonlySet<number>;
+  /** Server id → stand-in id, for an added row's stable key. */
+  rowKeys?: ReadonlyMap<number, number>;
+  /** A refused pane edit to keep in its field. */
+  rejection?: EditRejection | null;
 }
 
 export interface TreeState {
@@ -309,9 +316,10 @@ export function useTree(options: UseTreeOptions): TreeState {
     members,
     presence: options.presence ?? noPresence,
     selectedTaskId: selectedId,
-    // Nothing is in flight until the operation adapter lands (Arc 3).
-    savingIds: EMPTY_IDS,
-    recomputingIds: EMPTY_IDS,
+    savingIds: options.savingIds ?? EMPTY_IDS,
+    recomputingIds: options.recomputingIds ?? EMPTY_IDS,
+    rowKeys: options.rowKeys ?? EMPTY_KEYS,
+    rejection: options.rejection ?? null,
     canProgress: (id: number) => canProgress(permissions, id),
     collapsed,
     onToggleCollapse,
@@ -351,6 +359,7 @@ export function useTree(options: UseTreeOptions): TreeState {
 }
 
 const EMPTY_IDS: ReadonlySet<number> = new Set<number>();
+const EMPTY_KEYS: ReadonlyMap<number, number> = new Map<number, number>();
 const EMPTY_EXPANDING: readonly number[] = [];
 
 /** Brings a row the keyboard just selected into view, gently. */

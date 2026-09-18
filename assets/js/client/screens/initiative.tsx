@@ -11,8 +11,11 @@
 //
 // Every write the tree asks for goes out through the operation adapter
 // (`tree/adapter.ts`, item 5.1.1): one batch per intent, in order, under an
-// idempotency key. The reply's delta is merged into the model; a rejection is
-// said out loud. Pending paint and revert are item 5.2's.
+// idempotency key. The moment a batch is queued its prediction is on screen
+// and its rows are pending (item 5.2); the reply's delta lands on canonical
+// truth and the prediction is dropped (`tree/optimistic.ts`); a rejection
+// reverts the tree and is said out loud — or, for a pane edit, kept in the
+// field with the reason beside it.
 //
 // This is also where the connection seam is exercised — the screen subscribes
 // on mount and unsubscribes on unmount, while the connection object itself
@@ -32,13 +35,24 @@ import { members as membersOf, presence as presenceOf, putMembers, putTree } fro
 import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
-import type { TreeWrite } from "../tree/adapter.ts";
-import { createAdapter, rejectionMessage } from "../tree/adapter.ts";
+import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
+import { createAdapter, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
 import { CONFIRM_CLASSES, dialogIdFor } from "../tree/confirm_model.ts";
-import type { TreeIntent } from "../tree/context.ts";
+import type { EditRejection, TreeIntent } from "../tree/context.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { TaskDetails } from "../tree/details.tsx";
+import type { OptimisticState } from "../tree/optimistic.ts";
+import { alias, begin as beginFlight, idle, reject, succeed } from "../tree/optimistic.ts";
+import type { PendingMap } from "../tree/pending_model.ts";
+import {
+  NO_PENDING,
+  begin as beginPending,
+  recomputingIds,
+  savingIds,
+  scopeFor,
+  settle,
+} from "../tree/pending_model.ts";
 import { permissionsFor } from "../tree/permissions.ts";
 import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.ts";
 import type { RowPresence } from "../tree/row_model.ts";
@@ -48,9 +62,10 @@ import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
 import { useConfirm } from "../tree/use_confirm.ts";
 import { useTree } from "../tree/use_tree.ts";
 import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
+import { createStore } from "../state/store.ts";
 import type { UiState } from "../state/ui.ts";
 import { pushNotice, selectTask } from "../state/ui.ts";
-import { useStoreValue } from "../state/use_store.ts";
+import { useStore, useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import { browserKeyValueStore } from "../storage/last_user.ts";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
@@ -203,6 +218,25 @@ export function InitiativeScreen({ id }: { id: number }) {
 
 const REJECTED_TITLE = "That change was not saved";
 
+/**
+ * What is true about writes in flight and nowhere else (item 5.2.1): which rows
+ * are pending, which added rows keep a stand-in key, and the last refused pane
+ * edit. Ephemeral — it lives with the mounted tree and never enters the model.
+ * A store rather than React state so it commits in the same pass as the tree
+ * store: the pink and the prediction land together, and lift together.
+ */
+interface InFlightState {
+  readonly pending: PendingMap;
+  readonly rowKeys: ReadonlyMap<number, number>;
+  readonly rejection: EditRejection | null;
+}
+
+const NOTHING_IN_FLIGHT: InFlightState = {
+  pending: NO_PENDING,
+  rowKeys: new Map(),
+  rejection: null,
+};
+
 /** The tree, and everything that is true only once there is a tree. */
 function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   const { api, stores, connection, escalate } = useServices();
@@ -259,43 +293,126 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   // a viewer sees no Progress control it cannot use (item 1.2.3).
   const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
 
+  const inFlight = useMemo(() => createStore<InFlightState>(NOTHING_IN_FLIGHT), []);
+  const { pending, rowKeys, rejection } = useStore(inFlight);
+  // Canonical truth plus the predictions still unanswered. A ref, not state:
+  // it is read and written only inside the adapter's hooks, never rendered.
+  const flights = useRef<OptimisticState | null>(null);
+  // Stand-in ids for added rows, unique across this tree's life: negative by
+  // contract, and never reused so two adds in flight cannot share a key.
+  const standIn = useRef(0);
+
   // One adapter per mounted tree. It reads the model and the members off the
-  // store at submit time, so a batch is always built from what is current.
-  const adapter = useMemo(
-    () =>
-      createAdapter({
-        api,
-        context: (initiativeId) => {
-          const state = stores.domain.get();
-          const current = state.trees[initiativeId];
-          if (current === undefined) return undefined;
-          return {
-            model: current,
-            memberIds: membersOf(state, initiativeId).map((member) => member.user_id),
-          };
-        },
-      }),
-    [api, stores.domain],
-  );
+  // store at submit time, so a batch is always built from what is current —
+  // including the predictions already on screen, which is what the user is
+  // acting on.
+  const adapter = useMemo(() => {
+    const contextFor = (initiativeId: number, model: TreeModel) => ({
+      model,
+      memberIds: membersOf(stores.domain.get(), initiativeId).map((member) => member.user_id),
+    });
+
+    // Item 5.2.1: the guess goes on screen and its rows go pending, in the same
+    // synchronous step as the batch is queued — before anything is sent.
+    const onSubmit = (submission: Submission): void => {
+      const { initiativeId, write, key } = submission;
+      const current = stores.domain.get().trees[initiativeId];
+      if (current === undefined || write === null) return;
+
+      standIn.current -= 1;
+      const tempId = write.kind === "add" ? standIn.current : null;
+      const predict = (base: TreeModel): TreeModel =>
+        predictWrite(write, contextFor(initiativeId, base), tempId ?? -1) ?? base;
+
+      // With nothing in flight, whatever the store holds IS canonical — a
+      // refetch that landed since the last write is picked up here.
+      const previous = flights.current;
+      const base = previous === null || previous.flights.length === 0 ? idle(current) : previous;
+      const begun = beginFlight(base, { key, predict, tempId });
+      flights.current = begun.state;
+
+      const scope = scopeFor(current, begun.shown, [targetOf(write, tempId ?? -1)], submission.affectedIds);
+      inFlight.set((state) => ({
+        ...state,
+        pending: beginPending(state.pending, key, scope),
+        // A new edit on the same task supersedes what was refused before.
+        rejection:
+          write.kind === "edit" && state.rejection?.id === write.id ? null : state.rejection,
+      }));
+      putTree(stores.domain, begun.shown);
+    };
+
+    const onResult = (submission: Submission, result: SubmitResult): void => {
+      const state = flights.current;
+      if (state === null) return;
+      const { key, write } = submission;
+      const flight = state.flights.find((candidate) => candidate.key === key);
+
+      if (result.ok) {
+        // Item 5.2.2: truth lands on canonical; the prediction is dropped and
+        // the ones still pending are re-run on top. An added row's server id
+        // is aliased to its stand-in key before the tree re-renders.
+        const landed = succeed(state, key, result.delta);
+        flights.current = landed.state;
+        inFlight.set((current) => ({
+          ...current,
+          pending: settle(current.pending, key),
+          rowKeys: alias(current.rowKeys, landed.createdId, flight?.tempId ?? null),
+        }));
+        putTree(stores.domain, landed.shown);
+        return;
+      }
+
+      // Item 5.2.3: the revert is canonical plus what is still pending. A pane
+      // edit keeps its text in the field with the reason beside it; anything
+      // else is said out loud.
+      const dropped = reject(state, key);
+      flights.current = dropped.state;
+      const message = rejectionMessage(result.error);
+      const refusedEdit: EditRejection | null =
+        write?.kind === "edit" ? { id: write.id, fields: write.fields, message } : null;
+      inFlight.set((current) => ({
+        ...current,
+        pending: settle(current.pending, key),
+        rejection: refusedEdit ?? current.rejection,
+      }));
+      putTree(stores.domain, dropped.shown);
+      if (refusedEdit === null) {
+        pushNotice(stores.ui, { kind: "error", title: REJECTED_TITLE, message });
+      }
+    };
+
+    return createAdapter({
+      api,
+      context: (initiativeId) => {
+        const current = stores.domain.get().trees[initiativeId];
+        return current === undefined ? undefined : contextFor(initiativeId, current);
+      },
+      // The batch itself is built from truth, never from a guess: canonical as
+      // the previous reply left it (or the store, when nothing is in flight).
+      sendContext: (initiativeId) => {
+        const state = flights.current;
+        const canonical =
+          state !== null && state.flights.length > 0
+            ? state.canonical
+            : stores.domain.get().trees[initiativeId];
+        return canonical === undefined ? undefined : contextFor(initiativeId, canonical);
+      },
+      onSubmit,
+      onResult,
+    });
+  }, [api, inFlight, stores.domain, stores.ui]);
 
   const submit = useCallback(
     (write: TreeWrite) => {
-      void adapter.submit(id, write).then((result) => {
-        if (result.ok) {
-          // Server truth, merged over whatever the model holds by now.
-          const current = stores.domain.get().trees[id];
-          if (current !== undefined) putTree(stores.domain, applyDelta(current, result.delta).model);
-          return;
-        }
-        pushNotice(stores.ui, {
-          kind: "error",
-          title: REJECTED_TITLE,
-          message: rejectionMessage(result.error),
-        });
-      });
+      // Everything that happens on the way out and back is the adapter's hooks.
+      void adapter.submit(id, write);
     },
-    [adapter, id, stores.domain, stores.ui],
+    [adapter, id],
   );
+
+  const saving = useMemo(() => savingIds(pending), [pending]);
+  const recomputing = useMemo(() => recomputingIds(pending), [pending]);
   // The three confirms (item 5.1.4) sit between an intent and the adapter:
   // asked from the model, client-side, before anything is sent (§6.5).
   const storage = useMemo(browserKeyValueStore, []);
@@ -319,6 +436,10 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     deepLinkTaskId,
     onIntent,
     onAdd,
+    savingIds: saving,
+    recomputingIds: recomputing,
+    rowKeys,
+    rejection,
     onBlocked: useCallback(() => {
       pushNotice(stores.ui, {
         kind: "info",

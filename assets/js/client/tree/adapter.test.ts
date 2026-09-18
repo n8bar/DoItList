@@ -12,6 +12,7 @@ import {
   rejectionMessage,
 } from "./adapter.ts";
 import type { TaskResult } from "./delta.ts";
+import { applyDelta } from "./delta.ts";
 import { buildTree } from "./gen.ts";
 import { fromSnapshot } from "./model.ts";
 
@@ -426,6 +427,45 @@ describe("createAdapter", () => {
     const [a, b] = await Promise.all([first, second]);
     assert.ok(a.ok && b.ok);
     assert.deepEqual(results, ["key-1:ok", "key-2:ok"]);
+  });
+
+  it("a second edit on one record is built at send time, with the bumped version", async () => {
+    const fake = fakeApi();
+    // The screen's canonical model: the first reply's version lands here.
+    let canonical = base();
+    let n = 0;
+    const instance = createAdapter({
+      api: fake.api,
+      context: () => ({ model: canonical, memberIds: [7, 8] }),
+      sendContext: () => ({ model: canonical, memberIds: [7, 8] }),
+      keyGen: () => `key-${++n}`,
+      onResult: (_s, r) => {
+        if (r.ok) canonical = applyDelta(canonical, r.delta).model;
+      },
+    });
+
+    const first = instance.submit(5, { kind: "edit", id: 11, fields: { title: "Door" } });
+    const second = instance.submit(5, { kind: "edit", id: 11, fields: { priority: "high" } });
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls[0]?.body.operations[0]?.data["expected_version"], version(11));
+
+    fake.calls[0]?.resolve({
+      ok: true,
+      data: {
+        results: [{ index: 0, status: "ok", data: result({ id: 11, title: "Door", version: version(11) + 1 }) }],
+      },
+    });
+    await settle();
+    assert.equal(fake.calls.length, 2);
+    assert.deepEqual(fake.calls[1]?.body.operations[0]?.data, {
+      priority: "high",
+      expected_version: version(11) + 1,
+    });
+
+    fake.calls[1]?.resolve(okReply(11));
+    const [a, b] = await Promise.all([first, second]);
+    assert.ok(a.ok && b.ok);
   });
 
   it("a failure does not hold the queue; the next batch still goes", async () => {

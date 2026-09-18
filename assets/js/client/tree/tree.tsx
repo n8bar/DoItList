@@ -117,7 +117,15 @@ function Children({
         .join(" ")}
     >
       {childIds.map((id) => (
-        <Branch key={id} ctx={ctx} id={id} depth={depth} slot={slot} form={form} dragging={dragging} />
+        <Branch
+          key={ctx.rowKeys?.get(id) ?? id}
+          ctx={ctx}
+          id={id}
+          depth={depth}
+          slot={slot}
+          form={form}
+          dragging={dragging}
+        />
       ))}
       {/* "Last child of this branch" — only reachable while the branch is open,
           so a closed one gets no strip at all. */}
@@ -229,8 +237,18 @@ export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAd
           className="space-y-2"
         >
           {dragging && <RootZone zone="top" />}
+          {/* Keyed by the id the row was FIRST drawn under: an added row keeps
+              its stand-in key once the server names it, so nothing remounts. */}
           {rootIds.map((id) => (
-            <Branch key={id} ctx={ctx} id={id} depth={0} slot={addSlot} form={form} dragging={dragging} />
+            <Branch
+              key={ctx.rowKeys?.get(id) ?? id}
+              ctx={ctx}
+              id={id}
+              depth={0}
+              slot={addSlot}
+              form={form}
+              dragging={dragging}
+            />
           ))}
           {dragging && <RootZone zone="bottom" />}
         </ul>

@@ -8,8 +8,11 @@
 // Each field keeps a draft while the user is in it and commits ONE intent when
 // they leave it (blur, or Enter on the title) or change it (selects, slider).
 // Between edits the field shows the record, so a change that lands from the
-// channel is what the user sees, not a stale copy. The intents are read-only
-// until Worklist 5's adapter answers them.
+// channel is what the user sees, not a stale copy. An edit the server refused
+// (item 5.2.3) comes back as `ctx.rejection`: a text field takes the refused
+// text back as its draft, with the server's sentence beside it, so it can be
+// fixed rather than retyped; a select or the slider shows the kept value and
+// the sentence.
 //
 // Comments, Activity and chat are Arc 7 — see the note at the end.
 
@@ -17,7 +20,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode, ToggleEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 
 import { Icon } from "../ui/icon.tsx";
-import type { TreeContext } from "./context.ts";
+import type { EditRejection, TreeContext } from "./context.ts";
 import {
   PRIORITIES,
   SORT_MODE_OPTIONS,
@@ -64,6 +67,9 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
   const canEdit = fields.edit;
   const progress = progressView(ctx.model, record);
   const rows = coRows(record, ctx.members);
+  const rejection = ctx.rejection?.id === id ? ctx.rejection : null;
+  const refused = (field: keyof EditableFields): string | null =>
+    rejection !== null && rejection.fields[field] !== undefined ? rejection.message : null;
   const commit = (edit: EditableFields | null): void => {
     if (edit !== null) ctx.onIntent({ kind: "edit", id, fields: edit });
   };
@@ -98,7 +104,14 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             </label>
             {canEdit && <RefPickerButton target="#task-field-title" />}
           </div>
-          <TitleField key={id} record={record} disabled={!canEdit} onCommit={commit} />
+          <TitleField
+            key={id}
+            record={record}
+            disabled={!canEdit}
+            onCommit={commit}
+            rejection={rejection}
+          />
+          <FieldError id="task-field-title" message={refused("title")} />
         </div>
 
         <div>
@@ -108,7 +121,14 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             </label>
             {canEdit && <RefPickerButton target="#task-field-description" />}
           </div>
-          <DescriptionField key={id} record={record} disabled={!canEdit} onCommit={commit} />
+          <DescriptionField
+            key={id}
+            record={record}
+            disabled={!canEdit}
+            onCommit={commit}
+            rejection={rejection}
+          />
+          <FieldError id="task-field-description" message={refused("description")} />
         </div>
 
         {/* One progress block for leaf and branch alike — the branch-only copy
@@ -135,6 +155,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             ariaLabel={progress.ariaLabel}
             onCommit={commit}
           />
+          <FieldError id="task-field-progress" message={refused("manual_progress")} />
           <p
             data-branch-note
             className={`text-xs text-zinc-400 dark:text-zinc-500 italic${progress.leaf ? " invisible" : ""}`}
@@ -171,6 +192,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
               </option>
             ))}
           </select>
+          <FieldError id="task-field-priority" message={refused("priority")} />
         </div>
         <div>
           <label htmlFor="task-field-assignee" className={LABEL}>
@@ -193,6 +215,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
               </option>
             ))}
           </select>
+          <FieldError id="task-field-assignee" message={refused("assignee_id")} />
         </div>
       </div>
 
@@ -341,16 +364,47 @@ function RefPickerButton({ target }: { target: string }) {
   );
 }
 
+/** The server's sentence for a refused edit, beside the field it refused. */
+function FieldError({ id, message }: { id: string; message: string | null }) {
+  if (message === null) return null;
+  return (
+    <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
+      {message}
+    </p>
+  );
+}
+
 interface FieldProps {
   record: TaskRecord;
   disabled: boolean;
   onCommit: (edit: EditableFields | null) => void;
+  /** A refused edit on this task; a text field takes its text back as the draft. */
+  rejection?: EditRejection | null;
+}
+
+/**
+ * The refused text becomes the draft again — once per rejection, so the user's
+ * later typing is not overwritten. Focus then keeps that draft rather than
+ * restarting from the record.
+ */
+function useRefusedDraft(
+  refusedText: string | null | undefined,
+  rejection: EditRejection | null | undefined,
+  setDraft: (draft: string | null) => void,
+): void {
+  useEffect(() => {
+    if (rejection !== null && rejection !== undefined && typeof refusedText === "string") {
+      setDraft(refusedText);
+    }
+  }, [rejection, refusedText, setDraft]);
 }
 
 /** Draft while focused, the record otherwise; commits on blur or Enter. */
-function TitleField({ record, disabled, onCommit }: FieldProps) {
+function TitleField({ record, disabled, onCommit, rejection }: FieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
+  useRefusedDraft(rejection?.fields.title, rejection, setDraft);
   const shown = draft ?? record.title;
+  const refused = rejection?.fields.title !== undefined;
 
   const finish = (): void => {
     if (draft !== null) onCommit(titleEdit(record, draft));
@@ -365,7 +419,9 @@ function TitleField({ record, disabled, onCommit }: FieldProps) {
       value={shown}
       className="w-full input input-bordered input-sm"
       disabled={disabled}
-      onFocus={() => setDraft(record.title)}
+      aria-invalid={refused || undefined}
+      aria-describedby={refused ? "task-field-title-error" : undefined}
+      onFocus={() => setDraft(draft ?? record.title)}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={finish}
       onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
@@ -379,9 +435,13 @@ function TitleField({ record, disabled, onCommit }: FieldProps) {
 }
 
 /** Same as the title, committing on blur only. */
-function DescriptionField({ record, disabled, onCommit }: FieldProps) {
+function DescriptionField({ record, disabled, onCommit, rejection }: FieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
+  const refusedText =
+    rejection?.fields.description === undefined ? undefined : (rejection.fields.description ?? "");
+  useRefusedDraft(refusedText, rejection, setDraft);
   const shown = draft ?? record.description ?? "";
+  const refused = refusedText !== undefined;
 
   return (
     <textarea
@@ -391,7 +451,9 @@ function DescriptionField({ record, disabled, onCommit }: FieldProps) {
       rows={3}
       disabled={disabled}
       value={shown}
-      onFocus={() => setDraft(record.description ?? "")}
+      aria-invalid={refused || undefined}
+      aria-describedby={refused ? "task-field-description-error" : undefined}
+      onFocus={() => setDraft(draft ?? record.description ?? "")}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
         if (draft !== null) onCommit(descriptionEdit(record, draft));

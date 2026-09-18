@@ -8,13 +8,18 @@
 // Per Initiative, batches leave in the order they were created and one at a
 // time: the second waits for the first's reply, so the server sees the user's
 // actions in the order the user took them and a later op never lands on a
-// record an earlier one is still changing.
+// record an earlier one is still changing. A batch is BUILT when it is
+// dequeued, not when it is queued: `expected_version` and slots come from the
+// canonical model as the previous reply left it, so two edits queued on one
+// record do not both carry the version the first one is about to bump.
 //
 // The server stays authoritative. What comes back is turned into a `TreeDelta`
 // (`delta.ts`) and handed to the caller; the pure ops in `ops.ts` are used here
-// only to work out WHICH records a write touches (`affectedIds`, the scope item
-// 5.2 paints pending) and, for a keyboard move, the slot the server op needs.
-// Nothing here paints, reverts, or reconciles.
+// to work out WHICH records a write touches (`affectedIds`, the scope item 5.2
+// paints pending), what the write will most likely look like (`predictWrite`,
+// the display-only guess `optimistic.ts` folds over canonical) and, for a
+// keyboard move, the slot the server op needs. Nothing here paints, reverts,
+// or reconciles.
 
 import type { ApiClient, ApiError } from "../api/client.ts";
 import type { Priority } from "../api/types.ts";
@@ -24,7 +29,7 @@ import type { HistoryResult, TaskResult, TaskUpsert, TreeDelta } from "./delta.t
 import { deltaFromHistoryResult, deltaFromOpResult } from "./delta.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
 import { childIdsOf } from "./model.ts";
-import type { MoveArgs } from "./ops.ts";
+import type { MoveArgs, OpResult } from "./ops.ts";
 import {
   addTask,
   cascadeSort,
@@ -142,6 +147,89 @@ export function intentToBatch(write: TreeWrite, context: BatchContext): Batch {
     default:
       return EMPTY;
   }
+}
+
+/**
+ * What the model most likely looks like once `write` lands — the same pure op
+ * `intentToBatch` consulted, run for its model this time. `null` when there is
+ * nothing to predict (nothing would be sent). An add's new row gets `tempId`;
+ * the caller owns making it unique across the adds it has in flight.
+ */
+export function predictWrite(
+  write: TreeWrite,
+  context: BatchContext,
+  tempId: number,
+): TreeModel | null {
+  const { model } = context;
+
+  switch (write.kind) {
+    case "add": {
+      const predicted = addTask(model, {
+        tempId,
+        parentId: write.request.parentId,
+        position: write.request.position,
+        title: write.request.title,
+      });
+      return failed(predicted) ? null : predicted.model;
+    }
+
+    case "toggleComplete":
+    case "cascadeComplete":
+      return changed(setDone(model, write.id, write.done));
+
+    case "reorder":
+    case "indent":
+    case "outdent":
+    case "move": {
+      const args = moveArgsFor(model, write);
+      if (args === null) return null;
+      const predicted = moveTask(model, args);
+      return failed(predicted) ? null : predicted.model;
+    }
+
+    case "edit":
+      return changed(updateFields(model, write.id, changedFor(model, write.id, write.fields)));
+
+    case "step": {
+      const record = model.tasks[write.id];
+      if (record === undefined) return null;
+      const fields = changedFields(record, stepped(record, write.field, write.back, context));
+      return changed(updateFields(model, write.id, fields));
+    }
+
+    case "coAssignees":
+      return changed(updateFields(model, write.id, { co_assignee_ids: write.ids }));
+
+    case "setSort":
+      return changed(setSort(model, write.id, write.mode, write.reverse));
+
+    case "cascadeSort":
+      return changed(cascadeSort(model, write.id));
+
+    case "delete":
+      return changed(deleteSubtree(model, write.id));
+
+    default:
+      return null;
+  }
+}
+
+/** The record the write is about — what item 5.2 paints as saving. */
+export function targetOf(write: TreeWrite, tempId: number): number {
+  return write.kind === "add" ? tempId : write.id;
+}
+
+function changed(result: OpResult): TreeModel | null {
+  return result.affected.length === 0 ? null : result.model;
+}
+
+function changedFor(
+  model: TreeModel,
+  id: number,
+  fields: Partial<Pick<TaskRecord, EditField>>,
+): Partial<Pick<TaskRecord, EditField>> {
+  const record = model.tasks[id];
+  return record === undefined ? {} : changedFields(record, fields);
 }
 
 /**
@@ -391,12 +479,22 @@ export interface Submission {
   key: string;
   initiativeId: number;
   affectedIds: number[];
+  /** The write this batch carries; `null` for undo/redo. */
+  write: TreeWrite | null;
 }
 
 export interface AdapterOptions {
   api: Pick<ApiClient, "post">;
-  /** The current model and members for an Initiative; `undefined` if not loaded. */
+  /**
+   * The model as shown and the members for an Initiative; `undefined` if not
+   * loaded. Consulted as a write is queued, for what it touches.
+   */
   context: (initiativeId: number) => BatchContext | undefined;
+  /**
+   * The canonical model — no predictions — the batch is built from as it is
+   * sent. Defaults to `context`.
+   */
+  sendContext?: (initiativeId: number) => BatchContext | undefined;
   /** Injected in tests; defaults to `crypto.randomUUID()`. */
   keyGen?: () => string;
   /** Fires synchronously as a batch is queued, before anything is sent. */
@@ -416,7 +514,22 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
   // time, so creation order is send order and only one is ever in flight.
   const tails = new Map<number, Promise<unknown>>();
 
-  async function send(submission: Submission, operations: Operation[]): Promise<SubmitResult> {
+  const emptyOk = (affectedIds: number[]): SubmitResult => ({
+    ok: true,
+    delta: { upserts: [], removed: [] },
+    refetch: false,
+    affectedIds,
+  });
+
+  async function send(
+    submission: Submission,
+    build: (context: BatchContext) => Batch,
+  ): Promise<SubmitResult> {
+    // Built now, from truth as the previous reply left it.
+    const context = (options.sendContext ?? options.context)(submission.initiativeId);
+    const operations = context === undefined ? [] : build(context).operations;
+    if (operations.length === 0) return emptyOk(submission.affectedIds);
+
     const body = { operations };
     const headers = { "idempotency-key": submission.key };
     let result = await options.api.post<BatchReply>("/operations", body, headers);
@@ -430,38 +543,45 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
     return { ok: true, delta, refetch, affectedIds: submission.affectedIds };
   }
 
-  function queue(initiativeId: number, batch: Batch): Promise<SubmitResult> {
-    if (batch.operations.length === 0) {
-      return Promise.resolve({
-        ok: true,
-        delta: { upserts: [], removed: [] },
-        refetch: false,
-        affectedIds: [],
-      });
-    }
+  function queue(
+    initiativeId: number,
+    build: (context: BatchContext) => Batch,
+    write: TreeWrite | null,
+  ): Promise<SubmitResult> {
+    // Against what is shown, for whether anything would go and what it touches.
+    const context = options.context(initiativeId);
+    const preview = context === undefined ? EMPTY : build(context);
+    if (preview.operations.length === 0) return Promise.resolve(emptyOk([]));
 
-    const submission: Submission = { key: keyGen(), initiativeId, affectedIds: batch.affectedIds };
+    const submission: Submission = {
+      key: keyGen(),
+      initiativeId,
+      affectedIds: preview.affectedIds,
+      write,
+    };
     options.onSubmit?.(submission);
 
     const previous = tails.get(initiativeId) ?? Promise.resolve();
-    const run = previous.then(() => send(submission, batch.operations));
-    // The queue moves on whatever a batch came to; the caller sees the failure.
+    const run = previous
+      .then(() => send(submission, build))
+      .then((result) => {
+        options.onResult?.(submission, result);
+        return result;
+      });
+    // The next batch is built only after this one's result has been handed
+    // over, so it sees the canonical model that result produced. The queue
+    // moves on whatever a batch came to; the caller sees the failure.
     tails.set(initiativeId, run.catch(() => undefined));
 
-    return run.then((result) => {
-      options.onResult?.(submission, result);
-      return result;
-    });
+    return run;
   }
 
   return {
     submit(initiativeId, write) {
-      const context = options.context(initiativeId);
-      if (context === undefined) return queue(initiativeId, EMPTY);
-      return queue(initiativeId, intentToBatch(write, context));
+      return queue(initiativeId, (context) => intentToBatch(write, context), write);
     },
     submitHistory(initiativeId, action) {
-      return queue(initiativeId, historyBatch(initiativeId, action));
+      return queue(initiativeId, () => historyBatch(initiativeId, action), null);
     },
   };
 }
