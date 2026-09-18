@@ -8,7 +8,10 @@
 // flyout, references, presence and the deep link (8.5), then readable width,
 // wrapping, sideways and pane scrolling, responsive panes, themes and reduced
 // motion (8.6), then the chevron on its parent's border line, touch targets
-// in both layouts, the touch switch and the LiveView workspace (7.8). Drags are real mouse
+// in both layouts, the touch switch and the LiveView workspace (7.8), then the
+// keyboard: selection keys, the documented shortcuts, N and S placement with
+// focus and caret, Alt + arrow reorganisation, the deep link followed by the
+// arrows, and the rows' screen-reader context (8.7). Drags are real mouse
 // gestures over the row handles — press, glide past the threshold, release.
 //
 // Opt-in, like `check_client.mjs`: NOT part of `mix test` or `mix precommit`.
@@ -17,8 +20,9 @@
 //   APP_URL       app origin                 (default http://localhost:4000)
 //   CDP_OPTIONAL  =1 → exit 0 when no endpoint answers (default: exit 2)
 //   CDP_FROM      start at the first check whose name contains this (the
-//                 earlier ones are skipped) — the reveal and 8.6 checks seed
-//                 their own rows, so `CDP_FROM="deep link"` runs from there
+//                 earlier ones are skipped) — the reveal, 8.6 and keyboard
+//                 checks seed their own rows, so `CDP_FROM="deep link"` or
+//                 `CDP_FROM="keys"` runs from there
 //   CDP_PROFILE   =1 → CPU-profile the reference click and print what rendered
 //
 // ONE tab, for every check and every run: the tab already open on APP_URL is
@@ -2080,6 +2084,618 @@ function secondWindow(topic, taskId) {
   `;
 }
 
+// ---------------------------------------------------------------------------
+// 8.7: the keyboard, and what a screen reader is told.
+// ---------------------------------------------------------------------------
+
+/** Windows virtual-key codes, for the browsers that key off them. */
+const VK = { ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Home: 36, End: 35, Escape: 27, Enter: 13, " ": 32, Delete: 46 };
+const MOD = { alt: 1, ctrl: 2, meta: 4, shift: 8 };
+
+/** A named key, as the tree's listener sees it. */
+async function tapKey(session, key, modifiers = 0) {
+  const code = key === " " ? "Space" : key;
+  await pressKey(session, key, { code, windowsVirtualKeyCode: VK[key] ?? 0, modifiers });
+}
+
+/** A letter shortcut: `n`, `s`, `p`, `z`, `?`. Shift is implied by an upper-case or shifted key. */
+async function tapLetter(session, letter, modifiers = 0) {
+  const shifted = letter === "?" || /^[A-Z]$/.test(letter);
+  const code = letter === "?" ? "Slash" : `Key${letter.toUpperCase()}`;
+  await pressKey(session, letter, { code, windowsVirtualKeyCode: letter === "?" ? 191 : letter.toUpperCase().charCodeAt(0), modifiers: modifiers | (shifted ? MOD.shift : 0) });
+}
+
+/** A row's title selected by a real click, without waiting on the pane. */
+async function clickTitle(session, id) {
+  await clickElement(session, titleOf(id));
+  await waitFor(session, `return __tree.selected() === ${id};`, { timeoutMs: 2_000, what: `row #${id} selected` });
+}
+
+/** Presses a selection key and checks it lands where the overlay says, at once, with nothing fetched. */
+async function selectionKey(session, key, steps) {
+  const expected = await evaluate(session, `return __tree.navTarget(${JSON.stringify(key)});`);
+  const was = await evaluate(session, `return __tree.selected();`);
+  if (expected === null || expected === was) {
+    // Nowhere to go: the key is not the tree's, and the selection stays put.
+    await tapKey(session, key);
+    const after = await evaluate(session, `return new Promise((r) => setTimeout(() => r(__tree.selected()), 80));`);
+    if (after !== was) throw new Error(`${key} with nowhere to go moved the selection from #${was} to #${after}`);
+    steps.push(`${key} stays on #${was}`);
+    return;
+  }
+  await armStopwatch(session, "keydown", `return __tree.selected() === ${expected} ? { inView: __tree.inView(${expected}), focus: __tree.focused(), inField: __tree.focusInField() } : false;`);
+  await tapKey(session, key);
+  const ack = await readStopwatch(session, `${key} to select #${expected}`, { expectReply: false });
+  assertAcknowledged(ack, `the selection on ${key}`);
+  const inView = await waitFor(session, `return __tree.inView(${expected});`, { timeoutMs: 1_000, everyMs: 10, what: `#${expected} scrolled into view` }).catch(() => false);
+  if (!inView) throw new Error(`${key} selected #${expected} but left it out of view`);
+  if (ack.detail.inField) throw new Error(`${key} put focus in ${ack.detail.focus}; the next key would go there, not to the tree`);
+  steps.push(`${key} → #${expected} ${ack.ackMs}ms`);
+}
+
+/**
+ * ↑ ↓ ← → Home End walk the rows on screen exactly as the overlay says, each
+ * selection on the glass within the budget, the row brought into view, focus
+ * left out of any field (so the next key is still the tree's), and nothing fetched.
+ * A key with nowhere to go leaves the selection where it is. Escape clears.
+ */
+export async function checkKeyboardSelection(ctx) {
+  const { session } = ctx;
+  // Wherever the last check left the tab, this one starts on a fresh tree.
+  await reopenTree(ctx);
+  await seedRevealRows(ctx);
+
+  await pressKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "nothing selected to begin with" });
+  const before = await evaluate(session, `return __ops.log.length;`);
+  const steps = [];
+
+  // From an open branch: → to its first child, ← back to it.
+  const branch = await evaluate(session, `
+    const rows = __tree.visible();
+    return rows.find((r, i) => rows[i + 1] !== undefined && rows[i + 1].depth === r.depth + 1)?.id ?? null;
+  `);
+  if (branch === null) throw new Error("no open branch on screen to walk into");
+  await clickTitle(session, branch);
+  await selectionKey(session, "ArrowRight", steps);
+  await selectionKey(session, "ArrowLeft", steps);
+
+  // The ends, and the keys that have nowhere to go there.
+  await selectionKey(session, "Home", steps);
+  await selectionKey(session, "ArrowUp", steps);
+  await selectionKey(session, "ArrowDown", steps);
+  await selectionKey(session, "ArrowDown", steps);
+  await selectionKey(session, "ArrowUp", steps);
+  await selectionKey(session, "End", steps);
+  await selectionKey(session, "ArrowDown", steps);
+  await selectionKey(session, "ArrowRight", steps);
+
+  await armStopwatch(session, "keydown", `return __tree.selected() === null;`);
+  await tapKey(session, "Escape");
+  const escaped = await readStopwatch(session, "Escape to clear the selection", { expectReply: false });
+  assertAcknowledged(escaped, "the Escape");
+  steps.push(`Escape clears ${escaped.ackMs}ms`);
+
+  await assertNothingFetched(session, before, "walking the tree by keyboard");
+  return `${steps.join("; ")}; nothing fetched`;
+}
+
+/**
+ * The overlay's other keys, one by one: Space closes and opens the selected
+ * branch (the chevron's aria-expanded follows); Enter closes the pane and
+ * reopens the last task; ? shows the eleven documented shortcuts and Escape
+ * closes it without touching the selection; Alt+P puts focus on the priority
+ * pill; P steps priority up and Shift+P back, each on the glass before its
+ * reply; Ctrl+Z undoes and Ctrl+Shift+Z redoes with the wait shown at once;
+ * Del asks first, and Cancel sends nothing.
+ */
+export async function checkKeyboardShortcuts(ctx) {
+  const { session } = ctx;
+  await seedRevealRows(ctx);
+  const notes = [];
+
+  const branch = await evaluate(session, `
+    const rows = __tree.visible();
+    return rows.find((r, i) => rows[i + 1] !== undefined && rows[i + 1].depth === r.depth + 1)?.id ?? null;
+  `);
+  if (branch === null) throw new Error("no open branch on screen to toggle");
+  await selectRow(session, branch);
+  const viewOnly = await evaluate(session, `return __ops.log.length;`);
+
+  // Space: closed, then open again.
+  const closed = `
+    const ul = document.getElementById("children-${branch}");
+    return ul !== null && ul.classList.contains("collapsed-peek") ? { expanded: document.getElementById("collapse-${branch}")?.getAttribute("aria-expanded") } : false;
+  `;
+  await armStopwatch(session, "keydown", closed);
+  await tapKey(session, " ");
+  const shut = await readStopwatch(session, "Space to close the branch", { expectReply: false });
+  assertAcknowledged(shut, "the branch closing on Space");
+  if (shut.detail.expanded !== "false") throw new Error(`the chevron reads aria-expanded="${shut.detail.expanded}" on a closed branch`);
+  await armStopwatch(session, "keydown", `return !document.getElementById("children-${branch}")?.classList.contains("collapsed-peek") ? { expanded: document.getElementById("collapse-${branch}")?.getAttribute("aria-expanded") } : false;`);
+  await tapKey(session, " ");
+  const opened = await readStopwatch(session, "Space to open the branch", { expectReply: false });
+  assertAcknowledged(opened, "the branch opening on Space");
+  if (opened.detail.expanded !== "true") throw new Error(`the chevron reads aria-expanded="${opened.detail.expanded}" on an open branch`);
+  notes.push(`Space closed ${shut.ackMs}ms / opened ${opened.ackMs}ms`);
+
+  // Enter: closes, then reopens the last task.
+  await armStopwatch(session, "keydown", `return __tree.selected() === null;`);
+  await tapKey(session, "Enter");
+  const shutPane = await readStopwatch(session, "Enter to close the pane", { expectReply: false });
+  assertAcknowledged(shutPane, "the deselect on Enter");
+  await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: "the pane to close on Enter" });
+  await armStopwatch(session, "keydown", `return __tree.selected() === ${branch};`);
+  await tapKey(session, "Enter");
+  const reopened = await readStopwatch(session, "Enter to reopen the last task", { expectReply: false });
+  assertAcknowledged(reopened, "the reselect on Enter");
+  await waitFor(session, `return __tree.pane(__tree.title(${branch})) !== false;`, { timeoutMs: 2_000, what: "the pane back on Enter" });
+  notes.push(`Enter closed ${shutPane.ackMs}ms / reopened ${reopened.ackMs}ms`);
+
+  // ?: the help, and Escape closes only the help.
+  await armStopwatch(session, "keydown", `
+    const d = document.getElementById("shortcuts-overlay");
+    return d !== null && d.open ? { keys: [...d.querySelectorAll("kbd")].map((k) => k.textContent.trim()) } : false;
+  `, { transient: true });
+  await tapLetter(session, "?");
+  const help = await readStopwatch(session, "? to open the shortcuts", { expectReply: false });
+  if (help.ackMs > ACK_BUDGET_MS) throw new Error(`the shortcuts overlay took ${help.ackMs}ms to open`);
+  const documented = ["Enter", "Space", "↑ ↓", "← →", "Alt + ↑ ↓ ← →", "N", "S", "P / A", "Alt + P / A", "Del", "?"];
+  if (JSON.stringify(help.detail.keys) !== JSON.stringify(documented)) throw new Error(`the overlay lists ${JSON.stringify(help.detail.keys)}, not the documented ${JSON.stringify(documented)}`);
+  await tapKey(session, "Escape");
+  await waitFor(session, `return document.getElementById("shortcuts-overlay")?.open !== true;`, { timeoutMs: 2_000, what: "the overlay to close on Escape" });
+  const kept = await evaluate(session, `return __tree.selected();`);
+  if (kept !== branch) throw new Error(`Escape on the overlay also cleared the selection (now ${kept})`);
+  notes.push(`? listed the ${documented.length} shortcuts in ${help.ackMs}ms, Escape closed it and kept the selection`);
+  await assertNothingFetched(session, viewOnly, "Space, Enter and ?");
+
+  // Alt+P: focus on the pill, not a step.
+  const pill = `document.querySelector("#task-${branch} [data-pill='priority']")`;
+  const priorityBefore = await evaluate(session, `return ${pill}?.dataset.priority ?? null;`);
+  if (priorityBefore === null) throw new Error("the selected row shows no priority pill");
+  await tapLetter(session, "p", MOD.alt);
+  const focused = await waitFor(session, `return document.activeElement === ${pill} ? __tree.focused() : null;`, { timeoutMs: 1_000, everyMs: 10, what: "Alt+P to focus the priority pill" });
+  const unstepped = await evaluate(session, `return { priority: ${pill}.dataset.priority, sent: __ops.sent };`);
+  if (unstepped.priority !== priorityBefore) throw new Error(`Alt+P stepped priority to ${unstepped.priority} instead of focusing the pill`);
+  await evaluate(session, `document.activeElement.blur(); return true;`);
+  notes.push(`Alt+P focused ${focused}`);
+
+  // P then Shift+P: two writes, each on the glass first.
+  const order = ["low", "normal", "high"];
+  const up = order[Math.min(order.indexOf(priorityBefore) + 1, 2)];
+  if (up === priorityBefore) throw new Error(`priority is already ${priorityBefore}; nothing for P to step to`);
+  await armStopwatch(session, "keydown", `return ${pill}?.dataset.priority === ${JSON.stringify(up)};`);
+  await tapLetter(session, "p");
+  const stepped = await readStopwatch(session, `P to step priority to ${up}`);
+  assertAcknowledged(stepped, "the priority step");
+  await settle(session);
+  await armStopwatch(session, "keydown", `return ${pill}?.dataset.priority === ${JSON.stringify(priorityBefore)};`);
+  await tapLetter(session, "P");
+  const back = await readStopwatch(session, `Shift+P to step priority back to ${priorityBefore}`);
+  assertAcknowledged(back, "the priority step back");
+  await settle(session);
+  notes.push(`P ${priorityBefore}→${up} ${stepped.ackMs}ms, Shift+P back ${back.ackMs}ms, each before its reply`);
+
+  // Ctrl+Z, Ctrl+Shift+Z: the wait is shown at once, the value follows the reply.
+  await armStopwatch(session, "keydown", `return document.getElementById("undo-button")?.getAttribute("aria-busy") === "true";`, { transient: true });
+  await tapLetter(session, "z", MOD.ctrl);
+  const undo = await readStopwatch(session, "Ctrl+Z to show the Undo wait");
+  assertAcknowledged(undo, "the Undo wait on Ctrl+Z");
+  await settle(session);
+  const undone = await evaluate(session, `return ${pill}?.dataset.priority;`);
+  if (undone !== up) throw new Error(`Ctrl+Z left priority at ${undone}, not ${up}`);
+  await armStopwatch(session, "keydown", `return document.getElementById("redo-button")?.getAttribute("aria-busy") === "true";`, { transient: true });
+  await tapLetter(session, "Z", MOD.ctrl);
+  const redo = await readStopwatch(session, "Ctrl+Shift+Z to show the Redo wait");
+  assertAcknowledged(redo, "the Redo wait on Ctrl+Shift+Z");
+  await settle(session);
+  const redone = await evaluate(session, `return ${pill}?.dataset.priority;`);
+  if (redone !== priorityBefore) throw new Error(`Ctrl+Shift+Z left priority at ${redone}, not ${priorityBefore}`);
+  notes.push(`Ctrl+Z wait ${undo.ackMs}ms (back to ${up}), Ctrl+Shift+Z wait ${redo.ackMs}ms (back to ${priorityBefore})`);
+
+  // Del: asks, Cancel sends nothing.
+  const before = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
+  await armStopwatch(session, "keydown", `
+    const d = document.getElementById("delete-confirm");
+    return d !== null && d.open ? { title: d.querySelector("h2")?.textContent.trim() } : false;
+  `, { transient: true });
+  await tapKey(session, "Delete");
+  const asked = await readStopwatch(session, "Del to open the delete confirm", { expectReply: false });
+  if (asked.ackMs > ACK_BUDGET_MS) throw new Error(`the delete confirm took ${asked.ackMs}ms to open on Del`);
+  if (asked.detail.title !== "Delete task") throw new Error(`Del opened a confirm titled "${asked.detail.title}"`);
+  await clickElement(session, "#delete-confirm-cancel");
+  await waitFor(session, `return document.getElementById("delete-confirm")?.open === false;`, { timeoutMs: 5_000, what: "the delete confirm to close" });
+  await assertNothingSent(session, before, "Cancel on the Del confirm");
+  const still = await evaluate(session, `return __tree.snapshot();`);
+  if (still !== before.tree) throw new Error("the tree changed around the Del confirm");
+  notes.push(`Del asked in ${asked.ackMs}ms, Cancel sent nothing`);
+
+  await tapKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "the selection cleared at the end" });
+  return notes.join("; ");
+}
+
+const KEY_TITLES = { kilo: "Kilo", lima: "Lima", mike: "Mike" };
+
+/**
+ * N opens the add form as the selected row's first-child slot with the cursor
+ * in the box; Enter puts the row at the top of that branch before the reply
+ * and leaves the cursor in the emptied box; Escape closes it. S opens the
+ * sibling slot right under the selected row; the row lands right after it.
+ * ↑ ↓ walk the form between slots with the typed title riding along.
+ */
+export async function checkKeyboardAdd(ctx) {
+  const { session } = ctx;
+  await seedRevealRows(ctx);
+  const { bravo, charlie } = ctx.ids;
+  const input = `document.querySelector("#add-task-form input[name='title']")`;
+  const caret = `(() => { const i = ${input}; return i === null ? null : { focused: document.activeElement === i, value: i.value, caret: i.selectionStart, placeholder: i.placeholder }; })()`;
+
+  // "Bravo" open and selected, "Charlie" on screen under it.
+  const shut = await evaluate(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") ?? null;`);
+  if (shut === null) throw new Error(`"Bravo" has no children list`);
+  if (shut) {
+    await clickElement(session, `#collapse-${bravo}`);
+    await waitFor(session, `return !document.getElementById("children-${bravo}").classList.contains("collapsed-peek");`, { timeoutMs: 2_000, what: `"Bravo" to open` });
+  }
+  await selectRow(session, bravo);
+  const viewOnly = await evaluate(session, `return __ops.log.length;`);
+
+  // N: the first-child slot, the cursor in the box.
+  await armStopwatch(session, "keydown", `
+    const f = document.getElementById("add-task-form");
+    if (f === null || f.dataset.addSlot !== "add-child-${bravo}") return false;
+    const ul = document.getElementById("children-${bravo}");
+    return { inRow: f.closest("#task-${bravo}") !== null, beforeChildren: ul !== null && ul.previousElementSibling?.contains(f) === true };
+  `);
+  await tapLetter(session, "n");
+  const nOpened = await readStopwatch(session, "N to open the subtask form", { expectReply: false });
+  assertAcknowledged(nOpened, "the form on N");
+  if (!nOpened.detail.inRow || !nOpened.detail.beforeChildren) throw new Error(`N placed the form ${JSON.stringify(nOpened.detail)}, not above "Bravo"'s children`);
+  const nCaret = await waitFor(session, `const c = ${caret}; return c !== null && c.focused ? c : null;`, { timeoutMs: 1_000, everyMs: 10, what: "the cursor in the subtask box" });
+  if (nCaret.value !== "" || nCaret.caret !== 0) throw new Error(`the subtask box opened with "${nCaret.value}" and the caret at ${nCaret.caret}`);
+  if (!nCaret.placeholder.startsWith("New subtask...")) throw new Error(`the subtask box says "${nCaret.placeholder}"`);
+  await assertNothingFetched(session, viewOnly, "opening the form with N");
+
+  // Enter: the row at the top of the branch, before the reply; the box empty and still focused.
+  await session.send("Input.insertText", { text: KEY_TITLES.kilo });
+  await armStopwatch(session, "keydown", `
+    const li = __tree.row(${JSON.stringify(KEY_TITLES.kilo)});
+    if (li === null) return false;
+    const order = __tree.order(${bravo});
+    return order !== null && order[0] === Number(li.dataset.taskId) ? { after: ${caret} } : false;
+  `);
+  await pressKey(session, "Enter", { windowsVirtualKeyCode: VK.Enter, text: "\r" });
+  const added = await readStopwatch(session, `"Kilo" at the top of "Bravo"`);
+  assertAcknowledged(added, `"Kilo"`);
+  if (added.detail.after === null || !added.detail.after.focused || added.detail.after.value !== "") throw new Error(`after Enter the box is ${JSON.stringify(added.detail.after)}`);
+  const settled = await settle(session);
+  const kilo = await evaluate(session, `const li = __tree.row(${JSON.stringify(KEY_TITLES.kilo)}); return li === null ? null : Number(li.dataset.taskId);`);
+  if (!(kilo > 0)) throw new Error(`"Kilo" did not settle under a server id (${kilo})`);
+  const kiloOrder = await evaluate(session, `return __tree.order(${bravo});`);
+  if (kiloOrder[0] !== kilo) throw new Error(`"Kilo" settled at ${JSON.stringify(kiloOrder)}, not first under "Bravo"`);
+  ctx.ids.kilo = kilo;
+
+  // Escape closes the form.
+  const beforeEscape = await evaluate(session, `return __ops.log.length;`);
+  await armStopwatch(session, "keydown", `return document.getElementById("add-task-form") === null;`);
+  await tapKey(session, "Escape");
+  const closed = await readStopwatch(session, "Escape to close the form", { expectReply: false });
+  assertAcknowledged(closed, "the form closing on Escape");
+  await assertNothingFetched(session, beforeEscape, "closing the form");
+
+  // S: the sibling slot right under "Charlie"; the row lands right after it.
+  await selectRow(session, charlie);
+  await armStopwatch(session, "keydown", `
+    const f = document.getElementById("add-task-form");
+    if (f === null || f.dataset.addSlot !== "add-sibling-${charlie}") return false;
+    return { under: f.closest("li")?.previousElementSibling?.id === "task-${charlie}" };
+  `);
+  await tapLetter(session, "s");
+  const sOpened = await readStopwatch(session, "S to open the sibling form", { expectReply: false });
+  assertAcknowledged(sOpened, "the form on S");
+  if (!sOpened.detail.under) throw new Error(`S did not place the form right under "Charlie"`);
+  const sCaret = await waitFor(session, `const c = ${caret}; return c !== null && c.focused ? c : null;`, { timeoutMs: 1_000, everyMs: 10, what: "the cursor in the sibling box" });
+  if (!sCaret.placeholder.startsWith("New task...")) throw new Error(`the sibling box says "${sCaret.placeholder}"`);
+  await session.send("Input.insertText", { text: KEY_TITLES.lima });
+  await armStopwatch(session, "keydown", `
+    const li = __tree.row(${JSON.stringify(KEY_TITLES.lima)});
+    if (li === null) return false;
+    const order = __tree.order(${bravo});
+    return order !== null && order[order.indexOf(${charlie}) + 1] === Number(li.dataset.taskId);
+  `);
+  await pressKey(session, "Enter", { windowsVirtualKeyCode: VK.Enter, text: "\r" });
+  const sibling = await readStopwatch(session, `"Lima" right after "Charlie"`);
+  assertAcknowledged(sibling, `"Lima"`);
+  await settle(session);
+  const lima = await evaluate(session, `const li = __tree.row(${JSON.stringify(KEY_TITLES.lima)}); return li === null ? null : Number(li.dataset.taskId);`);
+  if (!(lima > 0)) throw new Error(`"Lima" did not settle under a server id (${lima})`);
+  ctx.ids.lima = lima;
+
+  // ↑ ↓ walk the slot; the title rides along; Escape discards it.
+  await session.send("Input.insertText", { text: KEY_TITLES.mike });
+  const beforeWalk = await evaluate(session, `return __ops.log.length;`);
+  await armStopwatch(session, "keydown", `
+    const f = document.getElementById("add-task-form");
+    return f !== null && f.dataset.addSlot === "add-child-${lima}" ? ${caret} : false;
+  `);
+  await tapKey(session, "ArrowDown");
+  const walked = await readStopwatch(session, "↓ to walk the form to the next slot", { expectReply: false });
+  assertAcknowledged(walked, "the form's walk");
+  if (!walked.detail.focused || walked.detail.value !== KEY_TITLES.mike) throw new Error(`after ↓ the box is ${JSON.stringify(walked.detail)}`);
+  await armStopwatch(session, "keydown", `
+    const f = document.getElementById("add-task-form");
+    return f !== null && f.dataset.addSlot === "add-sibling-${charlie}" ? ${caret} : false;
+  `);
+  await tapKey(session, "ArrowUp");
+  const walkedBack = await readStopwatch(session, "↑ to walk the form back", { expectReply: false });
+  assertAcknowledged(walkedBack, "the form's walk back");
+  if (!walkedBack.detail.focused || walkedBack.detail.value !== KEY_TITLES.mike) throw new Error(`after ↑ the box is ${JSON.stringify(walkedBack.detail)}`);
+  await tapKey(session, "Escape");
+  await waitFor(session, `return document.getElementById("add-task-form") === null;`, { timeoutMs: 2_000, what: "the form to close" });
+  const mike = await evaluate(session, `return __tree.row(${JSON.stringify(KEY_TITLES.mike)}) !== null;`);
+  if (mike) throw new Error(`Escape kept "Mike" as a row`);
+  await assertNothingFetched(session, beforeWalk, "walking the form and discarding it");
+
+  await tapKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "the selection cleared at the end" });
+  return `N: form above "Bravo"'s children ${nOpened.ackMs}ms, cursor in the empty box; Enter: "Kilo" first ${added.ackMs}ms, ${added.replyMs - added.ackMs}ms before the reply, box emptied and kept focus; Escape closed ${closed.ackMs}ms; S: form under "Charlie" ${sOpened.ackMs}ms; "Lima" right after ${sibling.ackMs}ms; ↓ ↑ walked ${walked.ackMs}/${walkedBack.ackMs}ms with "Mike" riding along, Escape discarded it; settled with ${settled.note}`;
+}
+
+/** "Kilo" and "Lima" under "Bravo", when the add check did not make them. */
+async function seedKeyRows(ctx) {
+  if (ctx.ids.lima !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-keys`, [
+    { op: "add", type: "task", data: { initiative_id: initiativeId, parent_id: ctx.ids.bravo, title: KEY_TITLES.kilo } },
+    { op: "add", type: "task", data: { initiative_id: initiativeId, parent_id: ctx.ids.bravo, title: KEY_TITLES.lima } },
+  ]);
+  const [kilo, lima] = results.map((r) => r?.data?.id);
+  if (typeof kilo !== "number" || typeof lima !== "number") throw new Error(`the key seed did not name two tasks: ${JSON.stringify(results)}`);
+  Object.assign(ctx.ids, { kilo, lima });
+  await waitForRows(session, [kilo, lima], "the key rows");
+}
+
+/**
+ * Alt + ↑ ↓ reorder "Lima" among its siblings, Alt + → indents it under the
+ * sibling above (last child), Alt + ← brings it back out right after that
+ * sibling — each move on the glass before its reply, the selection staying on
+ * the row. A move with nowhere to go (Alt + ↑ on a first child, Alt + ← at
+ * the top level) says so in a notice and sends nothing.
+ */
+export async function checkKeyboardMoves(ctx) {
+  const { session } = ctx;
+  await seedRevealRows(ctx);
+  await seedKeyRows(ctx);
+  const { bravo, lima } = ctx.ids;
+
+  const shut = await evaluate(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") ?? null;`);
+  if (shut) {
+    await clickElement(session, `#collapse-${bravo}`);
+    await waitFor(session, `return !document.getElementById("children-${bravo}").classList.contains("collapsed-peek");`, { timeoutMs: 2_000, what: `"Bravo" to open` });
+  }
+  const start = await evaluate(session, `return __tree.order(${bravo});`);
+  const at = start.indexOf(lima);
+  if (at < 1) throw new Error(`"Lima" is at ${at} under "Bravo" (${JSON.stringify(start)}); the check needs a sibling above it`);
+  const above = start[at - 1];
+  await selectRow(session, lima);
+  const notes = [];
+
+  const move = async (key, what, predicate) => {
+    await armStopwatch(session, "keydown", `${predicate} ? { selected: __tree.selected(), inView: __tree.inView(${lima}) } : false`);
+    await tapKey(session, key, MOD.alt);
+    const ack = await readStopwatch(session, what);
+    assertAcknowledged(ack, what);
+    if (ack.detail.selected !== lima) throw new Error(`${what}: the selection left "Lima" (now ${ack.detail.selected})`);
+    if (!ack.detail.inView) throw new Error(`${what}: "Lima" moved out of view`);
+    await settle(session);
+    notes.push(`${what} ${ack.ackMs}ms, ${ack.replyMs - ack.ackMs}ms before the reply`);
+  };
+
+  const swapped = [...start];
+  [swapped[at - 1], swapped[at]] = [swapped[at], swapped[at - 1]];
+  await move("ArrowUp", "Alt+↑", `return JSON.stringify(__tree.order(${bravo})) === ${JSON.stringify(JSON.stringify(swapped))}`);
+  await move("ArrowDown", "Alt+↓", `return JSON.stringify(__tree.order(${bravo})) === ${JSON.stringify(JSON.stringify(start))}`);
+  await move("ArrowRight", "Alt+→", `return (() => { const o = __tree.order(${above}); return o !== null && o[o.length - 1] === ${lima} && !__tree.order(${bravo}).includes(${lima}); })()`);
+  await move("ArrowLeft", "Alt+←", `return (() => { const o = __tree.order(${bravo}); return o[o.indexOf(${above}) + 1] === ${lima} && !(__tree.order(${above}) ?? []).includes(${lima}); })()`);
+  const end = await evaluate(session, `return __tree.order(${bravo});`);
+  if (JSON.stringify(end) !== JSON.stringify(start)) throw new Error(`the four moves left "Bravo" as ${JSON.stringify(end)}, not ${JSON.stringify(start)}`);
+
+  // Nowhere to go: the notice, and nothing sent.
+  const blocked = async (id, key, what) => {
+    await evaluate(session, `for (const b of document.querySelectorAll('#client-notices [id$="-dismiss"]')) b.click(); return true;`);
+    await waitFor(session, `return document.querySelectorAll("#client-notices [role]").length === 0;`, { timeoutMs: 2_000, what: "the notices to clear" });
+    await selectRow(session, id);
+    const before = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
+    await armStopwatch(session, "keydown", `
+      const n = document.querySelector('#client-notices [role="status"][data-kind="info"]');
+      return n !== null ? { text: n.textContent.trim().replace(/\\s+/g, " ") } : false;
+    `, { transient: true });
+    await tapKey(session, key, MOD.alt);
+    const ack = await readStopwatch(session, `${what} to say it has nowhere to go`, { expectReply: false });
+    if (ack.ackMs > ACK_BUDGET_MS) throw new Error(`${what}'s refusal took ${ack.ackMs}ms to show`);
+    if (!ack.detail.text.includes("That move has nowhere to go")) throw new Error(`${what} said "${ack.detail.text}"`);
+    await assertNothingSent(session, before, what);
+    const after = await evaluate(session, `return __tree.snapshot();`);
+    if (after !== before.tree) throw new Error(`${what} changed the tree`);
+    notes.push(`${what} refused in ${ack.ackMs}ms, nothing sent`);
+  };
+  await blocked(start[0], "ArrowUp", "Alt+↑ on a first child");
+  await blocked(bravo, "ArrowLeft", "Alt+← at the top level");
+
+  await tapKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "the selection cleared at the end" });
+  return notes.join("; ");
+}
+
+/**
+ * Arriving on `?task=` (checked in "deep link: ?task= reveals"), the keyboard
+ * carries on from the revealed row: focus is on the page, not in a field, so
+ * the very next ↓ selects the row after it, at once, with the pane following.
+ */
+export async function checkDeepLinkThenArrows(ctx) {
+  const { session } = ctx;
+  await seedRevealRows(ctx);
+  await seedKeyRows(ctx);
+  const { bravo, lima } = ctx.ids;
+
+  await pressKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "nothing selected before the link" });
+  await collapseBranch(session, bravo);
+  await reopenTree(ctx, `?task=${lima}`);
+  await waitFor(session, `return __tree.selected() === ${lima} && !document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") && __tree.inView(${lima});`, {
+    timeoutMs: 5_000,
+    everyMs: 10,
+    what: `"Lima" revealed and in view`,
+  });
+  const focus = await evaluate(session, `return { on: __tree.focused(), inField: __tree.focusInField() };`);
+  if (focus.inField) throw new Error(`after the link focus is in ${focus.on}; the arrows would go there, not to the tree`);
+
+  const before = await evaluate(session, `return __ops.log.length;`);
+  const steps = [];
+  await selectionKey(session, "ArrowDown", steps);
+  const next = await evaluate(session, `return __tree.selected();`);
+  await waitFor(session, `return __tree.pane(__tree.title(${next})) !== false && window.location.search === "?task=${next}";`, {
+    timeoutMs: 2_000,
+    everyMs: 10,
+    what: "the pane and the address bar to follow the arrow",
+  });
+  await selectionKey(session, "ArrowUp", steps);
+  await assertNothingFetched(session, before, "the arrows after the link");
+
+  await tapKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "the selection cleared at the end" });
+  return `arrived on "Lima" with focus on ${focus.on}, not in a field; ${steps.join("; ")}; pane and address bar followed; nothing fetched`;
+}
+
+/**
+ * A collapse and the selection (use_tree's prune): closing a branch keeps a
+ * selection that is still on screen and drops one it just hid. Two arrivals,
+ * because the prune reads its own idea of the live selection: after a deep
+ * link onto "Charlie", ← to "Bravo" then Space must leave "Bravo" selected;
+ * after a plain arrival, "Charlie" selected and "Bravo" closed by its chevron
+ * must clear the selection — the arrows cannot start from a hidden row.
+ */
+export async function checkCollapseKeepsSelection(ctx) {
+  const { session } = ctx;
+  await seedRevealRows(ctx);
+  const { bravo, charlie } = ctx.ids;
+  const wrong = [];
+
+  // Arrive on "Charlie", step up to "Bravo", close it: "Bravo" stays selected.
+  await reopenTree(ctx, `?task=${charlie}`);
+  await waitFor(session, `return __tree.selected() === ${charlie} && !document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek");`, {
+    timeoutMs: 5_000,
+    everyMs: 10,
+    what: `"Charlie" selected under an open "Bravo"`,
+  });
+  const steps = [];
+  await selectionKey(session, "ArrowLeft", steps);
+  const onBravo = await evaluate(session, `return __tree.selected();`);
+  if (onBravo !== bravo) throw new Error(`← from "Charlie" selected #${onBravo}, not "Bravo"`);
+  await tapKey(session, " ");
+  await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === true;`, { timeoutMs: 2_000, what: `"Bravo" to close on Space` });
+  const afterSpace = await evaluate(session, `return new Promise((r) => setTimeout(() => r(__tree.selected()), 200));`);
+  if (afterSpace !== bravo) wrong.push(`after arriving on "Charlie", ← to "Bravo" and Space, the selection is ${afterSpace === null ? "gone" : `#${afterSpace}`} — "Bravo" is still on screen and should have stayed selected`);
+
+  // Arrive plain, select "Charlie", close "Bravo" by its chevron: nothing stays selected.
+  await reopenTree(ctx);
+  await clickTitle(session, charlie);
+  await clickElement(session, `#collapse-${bravo}`);
+  await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === true;`, { timeoutMs: 2_000, what: `"Bravo" to close on its chevron` });
+  const hidden = await evaluate(session, `return new Promise((r) => setTimeout(() => r({ selected: __tree.selected(), paneClosed: __tree.paneClosed() }), 200));`);
+  if (hidden.selected !== null) wrong.push(`with "Charlie" selected and "Bravo" closed by its chevron, "Charlie" stays selected out of sight (pane ${hidden.paneClosed ? "closed" : "open"}) — the arrows would start from a hidden row`);
+
+  await clickElement(session, `#collapse-${bravo}`);
+  await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Bravo" to open again` });
+  await tapKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "the selection cleared at the end" });
+  if (wrong.length > 0) throw new Error(wrong.join("; "));
+  return `"Bravo" stayed selected through Space after a link onto "Charlie"; closing "Bravo" over a selected "Charlie" cleared the selection`;
+}
+
+/**
+ * What a screen reader is told about the rows: the tree's role, each row's
+ * role and level, whether a branch says it is expanded, whether the selected
+ * row says so, whether a selection or a collapse is announced, and whether
+ * every control on a row has a name. Everything missing is listed as one
+ * finding; the check does not fix any of it.
+ */
+export async function checkScreenReaderContext(ctx) {
+  const { session } = ctx;
+  await seedRevealRows(ctx);
+  const { bravo, charlie } = ctx.ids;
+
+  // A plain arrival: nothing selected, "Bravo" open, no earlier reveal on record.
+  await reopenTree(ctx);
+  await waitFor(session, `return __tree.selected() === null && document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === false;`, {
+    timeoutMs: 5_000,
+    what: `nothing selected and "Bravo" open to begin with`,
+  });
+
+  const quiet = await evaluate(session, `return __tree.announced();`);
+  await selectRow(session, bravo);
+  await evaluate(session, `return new Promise((r) => setTimeout(r, 150));`);
+  const afterSelect = await evaluate(session, `return __tree.announced();`);
+  await tapKey(session, " ");
+  await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === true;`, { timeoutMs: 2_000, what: `"Bravo" to close on Space` });
+  await evaluate(session, `return new Promise((r) => setTimeout(r, 150));`);
+  const afterCollapse = await evaluate(session, `return __tree.announced();`);
+  await tapKey(session, " ");
+  await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Bravo" to open again` });
+
+  const read = await evaluate(session, `
+    const tree = document.getElementById("task-tree");
+    const li = document.getElementById("task-${bravo}");
+    const leaf = document.getElementById("task-${charlie}");
+    const row = li.querySelector(":scope > [data-task-row]");
+    const chevron = document.getElementById("collapse-${bravo}");
+    const name = (el) => el === null ? null : (el.getAttribute("aria-label") ?? (el.getAttribute("aria-labelledby") ? "labelledby" : null) ?? el.getAttribute("title") ?? (el.textContent.trim() || null));
+    const controls = [...row.querySelectorAll("button, a, [role=button], [tabindex]")].map((el) => ({
+      what: el.tagName.toLowerCase() + [...el.attributes].filter((a) => a.name.startsWith("data-")).slice(0, 1).map((a) => "[" + a.name + "]").join(""),
+      name: name(el),
+    }));
+    return {
+      treeRole: tree.getAttribute("role"),
+      rowRole: li.getAttribute("role") ?? row.getAttribute("role"),
+      level: li.getAttribute("aria-level") ?? row.getAttribute("aria-level"),
+      leafLevel: leaf.getAttribute("aria-level") ?? leaf.querySelector(":scope > [data-task-row]").getAttribute("aria-level"),
+      rowExpanded: li.getAttribute("aria-expanded") ?? row.getAttribute("aria-expanded"),
+      chevron: chevron === null ? null : { expanded: chevron.getAttribute("aria-expanded"), controls: chevron.getAttribute("aria-controls"), name: name(chevron) },
+      selected: li.getAttribute("aria-selected") ?? row.getAttribute("aria-selected"),
+      selectedMarker: li.hasAttribute("data-selected"),
+      rowFocusable: li.hasAttribute("tabindex") || row.hasAttribute("tabindex"),
+      controls,
+    };
+  `);
+
+  const gaps = [];
+  if (read.treeRole !== "tree") gaps.push(`#task-tree has ${read.treeRole === null ? "no role" : `role="${read.treeRole}"`}, not role="tree"`);
+  if (read.rowRole !== "treeitem") gaps.push(`a row has ${read.rowRole === null ? "no role" : `role="${read.rowRole}"`}, not role="treeitem"`);
+  if (read.level === null) gaps.push("rows carry no aria-level (a screen reader cannot say how deep a task sits)");
+  if (read.rowExpanded === null) gaps.push(`a branch row has no aria-expanded of its own (only its chevron button says ${read.chevron?.expanded ?? "nothing"})`);
+  if (read.selected === null) gaps.push(`the selected row carries data-selected but no aria-selected`);
+  if (!read.rowFocusable) gaps.push("rows are not focusable (no tabindex): the selection is keyboard-driven but never a focus a screen reader follows");
+  const announcedSelect = afterSelect.filter((s) => !quiet.includes(s));
+  const announcedCollapse = afterCollapse.filter((s) => !afterSelect.includes(s));
+  if (announcedSelect.length === 0) gaps.push("selecting a row announces nothing in any live region");
+  if (announcedCollapse.length === 0) gaps.push("collapsing a branch announces nothing in any live region");
+  const unnamed = read.controls.filter((c) => c.name === null).map((c) => c.what);
+  if (unnamed.length > 0) gaps.push(`row controls with no accessible name: ${unnamed.join(", ")}`);
+
+  const present = [
+    read.chevron === null ? null : `chevron: aria-expanded="${read.chevron.expanded}" aria-controls="${read.chevron.controls}" named "${read.chevron.name}"`,
+    `${read.controls.length - unnamed.length}/${read.controls.length} row controls named`,
+    announcedSelect.length > 0 ? `selection announced: ${announcedSelect.join(" | ")}` : null,
+    announcedCollapse.length > 0 ? `collapse announced: ${announcedCollapse.join(" | ")}` : null,
+  ].filter((s) => s !== null);
+
+  await tapKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "the selection cleared at the end" });
+  if (gaps.length > 0) throw new Error(`${gaps.length} gap(s) — ${gaps.join("; ")} (present: ${present.join("; ")})`);
+  return present.join("; ");
+}
+
 const CHECKS = [
   ["add a task", checkAddTask],
   ["add a child", checkAddChild],
@@ -2112,6 +2728,13 @@ const CHECKS = [
   ["touch targets in both layouts", checkTouchTargets],
   ["touch switch: no fetch, survives a reload", checkTouchSwitchPersists],
   ["LiveView workspace: chevron and switch", checkLiveViewWorkspace],
+  ["keys: arrows, Home, End, Escape", checkKeyboardSelection],
+  ["keys: Space, Enter, ?, Alt+P, P, Ctrl+Z, Del", checkKeyboardShortcuts],
+  ["keys: N and S place the form and the row", checkKeyboardAdd],
+  ["keys: Alt + arrows reorganize", checkKeyboardMoves],
+  ["deep link, then the arrows carry on", checkDeepLinkThenArrows],
+  ["collapse: the selection follows what is on screen", checkCollapseKeepsSelection],
+  ["screen-reader context on rows", checkScreenReaderContext],
 ];
 
 // ---------------------------------------------------------------------------
@@ -2381,6 +3004,49 @@ const PAGE_HELPERS = `
     paneClosed() {
       const rail = document.getElementById("details-rail");
       return (rail === null || rail.dataset.open !== "true") && document.getElementById("task-field-title") === null;
+    },
+    // --- 8.7: the keyboard's view of the tree ---
+    // The rows a key can reach, in order: every row not under a closed branch.
+    visible() {
+      return [...document.querySelectorAll("#task-tree li[data-task-id]")]
+        .filter((li) => li.parentElement.closest(".collapsed-peek") === null && !li.parentElement.classList.contains("collapsed-peek"))
+        .map((li) => ({ id: Number(li.dataset.taskId), depth: Number(li.dataset.depth) }));
+    },
+    // Where a selection key should land from the current selection, as the
+    // overlay documents the keys: ↑ ↓ the previous / next row, ← the parent,
+    // → the first child (open branches only), Home / End the ends. null: nowhere.
+    navTarget(key) {
+      const rows = this.visible();
+      if (key === "Home") return rows[0]?.id ?? null;
+      if (key === "End") return rows[rows.length - 1]?.id ?? null;
+      const at = rows.findIndex((r) => r.id === this.selected());
+      if (at === -1) return null;
+      const cur = rows[at];
+      if (key === "ArrowUp" || key === "ArrowDown") return rows[at + (key === "ArrowUp" ? -1 : 1)]?.id ?? null;
+      if (key === "ArrowLeft") {
+        for (let i = at - 1; i >= 0; i -= 1) if (rows[i].depth < cur.depth) return rows[i].id;
+        return null;
+      }
+      const next = rows[at + 1];
+      return next !== undefined && next.depth === cur.depth + 1 ? next.id : null;
+    },
+    // What has focus, named: "body", "input#add-task-form", "button[data-pill=priority]"…
+    focused() {
+      const el = document.activeElement;
+      if (el === null || el === document.body) return "body";
+      const pill = el.getAttribute("data-pill");
+      return el.tagName.toLowerCase() + (el.id ? "#" + el.id : "") + (pill ? "[data-pill=" + pill + "]" : "") + (el.closest("form") ? " in #" + el.closest("form").id : "");
+    },
+    // True while a field would take the next key instead of the tree (\`inField\`).
+    focusInField() {
+      const el = document.activeElement;
+      return el !== null && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+    },
+    // Every live region's text, for "did anything get announced".
+    announced() {
+      return [...document.querySelectorAll('[aria-live], [role="status"], [role="alert"], [role="log"]')]
+        .map((el) => (el.getAttribute("aria-live") ?? el.getAttribute("role")) + ":" + el.textContent.trim().replace(/\s+/g, " ").slice(0, 120))
+        .filter((s) => !s.endsWith(":"));
     },
     // The row's top is inside the one scrolling region.
     inView(id) {

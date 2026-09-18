@@ -282,8 +282,18 @@ export async function mouseGlide(session, from, to, steps = 4) {
 }
 
 /** Presses one key (a "raw" down/up pair), e.g. `pressKey(session, "Escape")`. */
-export async function pressKey(session, key, { code = key, windowsVirtualKeyCode = 0 } = {}) {
-  const base = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode };
-  await session.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+/**
+ * `modifiers` is CDP's mask: Alt 1, Ctrl 2, Meta 4, Shift 8. `text` makes it a
+ * character press (`keyDown` with the text the key types), which is what a
+ * field's Enter needs to submit its form; without it the press is the bare
+ * key event a keydown listener sees, and nothing is typed.
+ */
+export async function pressKey(session, key, { code = key, windowsVirtualKeyCode = 0, modifiers = 0, text } = {}) {
+  const base = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers };
+  if (text === undefined) {
+    await session.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  } else {
+    await session.send("Input.dispatchKeyEvent", { type: "keyDown", text, unmodifiedText: text, ...base });
+  }
   await session.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
