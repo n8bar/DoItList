@@ -37,7 +37,8 @@ import {
   setSnapshotMeta,
   setStorageHealth,
 } from "./state/recovery.ts";
-import { rowPreferencesFrom, setRowPreferences } from "./state/preferences.ts";
+import { rowPreferencesFrom, setIndexSort, setRowPreferences } from "./state/preferences.ts";
+import { indexSortFrom } from "./screens/initiatives_model.ts";
 import { fatalMessage } from "./state/fatal.ts";
 import { updateNotifications, updatePresence } from "./state/domain.ts";
 import { prepend } from "./state/notifications.ts";
@@ -222,6 +223,9 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
         // The account's row-display choices, read once. The tree draws its rows
         // from these, so they arrive before any tree does.
         setRowPreferences(stores.preferences, rowPreferencesFrom(result.data.preferences));
+        // The index's saved sort, so the list opens in the order the account
+        // keeps (7.3). The screen writes changes back through `update account`.
+        setIndexSort(stores.preferences, indexSortFrom(result.data.preferences));
         // The session belongs to somebody else — a re-login in another tab,
         // say. Their cache is not ours to read: the old one goes before this
         // one is opened (spec §12).

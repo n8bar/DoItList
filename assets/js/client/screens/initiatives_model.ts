@@ -6,11 +6,12 @@
 // function over `InitiativeSummary` rows; `initiatives.tsx` only draws it.
 //
 // The sort choice is the LiveView's shape too: one mode plus a per-mode
-// reverse flag (`index_sort_reverse_by_mode`). The server keeps that on the
-// account preferences, but the client API has no write for it yet, so this
-// client keeps it in `localStorage` — the same place the tree keeps which
-// branches are open. Item 4.4 (drag) builds on `sortInitiatives` and
-// `manualOrder`; item 4.6 (live changes) patches rows with `mergeSummaries`.
+// reverse flag (`index_sort_reverse_by_mode`). It follows the account (7.3):
+// the session read carries the saved mode and its reverse, the change lands
+// on the page at once, and `update account` writes it back — so the workspace
+// and the client open on the same order. Item 4.4 (drag) builds on
+// `sortInitiatives` and `manualOrder`; item 4.6 (live changes) patches rows
+// with `mergeSummaries`.
 
 import type {
   ArchivedInitiative,
@@ -19,7 +20,6 @@ import type {
   Role,
   TrashedInitiative,
 } from "../api/types.ts";
-import type { KeyValueStore } from "../storage/last_user.ts";
 
 /**
  * The Sort control's options, in the order the template lists them. `""` is
@@ -181,40 +181,66 @@ export function roleBadgeClass(role: Role | string): string {
   }
 }
 
-// --- Remembering the sort choice ------------------------------------------
+// --- The sort choice on the account (7.3) -----------------------------------
 
-export const SORT_STORAGE_KEY = "doit:index_sort";
-
-/** The remembered sort, or the default where nothing usable is stored. */
-export function readSortState(store: KeyValueStore | null): IndexSortState {
-  if (store === null) return initialSortState;
-  try {
-    const raw = store.getItem(SORT_STORAGE_KEY);
-    if (raw === null) return initialSortState;
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return initialSortState;
-    const source = parsed as Record<string, unknown>;
-    const mode = isSortMode(source["mode"]) ? source["mode"] : "";
-    const reverseByMode: Partial<Record<IndexSortMode, boolean>> = {};
-    const flags = source["reverseByMode"];
-    if (typeof flags === "object" && flags !== null) {
-      for (const [key, value] of Object.entries(flags as Record<string, unknown>)) {
-        if (isSortMode(key) && value === true) reverseByMode[key] = true;
-      }
-    }
-    return { mode, reverseByMode };
-  } catch {
-    return initialSortState;
-  }
+/**
+ * The saved choice, off the session read's `preferences`: `index_sort` is the
+ * mode (`null` for Recent) and `index_sort_reverse` the flag remembered for
+ * that mode. Only that one flag is known at boot; the others are learnt as
+ * modes are picked. Defensive on purpose — a missing or odd value reads as
+ * Recent, not as a failed boot.
+ */
+export function indexSortFrom(payload: unknown): IndexSortState {
+  if (typeof payload !== "object" || payload === null) return initialSortState;
+  const source = payload as Record<string, unknown>;
+  const raw = source["index_sort"];
+  const mode: IndexSortMode = raw === null ? "" : isSortMode(raw) ? raw : "";
+  return { mode, reverseByMode: { [mode]: source["index_sort_reverse"] === true } };
 }
 
-export function writeSortState(store: KeyValueStore | null, state: IndexSortState): void {
-  if (store === null) return;
-  try {
-    store.setItem(SORT_STORAGE_KEY, JSON.stringify(state));
-  } catch {
-    // A full or blocked localStorage costs the memory of the choice, not the sort.
-  }
+/** The wire's `index_sort`: the mode, or `null` for Recent. */
+function wireMode(mode: IndexSortMode): string | null {
+  return mode === "" ? null : mode;
+}
+
+export interface AccountSortData {
+  index_sort: string | null;
+  index_sort_reverse?: boolean;
+}
+
+/**
+ * The `update account` operation for the choice now shown. The reverse flag
+ * goes along only when this client knows it for that mode — a mode picked for
+ * the first time this session is sent alone, so the server keeps the reverse
+ * that mode last had instead of a guess (the reply then says which).
+ */
+export function accountSortRequest(state: IndexSortState): {
+  operations: { op: "update"; type: "account"; data: AccountSortData }[];
+} {
+  const data: AccountSortData = { index_sort: wireMode(state.mode) };
+  const known = state.reverseByMode[state.mode];
+  if (typeof known === "boolean") data.index_sort_reverse = known;
+  return { operations: [{ op: "update", type: "account", data }] };
+}
+
+/**
+ * The reply's resolved pair, folded into what is shown. It fills in the
+ * reverse for a mode this client did not know — that is what the server
+ * remembered for it — and changes nothing otherwise: a mode the user has
+ * since moved off, or a flag they have since set themselves, stands.
+ */
+export function adoptSortReply(state: IndexSortState, payload: unknown): IndexSortState {
+  if (typeof payload !== "object" || payload === null) return state;
+  const results = (payload as { results?: unknown }).results;
+  if (!Array.isArray(results) || results.length === 0) return state;
+  const data = (results[0] as { data?: unknown }).data;
+  if (typeof data !== "object" || data === null) return state;
+  const reply = data as Record<string, unknown>;
+  const raw = reply["index_sort"];
+  const mode: IndexSortMode = raw === null ? "" : isSortMode(raw) ? raw : "";
+  if (mode !== state.mode || typeof state.reverseByMode[mode] === "boolean") return state;
+  const reverse = reply["index_sort_reverse"] === true;
+  return { ...state, reverseByMode: { ...state.reverseByMode, [mode]: reverse } };
 }
 
 // --- Dragging to reorder ----------------------------------------------------

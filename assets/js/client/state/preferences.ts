@@ -5,21 +5,21 @@
 // Initiatives" is a decision the user made about their account and should still
 // be true tomorrow, so it lives here.
 //
-// Only `theme` is actually persisted today — by `lib/theme.ts`, into the same
-// `phx:theme` key the LiveView and the first-paint script use, so the two
-// clients can't disagree about the user's theme. The view preferences below are
+// `theme` is persisted by `lib/theme.ts`, into the same `phx:theme` key the
+// LiveView and the first-paint script use, so the two clients can't disagree
+// about the user's theme. `rows` and `indexSort` are the account's, read from
+// `GET /app/api/session` at boot; the index sort is the one the client writes
+// back (`update account`, m04.02 7.3). The view preferences below are
 // per-account server state in a later arc; holding them here now means the
 // screens read them from one place either way.
 
 import type { ThemePreference } from "../lib/theme.ts";
+import type { IndexSortState } from "../screens/initiatives_model.ts";
+import { initialSortState } from "../screens/initiatives_model.ts";
 import type { Store } from "./store.ts";
 import { createStore } from "./store.ts";
 
-export type InitiativeSort = "manual" | "name" | "progress" | "updated";
-
 export interface ViewPreferences {
-  /** How the Initiatives index is ordered. */
-  readonly initiativeSort: InitiativeSort;
   /** Whether archived Initiatives appear in the index. */
   readonly showArchived: boolean;
   /** Whether completed tasks appear in a tree. Arc 2 reads this. */
@@ -45,10 +45,11 @@ export interface PreferencesState {
   readonly theme: ThemePreference;
   readonly view: ViewPreferences;
   readonly rows: RowPreferences;
+  /** The Initiatives index's Sort and Reverse choice, as the account saved it (7.3). */
+  readonly indexSort: IndexSortState;
 }
 
 export const initialViewPreferences: ViewPreferences = {
-  initiativeSort: "manual",
   showArchived: false,
   showCompleted: true,
 };
@@ -65,6 +66,7 @@ export const initialPreferencesState: PreferencesState = {
   theme: "system",
   view: initialViewPreferences,
   rows: initialRowPreferences,
+  indexSort: initialSortState,
 };
 
 export type PreferencesStore = Store<PreferencesState>;
@@ -108,4 +110,9 @@ export function setRowPreferences(store: PreferencesStore, rows: RowPreferences)
       state.rows.count === rows.count;
     return same ? state : { ...state, rows };
   });
+}
+
+/** Files the index sort — off the session read, a change the user just made, or a reply. */
+export function setIndexSort(store: PreferencesStore, indexSort: IndexSortState): void {
+  store.set((state) => (state.indexSort === indexSort ? state : { ...state, indexSort }));
 }

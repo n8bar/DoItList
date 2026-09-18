@@ -13,8 +13,10 @@ defmodule DoItWeb.Client.SessionController do
   choices from the account's Display elements (m02.04 §2.4). The client draws
   its own task rows (m04.02 worklist 2), so it needs the same four flags the
   LiveView's row rendering honors, and it needs them at boot rather than one
-  read per row. Session-only: `/api/v1` has no business with a browser's
-  display choices.
+  read per row. It also carries `index_sort` and `index_sort_reverse` — the
+  Initiatives index's Sort and Reverse choice, as the workspace's control saves
+  it (m04.02 7.3); the client writes it back through `update account`.
+  Session-only: `/api/v1` has no business with a browser's display choices.
   """
   use DoItWeb, :controller
 
@@ -24,10 +26,11 @@ defmodule DoItWeb.Client.SessionController do
 
   action_fallback DoItWeb.Client.FallbackController
 
-  @doc "The signed-in user, their row preferences, and a fresh CSRF token."
+  @doc "The signed-in user, their row and index-sort preferences, and a fresh CSRF token."
   def show(conn, _params) do
     user = conn.assigns.current_user
     prefs = Accounts.get_preferences(user)
+    mode = prefs.index_sort_mode
 
     json(
       conn,
@@ -37,7 +40,10 @@ defmodule DoItWeb.Client.SessionController do
           show_task_priority: prefs.show_task_priority,
           show_task_assignee: prefs.show_task_assignee,
           show_task_progress: prefs.show_task_progress,
-          show_task_count: prefs.show_task_count
+          show_task_count: prefs.show_task_count,
+          # `null` is Recent; reverse is the flag remembered for that mode.
+          index_sort: mode,
+          index_sort_reverse: !!Map.get(prefs.index_sort_reverse_by_mode || %{}, mode || "")
         },
         csrf_token: get_csrf_token()
       })

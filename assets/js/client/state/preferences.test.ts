@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { initialSortState, withMode } from "../screens/initiatives_model.ts";
 import {
   createPreferencesStore,
   initialRowPreferences,
   rowPreferencesFrom,
+  setIndexSort,
   setRowPreferences,
 } from "./preferences.ts";
 
@@ -53,5 +55,22 @@ describe("the row preferences", () => {
     setRowPreferences(store, rowPreferencesFrom({ show_task_assignee: false }));
     assert.equal(woken, 1);
     assert.equal(store.get().rows.assignee, false);
+  });
+});
+
+describe("the index sort (item 7.3)", () => {
+  it("starts on Recent and files what is set, without waking on the same value", () => {
+    const store = createPreferencesStore();
+    assert.deepEqual(store.get().indexSort, initialSortState);
+    let woken = 0;
+    store.subscribe(() => (woken += 1));
+
+    setIndexSort(store, initialSortState);
+    assert.equal(woken, 0);
+
+    const name = withMode(initialSortState, "name");
+    setIndexSort(store, name);
+    assert.equal(woken, 1);
+    assert.equal(store.get().indexSort, name);
   });
 });

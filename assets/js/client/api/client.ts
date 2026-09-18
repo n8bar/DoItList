@@ -43,6 +43,9 @@ export interface SessionData {
     show_task_assignee: boolean;
     show_task_progress: boolean;
     show_task_count: boolean;
+    /** The index's Sort mode (`null` for Recent) and that mode's Reverse (7.3). */
+    index_sort: string | null;
+    index_sort_reverse: boolean;
   };
   csrf_token: string;
 }

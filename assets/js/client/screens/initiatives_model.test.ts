@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { ArchivedInitiative, InitiativeArchive, InitiativeSummary, TrashedInitiative } from "../api/types.ts";
-import type { KeyValueStore } from "../storage/last_user.ts";
 import {
-  SORT_STORAGE_KEY,
+  accountSortRequest,
+  adoptSortReply,
   applyOrder,
   archiveDrawerTitle,
   archiveHasRows,
@@ -21,6 +21,7 @@ import {
   descriptionText,
   dropSide,
   droppedOrder,
+  indexSortFrom,
   initialSortState,
   manualOrder,
   mergeSummaries,
@@ -28,7 +29,6 @@ import {
   patchSummary,
   percentText,
   positionRequest,
-  readSortState,
   reversed,
   revertOrder,
   roleBadgeClass,
@@ -39,7 +39,6 @@ import {
   updatedText,
   withMode,
   withReverse,
-  writeSortState,
 } from "./initiatives_model.ts";
 
 function row(overrides: Partial<InitiativeSummary> & { id: number }): InitiativeSummary {
@@ -146,50 +145,63 @@ describe("the card's words (item 4.3)", () => {
   });
 });
 
-function fakeStore(initial: Record<string, string> = {}): KeyValueStore & { data: Record<string, string> } {
-  const data = { ...initial };
-  return {
-    data,
-    getItem: (key) => (key in data ? data[key]! : null),
-    setItem: (key, value) => {
-      data[key] = value;
-    },
-    removeItem: (key) => {
-      delete data[key];
-    },
-  };
-}
-
-describe("remembering the sort choice", () => {
-  it("round-trips through the store", () => {
-    const store = fakeStore();
-    const state = withReverse(withMode(initialSortState, "updated"), true);
-    writeSortState(store, state);
-    assert.deepEqual(readSortState(store), { mode: "updated", reverseByMode: { updated: true } });
+describe("the sort choice on the account (item 7.3)", () => {
+  it("reads the session's mode and that mode's reverse", () => {
+    assert.deepEqual(indexSortFrom({ index_sort: "updated", index_sort_reverse: true }), {
+      mode: "updated",
+      reverseByMode: { updated: true },
+    });
+    assert.deepEqual(indexSortFrom({ index_sort: null, index_sort_reverse: false }), {
+      mode: "",
+      reverseByMode: { "": false },
+    });
   });
 
   it("falls back to Recent on nothing, garbage, or an unknown mode", () => {
-    assert.deepEqual(readSortState(null), initialSortState);
-    assert.deepEqual(readSortState(fakeStore()), initialSortState);
-    assert.deepEqual(readSortState(fakeStore({ [SORT_STORAGE_KEY]: "{" })), initialSortState);
-    assert.deepEqual(
-      readSortState(fakeStore({ [SORT_STORAGE_KEY]: JSON.stringify({ mode: "colour", reverseByMode: { colour: true, name: "yes" } }) })),
-      initialSortState,
-    );
+    assert.deepEqual(indexSortFrom(undefined), initialSortState);
+    assert.deepEqual(indexSortFrom(null), initialSortState);
+    assert.equal(indexSortFrom({ index_sort: "colour", index_sort_reverse: "yes" }).mode, "");
+    assert.equal(reversed(indexSortFrom({ index_sort: "name", index_sort_reverse: "yes" })), false);
   });
 
-  it("survives a store that throws", () => {
-    const broken: KeyValueStore = {
-      getItem: () => {
-        throw new Error("blocked");
-      },
-      setItem: () => {
-        throw new Error("blocked");
-      },
-      removeItem: () => {},
-    };
-    assert.deepEqual(readSortState(broken), initialSortState);
-    assert.doesNotThrow(() => writeSortState(broken, initialSortState));
+  it("sends the mode alone when this client has not seen its reverse", () => {
+    const booted = indexSortFrom({ index_sort: null, index_sort_reverse: false });
+    assert.deepEqual(accountSortRequest(withMode(booted, "name")), {
+      operations: [{ op: "update", type: "account", data: { index_sort: "name" } }],
+    });
+  });
+
+  it("sends both once the reverse for the mode is known, and null for Recent", () => {
+    const state = withReverse(withMode(initialSortState, "name"), true);
+    assert.deepEqual(accountSortRequest(state).operations[0]!.data, {
+      index_sort: "name",
+      index_sort_reverse: true,
+    });
+    const recent = withReverse(initialSortState, false);
+    assert.deepEqual(accountSortRequest(withMode(withReverse(initialSortState, true), "")).operations[0]!.data, {
+      index_sort: null,
+      index_sort_reverse: true,
+    });
+    assert.deepEqual(accountSortRequest(recent).operations[0]!.data, { index_sort: null });
+  });
+
+  it("adopts the reply's reverse for a mode it did not know", () => {
+    const state = withMode(initialSortState, "name");
+    const reply = { results: [{ status: "ok", data: { type: "account", index_sort: "name", index_sort_reverse: true } }] };
+    assert.deepEqual(adoptSortReply(state, reply), { mode: "name", reverseByMode: { name: true } });
+    const off = { results: [{ status: "ok", data: { type: "account", index_sort: "name", index_sort_reverse: false } }] };
+    assert.deepEqual(adoptSortReply(state, off), { mode: "name", reverseByMode: { name: false } });
+  });
+
+  it("leaves a flag the user set, a mode they moved off, or a bad reply alone", () => {
+    // Ticked then cleared: the flag is known false, not merely absent.
+    const set = withReverse(withReverse(withMode(initialSortState, "name"), true), false);
+    const reply = { results: [{ status: "ok", data: { index_sort: "name", index_sort_reverse: true } }] };
+    assert.equal(adoptSortReply(set, reply), set);
+    const moved = withMode(initialSortState, "progress");
+    assert.equal(adoptSortReply(moved, reply), moved);
+    assert.equal(adoptSortReply(moved, null), moved);
+    assert.equal(adoptSortReply(moved, { results: [] }), moved);
   });
 });
 

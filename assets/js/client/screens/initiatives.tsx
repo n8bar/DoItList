@@ -35,9 +35,10 @@ import { LIST_ROW_HEIGHT } from "../frame/layout_budget.ts";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID, useRouter } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
+import type { PreferencesState } from "../state/preferences.ts";
+import { setIndexSort } from "../state/preferences.ts";
 import { pushNotice } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
-import { browserKeyValueStore } from "../storage/last_user.ts";
 import { useServices } from "../services.tsx";
 import { InlineError, Skeleton } from "../ui/feedback.tsx";
 import { TextArea, TextInput } from "../ui/form.tsx";
@@ -54,6 +55,8 @@ import type {
 } from "./initiatives_model.ts";
 import {
   SORT_OPTIONS,
+  accountSortRequest,
+  adoptSortReply,
   applyOrder,
   archiveDrawerTitle,
   archiveHasRows,
@@ -68,7 +71,6 @@ import {
   percentText,
   positionRequest,
   progressValue,
-  readSortState,
   revertOrder,
   reversed,
   roleBadgeClass,
@@ -85,28 +87,48 @@ import {
   withMode,
   withReverse,
   withoutJoined,
-  writeSortState,
 } from "./initiatives_model.ts";
 import { useResource } from "./use_resource.ts";
 
 const selectSummaries = (state: DomainState) => state.initiativeSummaries;
 const selectArchive = (state: DomainState) => state.initiativeArchive;
-
-/** The sort choice, remembered in this browser (see `initiatives_model.ts`). */
-function useSortState(): [IndexSortState, (next: IndexSortState) => void] {
-  const [state, setState] = useState<IndexSortState>(() => readSortState(browserKeyValueStore()));
-  const update = useCallback((next: IndexSortState) => {
-    setState(next);
-    writeSortState(browserKeyValueStore(), next);
-  }, []);
-  return [state, update];
-}
+const selectIndexSort = (state: PreferencesState) => state.indexSort;
 
 export function InitiativesScreen() {
   const { api, stores, sync, escalate } = useServices();
   const summaries = useStoreValue(stores.domain, selectSummaries);
   const archive = useStoreValue(stores.domain, selectArchive);
-  const [sort, setSort] = useSortState();
+  const sort = useStoreValue(stores.preferences, selectIndexSort);
+
+  /**
+   * The sort choice follows the account (7.3): the list re-orders the moment
+   * the control changes (§6.2), and `update account` saves it. The reply's
+   * reverse fills in a mode this client had not seen; a refusal puts the
+   * order back and says so.
+   */
+  const setSort = useCallback(
+    (next: IndexSortState) => {
+      const prior = stores.preferences.get().indexSort;
+      if (next === prior) return;
+      setIndexSort(stores.preferences, next);
+      void api
+        .post<unknown>("/operations", accountSortRequest(next), {
+          "idempotency-key": crypto.randomUUID(),
+        })
+        .then((result) => {
+          if (result.ok) {
+            setIndexSort(stores.preferences, adoptSortReply(stores.preferences.get().indexSort, result.data));
+            return;
+          }
+          setIndexSort(stores.preferences, prior);
+          pushNotice(stores.ui, {
+            kind: "error",
+            message: `Could not save the sort. ${result.error.message}`,
+          });
+        });
+    },
+    [api, stores],
+  );
   const [creating, setCreating] = useState(false);
 
   const resource = useResource<InitiativeSummary[]>({

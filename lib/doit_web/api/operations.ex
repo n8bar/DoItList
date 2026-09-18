@@ -22,7 +22,7 @@ defmodule DoItWeb.Api.Operations do
 
       {
         "op":   "add" | "update" | "remove",   // the verb
-        "type": "task" | "initiative" | "comment" | "member" | "notification" | "link",
+        "type": "task" | "initiative" | "comment" | "member" | "notification" | "link" | "history" | "account",
         "id":   123,        // target of an update/remove (an EXISTING resource)
         "ids":  [12, 15],   // `update task` only: an ordered list of targets
                             // moved together (instead of `id`; see the table)
@@ -81,6 +81,7 @@ defmodule DoItWeb.Api.Operations do
   | `add`    | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.create_link/2`              | edit (source) |
   | `remove` | `link`         | `source_id`/`source_lid`, `target_id`/`target_lid` | `Tasks.remove_link/2`              | edit (source) |
   | `add`    | `history`      | `initiative_id`, `action: "undo"`/`"redo"`      | `Tasks.undo/2` / `Tasks.redo/2`         | view (the reversal is role-gated inside) |
+  | `update` | `account`      | `index_sort`, `index_sort_reverse` — the caller's own Initiatives index sort (no `id`; the target is always the caller) | `Accounts.update_preferences/2` | (the caller) |
 
   ### Task parentage (and one-batch bootstrap)
 
@@ -193,7 +194,9 @@ defmodule DoItWeb.Api.Operations do
     * an `add`/`update member` `data` carrying `role: "owner"` →
       `irreversible_op` (minting an owner bypasses the guarded transfer flow and
       can leave multiple owners — `role` is limited to `editor`/`viewer`).
-    * any `type` outside the set above (e.g. `user`/`account`) → `unsupported_op`.
+    * any `type` outside the set above (e.g. `user`) → `unsupported_op`.
+      `update account` is the one account op, and it reaches only the caller's
+      own index sort preference (m04.02 7.3) — never email, password, or tokens.
 
   ## Response shapes
 
@@ -245,14 +248,14 @@ defmodule DoItWeb.Api.Operations do
 
   import Ecto.Query, only: [from: 2]
 
-  alias DoIt.{Broadcast, Initiatives, Notifications, Repo, Tasks}
-  alias DoIt.Accounts.User
+  alias DoIt.{Accounts, Broadcast, Initiatives, Notifications, Repo, Tasks}
+  alias DoIt.Accounts.{User, UserPreferences}
   alias DoIt.Initiatives.Initiative
   alias DoIt.Notifications.Notification
   alias DoIt.Tasks.{Comment, Index, Task}
   alias DoItWeb.Api.{Authz, Serializer}
 
-  @types ~w(task initiative comment member notification link history)
+  @types ~w(task initiative comment member notification link history account)
   @verbs ~w(add update remove)
 
   # Hard cap on ops per batch, enforced before any DB work (see apply_batch/2).
@@ -301,7 +304,8 @@ defmodule DoItWeb.Api.Operations do
     {"update", "notification"} => ~w(all read),
     {"add", "link"} => ~w(source_id source_lid source target_id target_lid target),
     {"remove", "link"} => ~w(source_id source_lid source target_id target_lid target),
-    {"add", "history"} => ~w(initiative_id action)
+    {"add", "history"} => ~w(initiative_id action),
+    {"update", "account"} => ~w(index_sort index_sort_reverse)
   }
 
   # The sort concern's keys (m04.02 5.1.5); see sort_task_op/3.
@@ -325,7 +329,7 @@ defmodule DoItWeb.Api.Operations do
   #     check (any authed user may create one);
   #   * every row can fail `bad_reference` (a bad/forward/foreign/duplicate
   #     lid) EXCEPT `update notification`, whose target is always a literal
-  #     id, never a lid;
+  #     id, never a lid, and `update account`, which has no target at all;
   #   * `conflict` appears only where `expected_version` is an accepted key;
   #   * `irreversible_op` appears only where `owner_id` (ownership transfer)
   #     or a member `role` (which could name "owner") is accepted.
@@ -959,6 +963,41 @@ defmodule DoItWeb.Api.Operations do
               {:error, context_error(reason)}
           end
         end
+    end
+  end
+
+  # ---- account (m04.02 7.3) -------------------------------------------------
+  #
+  # The caller's own Initiatives index sort, as the workspace's Sort control
+  # saves it: `index_sort` is the mode (`null` for Recent) and
+  # `index_sort_reverse` the flag for that mode — the preferences row keeps
+  # reverse per mode, so a flag lands on whichever mode the op leaves current.
+  # No `id`, no lid, no capability check: the target is always the caller, and
+  # nobody else's preference is reachable. The result carries the resolved
+  # pair, so a client that sent only a mode learns the reverse it came with.
+
+  defp dispatch(user, "update", "account", op, _changes) do
+    data = data(op)
+    prefs = Accounts.get_preferences(user)
+
+    with {:ok, mode} <- account_sort_mode(data, prefs),
+         {:ok, reverse} <- account_sort_reverse(data, prefs, mode) do
+      reverse_by_mode = Map.put(prefs.index_sort_reverse_by_mode || %{}, mode || "", reverse)
+
+      case Accounts.update_preferences(user, %{
+             "index_sort_mode" => mode,
+             "index_sort_reverse_by_mode" => reverse_by_mode
+           }) do
+        {:ok, _} ->
+          ok(nil, nil, "account", %{
+            type: "account",
+            index_sort: mode,
+            index_sort_reverse: reverse
+          })
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
+      end
     end
   end
 
@@ -2048,6 +2087,50 @@ defmodule DoItWeb.Api.Operations do
     case Notifications.get(id) do
       %Notification{} = notification -> {:ok, notification}
       nil -> {:error, err(:not_found, "No such notification with id #{id}.", 422)}
+    end
+  end
+
+  # `index_sort` left out keeps the current mode; `null` is Recent.
+  defp account_sort_mode(data, prefs) do
+    case Map.fetch(data, "index_sort") do
+      :error ->
+        {:ok, prefs.index_sort_mode}
+
+      {:ok, nil} ->
+        {:ok, nil}
+
+      {:ok, mode} when is_binary(mode) ->
+        if mode in UserPreferences.index_sort_modes(),
+          do: {:ok, mode},
+          else: {:error, account_sort_mode_error(mode)}
+
+      {:ok, other} ->
+        {:error, account_sort_mode_error(other)}
+    end
+  end
+
+  defp account_sort_mode_error(given) do
+    err(
+      :unprocessable_entity,
+      "index_sort must be one of #{Enum.join(UserPreferences.index_sort_modes(), ", ")}, or null for Recent (got #{inspect(given)}).",
+      422,
+      "index_sort"
+    )
+  end
+
+  # `index_sort_reverse` left out keeps the flag the resulting mode already has.
+  defp account_sort_reverse(data, prefs, mode) do
+    case Map.fetch(data, "index_sort_reverse") do
+      :error -> {:ok, !!Map.get(prefs.index_sort_reverse_by_mode || %{}, mode || "")}
+      {:ok, reverse} when is_boolean(reverse) -> {:ok, reverse}
+      {:ok, other} ->
+        {:error,
+         err(
+           :unprocessable_entity,
+           "index_sort_reverse must be true or false (got #{inspect(other)}).",
+           422,
+           "index_sort_reverse"
+         )}
     end
   end
 

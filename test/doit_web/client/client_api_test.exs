@@ -75,18 +75,47 @@ defmodule DoItWeb.Client.ClientApiTest do
       assert is_binary(csrf) and csrf != ""
     end
 
-    test "carries the account's four row-display preferences", %{conn: conn, owner: owner} do
+    test "carries the account's row-display and index-sort preferences", %{
+      conn: conn,
+      owner: owner
+    } do
       conn = conn |> sign_in(owner) |> get(~p"/app/api/session")
 
-      # Defaults: every row attribute shown, exactly as the LiveView renders it.
+      # Defaults: every row attribute shown, exactly as the LiveView renders it,
+      # and the index on Recent (null), not reversed.
       assert %{"data" => %{"preferences" => prefs}} = json_response(conn, 200)
 
       assert prefs == %{
                "show_task_priority" => true,
                "show_task_assignee" => true,
                "show_task_progress" => true,
-               "show_task_count" => true
+               "show_task_count" => true,
+               "index_sort" => nil,
+               "index_sort_reverse" => false
              }
+    end
+
+    test "index sort follows what update account saved", %{conn: conn, owner: owner} do
+      saved =
+        conn
+        |> sign_in(owner)
+        |> post(~p"/app/api/operations", %{
+          "operations" => [
+            %{
+              "op" => "update",
+              "type" => "account",
+              "data" => %{"index_sort" => "name", "index_sort_reverse" => true}
+            }
+          ]
+        })
+
+      assert %{"results" => [%{"status" => "ok", "data" => data}]} = json_response(saved, 200)
+      assert data == %{"type" => "account", "index_sort" => "name", "index_sort_reverse" => true}
+
+      conn = build_conn() |> sign_in(owner) |> get(~p"/app/api/session")
+      assert %{"data" => %{"preferences" => prefs}} = json_response(conn, 200)
+      assert prefs["index_sort"] == "name"
+      assert prefs["index_sort_reverse"] == true
     end
 
     test "row preferences follow what the account saved", %{conn: conn, owner: owner} do
