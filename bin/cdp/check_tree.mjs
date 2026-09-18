@@ -2701,6 +2701,277 @@ export async function checkScreenReaderContext(ctx) {
   return present.join("; ");
 }
 
+// ---------------------------------------------------------------------------
+// 8.8: view-only actions stay local — before the channel connects, in
+// ordinary operation, and through a rerender the channel causes.
+// ---------------------------------------------------------------------------
+
+const LOCAL_TITLES = { oscar: "Oscar", papa: "Papa", quebec: "Quebec", romeo: "Romeo", sierra: "Sierra", tango: "Tango" };
+
+/** "Oscar" (Papa, Quebec), "Romeo" (Sierra) and the leaf "Tango" at the root. */
+async function seedLocalRows(ctx) {
+  if (ctx.ids.oscar !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-local`, [
+    { op: "add", type: "task", lid: "oscar", data: { initiative_id: initiativeId, title: LOCAL_TITLES.oscar } },
+    { op: "add", type: "task", data: { parent_lid: "oscar", title: LOCAL_TITLES.papa } },
+    { op: "add", type: "task", data: { parent_lid: "oscar", title: LOCAL_TITLES.quebec } },
+    { op: "add", type: "task", lid: "romeo", data: { initiative_id: initiativeId, title: LOCAL_TITLES.romeo } },
+    { op: "add", type: "task", data: { parent_lid: "romeo", title: LOCAL_TITLES.sierra } },
+    { op: "add", type: "task", data: { initiative_id: initiativeId, title: LOCAL_TITLES.tango } },
+  ]);
+  const ids = results.map((r) => r?.data?.id);
+  if (!ids.every((id) => typeof id === "number")) throw new Error(`the local seed did not name six tasks: ${JSON.stringify(results)}`);
+  const [oscar, papa, quebec, romeo, sierra, tango] = ids;
+  Object.assign(ctx.ids, { oscar, papa, quebec, romeo, sierra, tango });
+  await waitForRows(session, ids, "the local rows");
+}
+
+/**
+ * Installed before the page's scripts run: the page's WebSocket is a stand-in
+ * that opens the real socket at once (`held` false) or only once
+ * `__gate.release()` is called (`held` true — the channel never connects until
+ * then, while the page itself loads as usual). Every frame the page sends is
+ * kept, so a check can count the channel pushes an action cost, and every
+ * frame received, so it can see the join land and a change arrive.
+ */
+function wsGate(held) {
+  return `
+  (() => {
+    const Native = window.WebSocket;
+    const gate = {
+      held: ${held},
+      Native,
+      sockets: [],
+      pending: [],
+      pushes: [],
+      frames: [],
+      release() {
+        gate.held = false;
+        for (const sock of gate.pending.splice(0)) sock.open();
+      },
+      // The received frames on topic, parsed: [join_ref, ref, topic, event, payload].
+      received(topic) {
+        return gate.frames.map((f) => { try { return JSON.parse(f); } catch { return null; } }).filter((m) => Array.isArray(m) && m[2] === topic);
+      },
+      // The sent frames, parsed, from index from on.
+      sent(from) {
+        return gate.pushes.slice(from).map((f) => { try { return JSON.parse(f); } catch { return null; } }).filter((m) => Array.isArray(m));
+      },
+    };
+    class Gated extends EventTarget {
+      constructor(url, protocols) {
+        super();
+        this.url = String(url);
+        this.protocols = protocols;
+        this.readyState = 0;
+        this.onopen = null; this.onerror = null; this.onmessage = null; this.onclose = null;
+        this.real = null;
+        this.type = "blob";
+        gate.sockets.push(this);
+        if (gate.held) gate.pending.push(this); else this.open();
+      }
+      get binaryType() { return this.type; }
+      set binaryType(value) { this.type = value; if (this.real) this.real.binaryType = value; }
+      open() {
+        const real = new Native(this.url, this.protocols);
+        this.real = real;
+        real.binaryType = this.type;
+        real.onopen = (e) => { this.readyState = 1; this.onopen?.(e); };
+        real.onerror = (e) => { this.onerror?.(e); };
+        real.onmessage = (e) => { gate.frames.push(String(e.data).slice(0, 4000)); this.onmessage?.(e); };
+        real.onclose = (e) => { this.readyState = 3; this.onclose?.(e); };
+      }
+      send(data) {
+        gate.pushes.push(String(data).slice(0, 1000));
+        if (this.real) this.real.send(data);
+      }
+      close(code, reason) {
+        if (this.real) { this.readyState = 2; this.real.close(code, reason); return; }
+        const at = gate.pending.indexOf(this);
+        if (at >= 0) gate.pending.splice(at, 1);
+        this.readyState = 3;
+        this.onclose?.({ code: code ?? 1000, reason: reason ?? "", wasClean: true });
+      }
+    }
+    Gated.CONNECTING = 0; Gated.OPEN = 1; Gated.CLOSING = 2; Gated.CLOSED = 3;
+    window.__gate = gate;
+    window.WebSocket = Gated;
+  })();
+`;
+}
+
+/** Waits for the page's channel on the throwaway to be joined (the server's ok on phx_join). */
+async function waitForJoin(ctx) {
+  const topic = `initiative:${ctx.initiativeId}`;
+  await waitFor(ctx.session, `return __gate.received(${JSON.stringify(topic)}).some((m) => m[3] === "phx_reply" && m[4]?.status === "ok");`, {
+    timeoutMs: 10_000,
+    everyMs: 20,
+    what: `the channel on ${topic} to be joined`,
+  });
+}
+
+/**
+ * The sent frames from `from` on, sorted: heartbeats (topic "phoenix") are
+ * the socket's own; `select` on the Initiative's topic is the presence
+ * announcement the selection makes by design (3.4.2); anything else is a
+ * request a view-only action must not make.
+ */
+async function pushesSince(ctx, from) {
+  const topic = `initiative:${ctx.initiativeId}`;
+  const frames = await evaluate(ctx.session, `return __gate.sent(${from});`);
+  const heartbeats = frames.filter((m) => m[2] === "phoenix").length;
+  const selects = frames.filter((m) => m[2] === topic && m[3] === "select").length;
+  const other = frames.filter((m) => m[2] !== "phoenix" && !(m[2] === topic && m[3] === "select")).map((m) => `${m[3]} on ${m[2]}`);
+  return { heartbeats, selects, other };
+}
+
+/**
+ * Every view-only action, each taking effect on screen: select by click,
+ * walk with a key, deselect with Escape, collapse and expand a branch, open
+ * and close the Details pane, flip the touch switch and the theme (both put
+ * back). Leaves nothing selected and every branch open.
+ */
+async function viewOnlyActions(ctx) {
+  const { session } = ctx;
+  const { papa, quebec, romeo, tango } = ctx.ids;
+  const touch = await evaluate(session, TOUCH_STATE_JS);
+  const theme = await evaluate(session, THEME_JS);
+  if (theme === null) throw new Error("no theme control or no row to sample");
+  try {
+    await clickTitle(session, papa);
+    await tapKey(session, "ArrowDown");
+    await waitFor(session, `return __tree.selected() === ${quebec};`, { timeoutMs: 2_000, what: `ArrowDown to land on "Quebec"` });
+    await tapKey(session, "Escape");
+    await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "Escape to clear the selection" });
+    await collapseBranch(session, romeo);
+    await clickElement(session, `#collapse-${romeo}`);
+    await waitFor(session, `return document.getElementById("children-${romeo}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Romeo" to open again` });
+    await selectRow(session, tango);
+    await clickElement(session, "#details-rail [data-close-task]");
+    await waitFor(session, `return __tree.paneClosed() && __tree.selected() === null;`, { timeoutMs: 2_000, what: "the pane to close" });
+    await setTouchLayout(session, !touch.on);
+    await restoreTouchLayout(session, touch);
+    const other = theme.pressed === "light" ? "dark" : "light";
+    await clickElement(session, `#client-theme-toggle-${other}`);
+    await themeState(session, `out.pressed === ${JSON.stringify(other)}`, `${other} to take`);
+    return "select, ArrowDown, Escape, collapse, expand, pane open and Close, touch switch on and off, theme flipped and back";
+  } finally {
+    await clickElement(session, `#client-theme-toggle-${theme.pressed}`).catch(() => {});
+    await themeState(session, `out.pressed === ${JSON.stringify(theme.pressed)}`, "the operator's theme to come back").catch(() => {});
+    await restoreTouchLayout(session, touch).catch(() => {});
+  }
+}
+
+/**
+ * 8.8 (1): with the socket held before it opens, the page comes up and every
+ * view-only action works with nothing fetched and nothing pushed; releasing
+ * the socket then joins the channel without disturbing what was set.
+ */
+export async function checkViewOnlyBeforeConnect(ctx) {
+  const { session } = ctx;
+  await seedLocalRows(ctx);
+  const { identifier } = await session.send("Page.addScriptToEvaluateOnNewDocument", { source: wsGate(true) });
+  try {
+    await reopenTree(ctx);
+    const held = await evaluate(session, `return { tried: __gate.sockets.length, open: __gate.sockets.filter((s) => s.readyState === 1).length, pushes: __gate.pushes.length };`);
+    if (held.tried === 0) throw new Error("the page opened no socket at all after coming up");
+    if (held.open > 0) throw new Error("a socket opened despite the hold");
+    const before = await evaluate(session, `return __ops.log.length;`);
+    const did = await viewOnlyActions(ctx);
+    await assertNothingFetched(session, before, "view-only actions before the channel connected");
+    const after = await evaluate(session, `return { open: __gate.sockets.filter((s) => s.readyState === 1).length, pushes: __gate.pushes.length };`);
+    if (after.open > 0) throw new Error("a socket opened during the actions");
+    if (after.pushes !== held.pushes) throw new Error(`${after.pushes - held.pushes} frame(s) were sent on a socket that is not open`);
+
+    await evaluate(session, `__gate.release(); return true;`);
+    await waitForJoin(ctx);
+    const settled = await evaluate(session, `return { selected: __tree.selected(), romeoOpen: document.getElementById("children-${ctx.ids.romeo}")?.classList.contains("collapsed-peek") === false, pane: __tree.paneClosed() };`);
+    if (settled.selected !== null || !settled.romeoOpen || !settled.pane) throw new Error(`the join changed the view: ${JSON.stringify(settled)}`);
+    return `socket held (${held.tried} tried, none open): ${did}; nothing fetched, nothing pushed; released: the channel joined and the view stayed put`;
+  } finally {
+    await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+  }
+}
+
+/**
+ * 8.8 (2): with the channel joined, the same actions fetch nothing and push
+ * nothing but the selection's own presence announcement.
+ */
+export async function checkViewOnlyOrdinary(ctx) {
+  const { session } = ctx;
+  await seedLocalRows(ctx);
+  const { identifier } = await session.send("Page.addScriptToEvaluateOnNewDocument", { source: wsGate(false) });
+  try {
+    await reopenTree(ctx);
+    await waitForJoin(ctx);
+    await settle(session);
+    const before = await evaluate(session, `return { fetches: __ops.log.length, pushes: __gate.pushes.length };`);
+    const did = await viewOnlyActions(ctx);
+    await assertNothingFetched(session, before.fetches, "view-only actions in ordinary operation");
+    const pushed = await pushesSince(ctx, before.pushes);
+    if (pushed.other.length > 0) throw new Error(`view-only actions pushed on the channel: ${pushed.other.join(", ")}`);
+    return `${did}; nothing fetched; pushed ${pushed.selects} presence select(s) and ${pushed.heartbeats} heartbeat(s), nothing else`;
+  } finally {
+    await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+  }
+}
+
+/** The view state 8.8 (3) expects to survive a rerender, read off the page. */
+function viewStateOf(ctx) {
+  const { papa, oscar, romeo } = ctx.ids;
+  return `
+    const li = document.getElementById("task-${papa}");
+    return {
+      selected: __tree.selected(),
+      oscarClosed: document.getElementById("children-${oscar}")?.classList.contains("collapsed-peek") ?? null,
+      romeoClosed: document.getElementById("children-${romeo}")?.classList.contains("collapsed-peek") ?? null,
+      pane: __tree.pane(${JSON.stringify(LOCAL_TITLES.papa)}) !== false,
+      focused: __tree.focused(),
+      sameRow: li?.dataset.cdpMark === "1",
+      visible: __tree.visible().map((r) => r.id).join(","),
+    };
+  `;
+}
+
+/**
+ * 8.8 (3): a change made elsewhere — a title edit through the API on another
+ * row — arrives over the channel and rerenders the tree; the selection, the
+ * collapse set, the open pane, the focused row and the row's own element all
+ * come through unchanged.
+ */
+export async function checkViewStateThroughRerender(ctx) {
+  const { session } = ctx;
+  await seedLocalRows(ctx);
+  const { papa, romeo, tango } = ctx.ids;
+  const topic = `initiative:${ctx.initiativeId}`;
+  const { identifier } = await session.send("Page.addScriptToEvaluateOnNewDocument", { source: wsGate(false) });
+  try {
+    await reopenTree(ctx);
+    await waitForJoin(ctx);
+    await settle(session);
+    await collapseBranch(session, romeo);
+    await selectRow(session, papa);
+    await evaluate(session, `document.getElementById("task-${papa}").dataset.cdpMark = "1"; return true;`);
+    const was = await evaluate(session, viewStateOf(ctx));
+    if (was.selected !== papa || !was.pane || !was.romeoClosed) throw new Error(`the view was not set up: ${JSON.stringify(was)}`);
+    const framesBefore = await evaluate(session, `return __gate.frames.length;`);
+
+    const renamed = `${LOCAL_TITLES.tango}, renamed`;
+    await pageOperation(session, `cdp-tree-${ctx.stamp}-local-rename`, { op: "update", type: "task", id: tango, data: { title: renamed } });
+    await waitFor(session, `return __tree.title(${tango}) === ${JSON.stringify(renamed)};`, { timeoutMs: 10_000, what: `"Tango" to show its new title` });
+    await settle(session);
+    const arrived = await evaluate(session, `return __gate.frames.slice(${framesBefore}).map((f) => { try { return JSON.parse(f); } catch { return null; } }).filter((m) => Array.isArray(m) && m[2] === ${JSON.stringify(topic)} && m[3] !== "phx_reply").map((m) => m[3] + ":" + (m[4]?.kind ?? ""));`);
+
+    const now = await evaluate(session, viewStateOf(ctx));
+    const changed = Object.keys(was).filter((key) => was[key] !== now[key]).map((key) => `${key}: ${JSON.stringify(was[key])} → ${JSON.stringify(now[key])}`);
+    if (changed.length > 0) throw new Error(`the rerender changed the view — ${changed.join("; ")}`);
+    return `"Tango" renamed through the API (${arrived.join(", ") || "no channel frame seen"}); selection, collapse set, pane, focus (${now.focused}) and the row's element all stayed`;
+  } finally {
+    await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+  }
+}
+
 const CHECKS = [
   ["add a task", checkAddTask],
   ["add a child", checkAddChild],
@@ -2740,6 +3011,9 @@ const CHECKS = [
   ["deep link, then the arrows carry on", checkDeepLinkThenArrows],
   ["collapse: the selection follows what is on screen", checkCollapseKeepsSelection],
   ["screen-reader context on rows", checkScreenReaderContext],
+  ["view-only before the channel connects", checkViewOnlyBeforeConnect],
+  ["view-only in ordinary operation", checkViewOnlyOrdinary],
+  ["view state through a rerender", checkViewStateThroughRerender],
 ];
 
 // ---------------------------------------------------------------------------
