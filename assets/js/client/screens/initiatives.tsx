@@ -40,6 +40,7 @@ import { setIndexSort } from "../state/preferences.ts";
 import { pushNotice } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
+import { ConfirmDialog } from "../ui/dialog.tsx";
 import { InlineError, Skeleton } from "../ui/feedback.tsx";
 import { TextArea, TextInput } from "../ui/form.tsx";
 import { Icon } from "../ui/icon.tsx";
@@ -75,10 +76,11 @@ import {
   reversed,
   roleBadgeClass,
   sortInitiatives,
-  stateRequest,
+  PURGE_CONFIRM_ID,
   storedOrder,
   subtitleText,
   summaryForCreated,
+  purgeConfirmText,
   trashedRowActions,
   trashedText,
   updatedText,
@@ -294,6 +296,8 @@ const RESTORE_CLASS =
   "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30";
 const UNHIDE_CLASS =
   "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-zinc-400 dark:border-zinc-600 text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800";
+const DELETE_CLASS =
+  "inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold border border-red-500 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40";
 const ROW_CLASS =
   "flex flex-col gap-1 rounded border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-900 px-3 py-2";
 
@@ -302,6 +306,9 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
   const [open, setOpen] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
   const [showTrash, setShowTrash] = useState(false);
+  // The Trash row whose Delete is waiting on the confirm (7.4). Asked here,
+  // from the row the client already holds — nothing waits on the network (§6.5).
+  const [purging, setPurging] = useState<TrashedInitiative | null>(null);
 
   const act = useCallback(
     (bucket: "archived" | "trashed", id: number, action: ArchiveAction) => {
@@ -322,7 +329,7 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
       }));
 
       void api
-        .post<unknown>("/operations", stateRequest(id, step.state), {
+        .post<unknown>("/operations", step.request, {
           "idempotency-key": crypto.randomUUID(),
         })
         .then((result) => {
@@ -336,10 +343,9 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
                 ? state.initiativeSummaries
                 : withoutJoined(state.initiativeSummaries ?? [], id),
           }));
-          const verb = action === "unhide" ? "unhide" : "restore";
           pushNotice(stores.ui, {
             kind: "error",
-            message: `Could not ${verb} that Initiative. ${result.error.message}`,
+            message: `Could not ${action} that Initiative. ${result.error.message}`,
           });
         });
     },
@@ -349,84 +355,114 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
   const title = archiveDrawerTitle(archive, showHidden);
   const shown = visibleArchived(archive.archived, showHidden);
 
+  const onTrashAct = (row: TrashedInitiative, action: ArchiveAction) => {
+    if (action === "delete") {
+      setPurging(row);
+      return;
+    }
+    act("trashed", row.id, action);
+  };
+
+  const purge = () => {
+    if (purging === null) return;
+    const { id } = purging;
+    setPurging(null);
+    act("trashed", id, "delete");
+  };
+
   return (
-    <details
-      id="archived"
-      open={open}
-      onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
-      aria-label={title}
-      className="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
-    >
-      <summary className="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 3xl:px-3 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
-        {archive.archived.length > 0 && (
-          <>
-            <Icon name="archive-box" className="w-4 h-4 flex-none" />
-            <span>Archived ({shown.length})</span>
-          </>
-        )}
-        {archive.archived.length > 0 && archive.trashed.length > 0 && (
-          <span className="text-zinc-400 dark:text-zinc-500">·</span>
-        )}
-        {archive.trashed.length > 0 && (
-          <>
-            <Icon name="trash" className="w-4 h-4 flex-none" />
-            <span>Trash ({archive.trashed.length})</span>
-          </>
-        )}
-        <Icon
-          name="chevron-up"
-          className="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
-        />
-      </summary>
-      <div className="px-4 sm:px-6 3xl:px-3 pb-3">
-        <div className="flex items-center justify-end gap-2">
-          {hasHidden(archive.archived) && (
-            <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none">
-              <input
-                type="checkbox"
-                id="show-hidden"
-                checked={showHidden}
-                onChange={(event) => setShowHidden(event.target.checked)}
-                className="checkbox checkbox-xs"
-              />{" "}
-              Show hidden
-            </label>
+    <>
+      <details
+        id="archived"
+        open={open}
+        onToggle={(event) => setOpen((event.currentTarget as HTMLDetailsElement).open)}
+        aria-label={title}
+        className="group fixed bottom-0 z-30 border-t border-zinc-200 dark:border-zinc-800 bg-white/95 dark:bg-zinc-900/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-zinc-900/80 shadow-[0_-1px_3px_rgba(0,0,0,0.06)] 3xl:rounded-t-lg 3xl:border-x 3xl:shadow-[0_-1px_3px_rgba(0,0,0,0.1)]"
+      >
+        <summary className="flex cursor-pointer list-none select-none items-center gap-2 px-4 sm:px-6 3xl:px-3 py-2.5 text-sm font-semibold text-zinc-600 dark:text-zinc-300 [&::-webkit-details-marker]:hidden hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+          {archive.archived.length > 0 && (
+            <>
+              <Icon name="archive-box" className="w-4 h-4 flex-none" />
+              <span>Archived ({shown.length})</span>
+            </>
+          )}
+          {archive.archived.length > 0 && archive.trashed.length > 0 && (
+            <span className="text-zinc-400 dark:text-zinc-500">·</span>
           )}
           {archive.trashed.length > 0 && (
-            <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none">
-              <input
-                type="checkbox"
-                id="show-trash"
-                checked={showTrash}
-                onChange={(event) => setShowTrash(event.target.checked)}
-                className="checkbox checkbox-xs"
-              />{" "}
-              Show trash
-            </label>
+            <>
+              <Icon name="trash" className="w-4 h-4 flex-none" />
+              <span>Trash ({archive.trashed.length})</span>
+            </>
+          )}
+          <Icon
+            name="chevron-up"
+            className="ml-auto w-4 h-4 flex-none transition-transform group-open:rotate-180"
+          />
+        </summary>
+        <div className="px-4 sm:px-6 3xl:px-3 pb-3">
+          <div className="flex items-center justify-end gap-2">
+            {hasHidden(archive.archived) && (
+              <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none">
+                <input
+                  type="checkbox"
+                  id="show-hidden"
+                  checked={showHidden}
+                  onChange={(event) => setShowHidden(event.target.checked)}
+                  className="checkbox checkbox-xs"
+                />{" "}
+                Show hidden
+              </label>
+            )}
+            {archive.trashed.length > 0 && (
+              <label className="flex items-center gap-1.5 text-xs text-zinc-500 dark:text-zinc-400 select-none">
+                <input
+                  type="checkbox"
+                  id="show-trash"
+                  checked={showTrash}
+                  onChange={(event) => setShowTrash(event.target.checked)}
+                  className="checkbox checkbox-xs"
+                />{" "}
+                Show trash
+              </label>
+            )}
+          </div>
+          <ul className="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
+            {shown.map((row) => (
+              <ArchivedRow key={row.id} row={row} onAct={(action) => act("archived", row.id, action)} />
+            ))}
+          </ul>
+          {archive.trashed.length > 0 && showTrash && (
+            <div className="mt-4 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+              <h3 className="flex items-center gap-1.5 text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
+                <Icon name="trash" className="w-3.5 h-3.5" /> Trash
+                <span className="font-normal normal-case text-zinc-400 dark:text-zinc-500">
+                  · auto-deletes after {archive.retention_days} days
+                </span>
+              </h3>
+              <ul className="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
+                {archive.trashed.map((row) => (
+                  <TrashedRow key={row.id} row={row} onAct={(action) => onTrashAct(row, action)} />
+                ))}
+              </ul>
+            </div>
           )}
         </div>
-        <ul className="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
-          {shown.map((row) => (
-            <ArchivedRow key={row.id} row={row} onAct={(action) => act("archived", row.id, action)} />
-          ))}
-        </ul>
-        {archive.trashed.length > 0 && showTrash && (
-          <div className="mt-4 pt-3 border-t border-zinc-200 dark:border-zinc-800">
-            <h3 className="flex items-center gap-1.5 text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wide">
-              <Icon name="trash" className="w-3.5 h-3.5" /> Trash
-              <span className="font-normal normal-case text-zinc-400 dark:text-zinc-500">
-                · auto-deletes after {archive.retention_days} days
-              </span>
-            </h3>
-            <ul className="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
-              {archive.trashed.map((row) => (
-                <TrashedRow key={row.id} row={row} onAct={(action) => act("trashed", row.id, action)} />
-              ))}
-            </ul>
-          </div>
-        )}
-      </div>
-    </details>
+      </details>
+      {/* The workspace's `data-confirm` on the Trash's Delete, opened client-side.
+          Only Delete sends; Escape, the backdrop and Cancel keep the row. */}
+      <ConfirmDialog
+        id={PURGE_CONFIRM_ID}
+        open={purging !== null}
+        title="Delete forever?"
+        confirmLabel="Delete"
+        danger
+        onConfirm={purge}
+        onCancel={() => setPurging(null)}
+      >
+        {purging === null ? "" : purgeConfirmText(purging.name)}
+      </ConfirmDialog>
+    </>
   );
 }
 
@@ -504,6 +540,16 @@ function TrashedRow({
               className={RESTORE_CLASS}
             >
               <Icon name="arrow-uturn-left" className="w-3.5 h-3.5" /> Restore
+            </button>
+          )}
+          {actions.includes("delete") && (
+            <button
+              type="button"
+              id={`trashed-${row.id}-delete`}
+              onClick={() => onAct("delete")}
+              className={DELETE_CLASS}
+            >
+              <Icon name="x-mark" className="w-3.5 h-3.5" /> Delete
             </button>
           )}
         </span>

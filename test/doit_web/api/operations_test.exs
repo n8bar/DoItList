@@ -825,7 +825,7 @@ defmodule DoItWeb.Api.OperationsTest do
   end
 
   describe "irreversible ops are rejected" do
-    test "remove initiative (permanent delete) → irreversible_op, Initiative survives", ctx do
+    test "remove initiative on a live Initiative → irreversible_op, Initiative survives", ctx do
       {status, body} =
         post_ops(ctx.owner, [%{"op" => "remove", "type" => "initiative", "id" => ctx.ini.id}])
 

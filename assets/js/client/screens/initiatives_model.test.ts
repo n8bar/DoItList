@@ -11,6 +11,8 @@ import {
   archiveStep,
   archivedRowActions,
   hasHidden,
+  purgeConfirmText,
+  removeRequest,
   stateRequest,
   trashedRowActions,
   trashedText,
@@ -394,8 +396,8 @@ describe("which buttons a row offers", () => {
     ]);
   });
 
-  it("only the owner restores from Trash, and nothing deletes forever", () => {
-    assert.deepEqual(trashedRowActions(trashed({ id: 1 })), ["restore"]);
+  it("only the owner restores or deletes from Trash", () => {
+    assert.deepEqual(trashedRowActions(trashed({ id: 1 })), ["restore", "delete"]);
     assert.deepEqual(trashedRowActions(trashed({ id: 1, role: "editor" })), []);
   });
 });
@@ -404,7 +406,7 @@ describe("what a press does before the server answers", () => {
   it("Restore frees an archived-only row onto the index", () => {
     const step = archiveStep(drawer, "archived", 10, "restore");
     assert.ok(step);
-    assert.equal(step.state, "unarchived");
+    assert.deepEqual(step.request, stateRequest(10, "unarchived"));
     assert.deepEqual(ids(step.archive.archived), [11, 12]);
     assert.equal(step.joined?.id, 10);
     assert.equal(step.joined?.archived, false);
@@ -422,7 +424,7 @@ describe("what a press does before the server answers", () => {
   it("Unhide frees a hidden-only row and posts unhidden", () => {
     const step = archiveStep(drawer, "archived", 11, "unhide");
     assert.ok(step);
-    assert.equal(step.state, "unhidden");
+    assert.deepEqual(step.request, stateRequest(11, "unhidden"));
     assert.equal(step.joined?.id, 11);
     assert.deepEqual(ids(step.archive.archived), [10, 12]);
   });
@@ -430,11 +432,29 @@ describe("what a press does before the server answers", () => {
   it("Restore from Trash posts restored and leaves trashed_at behind", () => {
     const step = archiveStep(drawer, "trashed", 20, "restore");
     assert.ok(step);
-    assert.equal(step.state, "restored");
+    assert.deepEqual(step.request, stateRequest(20, "restored"));
     assert.deepEqual(step.archive.trashed, []);
     assert.equal("trashed_at" in (step.joined as object), false);
     assert.equal(archiveStep(drawer, "trashed", 20, "unhide"), null);
     assert.equal(archiveStep(drawer, "archived", 99, "restore"), null);
+  });
+
+  it("Delete from Trash posts remove initiative and joins nothing (7.4)", () => {
+    const step = archiveStep(drawer, "trashed", 20, "delete");
+    assert.ok(step);
+    assert.deepEqual(step.request, removeRequest(20));
+    assert.equal(step.joined, null);
+    assert.deepEqual(step.archive.trashed, []);
+    assert.deepEqual(step.archive.archived, drawer.archived);
+    assert.equal(archiveStep(drawer, "archived", 10, "delete"), null);
+    assert.equal(archiveStep(drawer, "trashed", 99, "delete"), null);
+  });
+
+  it("asks with the workspace's words before a Delete", () => {
+    assert.equal(purgeConfirmText("Q3 Launch"), 'Permanently delete "Q3 Launch"? This can\'t be undone.');
+    assert.deepEqual(removeRequest(7), {
+      operations: [{ op: "remove", type: "initiative", id: 7 }],
+    });
   });
 
   it("joins the index at the top and leaves it again on a refusal", () => {

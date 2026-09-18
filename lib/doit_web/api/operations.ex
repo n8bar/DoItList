@@ -66,6 +66,7 @@ defmodule DoItWeb.Api.Operations do
   | `update` | `task`         | `co_assignee_ids: [..]`                         | `Tasks.add/remove/reorder_co_assignee(s)` | edit            |
   | `update` | `task`         | `sort_mode`/`sort_reverse` and/or `cascade_sort: true` — sets how the branch orders its children (`null` inherits), then makes every descendant branch inherit; result carries `records` | `Tasks.set_sort/4` / `cascade_sort/2` | edit |
   | `remove` | `task`         | —                                              | `Tasks.delete_task/2` (soft, undoable)  | edit              |
+  | `remove` | `initiative`   | `expected_version` — permanent delete of an Initiative already in Trash; the Trash's Delete button | `Initiatives.purge_initiative/1` | owner (and trashed) |
   | `add`    | `initiative`   | `name`, `subtitle`, `progress_calc`, `index_style`, … | `Initiatives.create_initiative/2`  | (any authed user) |
   | `update` | `initiative`   | content: `name`/`subtitle`/`progress_calc`/`index_style`/… | `Initiatives.update_initiative/2` + `update_subtitle/2` | edit |
   | `update` | `initiative`   | `state: "archived"`/`"unarchived"`/`"hidden"`/`"unhidden"` | `Initiatives.archive/hide…`         | view (own membership) |
@@ -182,12 +183,14 @@ defmodule DoItWeb.Api.Operations do
 
   ## Irreversible ops — rejected
 
-  Permanent delete / empty-Trash, transfer of ownership, and account
-  self-management are intentionally **not reachable** (Q6 — they stay
-  LiveView-only). They are rejected as a per-op error before any write:
+  Transfer of ownership and account self-management are intentionally **not
+  reachable** (Q6 — they stay LiveView-only), and a permanent delete never
+  happens in one step. They are rejected as a per-op error before any write:
 
-    * `remove initiative` → `irreversible_op` (Trash is the reversible
-      `update initiative {state: "trashed"}`; there is no permanent-delete verb).
+    * `remove initiative` on a **live** Initiative → `irreversible_op`. The
+      permanent delete (m04.02 7.4) is the Trash's Delete: it takes only an
+      Initiative already in Trash (`update initiative {state: "trashed"}`, the
+      reversible step) and only from its owner; anyone else is `forbidden`.
     * an `update initiative` `data` carrying `owner_id` → `irreversible_op`
       (transfer of ownership). Initiative-content updates are field-whitelisted,
       so no privileged column can be set through the generic changeset.
@@ -284,14 +287,15 @@ defmodule DoItWeb.Api.Operations do
   # path. Drives validate_data_keys/3 — the fail-fast targeted-hint check that
   # rejects an unrecognized key with a per-op error instead of silently dropping
   # it (Map.take only lifts known keys). A {verb, type} that is NOT a key here is
-  # left to the unsupported/irreversible dispatch (e.g. remove initiative, add
-  # notification, update link) so its own error is never preempted.
+  # left to the unsupported dispatch (e.g. add notification, update link) so
+  # its own error is never preempted.
   @accepted_data_keys %{
     {"add", "task"} =>
       ~w(initiative_id initiative_lid initiative parent_id parent_lid parent title description priority assignee_id manual_progress position status done numbered_title),
     {"update", "task"} =>
       ~w(parent_id parent_lid parent position reorder done co_assignee_ids title description priority assignee_id manual_progress expected_version numbered_title sort_mode sort_reverse cascade_sort),
     {"remove", "task"} => ~w(expected_version),
+    {"remove", "initiative"} => ~w(expected_version),
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
     {"update", "initiative"} =>
       @initiative_content_fields ++ ~w(subtitle state position owner_id expected_version),
@@ -772,13 +776,26 @@ defmodule DoItWeb.Api.Operations do
     end
   end
 
-  defp dispatch(_user, "remove", "initiative", _op, _changes) do
-    {:error,
-     err(
-       :irreversible_op,
-       "Permanently deleting an Initiative is irreversible and not available via the API. Use update {state: \"trashed\"} for the reversible soft delete.",
-       422
-     )}
+  # Permanent delete (m04.02 7.4): the Trash's Delete button. The gate is the
+  # workspace's `with_owned_trashed` — only the owner, only once the Initiative
+  # is in Trash. A live one is still refused as irreversible: Trash first (the
+  # reversible step), then remove. `:admin` is owner-only today; the explicit
+  # owner check keeps that true if admin ever widens.
+  defp dispatch(user, "remove", "initiative", op, changes) do
+    with {:ok, expected} <- fetch_expected_version(data(op)),
+         {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
+         {:ok, initiative} <- authorize(user, initiative_id, :admin),
+         :ok <- check_owner(user, initiative),
+         :ok <- check_trashed(initiative),
+         :ok <- check_initiative_version(initiative, expected) do
+      case Initiatives.purge_initiative(initiative) do
+        {:ok, purged} ->
+          ok(nil, purged.id, "initiative", %{type: "initiative", id: purged.id, removed: true})
+
+        {:error, reason} ->
+          {:error, context_error(reason)}
+      end
+    end
   end
 
   defp dispatch(user, "update", "initiative", op, changes) do
@@ -1562,6 +1579,24 @@ defmodule DoItWeb.Api.Operations do
   defp trash(_user, initiative), do: Initiatives.trash_initiative(initiative)
   defp restore(_user, initiative), do: Initiatives.restore_initiative(initiative)
 
+  # `remove initiative`'s two gates (m04.02 7.4) — the workspace's `with_owned_trashed`.
+  defp check_owner(%User{id: user_id}, %Initiative{owner_id: user_id}), do: :ok
+
+  defp check_owner(_user, %Initiative{id: id}) do
+    {:error, err(:forbidden, "Only the owner may permanently delete Initiative #{id}.", 403)}
+  end
+
+  defp check_trashed(%Initiative{trashed_at: %DateTime{}}), do: :ok
+
+  defp check_trashed(%Initiative{id: id}) do
+    {:error,
+     err(
+       :irreversible_op,
+       "Initiative #{id} is live; permanently deleting it is irreversible. Move it to Trash first with update {state: \"trashed\"}, then remove it.",
+       422
+     )}
+  end
+
   # `position` is the caller's own slot in their Manual index order (m04.02
   # 4.4) — a membership-row write, never the Initiative's content, so any
   # member may do it and the version stays put. The stored order is rebuilt
@@ -2121,8 +2156,12 @@ defmodule DoItWeb.Api.Operations do
   # `index_sort_reverse` left out keeps the flag the resulting mode already has.
   defp account_sort_reverse(data, prefs, mode) do
     case Map.fetch(data, "index_sort_reverse") do
-      :error -> {:ok, !!Map.get(prefs.index_sort_reverse_by_mode || %{}, mode || "")}
-      {:ok, reverse} when is_boolean(reverse) -> {:ok, reverse}
+      :error ->
+        {:ok, !!Map.get(prefs.index_sort_reverse_by_mode || %{}, mode || "")}
+
+      {:ok, reverse} when is_boolean(reverse) ->
+        {:ok, reverse}
+
       {:ok, other} ->
         {:error,
          err(

@@ -433,7 +433,7 @@ export function archiveHasRows(archive: InitiativeArchive | null): archive is In
   return archive !== null && (archive.archived.length > 0 || archive.trashed.length > 0);
 }
 
-export type ArchiveAction = "restore" | "unhide";
+export type ArchiveAction = "restore" | "unhide" | "delete";
 
 /** An Archived row's buttons: Restore while archived, Unhide while hidden — both when both. */
 export function archivedRowActions(row: ArchivedInitiative): ArchiveAction[] {
@@ -443,24 +443,36 @@ export function archivedRowActions(row: ArchivedInitiative): ArchiveAction[] {
   return actions;
 }
 
-/**
- * A Trash row's buttons. Only the owner may restore, and the API has no
- * permanent delete, so there is no Delete button here yet.
- */
+/** A Trash row's buttons: Restore and Delete, and only for the owner (the server's gate too). */
 export function trashedRowActions(row: TrashedInitiative): ArchiveAction[] {
-  return row.role === "owner" ? ["restore"] : [];
+  return row.role === "owner" ? ["restore", "delete"] : [];
 }
 
-/** The `update initiative {state}` operation each drawer button posts. */
+/** The `update initiative {state}` operation a Restore or Unhide posts. */
 export type InitiativeState = "unarchived" | "unhidden" | "restored";
 
-export function stateRequest(
-  id: number,
-  state: InitiativeState,
-): {
+export interface StateRequest {
   operations: { op: "update"; type: "initiative"; id: number; data: { state: InitiativeState } }[];
-} {
+}
+
+export function stateRequest(id: number, state: InitiativeState): StateRequest {
   return { operations: [{ op: "update", type: "initiative", id, data: { state } }] };
+}
+
+/** The `remove initiative` operation the Trash's Delete posts (7.4). */
+export interface RemoveRequest {
+  operations: { op: "remove"; type: "initiative"; id: number }[];
+}
+
+export function removeRequest(id: number): RemoveRequest {
+  return { operations: [{ op: "remove", type: "initiative", id }] };
+}
+
+/** The Trash's Delete confirm — the workspace's `data-confirm` copy, word for word. */
+export const PURGE_CONFIRM_ID = "purge-initiative-confirm";
+
+export function purgeConfirmText(name: string): string {
+  return `Permanently delete "${name}"? This can't be undone.`;
 }
 
 /** The row's "trashed Sep 17" line — the template's `%b %-d` in local time. */
@@ -483,15 +495,16 @@ export interface ArchiveStep {
   /** The row to add to the index, when the press frees it entirely. */
   readonly joined: InitiativeSummary | null;
   /** What to post. */
-  readonly state: InitiativeState;
+  readonly request: StateRequest | RemoveRequest;
 }
 
 /**
  * What one drawer button does to the drawer, decided before the server answers
  * (§6.2). Restore on an Archived row clears `archived`, Unhide clears `hidden`;
  * a row with neither flag left leaves the drawer and joins the index. Restore
- * on a Trash row takes it out of Trash and onto the index. `null` when the row
- * is not there to act on.
+ * on a Trash row takes it out of Trash and onto the index; Delete takes it out
+ * of Trash and nowhere (the row is gone for good once the server agrees).
+ * `null` when the row is not there to act on.
  */
 export function archiveStep(
   archive: InitiativeArchive,
@@ -501,16 +514,15 @@ export function archiveStep(
 ): ArchiveStep | null {
   if (bucket === "trashed") {
     const row = archive.trashed.find((item) => item.id === id);
-    if (row === undefined || action !== "restore") return null;
-    return {
-      archive: { ...archive, trashed: archive.trashed.filter((item) => item.id !== id) },
-      joined: summaryOf(row),
-      state: "restored",
-    };
+    if (row === undefined || action === "unhide") return null;
+    const without = { ...archive, trashed: archive.trashed.filter((item) => item.id !== id) };
+    return action === "restore"
+      ? { archive: without, joined: summaryOf(row), request: stateRequest(id, "restored") }
+      : { archive: without, joined: null, request: removeRequest(id) };
   }
 
   const row = archive.archived.find((item) => item.id === id);
-  if (row === undefined) return null;
+  if (row === undefined || action === "delete") return null;
   const next: ArchivedInitiative =
     action === "restore" ? { ...row, archived: false } : { ...row, hidden: false };
   const stays = next.archived || next.hidden;
@@ -522,7 +534,7 @@ export function archiveStep(
         : archive.archived.filter((item) => item.id !== id),
     },
     joined: stays ? null : summaryOf(row),
-    state: action === "restore" ? "unarchived" : "unhidden",
+    request: stateRequest(id, action === "restore" ? "unarchived" : "unhidden"),
   };
 }
 
