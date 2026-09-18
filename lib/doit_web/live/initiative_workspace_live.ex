@@ -5621,7 +5621,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             kind={badge_icon(@initiative.progress_calc)}
             class={badge_icon_class(@initiative.progress_calc)}
           />
-          <span :if={@unit_count != 1} data-unit-plural class="-ml-0.5 text-[1.2em] leading-none">
+          <span :if={@unit_count != 1} data-unit-plural class="-ml-0.5 text-[1.2em] font-normal leading-none">
             s
           </span>
           <span class="inline-flex flex-col items-center leading-none">
@@ -5808,7 +5808,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
           <span
             :if={branch_unit_count(@task, @progress_calc) != 1}
             data-unit-plural
-            class="-ml-0.5 text-[1.2em] leading-none"
+            class="-ml-0.5 text-[1.2em] font-normal leading-none"
           >
             s
           </span>
