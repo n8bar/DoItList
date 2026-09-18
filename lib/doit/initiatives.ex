@@ -58,6 +58,30 @@ defmodule DoIt.Initiatives do
     |> attach_trust_confirm_state(user_id)
   end
 
+  @doc """
+  One row of `list_visible_initiatives/2`, by id: the same virtual fields
+  (`my_role`, `my_sort_order`, `subtitle`, `progress`), or `nil` when the
+  Initiative is not on `user`'s index — unknown, trashed, or put away by them.
+  """
+  def get_visible_initiative(%User{id: user_id}, id) do
+    from(i in Initiative,
+      where: i.id == ^id and is_nil(i.trashed_at),
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id == ^user_id,
+      where: is_nil(m.archived_at) and is_nil(m.hidden_at),
+      left_join: rt in Task,
+      on: rt.id == i.root_task_id,
+      select: %{
+        i
+        | my_role: m.role,
+          my_sort_order: m.sort_order,
+          subtitle: rt.title,
+          progress: rt.computed_progress
+      }
+    )
+    |> Repo.one()
+  end
+
   # Batch-load each Initiative's members into the virtual `:members` field for
   # the left-rail avatar chip row (m02.09 WL3.5). ONE query over the whole set
   # (no N+1), grouped by Initiative and ordered owner-first then by name to

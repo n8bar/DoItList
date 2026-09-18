@@ -5,6 +5,7 @@ defmodule DoItWeb.Client.InitiativeController do
     * `GET /app/api/initiatives` — the index list.
     * `GET /app/api/initiatives/archive` — the Archived and Trash drawer's rows.
     * `GET /app/api/initiatives/:id` — the whole nested tree.
+    * `GET /app/api/initiatives/:id/summary` — that Initiative's index row.
     * `GET /app/api/initiatives/:id/members` — members with their roles.
     * `GET /app/api/initiatives/:id/history` — what this user can undo / redo.
 
@@ -41,6 +42,18 @@ defmodule DoItWeb.Client.InitiativeController do
     user = conn.assigns.current_user
 
     with {:ok, payload} <- Reads.initiative_tree(user, id, require_agent_access: false) do
+      json(conn, Api.data(payload))
+    end
+  end
+
+  @doc """
+  One Initiative's index row (m04.02 item 4.6) — what the client patches into
+  the list on a live change, instead of re-reading the whole index.
+  """
+  def summary(conn, %{"id" => id}) do
+    user = conn.assigns.current_user
+
+    with {:ok, payload} <- Reads.initiative_summary(user, id, require_agent_access: false) do
       json(conn, Api.data(payload))
     end
   end

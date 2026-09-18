@@ -17,8 +17,9 @@
 // its own read (`/initiatives/archive`) that never holds up the list. Restore
 // and Unhide move the row at once — out of the drawer and onto the index —
 // and post `update initiative {state}`; a refusal puts it back and says so.
-// Still to come: live list changes (4.6, into the domain store this screen
-// already reads).
+// Live changes (4.6) never touch this file: the sync module patches rows in
+// the domain store this screen already reads, and a return to the page asks
+// it to revalidate the list behind what is already drawn — no skeleton.
 
 import type { CSSProperties, FormEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -102,7 +103,7 @@ function useSortState(): [IndexSortState, (next: IndexSortState) => void] {
 }
 
 export function InitiativesScreen() {
-  const { api, stores, escalate } = useServices();
+  const { api, stores, sync, escalate } = useServices();
   const summaries = useStoreValue(stores.domain, selectSummaries);
   const archive = useStoreValue(stores.domain, selectArchive);
   const [sort, setSort] = useSortState();
@@ -120,6 +121,13 @@ export function InitiativesScreen() {
     ),
     escalate,
   });
+
+  // A list already held renders at once; the server's version is fetched
+  // behind it and only the rows that differ change (4.6). Once, on arrival.
+  const heldOnArrival = useRef(summaries !== null);
+  useEffect(() => {
+    if (heldOnArrival.current) sync.revalidateList();
+  }, [sync]);
 
   // The drawer's own read. It is secondary: a failure here shows no drawer
   // and never stands between the user and the list, so nothing escalates.

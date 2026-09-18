@@ -10,6 +10,7 @@ import { createContext, useContext } from "react";
 
 import type { ApiClient, ApiError } from "./api/client.ts";
 import type { Connection } from "./live/connection.ts";
+import type { InitiativeSync } from "./live/refresh.ts";
 import type { Stores } from "./state/stores.ts";
 import type { ClientCache } from "./storage/client_cache.ts";
 
@@ -17,6 +18,8 @@ export interface Services {
   readonly api: ApiClient;
   readonly stores: Stores;
   readonly connection: Connection;
+  /** What the live channel makes the client re-read, and the index's background revalidation. */
+  readonly sync: InitiativeSync;
   /** This account's local recovery cache. Never throws at a screen. */
   readonly cache: ClientCache;
   /**

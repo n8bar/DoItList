@@ -23,7 +23,9 @@ import {
   droppedOrder,
   initialSortState,
   manualOrder,
+  mergeSummaries,
   newInitiativeRequest,
+  patchSummary,
   percentText,
   positionRequest,
   readSortState,
@@ -440,5 +442,67 @@ describe("what a press does before the server answers", () => {
     const local = new Date(2026, 8, 17, 12).toISOString();
     assert.equal(trashedText(local), "trashed Sep 17");
     assert.equal(trashedText("nope"), "");
+  });
+});
+
+describe("live list changes (item 4.6)", () => {
+  const row = (id: number, patch: Partial<InitiativeSummary> = {}): InitiativeSummary => ({
+    id,
+    name: `Row ${id}`,
+    subtitle: "",
+    description: null,
+    role: "owner",
+    progress: 10,
+    unit_count: 2,
+    root_task_id: id * 10,
+    version: 1,
+    sort_order: null,
+    archived: false,
+    created_at: "2026-09-01T00:00:00Z",
+    updated_at: "2026-09-01T00:00:00Z",
+    ...patch,
+  });
+
+  it("mergeSummaries keeps an unchanged row's identity and hands back the same list", () => {
+    const current = [row(1), row(2)];
+    const merged = mergeSummaries(current, [row(1), row(2)]);
+    assert.equal(merged, current);
+  });
+
+  it("mergeSummaries updates changed rows, adds new ones and drops missing ones", () => {
+    const one = row(1);
+    const current = [one, row(2), row(3)];
+    const merged = mergeSummaries(current, [row(4), row(2, { progress: 60 }), one]);
+    assert.deepEqual(
+      merged.map((r) => r.id),
+      [4, 2, 1],
+    );
+    assert.equal(merged[2], one, "an unchanged row keeps its object");
+    assert.equal(merged[1]?.progress, 60);
+    assert.notEqual(merged, current);
+  });
+
+  it("mergeSummaries follows the read's order even when the rows are the same", () => {
+    const current = [row(1), row(2)];
+    const merged = mergeSummaries(current, [row(2), row(1)]);
+    assert.deepEqual(
+      merged.map((r) => r.id),
+      [2, 1],
+    );
+  });
+
+  it("patchSummary replaces one row in place and never adds one", () => {
+    const current = [row(1), row(2)];
+    const patched = patchSummary(current, row(2, { progress: 90, updated_at: "2026-09-17T00:00:00Z" }));
+    assert.deepEqual(
+      patched.map((r) => [r.id, r.progress]),
+      [
+        [1, 10],
+        [2, 90],
+      ],
+    );
+    assert.equal(patched[0], current[0]);
+    assert.equal(patchSummary(current, row(2)), current, "no change, same list");
+    assert.equal(patchSummary(current, row(9)), current, "a stranger is not added");
   });
 });

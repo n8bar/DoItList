@@ -8,7 +8,8 @@ import { createUiStore } from "../state/ui.ts";
 import { buildTree } from "../tree/gen.ts";
 import type { TreeModel } from "../tree/model.ts";
 import { fromSnapshot } from "../tree/model.ts";
-import { createInitiativeSync } from "./refresh.ts";
+import { fakeTimers } from "./fake_transport.ts";
+import { SUMMARY_DEBOUNCE_MS, coalesce, createInitiativeSync } from "./refresh.ts";
 
 const tree = (id: number, name: string): InitiativeTree => ({
   id,
@@ -34,8 +35,8 @@ const badTree = (id: number): InitiativeTree => {
   return read;
 };
 
-const summary = (id: number, name: string): InitiativeSummary =>
-  ({ id, name, progress: 50 }) as unknown as InitiativeSummary;
+const summary = (id: number, name: string, progress = 50): InitiativeSummary =>
+  ({ id, name, progress }) as unknown as InitiativeSummary;
 
 function fakeApi(responses: Record<string, unknown>) {
   const calls: string[] = [];
@@ -91,6 +92,7 @@ function sync(parts: {
   ui?: ReturnType<typeof createUiStore>;
   onForbidden?: () => void;
   snapshots?: { cacheTree(model: TreeModel): void; forgetTree(id: number): Promise<void> };
+  timers?: ReturnType<typeof fakeTimers>["timers"];
 }) {
   return createInitiativeSync({
     api: parts.api ?? fakeApi({}).api,
@@ -98,6 +100,7 @@ function sync(parts: {
     ui: parts.ui ?? createUiStore(),
     onForbidden: parts.onForbidden ?? (() => {}),
     ...(parts.snapshots === undefined ? {} : { snapshots: parts.snapshots }),
+    ...(parts.timers === undefined ? {} : { timers: parts.timers }),
   });
 }
 
@@ -138,21 +141,77 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
     assert.deepEqual(calls, []);
   });
 
-  it("refreshes the Initiatives list once it has been read", async () => {
+  it("patches that Initiative's row in the list once it has been read (item 4.6)", async () => {
     const domain = createDomainStore({
       trees: { 12: model(12, "Old") },
-      initiativeSummaries: [summary(12, "Old")],
+      initiativeSummaries: [summary(12, "Old"), summary(13, "Other")],
     });
+    const other = domain.get().initiativeSummaries?.[1];
     const { api, calls } = fakeApi({
       "/initiatives/12": tree(12, "New"),
-      "/initiatives": [summary(12, "New")],
+      "/initiatives/12/summary": summary(12, "New", 75),
     });
+    const clock = fakeTimers();
 
-    sync({ api, domain }).onChanged({ initiativeId: 12, kind: "task_updated", id: 5 });
+    sync({ api, domain, timers: clock.timers }).onChanged({
+      initiativeId: 12,
+      kind: "task_updated",
+      id: 5,
+    });
+    await settle();
+    assert.deepEqual(calls, ["/initiatives/12"], "the row read waits out the debounce");
+
+    clock.flush();
     await settle();
 
-    assert.deepEqual(calls, ["/initiatives/12", "/initiatives"]);
+    assert.deepEqual(calls, ["/initiatives/12", "/initiatives/12/summary"]);
     assert.equal(domain.get().initiativeSummaries?.[0]?.name, "New");
+    assert.equal(domain.get().initiativeSummaries?.[0]?.progress, 75);
+    assert.equal(domain.get().initiativeSummaries?.[1], other, "the other row is untouched");
+  });
+
+  it("reads one row for a burst of changes, and none before the list is read", async () => {
+    const domain = createDomainStore({ initiativeSummaries: [summary(12, "Old")] });
+    const { api, calls } = fakeApi({ "/initiatives/12/summary": summary(12, "New") });
+    const clock = fakeTimers();
+    const unit = sync({ api, domain, timers: clock.timers });
+
+    unit.onChanged({ initiativeId: 12, kind: "task_created", id: 1 });
+    unit.onChanged({ initiativeId: 12, kind: "task_updated", id: 2 });
+    unit.onChanged({ initiativeId: 12, kind: "task_moved", id: 3 });
+    clock.flush();
+    await settle();
+    assert.deepEqual(calls, ["/initiatives/12/summary"]);
+
+    const unread = createDomainStore();
+    const idle = fakeApi({ "/initiatives/12/summary": summary(12, "New") });
+    sync({ api: idle.api, domain: unread, timers: clock.timers }).onChanged({
+      initiativeId: 12,
+      kind: "task_updated",
+      id: 1,
+    });
+    clock.flush();
+    await settle();
+    assert.deepEqual(idle.calls, [], "no list on the glass, nothing to patch");
+  });
+
+  it("a row read the list no longer holds adds nothing", async () => {
+    const domain = createDomainStore({ initiativeSummaries: [summary(13, "Other")] });
+    const { api } = fakeApi({ "/initiatives/12/summary": summary(12, "Stray") });
+    const clock = fakeTimers();
+
+    sync({ api, domain, timers: clock.timers }).onChanged({
+      initiativeId: 12,
+      kind: "task_updated",
+      id: 5,
+    });
+    clock.flush();
+    await settle();
+
+    assert.deepEqual(
+      domain.get().initiativeSummaries?.map((s) => s.id),
+      [13],
+    );
   });
 
   it("never lets an older read land on top of a newer one", async () => {
@@ -268,8 +327,8 @@ describe("what losing access makes the client do (item 1.5)", () => {
   });
 
   it("a list read in flight cannot put the row back either", async () => {
-    // No tree held, so the handler goes straight to the index read — and that
-    // read is the one carrying a row the user may no longer have.
+    // A revalidation of the index is out when access goes — and that read is
+    // the one carrying a row the user may no longer have.
     const domain = createDomainStore({
       initiativeSummaries: [summary(12, "Old"), summary(13, "Other")],
     });
@@ -278,7 +337,7 @@ describe("what losing access makes the client do (item 1.5)", () => {
     fake.hold();
 
     const unit = sync({ api: fake.api, domain, ui });
-    unit.onChanged({ initiativeId: 12, kind: "members_changed", id: 12 });
+    unit.revalidateList();
     await settle();
     assert.equal(fake.parked(), 1, "the index read is in flight");
 
@@ -290,6 +349,40 @@ describe("what losing access makes the client do (item 1.5)", () => {
       domain.get().initiativeSummaries?.map((s) => s.id),
       [13],
       "a stale index read put the revoked row back",
+    );
+  });
+
+  it("a pending row read is dropped, and one in flight cannot land", async () => {
+    const domain = createDomainStore({
+      initiativeSummaries: [summary(12, "Old"), summary(13, "Other")],
+    });
+    const ui = createUiStore({ route: { kind: "initiatives" } });
+    const fake = fakeApi({ "/initiatives/12/summary": summary(12, "Old") });
+    const clock = fakeTimers();
+    const unit = sync({ api: fake.api, domain, ui, timers: clock.timers });
+
+    // Pending: revoked before the debounce fires, so no read goes out at all.
+    unit.onChanged({ initiativeId: 12, kind: "members_changed", id: 12 });
+    unit.onAccessRevoked(12);
+    clock.flush();
+    await settle();
+    assert.deepEqual(fake.calls, []);
+
+    // In flight: the read is out when access goes; its answer must be dropped.
+    domain.set((state) => ({ ...state, initiativeSummaries: [summary(12, "Old"), summary(13, "Other")] }));
+    fake.hold();
+    unit.onChanged({ initiativeId: 12, kind: "members_changed", id: 12 });
+    clock.flush();
+    await settle();
+    assert.equal(fake.parked(), 1, "the row read is in flight");
+    unit.onAccessRevoked(12);
+    fake.release(0);
+    await settle();
+
+    assert.deepEqual(
+      domain.get().initiativeSummaries?.map((s) => s.id),
+      [13],
+      "a stale row read put the revoked row back",
     );
   });
 
@@ -387,5 +480,107 @@ describe("the local cache follows the same rules (items 3.4–3.6)", () => {
 
     assert.deepEqual(snapshots.cached, [], "the guard rejected it, so it was never cached");
     assert.deepEqual(snapshots.forgotten, [12]);
+  });
+});
+
+describe("coalescing a burst into one read (item 4.6)", () => {
+  it("runs once per key, after the last request", () => {
+    const clock = fakeTimers();
+    const ran: number[] = [];
+    const burst = coalesce<number>(clock.timers, 300, (key) => ran.push(key));
+
+    burst.request(12);
+    burst.request(12);
+    burst.request(13);
+    assert.deepEqual(burst.pending(), [12, 13]);
+    assert.equal(clock.pendingCount(), 2, "a repeat restarts the wait, it does not add one");
+
+    clock.flush();
+    assert.deepEqual(ran, [12, 13]);
+    assert.deepEqual(burst.pending(), []);
+  });
+
+  it("cancel drops a key's pending work and nothing else", () => {
+    const clock = fakeTimers();
+    const ran: number[] = [];
+    const burst = coalesce<number>(clock.timers, 300, (key) => ran.push(key));
+
+    burst.request(12);
+    burst.request(13);
+    burst.cancel(12);
+    burst.cancel(99);
+    clock.flush();
+
+    assert.deepEqual(ran, [13]);
+  });
+
+  it("the sync's debounce is short", () => {
+    assert.ok(SUMMARY_DEBOUNCE_MS > 0 && SUMMARY_DEBOUNCE_MS <= 500);
+  });
+});
+
+describe("revalidating the index behind a list on the glass (item 4.6)", () => {
+  it("patches changed rows, adds new ones, drops missing ones, keeps the rest", async () => {
+    const domain = createDomainStore({
+      initiativeSummaries: [summary(12, "Old"), summary(13, "Same"), summary(14, "Gone")],
+    });
+    const same = domain.get().initiativeSummaries?.[1];
+    const { api, calls } = fakeApi({
+      "/initiatives": [summary(15, "New"), summary(12, "Renamed"), summary(13, "Same")],
+    });
+
+    sync({ api, domain }).revalidateList();
+    await settle();
+
+    assert.deepEqual(calls, ["/initiatives"]);
+    assert.deepEqual(
+      domain.get().initiativeSummaries?.map((s) => [s.id, s.name]),
+      [
+        [15, "New"],
+        [12, "Renamed"],
+        [13, "Same"],
+      ],
+    );
+    assert.equal(domain.get().initiativeSummaries?.[2], same, "an unchanged row keeps its object");
+  });
+
+  it("does nothing before the list has been read, or when the read fails", async () => {
+    const unread = createDomainStore();
+    const idle = fakeApi({ "/initiatives": [summary(12, "New")] });
+    sync({ api: idle.api, domain: unread }).revalidateList();
+    await settle();
+    assert.deepEqual(idle.calls, []);
+    assert.equal(unread.get().initiativeSummaries, null);
+
+    const domain = createDomainStore({ initiativeSummaries: [summary(12, "Old")] });
+    const before = domain.get().initiativeSummaries;
+    sync({ api: fakeApi({}).api, domain }).revalidateList();
+    await settle();
+    assert.equal(domain.get().initiativeSummaries, before, "a failed read changes nothing");
+  });
+
+  it("a list read outranks a row read still in flight", async () => {
+    const domain = createDomainStore({ initiativeSummaries: [summary(12, "Old")] });
+    const fake = fakeApi({
+      "/initiatives/12/summary": summary(12, "Row"),
+      "/initiatives": [summary(12, "List")],
+    });
+    const clock = fakeTimers();
+    const unit = sync({ api: fake.api, domain, timers: clock.timers });
+
+    fake.hold();
+    unit.onChanged({ initiativeId: 12, kind: "task_updated", id: 1 });
+    clock.flush();
+    await settle();
+    unit.revalidateList();
+    await settle();
+    assert.equal(fake.parked(), 2);
+
+    fake.release(1);
+    await settle();
+    fake.release(0);
+    await settle();
+
+    assert.equal(domain.get().initiativeSummaries?.[0]?.name, "List");
   });
 });

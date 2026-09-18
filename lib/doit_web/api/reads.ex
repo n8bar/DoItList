@@ -38,6 +38,35 @@ defmodule DoItWeb.Api.Reads do
   end
 
   @doc """
+  One index row (m04.02 item 4.6): the `Serializer.initiative_summary/4` map
+  the index would carry for this Initiative, so a client can patch one row on
+  a live change instead of re-reading the list. View-gated like the tree read;
+  an Initiative the user has put away is `{:error, :not_found}` — it has no
+  row to patch.
+  """
+  @spec initiative_summary(User.t(), term(), keyword()) ::
+          {:ok, map()} | {:error, :not_found | :forbidden}
+  def initiative_summary(%User{} = user, id, opts \\ []) do
+    with {:ok, initiative} <- Authz.fetch_initiative(user, id, :view, opts) do
+      case Initiatives.get_visible_initiative(user, initiative.id) do
+        nil ->
+          {:error, :not_found}
+
+        ini ->
+          unit_counts = Tasks.unit_counts_for_initiatives([ini])
+
+          {:ok,
+           Serializer.initiative_summary(
+             ini,
+             ini.my_role,
+             ini.progress,
+             Map.get(unit_counts, ini.id, 0)
+           )}
+      end
+    end
+  end
+
+  @doc """
   The Initiatives `user` has put away (m04.02 item 4.5): `archived`, the rows
   on their own membership flags (`archived` / `hidden`, per user, trashed
   excluded), and `trashed`, the Initiatives they own that sit in Trash. Each

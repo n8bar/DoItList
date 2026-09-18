@@ -1,4 +1,4 @@
-// The Initiatives index, decided without a DOM (m04.02 items 4.1–4.3).
+// The Initiatives index, decided without a DOM (m04.02 items 4.1–4.3, 4.6).
 //
 // A port of the LiveView index's rules — `sort_initiatives/2`, the card's
 // "Updated" line, the percent on the bar, `role_badge_class/1` — so the two
@@ -9,8 +9,8 @@
 // reverse flag (`index_sort_reverse_by_mode`). The server keeps that on the
 // account preferences, but the client API has no write for it yet, so this
 // client keeps it in `localStorage` — the same place the tree keeps which
-// branches are open. Items 4.4 (drag) and 4.6 (live changes) build on
-// `sortInitiatives` and `manualOrder` rather than on the screen.
+// branches are open. Item 4.4 (drag) builds on `sortInitiatives` and
+// `manualOrder`; item 4.6 (live changes) patches rows with `mergeSummaries`.
 
 import type {
   ArchivedInitiative,
@@ -514,4 +514,71 @@ export function withoutJoined(
   id: number,
 ): InitiativeSummary[] {
   return rows.filter((row) => row.id !== id);
+}
+
+// --- Live changes (4.6) -----------------------------------------------------
+
+/** The fields a row can change in place. `id` is identity, never compared. */
+const SUMMARY_FIELDS = [
+  "name",
+  "subtitle",
+  "description",
+  "role",
+  "progress",
+  "unit_count",
+  "root_task_id",
+  "version",
+  "sort_order",
+  "archived",
+  "created_at",
+  "updated_at",
+] as const satisfies readonly (keyof InitiativeSummary)[];
+
+function sameSummary(a: InitiativeSummary, b: InitiativeSummary): boolean {
+  return SUMMARY_FIELDS.every((field) => a[field] === b[field]);
+}
+
+/**
+ * The list as a fresh read leaves it, patched in place rather than replaced:
+ * a row the read still carries keeps its object when nothing on it changed
+ * (so React re-renders only the cards that moved), takes the fresh values when
+ * something did, a row the read no longer carries is dropped, and a new row
+ * lands where the read put it. The order is the read's — the server's own
+ * "Recent" order, which the page sorts on top of. The same array comes back
+ * when nothing at all changed.
+ */
+export function mergeSummaries(
+  current: readonly InitiativeSummary[],
+  fresh: readonly InitiativeSummary[],
+): readonly InitiativeSummary[] {
+  const held = new Map(current.map((row) => [row.id, row]));
+  let changed = fresh.length !== current.length;
+  const merged = fresh.map((row, index) => {
+    const before = held.get(row.id);
+    if (before !== undefined && sameSummary(before, row)) {
+      if (current[index] !== before) changed = true;
+      return before;
+    }
+    changed = true;
+    return row;
+  });
+  return changed ? merged : current;
+}
+
+/**
+ * One row replaced by a fresh read of it, in its place. A row the list does
+ * not hold is not added — the index read, not a stray change notice, decides
+ * who is on the list. The same array comes back when the row did not change.
+ */
+export function patchSummary(
+  current: readonly InitiativeSummary[],
+  fresh: InitiativeSummary,
+): readonly InitiativeSummary[] {
+  const index = current.findIndex((row) => row.id === fresh.id);
+  if (index === -1) return current;
+  const before = current[index] as InitiativeSummary;
+  if (sameSummary(before, fresh)) return current;
+  const next = [...current];
+  next[index] = fresh;
+  return next;
 }

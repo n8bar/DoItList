@@ -96,17 +96,19 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   // The tab's one live connection. A route change must never recreate it — and
   // it opens no socket until the effect below says we have an identity, so a
   // signed-out tab never hammers a handshake it cannot pass.
-  const [connection] = useState(() => {
-    // One unit: a refetch in flight when access is taken away must not land
-    // after the forget and put the tree back.
-    const sync = createInitiativeSync({
+  // One unit: a refetch in flight when access is taken away must not land
+  // after the forget and put the tree back. Screens reach it through the
+  // services too (the index revalidates behind its list, item 4.6).
+  const [sync] = useState(() =>
+    createInitiativeSync({
       api,
       domain: stores.domain,
       ui: stores.ui,
       snapshots: cache,
       onForbidden: () => setState({ kind: "forbidden" }),
-    });
-
+    }),
+  );
+  const [connection] = useState(() => {
     return initConnection({
       transport: (options) => phoenixTransport(options, () => api.csrfToken()),
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
@@ -151,8 +153,8 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   );
 
   const services = useMemo(
-    () => ({ api, stores, connection, cache, escalate }),
-    [api, stores, connection, cache, escalate],
+    () => ({ api, stores, connection, sync, cache, escalate }),
+    [api, stores, connection, sync, cache, escalate],
   );
 
   // Failures that escape everything else, once the client is up — but only the

@@ -172,6 +172,42 @@ defmodule DoItWeb.Client.ClientApiTest do
     end
   end
 
+  describe "GET /app/api/initiatives/:id/summary" do
+    test "a member gets the row the index carries for it", ctx do
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/summary")
+      assert %{"data" => row} = json_response(conn, 200)
+
+      index = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives")
+      assert %{"data" => rows} = json_response(index, 200)
+      assert row == Enum.find(rows, &(&1["id"] == ctx.ini.id))
+      assert row["role"] == "owner"
+      assert row["unit_count"] == 1
+    end
+
+    test "an Initiative the user archived has no row", ctx do
+      _ = Initiatives.archive_initiative(ctx.owner, ctx.ini)
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/summary")
+
+      assert %{"error" => %{"status" => 404, "code" => "not_found"}} =
+               json_response(conn, 404)
+    end
+
+    test "a non-member is forbidden and an unknown id is not found", ctx do
+      forbidden =
+        ctx.conn |> sign_in(ctx.stranger) |> get(~p"/app/api/initiatives/#{ctx.ini.id}/summary")
+
+      assert %{"error" => %{"status" => 403, "code" => "forbidden"}} =
+               json_response(forbidden, 403)
+
+      missing =
+        build_conn() |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/98765432/summary")
+
+      assert %{"error" => %{"status" => 404, "code" => "not_found"}} =
+               json_response(missing, 404)
+    end
+  end
+
   describe "GET /app/api/initiatives/:id/members" do
     test "a member sees everyone's role, as the bearer API serialises them", ctx do
       {:ok, _} = Initiatives.add_member(ctx.ini.id, ctx.stranger.id, "viewer")
