@@ -24,6 +24,7 @@ import type { HistoryResult, TaskResult, TaskUpsert, TreeDelta } from "./delta.t
 import { deltaFromHistoryResult, deltaFromOpResult } from "./delta.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
 import { childIdsOf } from "./model.ts";
+import type { MoveArgs } from "./ops.ts";
 import {
   addTask,
   cascadeSort,
@@ -90,40 +91,14 @@ export function intentToBatch(write: TreeWrite, context: BatchContext): Batch {
       );
     }
 
-    case "reorder": {
-      const record = model.tasks[write.id];
-      if (record === undefined) return EMPTY;
-      const siblings = childIdsOf(model, record.parent_id);
-      const at = siblings.indexOf(write.id);
-      const position = write.dir === "up" ? at - 1 : at + 1;
-      if (at === -1 || position < 0 || position >= siblings.length) return EMPTY;
-      return moveBatch(model, write.id, record.parent_id, position, true);
+    case "reorder":
+    case "indent":
+    case "outdent":
+    case "move": {
+      const args = moveArgsFor(model, write);
+      if (args === null) return EMPTY;
+      return moveBatch(model, args.id, args.parentId, args.position ?? null, args.reorder === true);
     }
-
-    case "indent": {
-      // Alt+→: first child of the previous sibling (`kbd_indent/3`). A plain
-      // reparent with no slot lands at the top of the new parent.
-      const record = model.tasks[write.id];
-      if (record === undefined) return EMPTY;
-      const siblings = childIdsOf(model, record.parent_id);
-      const previous = siblings[siblings.indexOf(write.id) - 1];
-      if (previous === undefined) return EMPTY;
-      return moveBatch(model, write.id, previous, null, false);
-    }
-
-    case "outdent": {
-      // Alt+←: a sibling of the parent, right after it (`kbd_dedent/1`).
-      const record = model.tasks[write.id];
-      const parent = record === undefined ? undefined : model.tasks[record.parent_id];
-      if (record === undefined || parent === undefined) return EMPTY;
-      const grandSiblings = childIdsOf(model, parent.parent_id);
-      const position = grandSiblings.indexOf(parent.id) + 1;
-      return moveBatch(model, write.id, parent.parent_id, position, false);
-    }
-
-    case "move":
-      if (model.tasks[write.id] === undefined) return EMPTY;
-      return moveBatch(model, write.id, write.parentId, write.position, write.reorder);
 
     case "edit":
       return editBatch(model, write.id, write.fields);
@@ -166,6 +141,49 @@ export function intentToBatch(write: TreeWrite, context: BatchContext): Batch {
 
     default:
       return EMPTY;
+  }
+}
+
+/**
+ * The slot a keyboard or drag move lands in, as `moveTask` reads it — shared
+ * with the confirm (`confirm_model.ts`) so the flip it predicts is the move that
+ * is sent. `null` when there is nowhere to go.
+ */
+export function moveArgsFor(
+  model: TreeModel,
+  write: Extract<TreeWrite, { kind: "reorder" | "indent" | "outdent" | "move" }>,
+): MoveArgs | null {
+  const record = model.tasks[write.id];
+  if (record === undefined) return null;
+
+  switch (write.kind) {
+    case "reorder": {
+      const siblings = childIdsOf(model, record.parent_id);
+      const at = siblings.indexOf(write.id);
+      const position = write.dir === "up" ? at - 1 : at + 1;
+      if (at === -1 || position < 0 || position >= siblings.length) return null;
+      return { id: write.id, parentId: record.parent_id, position, reorder: true };
+    }
+
+    case "indent": {
+      // Alt+→: first child of the previous sibling (`kbd_indent/3`). A plain
+      // reparent with no slot lands at the top of the new parent.
+      const siblings = childIdsOf(model, record.parent_id);
+      const previous = siblings[siblings.indexOf(write.id) - 1];
+      if (previous === undefined) return null;
+      return { id: write.id, parentId: previous, position: null };
+    }
+
+    case "outdent": {
+      // Alt+←: a sibling of the parent, right after it (`kbd_dedent/1`).
+      const parent = model.tasks[record.parent_id];
+      if (parent === undefined) return null;
+      const grandSiblings = childIdsOf(model, parent.parent_id);
+      return { id: write.id, parentId: parent.parent_id, position: grandSiblings.indexOf(parent.id) + 1 };
+    }
+
+    case "move":
+      return { id: write.id, parentId: write.parentId, position: write.position, reorder: write.reorder };
   }
 }
 

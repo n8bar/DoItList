@@ -35,6 +35,7 @@ import { fromSnapshot } from "../tree/model.ts";
 import type { TreeWrite } from "../tree/adapter.ts";
 import { createAdapter, rejectionMessage } from "../tree/adapter.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
+import { CONFIRM_CLASSES, dialogIdFor } from "../tree/confirm_model.ts";
 import type { TreeIntent } from "../tree/context.ts";
 import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { TaskDetails } from "../tree/details.tsx";
@@ -44,13 +45,16 @@ import type { RowPresence } from "../tree/row_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
 import { Tree } from "../tree/tree.tsx";
 import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
+import { useConfirm } from "../tree/use_confirm.ts";
 import { useTree } from "../tree/use_tree.ts";
 import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
 import type { UiState } from "../state/ui.ts";
 import { pushNotice, selectTask } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
+import { browserKeyValueStore } from "../storage/last_user.ts";
 import type { InitiativeSnapshot } from "../storage/snapshots.ts";
+import { ConfirmDialog } from "../ui/dialog.tsx";
 import { InlineError } from "../ui/feedback.tsx";
 import { Heading } from "./chrome.tsx";
 import { useResource } from "./use_resource.ts";
@@ -292,8 +296,13 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     },
     [adapter, id, stores.domain, stores.ui],
   );
-  const onIntent = useCallback((intent: TreeIntent) => submit(intent), [submit]);
-  const onAdd = useCallback((request: AddRequest) => submit({ kind: "add", request }), [submit]);
+  // The three confirms (item 5.1.4) sit between an intent and the adapter:
+  // asked from the model, client-side, before anything is sent (§6.5).
+  const storage = useMemo(browserKeyValueStore, []);
+  const confirm = useConfirm({ model, submit, storage });
+  const { request } = confirm;
+  const onIntent = useCallback((intent: TreeIntent) => request(intent), [request]);
+  const onAdd = useCallback((added: AddRequest) => request({ kind: "add", request: added }), [request]);
 
   // Read once, off the address bar the screen arrived on.
   const [deepLinkTaskId] = useState(() => taskParam(window.location.search));
@@ -380,6 +389,45 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
         onAdd={tree.onAdd}
       />
       <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
+      {/* One dialog per confirm class, under the id the LiveView's modal had.
+          Only Proceed submits; Escape, the backdrop and Cancel drop the write. */}
+      {CONFIRM_CLASSES.map((confirmClass) => {
+        const shown = confirm.open !== null && confirm.open.confirm.class === confirmClass;
+        const current = shown ? confirm.open?.confirm : undefined;
+        const dialogId = dialogIdFor(confirmClass);
+        return (
+          <ConfirmDialog
+            key={confirmClass}
+            id={dialogId}
+            open={shown}
+            title={current?.title ?? ""}
+            confirmLabel="Proceed"
+            onConfirm={confirm.proceed}
+            onCancel={confirm.cancel}
+          >
+            <p>{current?.body ?? ""}</p>
+            {current !== undefined && current.titles.length > 0 && (
+              <ul className="mt-3 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                {current.titles.map((title, index) => (
+                  <li key={`${index}-${title}`} className="truncate">
+                    {title}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <label className="mt-4 flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:min-h-9">
+              <input
+                type="checkbox"
+                id={`${dialogId}-dont-show`}
+                checked={shown && confirm.dontAsk}
+                className="size-5 flex-none rounded border-zinc-300 text-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:border-zinc-600 dark:focus-visible:ring-emerald-400"
+                onChange={(event) => confirm.setDontAsk(event.target.checked)}
+              />
+              {current?.checkboxLabel ?? ""}
+            </label>
+          </ConfirmDialog>
+        );
+      })}
       {/* The Details pane (item 3.4.3): opens with the selection, from the
           model alone — nothing here waits on the network (§6). A selected id
           the model no longer holds (deleted under us) opens nothing. */}
