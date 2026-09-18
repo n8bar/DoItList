@@ -445,6 +445,17 @@ window.DoitUnregisterLivePush = (fn) => { if (livePush === fn) livePush = null }
 // new client-owned element joins the preserve path by rendering the marker — no
 // per-feature observer. This slice registers `"selected"`; later slices add the
 // editor/pane, optimistic-flip, presence, and focus kinds.
+// The screen-reader half of a row's state (m04.02 7.12.3), beside the
+// data attributes the styling keys off: aria-selected on the selected row,
+// aria-expanded on a branch's own <li> next to its chevron's.
+function markRowSelected(li, on) {
+  if (li.getAttribute("aria-selected") !== String(on)) li.setAttribute("aria-selected", String(on))
+}
+function markBranchExpanded(taskId, expanded) {
+  const li = document.getElementById("task-" + taskId)
+  if (li && li.getAttribute("aria-expanded") !== String(expanded)) li.setAttribute("aria-expanded", String(expanded))
+}
+
 const KeepRegistry = {
   selected: {
     // Match the task-row <li>'s data-selected to state.selectedId. Set when this
@@ -457,6 +468,7 @@ const KeepRegistry = {
       } else if (el.hasAttribute("data-selected")) {
         el.removeAttribute("data-selected")
       }
+      markRowSelected(el, want)
     },
   },
   editor: {
@@ -547,6 +559,7 @@ const KeepRegistry = {
       if (el.classList.contains("collapsed-peek") !== collapsed) {
         el.classList.toggle("collapsed-peek", collapsed)
       }
+      markBranchExpanded(el.dataset.taskId, !collapsed)
     },
   },
   open: {
@@ -809,12 +822,16 @@ const DoitSelection = {
   // re-applying from the preserve-path callbacks is a safe no-op when matched.
   apply() {
     document.querySelectorAll("li[data-selected]").forEach((li) => {
-      if (!this.id || li.id !== "task-" + this.id) li.removeAttribute("data-selected")
+      if (!this.id || li.id !== "task-" + this.id) {
+        li.removeAttribute("data-selected")
+        markRowSelected(li, false)
+      }
     })
     const li = this.li()
     if (li && li.getAttribute("data-selected") !== this.id) {
       li.setAttribute("data-selected", this.id)
     }
+    if (li) markRowSelected(li, true)
     this.syncPaneSkeleton()
   },
   // ONE pane, never swapped (.03.07.06): the pane stays mounted once created.
@@ -2254,6 +2271,7 @@ function expandRefAncestors(id) {
     if (init) localStorage.setItem(`phx:collapse:${init}:${aid}`, "0")
     ul.classList.remove("collapsed-peek")
     if (btn) btn.setAttribute("aria-expanded", "true")
+    markBranchExpanded(aid, true)
     li = document.getElementById("task-" + aid)
   }
 }
@@ -2268,6 +2286,7 @@ function setBranchCollapsed(btn, collapsed) {
   if (!ul) return
   localStorage.setItem(`phx:collapse:${btn.dataset.initiativeId}:${id}`, collapsed ? "1" : "0")
   ul.classList.toggle("collapsed-peek", collapsed)
+  markBranchExpanded(id, !collapsed)
   btn.setAttribute("aria-expanded", String(!collapsed))
 }
 
@@ -5873,6 +5892,7 @@ Hooks.CollapseToggle = {
     const collapsed = localStorage.getItem(this.storageKey()) === "1"
     ce.classList.toggle("collapsed-peek", collapsed)
     this.el.setAttribute("aria-expanded", String(!collapsed))
+    markBranchExpanded(this.el.dataset.taskId, !collapsed)
   },
   bind() {
     this.el.addEventListener("click", (e) => {
@@ -5884,6 +5904,7 @@ Hooks.CollapseToggle = {
       // relayout of the whole branch — follows once the browser has painted
       // it, so the click is acknowledged before the heavy part (§6.7).
       this.el.setAttribute("aria-expanded", String(!collapsed))
+      markBranchExpanded(this.el.dataset.taskId, !collapsed)
       requestAnimationFrame(() => setTimeout(() => {
         ce.classList.toggle("collapsed-peek", collapsed)
         localStorage.setItem(this.storageKey(), collapsed ? "1" : "0")

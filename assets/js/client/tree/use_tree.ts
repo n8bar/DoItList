@@ -26,6 +26,8 @@ import type { CollapseStore } from "./tree_model.ts";
 import { collapsedOf, createCollapseStore, setCollapsedIn } from "./collapse_model.ts";
 import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
 import { initialSelection, revealPlan } from "./reveal_model.ts";
+import { announcementFor } from "./announce_model.ts";
+import type { AnnouncedState } from "./announce_model.ts";
 import { forgetMissing, noSelection, pendingBranches, prunedSelection, rememberSelection, stillClosed } from "./selection_model.ts";
 import type { Selected, SelectionState } from "./selection_model.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
@@ -85,6 +87,8 @@ export interface TreeState {
   onAdd: (request: AddRequest) => void;
   shortcutsOpen: boolean;
   closeShortcuts: () => void;
+  /** The line the tree's live region reads out for the latest change (7.12.2). */
+  announcement: string;
   /**
    * The selection this screen resolved on arrival, before anything rendered —
    * the link's task, a kept selection, or nothing. The address bar is written
@@ -241,6 +245,20 @@ export function useTree(options: UseTreeOptions): TreeState {
     const kept = prunedSelection(selectedReader, visible.map((row) => row.id), settled.current);
     if (kept !== current) setSelectedId(kept);
   }, [collapsedIds, selectedId, selectedReader, setSelectedId, visible]);
+
+  // What a screen reader hears (7.12.2): one line per selection or collapse
+  // change, decided against the model once the change has rendered. Nothing
+  // is said for the first render — arriving is not a change.
+  const [announcement, setAnnouncement] = useState("");
+  const announced = useRef<AnnouncedState | null>(null);
+  useEffect(() => {
+    const before = announced.current;
+    const after = { selectedId, collapsedIds };
+    announced.current = after;
+    if (before === null) return;
+    const text = announcementFor(model, before, after);
+    if (text !== null) setAnnouncement(text);
+  }, [selectedId, collapsedIds, model]);
 
   // "Enter with nothing selected reopens the last task" means the task the user
   // was last on, not the last row in the tree.
@@ -399,6 +417,7 @@ export function useTree(options: UseTreeOptions): TreeState {
     }, []),
     onAdd,
     shortcutsOpen,
+    announcement,
     initialSelectedId: resolved.current,
     closeShortcuts: useCallback(() => setShortcutsOpen(false), []),
     reveal,

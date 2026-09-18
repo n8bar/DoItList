@@ -3776,6 +3776,8 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
 
                     <ul
                       id="task-tree"
+                      role="tree"
+                      aria-label="Tasks"
                       phx-hook="TreeWidth"
                       data-sort-mode={@root_sort_mode}
                       data-progress-calc={@initiative.progress_calc}
@@ -5730,8 +5732,15 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
          is set by the client and the highlight comes from app.css rules under
          li[data-selected], so selection never re-renders the tree. Row clicks
          are handled by the delegated listener in app.js. --%>
+    <%!-- The screen-reader half (m04.02 7.12.3): role, level and, for a
+         branch, expanded — the client keeps aria-expanded and aria-selected
+         in step with the collapse and selection it owns (app.js). --%>
     <li
       id={"task-#{@task.id}"}
+      role="treeitem"
+      aria-level={@depth + 1}
+      aria-selected="false"
+      aria-expanded={if(@task.children != [], do: "true")}
       data-task-id={@task.id}
       data-keep="selected"
       data-depth={@depth}
@@ -6166,6 +6175,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
       <ul
         :if={@task.children != []}
         id={"children-#{@task.id}"}
+        role="group"
         data-keep="collapse"
         data-task-id={@task.id}
         data-initiative-id={@initiative_id}

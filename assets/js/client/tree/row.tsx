@@ -21,6 +21,7 @@ import { doneUnitCount, unitCount } from "./progress.ts";
 import { afterPaint } from "./after_paint.ts";
 import { BotanicalIcon, Chevron } from "./botanical.tsx";
 import { UnitBadge } from "./unit_badge.tsx";
+import { inField } from "./use_tree_keyboard.ts";
 import type { RefPart, RowUser } from "./row_model.ts";
 import {
   REF_DEAD_CLASS,
@@ -167,6 +168,31 @@ export function Row({ ctx, id, depth, children }: RowProps) {
     () => true,
   );
 
+  // The roving tabindex (7.12.1): the selected row is the one Tab reaches;
+  // with nothing selected, the first row is. Every other row is -1. Only the
+  // rows whose answer changes re-render.
+  const tabIndex = useSyncExternalStore(
+    ctx.selection.subscribe,
+    () => {
+      const current = ctx.selection.get();
+      if (current === id) return 0;
+      return current === null && depth === 0 && childIdsOf(ctx.model, ctx.model.rootId)[0] === id ? 0 : -1;
+    },
+    () => -1,
+  );
+  // The selection is also the focus a screen reader follows — unless the user
+  // is typing somewhere (the add form, the pane, a title editor), which a
+  // selection change must never pull them out of.
+  const li = useRef<HTMLLIElement | null>(null);
+  useEffect(() => {
+    if (!selected) return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) {
+      if (inField(active) || active.closest("#details-rail, #add-task-form, #initiative-header") !== null) return;
+    }
+    li.current?.focus({ preventScroll: true });
+  }, [selected]);
+
   const record = ctx.model.tasks[id];
   if (record === undefined) return null;
 
@@ -186,13 +212,19 @@ export function Row({ ctx, id, depth, children }: RowProps) {
 
   return (
     <li
+      ref={li}
       id={`task-${id}`}
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-selected={selected}
+      {...(branch ? { "aria-expanded": expanded } : {})}
+      tabIndex={tabIndex}
       data-task-id={id}
       data-depth={depth}
       data-sort={record.sort_mode ?? ""}
       data-sort-reverse={String(record.sort_reverse)}
       {...(selected ? { "data-selected": "" } : {})}
-      className="rounded border border-zinc-400 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-500 dark:first:border-t-zinc-500"
+      className="rounded border border-zinc-400 dark:border-zinc-700 bg-white dark:bg-zinc-900 first:border-t-2 first:border-t-zinc-500 dark:first:border-t-zinc-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
     >
       {/* `data-done` drives the done styling — one attribute, so the optimistic
           toggle in the next task flips one thing rather than juggling classes. */}

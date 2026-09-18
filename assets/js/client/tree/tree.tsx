@@ -55,6 +55,8 @@ export interface TreeProps {
    * the one in flight, if any — the button says so until the reply lands.
    */
   history?: HistoryControls;
+  /** The live region's line (7.12.2). Held still while a drag is on. */
+  announcement?: string;
 }
 
 export interface HistoryControls {
@@ -154,6 +156,7 @@ function Children({
   return (
     <ul
       id={`children-${parentId}`}
+      role="group"
       data-task-id={parentId}
       data-initiative-id={ctx.initiativeId}
       data-sort-mode={resolveSort(ctx.model, parentId)[0]}
@@ -232,12 +235,16 @@ export function Tree({
   onAddClose,
   onAdd,
   history,
+  announcement = "",
 }: TreeProps) {
   const box = useRef<HTMLDivElement | null>(null);
   const list = useRef<HTMLUListElement | null>(null);
 
   useTreeWidth(list);
   const dragging = useTreeDrag(ctx, list);
+  // Nothing is announced during a drag: the region keeps the last line it had.
+  const spoken = useRef("");
+  if (!dragging) spoken.current = announcement;
 
   const form = useCallback(
     (anchor: AddSlot) => (
@@ -308,6 +315,8 @@ export function Tree({
         <ul
           ref={list}
           id="task-tree"
+          role="tree"
+          aria-label="Tasks"
           data-progress-calc={ctx.progressCalc}
           className="space-y-2"
         >
@@ -328,6 +337,12 @@ export function Tree({
           {dragging && <RootZone zone="bottom" />}
         </ul>
 
+        {/* The one polite live region (7.12.2): the selection and collapse
+            changes, in words, for a screen reader. Outside the tree itself,
+            where only rows belong. */}
+        <div id="tree-announcer" aria-live="polite" aria-atomic="true" className="sr-only">
+          {spoken.current}
+        </div>
       </div>
     </div>
   );

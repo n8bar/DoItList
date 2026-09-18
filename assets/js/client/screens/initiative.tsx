@@ -607,6 +607,7 @@ function TreeSection({
         onAddClose={tree.onAddClose}
         onAdd={tree.onAdd}
         history={historyControls}
+        announcement={tree.announcement}
       />
       <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
       {/* One dialog per confirm class, under the id the LiveView's modal had.
