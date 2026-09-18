@@ -56,6 +56,21 @@ export function rememberSelection(state: SelectionState, id: number | null): Sel
 }
 
 /**
+ * `keptSelection` over the selection AS IT STANDS NOW (item 7.11). The prune
+ * runs in an effect, and an effect holds the render that scheduled it; the
+ * store is written synchronously — by a click, a key, a reveal — so this reads
+ * it live rather than trusting a value captured or remembered earlier. A row
+ * is dropped only when it is the one off screen.
+ */
+export function prunedSelection(
+  selected: Selected,
+  visible: readonly number[],
+  settled: boolean,
+): number | null {
+  return keptSelection(selected.get(), visible, settled);
+}
+
+/**
  * The selection to keep. `settled` is false until the deep link has had its
  * chance to expand the branch the selected task lives in.
  */

@@ -8,6 +8,7 @@ import {
   forgetMissing,
   keptSelection,
   noSelection,
+  prunedSelection,
   rememberSelection,
   selectionOf,
   pendingBranches,
@@ -77,6 +78,35 @@ describe("a selection that has gone off screen", () => {
 
   it("leaves an empty selection empty", () => {
     assert.equal(keptSelection(null, visible, true), null);
+  });
+});
+
+// The prune runs in an effect, and an effect holds the render that scheduled
+// it. The selection is written synchronously — by a click, a key, a reveal —
+// so what it must read is the store as it stands now, never a value captured
+// or remembered at some earlier commit (m04.02 item 7.11).
+describe("the prune reads the selection as it stands now", () => {
+  const store = () =>
+    createStore<{ selectedTaskId: number | null }>({ selectedTaskId: null });
+
+  it("keeps a row moved to since, even though the earlier row is off screen", () => {
+    const ui = store();
+    ui.set(() => ({ selectedTaskId: 13 }));
+    // ← from "Charlie" (13) to "Bravo" (10), then Space closes "Bravo".
+    ui.set(() => ({ selectedTaskId: 10 }));
+    assert.equal(prunedSelection(selectionOf(ui), [10, 20], true), 10);
+  });
+
+  it("drops the row that was actually hidden", () => {
+    const ui = store();
+    ui.set(() => ({ selectedTaskId: 13 }));
+    assert.equal(prunedSelection(selectionOf(ui), [10, 20], true), null);
+  });
+
+  it("leaves the selection alone until the screen has settled", () => {
+    const ui = store();
+    ui.set(() => ({ selectedTaskId: 13 }));
+    assert.equal(prunedSelection(selectionOf(ui), [10, 20], false), 13);
   });
 });
 

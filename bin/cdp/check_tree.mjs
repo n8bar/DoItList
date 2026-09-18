@@ -2599,7 +2599,12 @@ export async function checkCollapseKeepsSelection(ctx) {
   if (afterSpace !== bravo) wrong.push(`after arriving on "Charlie", ← to "Bravo" and Space, the selection is ${afterSpace === null ? "gone" : `#${afterSpace}`} — "Bravo" is still on screen and should have stayed selected`);
 
   // Arrive plain, select "Charlie", close "Bravo" by its chevron: nothing stays selected.
+  // The Space above closed "Bravo" and that is saved per browser: open it first.
   await reopenTree(ctx);
+  if (await evaluate(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === true;`)) {
+    await clickElement(session, `#collapse-${bravo}`);
+    await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Bravo" to open for the second arrival` });
+  }
   await clickTitle(session, charlie);
   await clickElement(session, `#collapse-${bravo}`);
   await waitFor(session, `return document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek") === true;`, { timeoutMs: 2_000, what: `"Bravo" to close on its chevron` });

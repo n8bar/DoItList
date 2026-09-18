@@ -26,7 +26,7 @@ import type { CollapseStore } from "./tree_model.ts";
 import { collapsedOf, createCollapseStore, setCollapsedIn } from "./collapse_model.ts";
 import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
 import { initialSelection, revealPlan } from "./reveal_model.ts";
-import { forgetMissing, keptSelection, noSelection, pendingBranches, rememberSelection, stillClosed } from "./selection_model.ts";
+import { forgetMissing, noSelection, pendingBranches, prunedSelection, rememberSelection, stillClosed } from "./selection_model.ts";
 import type { Selected, SelectionState } from "./selection_model.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
 
@@ -178,10 +178,6 @@ export function useTree(options: UseTreeOptions): TreeState {
     first.current = false;
     resolved.current = initialSelection(model, deepLinkTaskId, selectedId);
   }
-  // The selection as it stands RIGHT NOW, for effects already scheduled for
-  // this commit: they hold the value from the render that scheduled them, and
-  // the reveal moves the selection out from under them.
-  const live = useRef<number | null>(resolved.current);
   // Branches a reveal has asked to open and is still waiting on.
   const expanding = useRef<readonly number[]>(EMPTY_EXPANDING);
 
@@ -197,11 +193,9 @@ export function useTree(options: UseTreeOptions): TreeState {
       expanding.current = pendingBranches(expanding.current, plan.expand);
       for (const branchId of plan.expand) setCollapsed(branchId, false);
       if (plan.select === null) return;
+      // Written synchronously: the prune below, already scheduled for this
+      // commit, reads the store live and so sees this, not the old render.
       setSelectedId(plan.select);
-      // The store is written synchronously, but this render's `selectedId` is
-      // not. Effects already scheduled for this commit still hold the old
-      // value, so keep the live one somewhere they can read it.
-      live.current = plan.select;
       // Deferred a frame, like the LiveView's `deep-link-task` handler, so the
       // rows that were just expanded are laid out before anything measures.
       const target = plan.select;
@@ -222,7 +216,6 @@ export function useTree(options: UseTreeOptions): TreeState {
     // Applied before anything else runs: what was selected elsewhere is not a
     // selection here.
     setSelectedId(resolved.current);
-    live.current = resolved.current;
     if (deepLinkTaskId !== null) revealRef.current(deepLinkTaskId);
     // Only now may an off-screen selection be cleared: before this the branch
     // the link points into has not been expanded yet.
@@ -236,23 +229,18 @@ export function useTree(options: UseTreeOptions): TreeState {
   // A selected task that has been deleted, or hidden by a collapse, is not a
   // selection any more — otherwise the arrows navigate from a row nobody sees.
   useEffect(() => {
-    // `live.current`, not the captured `selectedId`: on the arrival commit the
-    // reveal effect has already moved the selection, and pruning a value that
-    // was true one effect ago would undo it.
+    // The store, read live, not the captured `selectedId`: on the arrival
+    // commit the reveal effect has already moved the selection, and every
+    // click and key since writes the store synchronously. Pruning a value
+    // from an earlier render (or one remembered from a reveal) cleared a row
+    // still on screen and kept one that had just been hidden (item 7.11).
     expanding.current = stillClosed(expanding.current, (id) => collapsedIds.has(id));
     if (expanding.current.length > 0) return;
 
-    const current = live.current;
-    const kept = keptSelection(
-      current,
-      visible.map((row) => row.id),
-      settled.current,
-    );
-    if (kept !== current) {
-      live.current = kept;
-      setSelectedId(kept);
-    }
-  }, [collapsedIds, selectedId, setSelectedId, visible]);
+    const current = selectedReader.get();
+    const kept = prunedSelection(selectedReader, visible.map((row) => row.id), settled.current);
+    if (kept !== current) setSelectedId(kept);
+  }, [collapsedIds, selectedId, selectedReader, setSelectedId, visible]);
 
   // "Enter with nothing selected reopens the last task" means the task the user
   // was last on, not the last row in the tree.
