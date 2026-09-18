@@ -32,7 +32,7 @@ import {
   rememberSelection,
   stillClosed,
 } from "./selection_model.ts";
-import type { SelectionState } from "./selection_model.ts";
+import type { Selected, SelectionState } from "./selection_model.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
 
 /** The tab's `localStorage`, or nothing at all where it is blocked. */
@@ -65,6 +65,8 @@ export interface UseTreeOptions {
   /** The selected task id, from the `ui` store, and the writer for it. */
   selectedId: number | null;
   select: (id: number | null) => void;
+  /** The same selection as each row subscribes to it, so a change costs two rows. */
+  selection: Selected;
   /** The task a `?task=<id>` link named, revealed once per value. */
   deepLinkTaskId?: number | null;
   /** Where collapse state is kept. Injected so a test can hand it a fake. */
@@ -114,7 +116,7 @@ export function useTree(options: UseTreeOptions): TreeState {
   // Selection lives in the `ui` store, not in this hook: it is view state with a
   // session's lifetime, and it has to survive this component re-rendering or
   // remounting (guardrails §7.3). The hook only reads and writes it.
-  const { selectedId, select: setSelectedId } = options;
+  const { selectedId, select: setSelectedId, selection: selectedReader } = options;
   const store = useMemo(
     () => (options.store === undefined ? browserCollapseStore() : options.store),
     [options.store],
@@ -343,7 +345,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       rows,
       members,
       presence,
-      selectedTaskId: selectedId,
+      selection: selectedReader,
       savingIds,
       recomputingIds,
       rowKeys,
@@ -352,6 +354,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       collapsed,
       onToggleCollapse,
       onSelect: setSelectedId,
+      onReveal: reveal,
       onOpenAdd: openAdd,
       onIntent,
       ...(onDragHint === undefined ? {} : { onDragHint }),
@@ -363,7 +366,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       rows,
       members,
       presence,
-      selectedId,
+      selectedReader,
       savingIds,
       recomputingIds,
       rowKeys,
@@ -372,6 +375,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       collapsed,
       onToggleCollapse,
       setSelectedId,
+      reveal,
       openAdd,
       onIntent,
       onDragHint,

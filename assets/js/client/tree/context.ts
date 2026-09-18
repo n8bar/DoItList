@@ -10,6 +10,7 @@ import type { RowPreferences } from "../state/preferences.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
 import type { RowPresence, RowUser } from "./row_model.ts";
+import type { Selected } from "./selection_model.ts";
 
 /** A write the user asked for. Arc 3's adapter is what eventually answers one. */
 export type TreeIntent =
@@ -66,7 +67,12 @@ export interface TreeContext {
   readonly members: ReadonlyMap<number, RowUser>;
   /** Other members' selections and who is online, for the badges and dots. */
   readonly presence: RowPresence;
-  readonly selectedTaskId: number | null;
+  /**
+   * The selected task, read by each row for itself (item 2.2.3). Not a value:
+   * a value here would give the context a new identity on every selection
+   * and re-render every row for a change that touches two.
+   */
+  readonly selection: Selected;
   /** Rows with a write in flight — painted pink (item 5.2.1). */
   readonly savingIds: ReadonlySet<number>;
   /** Rows whose roll-up is being recomputed — indeterminate bars. */
@@ -82,7 +88,10 @@ export interface TreeContext {
   canProgress(id: number): boolean;
   collapsed(id: number): boolean;
   onToggleCollapse(id: number): void;
-  onSelect(id: number): void;
+  /** Select `id`, or clear (`null`) — a click on the selected row clears it. */
+  onSelect(id: number | null): void;
+  /** Open the branches down to `id`, select it and scroll to it (a `%` reference). */
+  onReveal(id: number): void;
   onOpenAdd(anchor: AddAnchor): void;
   onIntent(intent: TreeIntent): void;
   /** A touch swiped the handle instead of holding it: teach the gesture. */

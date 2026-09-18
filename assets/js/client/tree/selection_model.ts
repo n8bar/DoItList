@@ -11,6 +11,36 @@
 //     first paint, and clearing the selection in between would undo the reveal
 //     the user followed the link for.
 
+/**
+ * The selection as a row reads it: the current id, and a way to hear it
+ * change. Each row subscribes for itself, so a selection change re-renders
+ * the row that lost it and the row that got it — not the tree.
+ */
+export interface Selected {
+  get(): number | null;
+  subscribe(listener: () => void): () => void;
+}
+
+/** A `Selected` over any store that holds `selectedTaskId`. */
+export function selectionOf<T extends { readonly selectedTaskId: number | null }>(store: {
+  get(): T;
+  subscribe(listener: () => void): () => void;
+}): Selected {
+  return {
+    get: () => store.get().selectedTaskId,
+    subscribe: (listener) => store.subscribe(listener),
+  };
+}
+
+/**
+ * What a click on row `id` selects: the row — or nothing, when it is the
+ * selected row already. The workspace's row click toggles the same way
+ * (`DoitSelection.clear()` on a second click); a pill click never clears.
+ */
+export function clickedSelection(selectedId: number | null, id: number): number | null {
+  return selectedId === id ? null : id;
+}
+
 export interface SelectionState {
   readonly selectedId: number | null;
   /** The last task actually selected. Survives a clear; that is its whole job. */

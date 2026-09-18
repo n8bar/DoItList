@@ -1,14 +1,46 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
+import { createStore } from "../state/store.ts";
 import type { SelectionState } from "./selection_model.ts";
 import {
+  clickedSelection,
   forgetMissing,
   keptSelection,
   noSelection,
   rememberSelection,
+  selectionOf,
   stillClosed,
 } from "./selection_model.ts";
+
+describe("what a row click selects", () => {
+  it("selects the row", () => {
+    assert.equal(clickedSelection(null, 12), 12);
+    assert.equal(clickedSelection(7, 12), 12);
+  });
+
+  it("clears the selection when the row is the selected one, as the workspace's click does", () => {
+    assert.equal(clickedSelection(12, 12), null);
+  });
+});
+
+describe("the selection a row reads for itself", () => {
+  it("reads the store's selected task and hears it change", () => {
+    const store = createStore<{ selectedTaskId: number | null; other: number }>({ selectedTaskId: null, other: 0 });
+    const selection = selectionOf(store);
+    let heard = 0;
+    const stop = selection.subscribe(() => {
+      heard += 1;
+    });
+    assert.equal(selection.get(), null);
+    store.set((state) => ({ ...state, selectedTaskId: 12 }));
+    assert.equal(selection.get(), 12);
+    assert.equal(heard, 1);
+    stop();
+    store.set((state) => ({ ...state, selectedTaskId: null }));
+    assert.equal(heard, 1);
+  });
+});
 
 describe("what Enter reopens", () => {
   it("remembers the last task that was actually selected", () => {

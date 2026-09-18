@@ -18,7 +18,7 @@
 // tenant re-rendering with a fresh arrow costs the frame nothing either.
 
 import type { ReactNode } from "react";
-import { createContext, useContext, useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import type { CloseTenant } from "./pane_slot.ts";
@@ -54,7 +54,11 @@ export function Pane({ onClose, children }: PaneProps) {
     closeRef.current = onClose;
   }, [onClose]);
 
-  useEffect(() => control?.acquire(() => closeRef.current()), [control]);
+  // A layout effect, not a passive one: the slot is claimed before the
+  // browser paints the commit that mounted this tenant, so the frame's column
+  // and the content land in the click's own task rather than a scheduled one
+  // (found by the 8.5 harness — the pane trailed the selection by a frame).
+  useLayoutEffect(() => control?.acquire(() => closeRef.current()), [control]);
 
   const host = control?.host ?? null;
   return host === null ? null : createPortal(children, host);

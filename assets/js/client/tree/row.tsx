@@ -13,7 +13,7 @@
 // nothing a user does to a row waits on the network.
 
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Icon } from "../ui/icon.tsx";
 import { childIdsOf } from "./model.ts";
@@ -38,6 +38,7 @@ import {
   rowBadges,
 } from "./row_model.ts";
 import type { TreeContext } from "./context.ts";
+import { clickedSelection } from "./selection_model.ts";
 
 export interface RowProps {
   ctx: TreeContext;
@@ -47,8 +48,12 @@ export interface RowProps {
   children?: ReactNode;
 }
 
-/** Prose with its `%<id>` references resolved to live labels. */
-function Prose({ parts }: { parts: readonly RefPart[] }) {
+/**
+ * Prose with its `%<id>` references resolved to live labels. A live reference
+ * is a link to its task: the click reveals it (the workspace's `a.doit-ref`
+ * listener) and never selects the row it sits in.
+ */
+function Prose({ parts, onReveal }: { parts: readonly RefPart[]; onReveal: (id: number) => void }) {
   if (parts.length === 1 && parts[0]?.kind === "text") return <>{parts[0].text}</>;
   return (
     <>
@@ -67,7 +72,17 @@ function Prose({ parts }: { parts: readonly RefPart[] }) {
           );
         }
         return (
-          <a key={index} className={REF_LINK_CLASS} data-task-id={part.id} role="link">
+          <a
+            key={index}
+            className={REF_LINK_CLASS}
+            data-task-id={part.id}
+            role="link"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onReveal(part.id);
+            }}
+          >
             {part.label}
           </a>
         );
@@ -138,6 +153,13 @@ function Avatar({ user, className }: { user: RowUser; className: string }) {
 
 export function Row({ ctx, id, depth, children }: RowProps) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  // This row's own subscription: a selection change re-renders the two rows
+  // it concerns, not every row under a context that changed identity.
+  const selected = useSyncExternalStore(
+    ctx.selection.subscribe,
+    () => ctx.selection.get() === id,
+    () => false,
+  );
 
   const record = ctx.model.tasks[id];
   if (record === undefined) return null;
@@ -150,7 +172,6 @@ export function Row({ ctx, id, depth, children }: RowProps) {
   const canProgress = ctx.canProgress(id);
   const expanded = !ctx.collapsed(id);
   const assignee = assigneeView(record, ctx.members);
-  const selected = ctx.selectedTaskId === id;
   const display = ctx.rows;
   const badges = rowBadges(ctx.presence, id);
   // The dot rides the primary assignee's disc only, as `applyPresenceBadges`
@@ -175,7 +196,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
         {...(done ? { "data-done": "true" } : {})}
         data-task-progress={progress}
         data-can-progress={String(canProgress)}
-        onClick={() => ctx.onSelect(id)}
+        onClick={() => ctx.onSelect(clickedSelection(selected ? id : null, id))}
         className={[
           "group/row relative flex flex-wrap items-center gap-x-2 xl:gap-x-3 gap-y-1 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px] cursor-pointer",
           ctx.savingIds.has(id) ? "is-saving" : "",
@@ -462,7 +483,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
               "group-data-done/row:line-through group-data-done/row:text-zinc-400 dark:group-data-done/row:text-zinc-500",
             ].join(" ")}
           >
-            <Prose parts={refParts(record.title, ctx.model)} />
+            <Prose parts={refParts(record.title, ctx.model)} onReveal={ctx.onReveal} />
           </span>
         </div>
 
@@ -473,7 +494,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           className="w-full min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate xl:whitespace-normal xl:line-clamp-2"
         >
           {record.description === null || record.description === "" ? null : (
-            <Prose parts={refParts(record.description, ctx.model)} />
+            <Prose parts={refParts(record.description, ctx.model)} onReveal={ctx.onReveal} />
           )}
         </span>
 

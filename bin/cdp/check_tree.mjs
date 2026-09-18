@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// The tree harness (m04.02 items 7.3, 7.4): drive a REAL browser through the
+// The tree harness (m04.02 items 8.3, 8.4, 8.5): drive a REAL browser through the
 // client's own tree at `/app/initiatives/:id` and report PASS/FAIL for add,
 // edit, completion, the cascade confirm, the delete confirm and delete, undo
 // and redo (7.3, 7.6), then
 // reorder, reparent, the forbidden drop, the root and tail zones, the
-// move-flip confirm and sort (7.4). Drags are real mouse gestures over the
-// row handles — press, glide past the threshold, release.
+// move-flip confirm and sort (7.4), then selection, the Details pane and its
+// flyout, references, presence and the deep link (8.5). Drags are real mouse
+// gestures over the row handles — press, glide past the threshold, release.
 //
 // Opt-in, like `check_client.mjs`: NOT part of `mix test` or `mix precommit`.
 //
@@ -752,6 +753,512 @@ export async function checkSort(ctx) {
   return `${sortNote}; cascade over ${CASCADE_SORT_BRANCHES} branches: confirm open ${asked.ackMs}ms after the click, nothing sent, Cancel left every child and its sort as it was`;
 }
 
+// ---------------------------------------------------------------------------
+// Item 8.5: selection, panes, references, presence, and deep links. Every one
+// of these is view state (§6.5): the DOM answers at the click and no fetch
+// goes out — the one thing that does go out is the `select` presence push on
+// the socket (item 3.4.1), which is not waited on. The markers asserted are
+// the workspace's own: `li[data-selected]`, `#details-rail[data-open]`,
+// `#pane-backdrop`, `[data-close-task]` / `[data-close-panel]`, `a.doit-ref`
+// / `span.doit-ref-dead`, `[data-presence-slot]`, and `?task=<id>`.
+// ---------------------------------------------------------------------------
+
+const PHONE = { width: 390, height: 844 };
+/** Wide enough for the flyout to leave the backdrop showing beside it (`sm:w-96`). */
+const TABLET = { width: 768, height: 1024 };
+/** A `%<id>` no task will ever have: the dead-reference case. */
+const DEAD_REF_ID = 999_999_999;
+/** The other member the presence check plays, as `selection_meta/2` would name them. */
+const PEER = {
+  user_id: -4242,
+  name: "CDP peer",
+  initials: "CP",
+  bg: "linear-gradient(135deg, #f59e0b, #ef4444)",
+  fg: "#ffffff",
+};
+
+/**
+ * Selection is local: a click on a row selects it at once, a click on another
+ * moves it, a click on the selected row again clears it (the workspace's
+ * toggle), and Escape clears it. Nothing is fetched for any of it.
+ */
+export async function checkSelection(ctx) {
+  const { session } = ctx;
+  const { charlie, echo } = ctx.ids;
+
+  const before = await evaluate(session, `return __ops.log.length;`);
+  await pressKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "nothing selected to begin with" });
+
+  await armStopwatch(session, "click", `return __tree.selected() === ${charlie};`);
+  await clickElement(session, titleOf(charlie));
+  const picked = await readStopwatch(session, `"Charlie" selected`, { expectReply: false });
+  assertAcknowledged(picked, "the selected row");
+
+  await armStopwatch(
+    session,
+    "click",
+    `return __tree.selected() === ${echo} && document.querySelector("#task-${charlie}[data-selected]") === null;`,
+  );
+  await clickElement(session, titleOf(echo));
+  const moved = await readStopwatch(session, `the selection on "Echo"`, { expectReply: false });
+  assertAcknowledged(moved, "the moved selection");
+
+  await armStopwatch(session, "click", `return __tree.selected() === null;`);
+  await clickElement(session, titleOf(echo));
+  const toggled = await readStopwatch(session, "the selection cleared by a second click", { expectReply: false });
+  assertAcknowledged(toggled, "the cleared selection");
+
+  await clickElement(session, titleOf(charlie));
+  await waitFor(session, `return __tree.selected() === ${charlie};`, { timeoutMs: 2_000, what: `"Charlie" selected again` });
+  await armStopwatch(session, "keydown", `return __tree.selected() === null;`);
+  await pressKey(session, "Escape");
+  const escaped = await readStopwatch(session, "the selection cleared by Escape", { expectReply: false });
+  assertAcknowledged(escaped, "the Escape");
+
+  await assertNothingFetched(session, before, "selecting and deselecting");
+  return `selected ${picked.ackMs}ms, moved ${moved.ackMs}ms, cleared by a second click ${toggled.ackMs}ms and by Escape ${escaped.ackMs}ms after the event; nothing fetched`;
+}
+
+/**
+ * At desktop width the Details pane opens in its slot with the selection:
+ * `#details-rail[data-open="true"]`, sticky beside the tree, the backdrop
+ * hidden. Its Close (`[data-close-task]`) deselects and the slot goes away.
+ */
+export async function checkPaneDesktop(ctx) {
+  const { session } = ctx;
+  const { charlie } = ctx.ids;
+
+  const before = await evaluate(session, `return __ops.log.length;`);
+  await armStopwatch(session, "click", `return __tree.pane(${JSON.stringify(MOVE_TITLES.charlie)});`);
+  await clickElement(session, titleOf(charlie));
+  const opened = await readStopwatch(session, "the Details pane", { expectReply: false });
+  assertAcknowledged(opened, "the open pane");
+  const pane = opened.detail;
+  if (pane.position !== "sticky") throw new Error(`the pane is "${pane.position}" at desktop width, not sticky in its slot`);
+  if (pane.backdrop !== "none") throw new Error(`the backdrop is "${pane.backdrop}" at desktop width, not hidden`);
+  if (!pane.inSlot) throw new Error("the pane is not in the frame's slot beside the tree");
+  if (!pane.closeVisible) throw new Error("the pane's Close is not on screen at desktop width");
+
+  await armStopwatch(session, "click", `return __tree.paneClosed() && __tree.selected() === null;`);
+  await clickElement(session, "#details-rail [data-close-task]");
+  const closed = await readStopwatch(session, "the pane to close", { expectReply: false });
+  assertAcknowledged(closed, "the closed pane");
+
+  await assertNothingFetched(session, before, "opening and closing the pane");
+  return `open ${opened.ackMs}ms after the click (sticky, backdrop hidden, field reads "${pane.value}"); closed and deselected ${closed.ackMs}ms after Close; nothing fetched`;
+}
+
+/**
+ * Below `lg:` the pane is the workspace's flyout (item 7.1): fixed over a
+ * backdrop, with the rail's own X. The X closes and deselects at phone width;
+ * the backdrop does the same at tablet width, where it shows beside the rail.
+ */
+export async function checkPaneFlyout(ctx) {
+  const { session } = ctx;
+  const { charlie } = ctx.ids;
+  const title = MOVE_TITLES.charlie;
+
+  const before = await evaluate(session, `return __ops.log.length;`);
+  try {
+    await setViewport(session, PHONE, true);
+    await armStopwatch(session, "click", `return __tree.pane(${JSON.stringify(title)});`);
+    await clickElement(session, titleOf(charlie));
+    const opened = await readStopwatch(session, "the flyout", { expectReply: false });
+    assertAcknowledged(opened, "the open flyout");
+    const pane = opened.detail;
+    if (pane.position !== "fixed") throw new Error(`the pane is "${pane.position}" at phone width, not a fixed flyout`);
+    if (pane.backdrop !== "block") throw new Error(`the backdrop is "${pane.backdrop}" at phone width, not shown`);
+    if (!pane.railCloseVisible) throw new Error("the rail's X is not on screen at phone width");
+
+    await armStopwatch(session, "click", `return __tree.paneClosed() && __tree.selected() === null;`);
+    await clickElement(session, "#details-rail button[data-close-panel]");
+    const closedByX = await readStopwatch(session, "the flyout to close", { expectReply: false });
+    assertAcknowledged(closedByX, "the flyout closed by its X");
+
+    await setViewport(session, TABLET, true);
+    await clickElement(session, titleOf(charlie));
+    await waitFor(session, `return __tree.pane(${JSON.stringify(title)}) !== false;`, { timeoutMs: 2_000, what: "the flyout at tablet width" });
+    const at = await evaluate(
+      session,
+      `
+      const p = { x: 40, y: 300 };
+      const el = document.elementFromPoint(p.x, p.y);
+      return el?.id === "pane-backdrop" ? p : { hit: el?.tagName + (el?.id ? "#" + el.id : "") };
+    `,
+    );
+    if (at.hit !== undefined) throw new Error(`the backdrop is not showing beside the rail at tablet width (found ${at.hit})`);
+    await armStopwatch(session, "click", `return __tree.paneClosed() && __tree.selected() === null;`);
+    await clickAt(session, at);
+    const closedByBackdrop = await readStopwatch(session, "the flyout to close from the backdrop", { expectReply: false });
+    assertAcknowledged(closedByBackdrop, "the flyout closed by its backdrop");
+
+    await assertNothingFetched(session, before, "the flyout");
+    return `phone: flyout ${opened.ackMs}ms after the tap (fixed, backdrop shown), closed by the rail's X in ${closedByX.ackMs}ms; tablet: closed by the backdrop in ${closedByBackdrop.ackMs}ms; nothing fetched`;
+  } finally {
+    await setViewport(session, VIEWPORT, false);
+  }
+}
+
+/**
+ * A `%<id>` reference in a title renders as the workspace's `buildRefNode`
+ * does — a live one as `a.doit-ref` reading the target's label, a dead one as
+ * `span.doit-ref-dead` reading "%?" — and clicking the link reveals the target:
+ * its collapsed branch opens, it is selected (the referring row is not) and
+ * scrolled into view, with nothing fetched.
+ */
+export async function checkReferences(ctx) {
+  const { session, initiativeId } = ctx;
+  const { bravo, charlie } = ctx.ids;
+
+  // Numbering on, so a live reference reads as a label rather than "↗". The
+  // Initiative channel ignores `initiative_updated` on purpose (it says so),
+  // so a style set from outside the tab reaches it only by a fresh read.
+  await pageOperation(session, `cdp-tree-${ctx.stamp}-numbering`, {
+    op: "update",
+    type: "initiative",
+    id: initiativeId,
+    data: { index_style: "numerical" },
+  });
+  await reopenTree(ctx);
+  await waitFor(session, `return document.querySelector("#task-${charlie} > [data-task-row] [data-task-index]") !== null;`, {
+    timeoutMs: 5_000,
+    what: "the rows to be numbered",
+  });
+
+  const result = await pageOperation(session, `cdp-tree-${ctx.stamp}-seed-ref`, {
+    op: "add",
+    type: "task",
+    data: { initiative_id: initiativeId, title: `See %<${charlie}> and %<${DEAD_REF_ID}>` },
+  });
+  const referrer = result?.data?.id;
+  if (typeof referrer !== "number") throw new Error(`the referring task was not added: ${JSON.stringify(result)}`);
+  ctx.ids.referrer = referrer;
+  await waitForRows(session, [referrer], "the referring row");
+
+  const rendered = await evaluate(
+    session,
+    `
+    const title = document.querySelector("#task-${referrer} > [data-task-row] [data-task-title]");
+    return {
+      links: [...title.querySelectorAll("a.doit-ref[data-task-id]")].map((a) => ({ id: Number(a.dataset.taskId), text: a.textContent.trim(), role: a.getAttribute("role") })),
+      dead: [...title.querySelectorAll("span.doit-ref-dead[data-task-id]")].map((s) => ({ id: Number(s.dataset.taskId), text: s.textContent.trim(), title: s.title })),
+      raw: /%<\\d+>/.test(title.textContent),
+      label: document.querySelector("#task-${charlie} > [data-task-row] [data-copy-index]")?.dataset.copyIndex ?? null,
+    };
+  `,
+  );
+  if (rendered.raw) throw new Error("a raw %<id> token is showing in the title");
+  const [link] = rendered.links;
+  if (rendered.links.length !== 1 || link.id !== charlie || link.role !== "link") {
+    throw new Error(`the live reference did not render as one a.doit-ref to "Charlie": ${JSON.stringify(rendered.links)}`);
+  }
+  if (rendered.label === null || link.text !== rendered.label) {
+    throw new Error(`the live reference reads "${link.text}", not "Charlie"'s label "${rendered.label}"`);
+  }
+  const [dead] = rendered.dead;
+  if (rendered.dead.length !== 1 || dead.id !== DEAD_REF_ID || dead.text !== "%?" || dead.title !== "Referenced task not found") {
+    throw new Error(`the dead reference did not render as the workspace's "%?": ${JSON.stringify(rendered.dead)}`);
+  }
+
+  // Bury the target, then follow the link to it.
+  await collapseBranch(session, bravo);
+  const before = await evaluate(session, `return __ops.log.length;`);
+  await armStopwatch(
+    session,
+    "click",
+    `
+    if (__tree.selected() !== ${charlie}) return false;
+    if (document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek")) return false;
+    return { referrerSelected: document.querySelector("#task-${referrer}[data-selected]") !== null };
+  `,
+  );
+  await clickElement(session, `#task-${referrer} > [data-task-row] a.doit-ref[data-task-id="${charlie}"]`);
+  const ack = await readStopwatch(session, `"Charlie" revealed by its reference`, { expectReply: false });
+  assertAcknowledged(ack, "the revealed target");
+  if (ack.detail.referrerSelected) throw new Error("the referring row was selected too");
+  await waitFor(session, `return __tree.inView(${charlie});`, { timeoutMs: 2_000, everyMs: 10, what: `"Charlie" scrolled into view` });
+  await assertNothingFetched(session, before, "following a reference");
+
+  return `live ref reads "${link.text}", dead ref reads "%?"; click opened "Bravo", selected "Charlie" ${ack.ackMs}ms after it, scrolled into view; nothing fetched`;
+}
+
+/**
+ * Presence (item 3.4): another member's selection is a badge on the row, and
+ * it goes when they leave. Two halves, both through the page's own socket:
+ *
+ *   * the server's half — a second window of this account joins the
+ *     Initiative's topic and selects "Charlie"; the page's socket receives the
+ *     `presence_diff` the server broadcast for it (and its leave). Its own
+ *     windows paint no badge, by design (`selectionsOf` skips self);
+ *   * the client's half — another member's `presence_diff` (a join on
+ *     "Charlie", a move to "Echo", a leave) is delivered on the page's socket
+ *     as a message and the badge follows it at once, with nothing fetched.
+ *
+ * A second signed-in browser is the only way to see both halves as one event.
+ */
+export async function checkPresence(ctx) {
+  const { session, initiativeId } = ctx;
+  const { charlie, echo } = ctx.ids;
+  const topic = `initiative:${initiativeId}`;
+
+  const { identifier } = await session.send("Page.addScriptToEvaluateOnNewDocument", { source: WS_HOOK });
+  try {
+    await reopenTree(ctx);
+    const socket = await waitFor(session, `return __ws.sockets.find((s) => s.readyState === 1)?.url ?? null;`, {
+      timeoutMs: 10_000,
+      what: "the page's own socket to be open",
+    });
+    if (!/\/socket\/websocket/.test(socket)) throw new Error(`the page's socket is not the WebSocket transport: ${socket}`);
+
+    // The server's half.
+    const me = await evaluate(
+      session,
+      `return (async () => (await (await fetch("/app/api/session", { headers: { accept: "application/json" }, credentials: "same-origin" })).json()).data?.user?.id ?? null)();`,
+    );
+    if (typeof me !== "number") throw new Error("the session read did not name the signed-in user");
+    const peerJoined = await evaluate(session, secondWindow(topic, charlie));
+    if (!peerJoined.ok) throw new Error(`the second window could not join: ${peerJoined.why}`);
+    const joinFrame = `return __ws.diffs(${JSON.stringify(topic)}).some((d) => (d.joins?.[${JSON.stringify(String(me))}]?.metas ?? []).some((m) => m.task_id === ${charlie}));`;
+    await waitFor(session, joinFrame, { timeoutMs: 5_000, everyMs: 20, what: "the server's presence_diff for the second window's selection" });
+    const ownBadge = await evaluate(session, `return document.querySelector('[data-presence-slot="${charlie}"] > span') !== null;`);
+    if (ownBadge) throw new Error("the page painted a badge for its own account's other window");
+    await evaluate(session, `__ws.second?.close(); __ws.second = null; return true;`);
+    const leaveFrame = `return __ws.diffs(${JSON.stringify(topic)}).some((d) => (d.leaves?.[${JSON.stringify(String(me))}]?.metas ?? []).some((m) => m.task_id === ${charlie}));`;
+    await waitFor(session, leaveFrame, { timeoutMs: 5_000, everyMs: 20, what: "the server's presence_diff for the second window leaving" });
+
+    // The client's half.
+    const before = await evaluate(session, `return __ops.log.length;`);
+    const badgeOn = (id) => `
+      const badge = document.querySelector('[data-presence-slot="${id}"] > span');
+      return badge === null ? false : { initials: badge.textContent.trim(), title: badge.title };
+    `;
+    const meta = (taskId, ref) => ({ ...PEER, task_id: taskId, phx_ref: ref });
+    const diff = (joins, leaves) => ({
+      joins: joins === null ? {} : { [PEER.user_id]: { metas: [joins] } },
+      leaves: leaves === null ? {} : { [PEER.user_id]: { metas: [leaves] } },
+    });
+
+    await armStopwatch(session, "cdp-presence", badgeOn(charlie));
+    await injectDiff(session, topic, diff(meta(charlie, "cdp-peer-1"), null));
+    const joined = await readStopwatch(session, `the peer's badge on "Charlie"`, { expectReply: false });
+    assertAcknowledged(joined, "the peer's badge");
+    if (joined.detail.initials !== PEER.initials || joined.detail.title !== `${PEER.name} has this task selected`) {
+      throw new Error(`the badge reads ${JSON.stringify(joined.detail)}`);
+    }
+
+    await armStopwatch(session, "cdp-presence", `if (document.querySelector('[data-presence-slot="${charlie}"] > span') !== null) return false; ${badgeOn(echo)}`);
+    await injectDiff(session, topic, diff(meta(echo, "cdp-peer-2"), meta(charlie, "cdp-peer-1")));
+    const moved = await readStopwatch(session, `the peer's badge moved to "Echo"`, { expectReply: false });
+    assertAcknowledged(moved, "the moved badge");
+
+    await armStopwatch(session, "cdp-presence", `return document.querySelector('[data-presence-slot="${echo}"] > span') === null;`);
+    await injectDiff(session, topic, diff(null, meta(echo, "cdp-peer-2")));
+    const left = await readStopwatch(session, "the peer's badge to go", { expectReply: false });
+    assertAcknowledged(left, "the cleared badge");
+
+    await assertNothingFetched(session, before, "presence");
+    return `server: a second window's select and leave came back as presence_diffs, no badge for self; client: peer's badge on ${joined.ackMs}ms after the diff, moved in ${moved.ackMs}ms, gone in ${left.ackMs}ms; nothing fetched`;
+  } finally {
+    await evaluate(session, `__ws?.second?.close(); return true;`).catch(() => {});
+    await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+  }
+}
+
+/**
+ * A `?task=<id>` link (the workspace's `honor_task_param/2`): arriving on it
+ * opens the collapsed branch the task is in, selects it, scrolls it into view
+ * and opens the pane — before anything is fetched beyond the tree itself. The
+ * address bar then follows the selection, and clears with it.
+ */
+export async function checkDeepLink(ctx) {
+  const { session } = ctx;
+  const { bravo, charlie, echo } = ctx.ids;
+  const title = MOVE_TITLES.charlie;
+
+  await pressKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "nothing selected before the link" });
+  await collapseBranch(session, bravo);
+
+  const arrival = await reopenTree(ctx, `?task=${charlie}`);
+  const revealed = await waitFor(
+    session,
+    `
+    if (__tree.selected() !== ${charlie}) return null;
+    if (document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek")) return null;
+    return { at: performance.now() };
+  `,
+    { timeoutMs: 5_000, everyMs: 5, what: `"Charlie" revealed by the link` },
+  );
+  const sinceTree = Math.round(revealed.at - arrival.at);
+  if (arrival.selected !== charlie && sinceTree > ACK_BUDGET_MS) {
+    throw new Error(`the tree was up ${sinceTree}ms before the link's task was selected`);
+  }
+  await waitFor(session, `return __tree.inView(${charlie}) && __tree.pane(${JSON.stringify(title)}) !== false;`, {
+    timeoutMs: 2_000,
+    everyMs: 10,
+    what: `"Charlie" in view with its pane open`,
+  });
+  const search = await evaluate(session, `return window.location.search;`);
+  if (search !== `?task=${charlie}`) throw new Error(`the address bar reads "${search}" after arrival`);
+
+  // The parameter follows the selection, and goes with it.
+  const before = await evaluate(session, `return __ops.log.length;`);
+  await clickElement(session, titleOf(echo));
+  const followed = await waitFor(session, `return window.location.search === "?task=${echo}" ? window.location.search : null;`, {
+    timeoutMs: 2_000,
+    everyMs: 10,
+    what: "the address bar to follow the selection",
+  });
+  await pressKey(session, "Escape");
+  await waitFor(session, `return __tree.selected() === null && window.location.search === "";`, {
+    timeoutMs: 2_000,
+    everyMs: 10,
+    what: "the address bar to clear with the selection",
+  });
+  await assertNothingFetched(session, before, "the address bar following the selection");
+
+  return `arrived with "Bravo" open, "Charlie" selected ${arrival.selected === charlie ? "in the tree's first paint" : `${sinceTree}ms after the tree`}, in view, pane open; address bar followed to "${followed}" and cleared with Escape; nothing fetched`;
+}
+
+/** The title element of row `id`, for a selecting click. */
+function titleOf(id) {
+  return `#task-${id} > [data-task-row] [data-task-title]`;
+}
+
+/** A click at a viewport point: the backdrop has no element centre worth aiming at. */
+async function clickAt(session, at) {
+  await mouseMove(session, at);
+  await mouseDown(session, at);
+  await mouseUp(session, at);
+}
+
+async function setViewport(session, { width, height }, mobile) {
+  await session.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile });
+}
+
+/** Collapses branch `id` through its own chevron and waits for the peek. */
+async function collapseBranch(session, id) {
+  const closed = await evaluate(session, `return document.getElementById("children-${id}")?.classList.contains("collapsed-peek") ?? null;`);
+  if (closed === null) throw new Error(`branch #${id} has no children list`);
+  if (closed) return;
+  await clickElement(session, `#collapse-${id}`);
+  await waitFor(session, `return document.getElementById("children-${id}")?.classList.contains("collapsed-peek") === true;`, {
+    timeoutMs: 2_000,
+    what: `branch #${id} to collapse`,
+  });
+}
+
+/** View state costs no fetch at all: not an operation, not a read. */
+async function assertNothingFetched(session, before, what) {
+  const after = await evaluate(session, `return { count: __ops.log.length, since: __ops.log.slice(${before}).map((f) => f.method + " " + f.url.replace(/^.*\\/app\\/api/, "")) };`);
+  if (after.count !== before) throw new Error(`${what} fetched: ${after.since.join(", ")}`);
+}
+
+/**
+ * Navigates the tab to the throwaway again (with `search`, e.g. a deep link)
+ * on a fast link, waits for the tree, re-installs the page helpers and puts
+ * the run's latency back. Returns what the tree's first sighting held.
+ */
+async function reopenTree(ctx, search = "") {
+  const { session } = ctx;
+  await session.send("Network.emulateNetworkConditions", FAST_LINK);
+  await evaluate(session, `window.__cdp_leaving = true; return true;`);
+  await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives/${ctx.initiativeId}${search}` });
+  const arrival = await waitFor(
+    session,
+    `
+    if (window.__cdp_leaving === true) return null;
+    if (window.__doit_client_ready !== true || document.getElementById("task-tree") === null) return null;
+    const li = document.querySelector("#task-tree li[data-selected]");
+    return { at: performance.now(), selected: li === null ? null : Number(li.dataset.taskId) };
+  `,
+    { timeoutMs: READY_TIMEOUT_MS, everyMs: 5, what: "the tree to come back up" },
+  );
+  await evaluate(session, PAGE_HELPERS);
+  await session.send("Network.emulateNetworkConditions", { ...FAST_LINK, latency: LINK_LATENCY_MS });
+  return arrival;
+}
+
+/**
+ * Installed before the page's scripts run: every WebSocket the page opens is
+ * kept, and every frame it receives is logged, so a check can read the
+ * server's presence pushes off the page's own socket and deliver a peer's
+ * push on it the way the server would.
+ */
+const WS_HOOK = `
+  (() => {
+    const Native = window.WebSocket;
+    const hook = {
+      Native,
+      sockets: [],
+      frames: [],
+      second: null,
+      // The presence_diff payloads received on topic, oldest first.
+      diffs(topic) {
+        return hook.frames
+          .map((f) => { try { return JSON.parse(f.data); } catch { return null; } })
+          .filter((m) => Array.isArray(m) && m[2] === topic && m[3] === "presence_diff")
+          .map((m) => m[4]);
+      },
+      // A server push, as the socket would receive it (Phoenix's V2 frame).
+      inject(topic, event, payload) {
+        const sock = hook.sockets.find((s) => s.readyState === 1);
+        if (!sock) throw new Error("the page has no open socket");
+        sock.dispatchEvent(new MessageEvent("message", { data: JSON.stringify([null, null, topic, event, payload]) }));
+      },
+    };
+    window.__ws = hook;
+    window.WebSocket = new Proxy(Native, {
+      construct(target, args) {
+        const sock = new target(...args);
+        hook.sockets.push(sock);
+        sock.addEventListener("message", (e) => { hook.frames.push({ at: performance.now(), data: String(e.data).slice(0, 4000) }); });
+        return sock;
+      },
+    });
+  })();
+`;
+
+/** Delivers a peer's `presence_diff` on the page's socket, stamping t0 first. */
+async function injectDiff(session, topic, payload) {
+  await evaluate(
+    session,
+    `
+    document.dispatchEvent(new Event("cdp-presence"));
+    __ws.inject(${JSON.stringify(topic)}, "presence_diff", ${JSON.stringify(payload)});
+    return true;
+  `,
+  );
+}
+
+/**
+ * A second window of this account, on Phoenix's own wire format: joins
+ * `topic` on the same URL the page's socket used (the session cookie is the
+ * credential), selects `taskId`, and stays open until closed.
+ */
+function secondWindow(topic, taskId) {
+  return `
+    return new Promise((resolve) => {
+      const url = __ws.sockets.find((s) => s.readyState === 1)?.url;
+      if (!url) return resolve({ ok: false, why: "the page has no open socket to copy" });
+      const sock = new __ws.Native(url);
+      __ws.second = sock;
+      const timer = setTimeout(() => resolve({ ok: false, why: "the join timed out" }), 5000);
+      sock.addEventListener("error", () => { clearTimeout(timer); resolve({ ok: false, why: "the socket errored" }); });
+      sock.addEventListener("open", () => sock.send(JSON.stringify(["1", "1", ${JSON.stringify(topic)}, "phx_join", {}])));
+      sock.addEventListener("message", (e) => {
+        let m; try { m = JSON.parse(e.data); } catch { return; }
+        if (m[1] !== "1" || m[3] !== "phx_reply") return;
+        clearTimeout(timer);
+        if (m[4]?.status !== "ok") return resolve({ ok: false, why: "the join was refused: " + JSON.stringify(m[4]) });
+        sock.send(JSON.stringify(["1", "2", ${JSON.stringify(topic)}, "select", { task_id: ${taskId} }]));
+        resolve({ ok: true });
+      });
+    });
+  `;
+}
+
 const CHECKS = [
   ["add a task", checkAddTask],
   ["add a child", checkAddChild],
@@ -767,6 +1274,12 @@ const CHECKS = [
   ["root zone and tail zone", checkRootAndTailZones],
   ["move-flip confirm, Cancel then Proceed", checkMoveFlipConfirm],
   ["sort, and cascade-sort confirm Cancel", checkSort],
+  ["selection: click, move, second click, Escape", checkSelection],
+  ["Details pane at desktop width", checkPaneDesktop],
+  ["Details flyout at phone and tablet width", checkPaneFlyout],
+  ["references: render and reveal", checkReferences],
+  ["presence: another member's selection", checkPresence],
+  ["deep link: ?task= reveals", checkDeepLink],
 ];
 
 // ---------------------------------------------------------------------------
@@ -985,6 +1498,42 @@ const PAGE_HELPERS = `
       return [...document.querySelectorAll("#task-" + id + " li[data-task-id]")]
         .map((li) => li.dataset.taskId + ":" + li.dataset.sort + ":" + li.dataset.sortReverse)
         .join("|");
+    },
+    // --- 8.5: selection, the pane, and what is on screen ---
+    // The selected row's id (the workspace's li[data-selected]), or null.
+    selected() {
+      const li = document.querySelector("#task-tree li[data-selected]");
+      return li === null ? null : Number(li.dataset.taskId);
+    },
+    // The Details pane open on a task titled title, with how it is placed —
+    // or false. #details-rail[data-open="true"] is the workspace's marker.
+    pane(title) {
+      const rail = document.getElementById("details-rail");
+      if (rail === null || rail.dataset.open !== "true") return false;
+      const field = document.getElementById("task-field-title");
+      if (field === null || field.value !== title) return false;
+      const box = (el) => el !== null && el.getBoundingClientRect().width > 0;
+      const backdrop = document.getElementById("pane-backdrop");
+      return {
+        value: field.value,
+        position: getComputedStyle(rail).position,
+        backdrop: backdrop === null ? "none" : getComputedStyle(backdrop).display,
+        inSlot: rail.parentElement === document.getElementById("client-main")?.parentElement,
+        closeVisible: box(rail.querySelector("[data-close-task]")),
+        railCloseVisible: box(rail.querySelector("button[data-close-panel]")),
+      };
+    },
+    paneClosed() {
+      const rail = document.getElementById("details-rail");
+      return (rail === null || rail.dataset.open !== "true") && document.getElementById("task-field-title") === null;
+    },
+    // The row's top is inside the one scrolling region.
+    inView(id) {
+      const row = this.rowEl(id);
+      if (row === null) return false;
+      const r = row.getBoundingClientRect();
+      const box = document.getElementById("client-scroll").getBoundingClientRect();
+      return r.top >= box.top - 1 && r.top <= box.bottom - 24;
     },
   };
 

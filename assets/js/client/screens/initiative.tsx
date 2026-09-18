@@ -55,6 +55,7 @@ import {
 } from "../tree/pending_model.ts";
 import { permissionsFor } from "../tree/permissions.ts";
 import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.ts";
+import { selectionOf } from "../tree/selection_model.ts";
 import type { RowPresence } from "../tree/row_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
 import { Tree } from "../tree/tree.tsx";
@@ -255,6 +256,9 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     (taskId: number | null) => selectTask(stores.ui, taskId),
     [stores.ui],
   );
+  // Each row reads the selection through this rather than through the tree
+  // context, so selecting costs two rows, not the tree (item 2.2.3).
+  const selection = useMemo(() => selectionOf(stores.ui), [stores.ui]);
   const memberList = useStoreValue(
     stores.domain,
     useCallback((state: DomainState) => membersOf(state, id), [id]),
@@ -472,6 +476,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     rows,
     selectedId,
     select,
+    selection,
     deepLinkTaskId,
     onIntent,
     onAdd,
@@ -506,7 +511,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   // against it stripped the link's own `?task=` and put it back a commit later.
   // Usually a link already says what we resolved, and then nothing is written at
   // all.
-  const selected = tree.ctx.selectedTaskId;
+  const selected = selectedId;
 
   // Tell the others what this window has selected — after it has painted,
   // never before (§6.5). Every change goes out, including the one the screen
