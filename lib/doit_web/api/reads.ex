@@ -38,6 +38,33 @@ defmodule DoItWeb.Api.Reads do
   end
 
   @doc """
+  The Initiatives `user` has put away (m04.02 item 4.5): `archived`, the rows
+  on their own membership flags (`archived` / `hidden`, per user, trashed
+  excluded), and `trashed`, the Initiatives they own that sit in Trash. Each
+  row is a `Serializer.initiative_summary/4` map plus those flags —
+  `Serializer.archived_initiative/2` and `Serializer.trashed_initiative/2`.
+  `retention_days` is how long Trash keeps a row before the sweep.
+  """
+  @spec initiative_archive(User.t()) :: %{
+          archived: [map()],
+          trashed: [map()],
+          retention_days: pos_integer()
+        }
+  def initiative_archive(%User{} = user) do
+    archived = Initiatives.list_archived_initiatives(user)
+    trashed = Initiatives.list_trashed_initiatives(user)
+    unit_counts = Tasks.unit_counts_for_initiatives(archived ++ trashed)
+
+    %{
+      archived:
+        Enum.map(archived, &Serializer.archived_initiative(&1, Map.get(unit_counts, &1.id, 0))),
+      trashed:
+        Enum.map(trashed, &Serializer.trashed_initiative(&1, Map.get(unit_counts, &1.id, 0))),
+      retention_days: Initiatives.trash_retention_days()
+    }
+  end
+
+  @doc """
   One Initiative's members with their roles, as `Serializer.member/1` maps.
 
   View-gated like the tree read: `{:error, :not_found}` / `{:error,

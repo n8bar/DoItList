@@ -107,6 +107,8 @@ defmodule DoItWeb.Router do
 
     get "/session", SessionController, :show
     get "/initiatives", InitiativeController, :index
+    # Before "/initiatives/:id", so "archive" is never read as an id.
+    get "/initiatives/archive", InitiativeController, :archive
     get "/initiatives/:id", InitiativeController, :show
     get "/initiatives/:id/members", InitiativeController, :members
     get "/initiatives/:id/history", InitiativeController, :history

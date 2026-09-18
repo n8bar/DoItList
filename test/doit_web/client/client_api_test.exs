@@ -214,6 +214,45 @@ defmodule DoItWeb.Client.ClientApiTest do
     end
   end
 
+  describe "GET /app/api/initiatives/archive" do
+    test "lists this user's archived and hidden rows and the owner's Trash", ctx do
+      {:ok, old} = Initiatives.create_initiative(ctx.owner, %{"name" => "Old"})
+      {:ok, quiet} = Initiatives.create_initiative(ctx.owner, %{"name" => "Quiet"})
+      {:ok, gone} = Initiatives.create_initiative(ctx.owner, %{"name" => "Gone"})
+      {:ok, _} = Initiatives.archive_initiative(ctx.owner, old)
+      {:ok, _} = Initiatives.hide_initiative(ctx.owner, quiet)
+      {:ok, _} = Initiatives.trash_initiative(gone)
+
+      conn = ctx.conn |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives/archive")
+
+      assert %{"data" => %{"archived" => archived, "trashed" => trashed, "retention_days" => 30}} =
+               json_response(conn, 200)
+
+      flags = Map.new(archived, &{&1["name"], {&1["archived"], &1["hidden"]}})
+      assert flags == %{"Old" => {true, false}, "Quiet" => {false, true}}
+      assert Enum.all?(archived, &(&1["role"] == "owner"))
+
+      assert [%{"name" => "Gone", "role" => "owner", "trashed_at" => trashed_at}] = trashed
+      assert is_binary(trashed_at)
+
+      # The index still excludes every one of them.
+      index = build_conn() |> sign_in(ctx.owner) |> get(~p"/app/api/initiatives")
+      names = index |> json_response(200) |> Map.fetch!("data") |> Enum.map(& &1["name"])
+      refute Enum.any?(names, &(&1 in ["Old", "Quiet", "Gone"]))
+    end
+
+    test "a member sees their own flags only, and never another owner's Trash", ctx do
+      {:ok, _} = Initiatives.add_member(ctx.ini.id, ctx.stranger.id, "viewer")
+      {:ok, _} = Initiatives.archive_initiative(ctx.owner, ctx.ini)
+      {:ok, gone} = Initiatives.create_initiative(ctx.owner, %{"name" => "Gone"})
+      {:ok, _} = Initiatives.trash_initiative(gone)
+
+      conn = ctx.conn |> sign_in(ctx.stranger) |> get(~p"/app/api/initiatives/archive")
+
+      assert %{"data" => %{"archived" => [], "trashed" => []}} = json_response(conn, 200)
+    end
+  end
+
   describe "GET /app/api/initiatives/:id/history" do
     test "reports nothing to undo or redo on an untouched stack", ctx do
       {:ok, fresh} = Initiatives.create_initiative(ctx.owner, %{"name" => "Fresh"})

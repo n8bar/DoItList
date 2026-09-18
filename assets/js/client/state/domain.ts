@@ -12,7 +12,7 @@
 // stay disjoint.
 
 import type { BootstrapUser } from "../boot.ts";
-import type { InitiativeSummary, Member } from "../api/types.ts";
+import type { InitiativeArchive, InitiativeSummary, Member } from "../api/types.ts";
 import type { PresenceState } from "../live/presence_model.ts";
 import { emptyPresence } from "../live/presence_model.ts";
 import type { TreeModel } from "../tree/model.ts";
@@ -26,6 +26,8 @@ export interface DomainState {
   readonly user: BootstrapUser | null;
   /** The Initiatives index, or `null` before it has ever been read. */
   readonly initiativeSummaries: readonly InitiativeSummary[] | null;
+  /** The Archived and Trash drawer's rows, or `null` before they have been read (4.5). */
+  readonly initiativeArchive: InitiativeArchive | null;
   /**
    * Loaded Initiative trees, keyed by Initiative id, in the client's own
    * normalized form (`tree/model.ts`) — records by id and child order by
@@ -52,6 +54,7 @@ export interface DomainState {
 export const initialDomainState: DomainState = {
   user: null,
   initiativeSummaries: null,
+  initiativeArchive: null,
   trees: {},
   members: {},
   presence: {},

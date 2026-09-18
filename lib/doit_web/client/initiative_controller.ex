@@ -3,6 +3,7 @@ defmodule DoItWeb.Client.InitiativeController do
   The browser client's Initiative reads (m04.01 worklist 5):
 
     * `GET /app/api/initiatives` — the index list.
+    * `GET /app/api/initiatives/archive` — the Archived and Trash drawer's rows.
     * `GET /app/api/initiatives/:id` — the whole nested tree.
     * `GET /app/api/initiatives/:id/members` — members with their roles.
     * `GET /app/api/initiatives/:id/history` — what this user can undo / redo.
@@ -24,6 +25,15 @@ defmodule DoItWeb.Client.InitiativeController do
   @doc "Every Initiative the signed-in user can see."
   def index(conn, _params) do
     json(conn, Api.data(Reads.initiative_summaries(conn.assigns.current_user)))
+  end
+
+  @doc """
+  What this user has put away: `archived`, their own archived and hidden
+  Initiatives, and `trashed`, the ones they own that sit in Trash (m04.02 item
+  4.5). Scoped to the user like the index, so no per-Initiative authz.
+  """
+  def archive(conn, _params) do
+    json(conn, Api.data(Reads.initiative_archive(conn.assigns.current_user)))
   end
 
   @doc "The whole nested Initiative tree."

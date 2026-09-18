@@ -10,7 +10,7 @@ Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` ar
 
 Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page. The server keeps only a hash, so a lost token is replaced, never recovered.
 
-The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read, and carries a `user:<id>` channel — joinable only as yourself — whose `notification` event is one of the user's own notifications, already worded and linked. That surface also answers `GET /app/api/notifications` with the user's recent notifications and unread count; marking them read is the ordinary `update notification` operation. It answers two more Initiative reads: `/members`, with roles, and `/history`, what this user can undo and redo. Its `initiative:<id>` channel carries selection presence too — a client sends `select` with a task id or null, and gets `presence_state` on join and `presence_diff` after, so each route sees the other's people. It is not an agent surface — agents use the endpoints below.
+The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read, and carries a `user:<id>` channel — joinable only as yourself — whose `notification` event is one of the user's own notifications, already worded and linked. That surface also answers `GET /app/api/notifications` with the user's recent notifications and unread count; marking them read is the ordinary `update notification` operation. It answers two more Initiative reads: `/members`, with roles, and `/history`, what this user can undo and redo. `GET /app/api/initiatives/archive` is the index's Archived and Trash drawer: `archived`, the Initiatives this user has archived or hidden (each summary row plus `archived` and `hidden`), and `trashed`, the ones they own that sit in Trash (plus `trashed_at`). Restoring any of them is the ordinary `update initiative {state}` operation; there is still no permanent delete. Its `initiative:<id>` channel carries selection presence too — a client sends `select` with a task id or null, and gets `presence_state` on join and `presence_diff` after, so each route sees the other's people. It is not an agent surface — agents use the endpoints below.
 
 ### Endpoints
 
@@ -87,6 +87,8 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | Shape | Purpose |
 |---|---|
 | initiative_summary | An Initiative list item (`GET /api/v1/initiatives`) |
+| archived_initiative | One row of the user's Archived list (`GET /app/api/initiatives/archive`, m04.02 item 4.5): the summary plus the per-user `hidden` flag |
+| trashed_initiative | One row of the owner's Trash (`GET /app/api/initiatives/archive`): the summary |
 | initiative_tree | The whole-Initiative tree response body (`GET /api/v1/initiatives/:id`) |
 | initiative_url | The Initiative's web URL |
 | task_ref | The task → Initiative resolver body (`GET /api/v1/tasks/:id`) |

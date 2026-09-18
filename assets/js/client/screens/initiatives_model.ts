@@ -12,7 +12,13 @@
 // branches are open. Items 4.4 (drag) and 4.6 (live changes) build on
 // `sortInitiatives` and `manualOrder` rather than on the screen.
 
-import type { InitiativeSummary, Role } from "../api/types.ts";
+import type {
+  ArchivedInitiative,
+  InitiativeArchive,
+  InitiativeSummary,
+  Role,
+  TrashedInitiative,
+} from "../api/types.ts";
 import type { KeyValueStore } from "../storage/last_user.ts";
 
 /**
@@ -360,4 +366,152 @@ export function summaryForCreated(
     created_at: now,
     updated_at: now,
   };
+}
+
+// --- The Archived and Trash drawer -----------------------------------------
+//
+// The index footer's rules (m04.02 item 4.5), ported from `visible_archived/2`
+// and `archive_drawer_title/3`: which put-away rows show, what the summary
+// line counts, which buttons a row offers, and what the list looks like the
+// moment a Restore is pressed — before the server has answered.
+
+/** `visible_archived/2`: archived rows always; a purely hidden row only under Show hidden. */
+export function visibleArchived(
+  rows: readonly ArchivedInitiative[],
+  showHidden: boolean,
+): ArchivedInitiative[] {
+  return rows.filter((row) => row.archived || (row.hidden && showHidden));
+}
+
+/** Whether the Show hidden box appears: only when something is hidden. */
+export function hasHidden(rows: readonly ArchivedInitiative[]): boolean {
+  return rows.some((row) => row.hidden);
+}
+
+/**
+ * `archive_drawer_title/3`: "Archived (n) · Trash (n)", each part only when
+ * its bucket has rows. Archived counts what Show hidden lets through; Trash
+ * counts everything it holds, whether or not Show trash is on.
+ */
+export function archiveDrawerTitle(archive: InitiativeArchive, showHidden: boolean): string {
+  const parts: string[] = [];
+  if (archive.archived.length > 0) {
+    parts.push(`Archived (${visibleArchived(archive.archived, showHidden).length})`);
+  }
+  if (archive.trashed.length > 0) parts.push(`Trash (${archive.trashed.length})`);
+  return parts.join(" · ");
+}
+
+/** The drawer is drawn at all only when it has something to show. */
+export function archiveHasRows(archive: InitiativeArchive | null): archive is InitiativeArchive {
+  return archive !== null && (archive.archived.length > 0 || archive.trashed.length > 0);
+}
+
+export type ArchiveAction = "restore" | "unhide";
+
+/** An Archived row's buttons: Restore while archived, Unhide while hidden — both when both. */
+export function archivedRowActions(row: ArchivedInitiative): ArchiveAction[] {
+  const actions: ArchiveAction[] = [];
+  if (row.archived) actions.push("restore");
+  if (row.hidden) actions.push("unhide");
+  return actions;
+}
+
+/**
+ * A Trash row's buttons. Only the owner may restore, and the API has no
+ * permanent delete, so there is no Delete button here yet.
+ */
+export function trashedRowActions(row: TrashedInitiative): ArchiveAction[] {
+  return row.role === "owner" ? ["restore"] : [];
+}
+
+/** The `update initiative {state}` operation each drawer button posts. */
+export type InitiativeState = "unarchived" | "unhidden" | "restored";
+
+export function stateRequest(
+  id: number,
+  state: InitiativeState,
+): {
+  operations: { op: "update"; type: "initiative"; id: number; data: { state: InitiativeState } }[];
+} {
+  return { operations: [{ op: "update", type: "initiative", id, data: { state } }] };
+}
+
+/** The row's "trashed Sep 17" line — the template's `%b %-d` in local time. */
+export function trashedText(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return `trashed ${MONTHS[date.getMonth()]} ${date.getDate()}`;
+}
+
+/** The index row a put-away Initiative becomes once nothing holds it back. */
+function summaryOf(row: ArchivedInitiative | TrashedInitiative): InitiativeSummary {
+  const { hidden: _hidden, ...rest } = row as TrashedInitiative;
+  const { trashed_at: _trashedAt, ...summary } = rest;
+  return { ...summary, archived: false };
+}
+
+export interface ArchiveStep {
+  /** The drawer after the press. */
+  readonly archive: InitiativeArchive;
+  /** The row to add to the index, when the press frees it entirely. */
+  readonly joined: InitiativeSummary | null;
+  /** What to post. */
+  readonly state: InitiativeState;
+}
+
+/**
+ * What one drawer button does to the drawer, decided before the server answers
+ * (§6.2). Restore on an Archived row clears `archived`, Unhide clears `hidden`;
+ * a row with neither flag left leaves the drawer and joins the index. Restore
+ * on a Trash row takes it out of Trash and onto the index. `null` when the row
+ * is not there to act on.
+ */
+export function archiveStep(
+  archive: InitiativeArchive,
+  bucket: "archived" | "trashed",
+  id: number,
+  action: ArchiveAction,
+): ArchiveStep | null {
+  if (bucket === "trashed") {
+    const row = archive.trashed.find((item) => item.id === id);
+    if (row === undefined || action !== "restore") return null;
+    return {
+      archive: { ...archive, trashed: archive.trashed.filter((item) => item.id !== id) },
+      joined: summaryOf(row),
+      state: "restored",
+    };
+  }
+
+  const row = archive.archived.find((item) => item.id === id);
+  if (row === undefined) return null;
+  const next: ArchivedInitiative =
+    action === "restore" ? { ...row, archived: false } : { ...row, hidden: false };
+  const stays = next.archived || next.hidden;
+  return {
+    archive: {
+      ...archive,
+      archived: stays
+        ? archive.archived.map((item) => (item.id === id ? next : item))
+        : archive.archived.filter((item) => item.id !== id),
+    },
+    joined: stays ? null : summaryOf(row),
+    state: action === "restore" ? "unarchived" : "unhidden",
+  };
+}
+
+/** The index with one freed row added at the top, where a new row lands too. */
+export function withJoined(
+  rows: readonly InitiativeSummary[],
+  joined: InitiativeSummary,
+): InitiativeSummary[] {
+  return [joined, ...rows.filter((row) => row.id !== joined.id)];
+}
+
+/** The index without the row a refused restore had put there. */
+export function withoutJoined(
+  rows: readonly InitiativeSummary[],
+  id: number,
+): InitiativeSummary[] {
+  return rows.filter((row) => row.id !== id);
 }

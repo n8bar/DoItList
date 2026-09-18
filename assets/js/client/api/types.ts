@@ -50,6 +50,25 @@ export interface InitiativeSummary {
   updated_at: string;
 }
 
+/** A row of the user's Archived list: the summary plus their own `hidden` flag. */
+export interface ArchivedInitiative extends InitiativeSummary {
+  hidden: boolean;
+}
+
+/** A row of the owner's Trash. */
+export interface TrashedInitiative extends InitiativeSummary {
+  hidden: boolean;
+  trashed_at: string;
+}
+
+/** `GET /app/api/initiatives/archive` — what the Archived and Trash drawer shows. */
+export interface InitiativeArchive {
+  archived: ArchivedInitiative[];
+  trashed: TrashedInitiative[];
+  /** How many days Trash keeps a row before the sweep deletes it. */
+  retention_days: number;
+}
+
 /** A node of the nested tree. */
 export interface TaskNode {
   id: number;

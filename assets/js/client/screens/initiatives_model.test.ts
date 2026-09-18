@@ -1,11 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import type { InitiativeSummary } from "../api/types.ts";
+import type { ArchivedInitiative, InitiativeArchive, InitiativeSummary, TrashedInitiative } from "../api/types.ts";
 import type { KeyValueStore } from "../storage/last_user.ts";
 import {
   SORT_STORAGE_KEY,
   applyOrder,
+  archiveDrawerTitle,
+  archiveHasRows,
+  archiveStep,
+  archivedRowActions,
+  hasHidden,
+  stateRequest,
+  trashedRowActions,
+  trashedText,
+  visibleArchived,
+  withJoined,
+  withoutJoined,
   createdInitiative,
   descriptionText,
   dropSide,
@@ -312,5 +323,122 @@ describe("positionRequest", () => {
     assert.deepEqual(positionRequest(7, 2), {
       operations: [{ op: "update", type: "initiative", id: 7, data: { position: 2 } }],
     });
+  });
+});
+
+// --- The Archived and Trash drawer (item 4.5) -------------------------------
+
+function archived(
+  overrides: Partial<ArchivedInitiative> & { id: number },
+): ArchivedInitiative {
+  return { ...row(overrides), hidden: false, ...overrides };
+}
+
+function trashed(overrides: Partial<TrashedInitiative> & { id: number }): TrashedInitiative {
+  return { ...row(overrides), hidden: false, trashed_at: "2026-09-17T10:00:00Z", ...overrides };
+}
+
+const drawer: InitiativeArchive = {
+  archived: [
+    archived({ id: 10, archived: true }),
+    archived({ id: 11, hidden: true }),
+    archived({ id: 12, archived: true, hidden: true }),
+  ],
+  trashed: [trashed({ id: 20 })],
+  retention_days: 30,
+};
+
+describe("the drawer's rows and title", () => {
+  it("shows archived rows always and hidden-only rows under Show hidden", () => {
+    assert.deepEqual(ids(visibleArchived(drawer.archived, false)), [10, 12]);
+    assert.deepEqual(ids(visibleArchived(drawer.archived, true)), [10, 11, 12]);
+    assert.equal(hasHidden(drawer.archived), true);
+    assert.equal(hasHidden([archived({ id: 1, archived: true })]), false);
+  });
+
+  it("counts what is visible for Archived and everything for Trash", () => {
+    assert.equal(archiveDrawerTitle(drawer, false), "Archived (2) · Trash (1)");
+    assert.equal(archiveDrawerTitle(drawer, true), "Archived (3) · Trash (1)");
+    assert.equal(archiveDrawerTitle({ ...drawer, trashed: [] }, false), "Archived (2)");
+    assert.equal(archiveDrawerTitle({ ...drawer, archived: [] }, true), "Trash (1)");
+  });
+
+  it("is drawn only when a bucket has rows", () => {
+    assert.equal(archiveHasRows(null), false);
+    assert.equal(archiveHasRows({ archived: [], trashed: [], retention_days: 30 }), false);
+    assert.equal(archiveHasRows(drawer), true);
+  });
+});
+
+describe("which buttons a row offers", () => {
+  it("Restore while archived, Unhide while hidden, both when both", () => {
+    assert.deepEqual(archivedRowActions(drawer.archived[0] as ArchivedInitiative), ["restore"]);
+    assert.deepEqual(archivedRowActions(drawer.archived[1] as ArchivedInitiative), ["unhide"]);
+    assert.deepEqual(archivedRowActions(drawer.archived[2] as ArchivedInitiative), [
+      "restore",
+      "unhide",
+    ]);
+  });
+
+  it("only the owner restores from Trash, and nothing deletes forever", () => {
+    assert.deepEqual(trashedRowActions(trashed({ id: 1 })), ["restore"]);
+    assert.deepEqual(trashedRowActions(trashed({ id: 1, role: "editor" })), []);
+  });
+});
+
+describe("what a press does before the server answers", () => {
+  it("Restore frees an archived-only row onto the index", () => {
+    const step = archiveStep(drawer, "archived", 10, "restore");
+    assert.ok(step);
+    assert.equal(step.state, "unarchived");
+    assert.deepEqual(ids(step.archive.archived), [11, 12]);
+    assert.equal(step.joined?.id, 10);
+    assert.equal(step.joined?.archived, false);
+    assert.equal("hidden" in (step.joined as object), false);
+  });
+
+  it("Restore on a row that is also hidden keeps it in the drawer, hidden", () => {
+    const step = archiveStep(drawer, "archived", 12, "restore");
+    assert.ok(step);
+    assert.equal(step.joined, null);
+    const kept = step.archive.archived.find((r) => r.id === 12);
+    assert.deepEqual([kept?.archived, kept?.hidden], [false, true]);
+  });
+
+  it("Unhide frees a hidden-only row and posts unhidden", () => {
+    const step = archiveStep(drawer, "archived", 11, "unhide");
+    assert.ok(step);
+    assert.equal(step.state, "unhidden");
+    assert.equal(step.joined?.id, 11);
+    assert.deepEqual(ids(step.archive.archived), [10, 12]);
+  });
+
+  it("Restore from Trash posts restored and leaves trashed_at behind", () => {
+    const step = archiveStep(drawer, "trashed", 20, "restore");
+    assert.ok(step);
+    assert.equal(step.state, "restored");
+    assert.deepEqual(step.archive.trashed, []);
+    assert.equal("trashed_at" in (step.joined as object), false);
+    assert.equal(archiveStep(drawer, "trashed", 20, "unhide"), null);
+    assert.equal(archiveStep(drawer, "archived", 99, "restore"), null);
+  });
+
+  it("joins the index at the top and leaves it again on a refusal", () => {
+    const joined = row({ id: 10 });
+    const list = withJoined(rows, joined);
+    assert.deepEqual(ids(list), [10, 1, 2, 3]);
+    assert.deepEqual(ids(withoutJoined(list, 10)), [1, 2, 3]);
+  });
+
+  it("posts one update initiative op with the state", () => {
+    assert.deepEqual(stateRequest(7, "restored"), {
+      operations: [{ op: "update", type: "initiative", id: 7, data: { state: "restored" } }],
+    });
+  });
+
+  it("dates the Trash row like the template", () => {
+    const local = new Date(2026, 8, 17, 12).toISOString();
+    assert.equal(trashedText(local), "trashed Sep 17");
+    assert.equal(trashedText("nope"), "");
   });
 });

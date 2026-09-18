@@ -42,6 +42,10 @@ export const ICON_CLASS = {
   link: "hero-link",
   "chevron-up": "hero-chevron-up",
   trash: "hero-trash",
+  // The Archived and Trash drawer (m04.02 item 4.5): its title and Restore / Unhide.
+  "archive-box": "hero-archive-box",
+  "arrow-uturn-left": "hero-arrow-uturn-left",
+  eye: "hero-eye",
 } as const;
 
 export type IconName = keyof typeof ICON_CLASS;

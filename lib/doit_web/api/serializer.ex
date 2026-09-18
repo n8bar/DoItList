@@ -310,6 +310,28 @@ defmodule DoItWeb.Api.Serializer do
   end
 
   @doc """
+  One row of the user's Archived list (`GET /app/api/initiatives/archive`,
+  m04.02 item 4.5): the summary plus the per-user `hidden` flag. `archived`
+  is already on the summary.
+  """
+  def archived_initiative(initiative, unit_count) do
+    initiative
+    |> initiative_summary(initiative.my_role, initiative.progress, unit_count)
+    |> Map.put(:hidden, initiative.hidden? == true)
+  end
+
+  @doc """
+  One row of the owner's Trash (`GET /app/api/initiatives/archive`): the
+  summary — the caller is the owner, so `role` is `"owner"` — plus
+  `trashed_at`, and `hidden: false` so every drawer row has both flags.
+  """
+  def trashed_initiative(initiative, unit_count) do
+    initiative
+    |> initiative_summary("owner", initiative.progress, unit_count)
+    |> Map.merge(%{hidden: false, trashed_at: iso8601(initiative.trashed_at)})
+  end
+
+  @doc """
   The whole-Initiative tree response body (`GET /api/v1/initiatives/:id`).
 
   `tree` is the assembled task tree (`Tasks.initiative_task_tree/1`); `role` the
