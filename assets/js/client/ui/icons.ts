@@ -45,6 +45,7 @@ export const ICON_CLASS = {
   // The Archived and Trash drawer (m04.02 item 4.5): its title and Restore / Unhide.
   "archive-box": "hero-archive-box",
   "arrow-uturn-left": "hero-arrow-uturn-left",
+  "arrow-uturn-right": "hero-arrow-uturn-right",
   eye: "hero-eye",
 } as const;
 

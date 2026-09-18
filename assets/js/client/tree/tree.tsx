@@ -50,6 +50,49 @@ export interface TreeProps {
   onAddMove: (dir: -1 | 1) => void;
   onAddClose: () => void;
   onAdd: (request: AddRequest) => void;
+  /**
+   * Undo / redo (the workspace's `#undo-button` / `#redo-button`). `busy` is
+   * the one in flight, if any — the button says so until the reply lands.
+   */
+  history?: HistoryControls;
+}
+
+export interface HistoryControls {
+  busy: "undo" | "redo" | null;
+  onHistory: (action: "undo" | "redo") => void;
+}
+
+const HISTORY_BUTTON =
+  "inline-flex items-center justify-center w-7 h-7 rounded text-zinc-500 hover:text-zinc-800 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:text-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:pointer-events-none transition";
+
+/** One of the two history buttons, latched to its in-flight look while it waits. */
+function HistoryButton({
+  action,
+  history,
+}: {
+  action: "undo" | "redo";
+  history: HistoryControls;
+}) {
+  const label = action === "undo" ? "Undo" : "Redo";
+  const busy = history.busy === action;
+  return (
+    <button
+      type="button"
+      id={`${action}-button`}
+      disabled={history.busy !== null}
+      aria-busy={busy}
+      title={busy ? `${label}…` : label}
+      aria-label={busy ? `${label}…` : label}
+      onClick={() => history.onHistory(action)}
+      className={HISTORY_BUTTON}
+    >
+      <Icon
+        name={busy ? "arrow-path" : action === "undo" ? "arrow-uturn-left" : "arrow-uturn-right"}
+        spin={busy}
+        className="w-4 h-4"
+      />
+    </button>
+  );
 }
 
 /** Keeps the tree at least as wide as its deepest visible row. */
@@ -166,7 +209,16 @@ function Branch({
   );
 }
 
-export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAddClose, onAdd }: TreeProps) {
+export function Tree({
+  ctx,
+  addSlot,
+  addTitle,
+  onAddTitleChange,
+  onAddMove,
+  onAddClose,
+  onAdd,
+  history,
+}: TreeProps) {
   const box = useRef<HTMLDivElement | null>(null);
   const list = useRef<HTMLUListElement | null>(null);
 
@@ -211,6 +263,14 @@ export function Tree({ ctx, addSlot, addTitle, onAddTitleChange, onAddMove, onAd
             <Icon name="plus" className="w-4 h-4" />
             <span>New List</span>
           </button>
+          {/* Undo / Redo, as the workspace header carries them (m02.06 item 5):
+              Ctrl+Z / Ctrl+Shift+Z drive the same handlers. */}
+          {history !== undefined && (
+            <div className="ml-auto flex items-center gap-1">
+              <HistoryButton action="undo" history={history} />
+              <HistoryButton action="redo" history={history} />
+            </div>
+          )}
         </div>
       )}
 

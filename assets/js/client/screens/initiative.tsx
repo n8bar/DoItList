@@ -229,12 +229,15 @@ interface InFlightState {
   readonly pending: PendingMap;
   readonly rowKeys: ReadonlyMap<number, number>;
   readonly rejection: EditRejection | null;
+  /** The undo or redo in flight, if any — one at a time, its button latched. */
+  readonly history: "undo" | "redo" | null;
 }
 
 const NOTHING_IN_FLIGHT: InFlightState = {
   pending: NO_PENDING,
   rowKeys: new Map(),
   rejection: null,
+  history: null,
 };
 
 /** The tree, and everything that is true only once there is a tree. */
@@ -294,7 +297,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
   const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
 
   const inFlight = useMemo(() => createStore<InFlightState>(NOTHING_IN_FLIGHT), []);
-  const { pending, rowKeys, rejection } = useStore(inFlight);
+  const { pending, rowKeys, rejection, history } = useStore(inFlight);
   // Canonical truth plus the predictions still unanswered. A ref, not state:
   // it is read and written only inside the adapter's hooks, never rendered.
   const flights = useRef<OptimisticState | null>(null);
@@ -317,17 +320,26 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     const onSubmit = (submission: Submission): void => {
       const { initiativeId, write, key } = submission;
       const current = stores.domain.get().trees[initiativeId];
-      if (current === undefined || write === null) return;
+      if (current === undefined) return;
+
+      // With nothing in flight, whatever the store holds IS canonical — a
+      // refetch that landed since the last write is picked up here.
+      const previous = flights.current;
+      const base = previous === null || previous.flights.length === 0 ? idle(current) : previous;
+
+      // An undo or redo predicts nothing — what it reverses is the server's to
+      // say — but it holds its place in line, so its reply lands on the
+      // canonical it was sent from and never on a stale one.
+      if (write === null) {
+        flights.current = beginFlight(base, { key, predict: (model) => model, tempId: null }).state;
+        return;
+      }
 
       standIn.current -= 1;
       const tempId = write.kind === "add" ? standIn.current : null;
       const predict = (base: TreeModel): TreeModel =>
         predictWrite(write, contextFor(initiativeId, base), tempId ?? -1) ?? base;
 
-      // With nothing in flight, whatever the store holds IS canonical — a
-      // refetch that landed since the last write is picked up here.
-      const previous = flights.current;
-      const base = previous === null || previous.flights.length === 0 ? idle(current) : previous;
       const begun = beginFlight(base, { key, predict, tempId });
       flights.current = begun.state;
 
@@ -371,13 +383,22 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
       const message = rejectionMessage(result.error);
       const refusedEdit: EditRejection | null =
         write?.kind === "edit" ? { id: write.id, fields: write.fields, message } : null;
+      // A refused undo or redo is not a lost change — "nothing to undo" is
+      // the stack's answer, said in the stack's terms.
+      const refusedHistory = write === null ? inFlight.get().history : null;
       inFlight.set((current) => ({
         ...current,
         pending: settle(current.pending, key),
         rejection: refusedEdit ?? current.rejection,
       }));
       putTree(stores.domain, dropped.shown);
-      if (refusedEdit === null) {
+      if (refusedHistory !== null) {
+        pushNotice(stores.ui, {
+          kind: "info",
+          title: refusedHistory === "undo" ? "Undo" : "Redo",
+          message,
+        });
+      } else if (refusedEdit === null) {
         pushNotice(stores.ui, { kind: "error", title: REJECTED_TITLE, message });
       }
     };
@@ -411,6 +432,24 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     [adapter, id],
   );
 
+  // Undo / redo: one at a time, its button latched until the reply lands
+  // (§6.7). The press is acknowledged in the same frame; the tree changes
+  // when the server says what it reversed.
+  const onHistory = useCallback(
+    (action: "undo" | "redo") => {
+      if (inFlight.get().history !== null) return;
+      inFlight.set((state) => ({ ...state, history: action }));
+      void adapter.submitHistory(id, action).finally(() => {
+        inFlight.set((state) => ({ ...state, history: null }));
+      });
+    },
+    [adapter, id, inFlight],
+  );
+  const historyControls = useMemo(
+    () => ({ busy: history, onHistory }),
+    [history, onHistory],
+  );
+
   const saving = useMemo(() => savingIds(pending), [pending]);
   const recomputing = useMemo(() => recomputingIds(pending), [pending]);
   // The three confirms (item 5.1.4) sit between an intent and the adapter:
@@ -436,6 +475,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
     deepLinkTaskId,
     onIntent,
     onAdd,
+    onHistory,
     savingIds: saving,
     recomputingIds: recomputing,
     rowKeys,
@@ -508,6 +548,7 @@ function TreeSection({ id, model }: { id: number; model: TreeModel }) {
         onAddMove={tree.onAddMove}
         onAddClose={tree.onAddClose}
         onAdd={tree.onAdd}
+        history={historyControls}
       />
       <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
       {/* One dialog per confirm class, under the id the LiveView's modal had.

@@ -215,9 +215,29 @@ describe("Del and ?", () => {
   });
 });
 
+describe("undo and redo", () => {
+  it("Ctrl or Cmd + Z undoes, with or without a selection", () => {
+    assert.deepEqual(handleKey(state(12), "z", { ctrl: true }), { kind: "history", action: "undo" });
+    assert.deepEqual(handleKey(state(null), "Z", { meta: true }), { kind: "history", action: "undo" });
+  });
+
+  it("Shift, or Y, makes it a redo", () => {
+    assert.deepEqual(handleKey(state(12), "z", { ctrl: true, shift: true }), {
+      kind: "history",
+      action: "redo",
+    });
+    assert.deepEqual(handleKey(state(12), "y", { meta: true }), { kind: "history", action: "redo" });
+  });
+
+  it("a bare z or y is not a chord", () => {
+    assert.deepEqual(handleKey(state(12), "z"), { kind: "none" });
+    assert.deepEqual(handleKey(state(12), "y"), { kind: "none" });
+  });
+});
+
 describe("keys that are not the tree's", () => {
   it("leaves a browser or system chord alone", () => {
-    assert.deepEqual(handleKey(state(12), "z", { ctrl: true }), { kind: "none" });
+    assert.deepEqual(handleKey(state(12), "c", { ctrl: true }), { kind: "none" });
     assert.deepEqual(handleKey(state(12), "ArrowDown", { meta: true }), { kind: "none" });
     assert.deepEqual(handleKey(state(12), "q"), { kind: "none" });
   });

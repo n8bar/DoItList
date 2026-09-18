@@ -149,6 +149,12 @@ export function createApiClient(options: ApiClientOptions): ApiClient {
       if (isRecord(payload) && "data" in payload) {
         return { ok: true, data: payload["data"] as T };
       }
+      // A batch reply is the operations envelope itself — `{results: [...]}`
+      // at the top, the same shape `/api/v1/operations` answers with (see
+      // `DoItWeb.Client.Api`) — so the envelope is the data.
+      if (isRecord(payload) && Array.isArray(payload["results"])) {
+        return { ok: true, data: payload as T };
+      }
       return {
         ok: false,
         error: { code: "malformed", status: response.status, message: "The response had no data." },

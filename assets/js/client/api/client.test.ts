@@ -149,6 +149,14 @@ test("a transport failure is a network error, not a throw", async () => {
   assert.equal(result.error.message, "offline");
 });
 
+test("a batch reply is the operations envelope itself, not wrapped in data", async () => {
+  const body = { results: [{ index: 0, status: "ok", data: { id: 7, type: "task" } }] };
+  const { api } = client([{ status: 200, body }]);
+  const result = await api.post<typeof body>("/operations", { operations: [] });
+  assert.ok(result.ok);
+  assert.deepEqual(result.data, body);
+});
+
 test("an unrecognised body is malformed, never silently ok", async () => {
   const { api } = client([{ status: 200, body: { nope: true } }]);
   const ok = await api.get("/session");

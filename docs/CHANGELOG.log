@@ -699,3 +699,6 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-17  M04.02 worklist 2 is now Omissions and Corrections; Multi-task move nests under it as 2.1.
 2026-09-17  Docs conventions §6: Omissions and Corrections is a numbered Worklist, not a separate section; each gap is one Item with its HOW nested beneath.
 2026-09-17  M04.02 2.1 Multi-task move landed: `update task` takes `ids`; `move_task` takes `task_ids`; CLI `move` takes a comma list; one undo step and one activity line per block.
+2026-09-17  M04.02 2.7 Undo and redo controls landed in the client: the buttons beside New List and Ctrl/Cmd+Z, Shift+Z, Y; "nothing to undo" is an info notice.
+2026-09-17  M04.02 client fix: a batch reply is the bare `{results}` envelope; the client had required a `data` wrapper, so every tree write read as "no data" and was rolled back after the reply. Found by 7.3.
+2026-09-17  M04.02 client fix: Enter in the Details title field blurred it before the tree's key listener ran, which then read the Enter as a deselect and closed the pane; the listener now also checks the key's target. Found by 7.3.

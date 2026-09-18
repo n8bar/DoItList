@@ -39,7 +39,9 @@ export function useTreeKeyboard({ state, onOutcome, enabled = true }: TreeKeyboa
     if (!enabled) return;
 
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (inField(document.activeElement)) return;
+      // The target too: a field's own Enter handler blurs it before this
+      // listener runs, and that Enter is the field's, not a deselect.
+      if (inField(document.activeElement) || inField(event.target as Element | null)) return;
 
       const step = nextIdclipBuffer(idclip.current, event.key);
       idclip.current = step.buffer;

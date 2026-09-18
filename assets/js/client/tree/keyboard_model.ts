@@ -38,7 +38,9 @@ export type KeyOutcome =
   /** Refused, and the user should hear it: the thud, not silence. */
   | { kind: "blocked" }
   /** The `idclip` easter egg: show every row's ids. */
-  | { kind: "idclip" };
+  | { kind: "idclip" }
+  /** Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y: the Initiative's shared undo stack. */
+  | { kind: "history"; action: "undo" | "redo" };
 
 export interface KeyboardState {
   readonly model: TreeModel;
@@ -135,6 +137,12 @@ export function nextIdclipBuffer(
  * tree's — a text field having focus is the hook's business, not the model's.
  */
 export function handleKey(state: KeyboardState, key: string, mods: Modifiers = {}): KeyOutcome {
+  // Undo / redo, as the `.TaskKeys` hook binds them: Ctrl/Cmd+Z undoes, with
+  // Shift or as Ctrl/Cmd+Y redoes. No selection required.
+  if ((mods.ctrl === true || mods.meta === true) && /^[zy]$/i.test(key)) {
+    const redo = /^y$/i.test(key) || mods.shift === true;
+    return { kind: "history", action: redo ? "redo" : "undo" };
+  }
   if (mods.ctrl === true || mods.meta === true) return NONE;
 
   if (key === "?") return { kind: "shortcuts" };

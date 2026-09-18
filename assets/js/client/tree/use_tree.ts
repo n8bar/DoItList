@@ -56,6 +56,8 @@ export interface UseTreeOptions {
   onIntent: (intent: TreeIntent) => void;
   /** A new task the user typed. Same. */
   onAdd: (request: AddRequest) => void;
+  /** Ctrl/Cmd+Z and friends: undo or redo on the Initiative's stack. */
+  onHistory?: (action: "undo" | "redo") => void;
   /** A key that asked for something this tree cannot do. */
   onBlocked: () => void;
   /** A touch swiped a drag handle instead of holding it. */
@@ -97,8 +99,18 @@ export interface TreeState {
 }
 
 export function useTree(options: UseTreeOptions): TreeState {
-  const { model, initiativeId, members, permissions, rows, onIntent, onAdd, onBlocked, onDragHint } =
-    options;
+  const {
+    model,
+    initiativeId,
+    members,
+    permissions,
+    rows,
+    onIntent,
+    onAdd,
+    onHistory,
+    onBlocked,
+    onDragHint,
+  } = options;
   // Selection lives in the `ui` store, not in this hook: it is view state with a
   // session's lifetime, and it has to survive this component re-rendering or
   // remounting (guardrails §7.3). The hook only reads and writes it.
@@ -274,6 +286,9 @@ export function useTree(options: UseTreeOptions): TreeState {
         case "intent":
           onIntent(outcome.intent);
           return;
+        case "history":
+          onHistory?.(outcome.action);
+          return;
         case "focusField":
           focusPill(selectedId, outcome.field);
           return;
@@ -292,7 +307,7 @@ export function useTree(options: UseTreeOptions): TreeState {
           return;
       }
     },
-    [onBlocked, onIntent, onToggleCollapse, openAdd, selectedId, setSelectedId],
+    [onBlocked, onHistory, onIntent, onToggleCollapse, openAdd, selectedId, setSelectedId],
   );
 
   useTreeKeyboard({
