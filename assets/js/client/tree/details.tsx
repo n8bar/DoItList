@@ -378,7 +378,7 @@ function RefPickerButton({ target }: { target: string }) {
       aria-label="Link a task by number"
       title="Link a task by number"
       disabled
-      className="inline-flex items-center justify-center w-6 h-6 rounded text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition disabled:opacity-50 disabled:pointer-events-none"
+      className="inline-flex items-center justify-center w-6 h-6 rounded text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition motion-reduce:transition-none disabled:opacity-50 disabled:pointer-events-none"
     >
       <Icon name="link" className="w-4 h-4" />
     </button>
@@ -609,7 +609,7 @@ function SortMenu({
           type="button"
           data-cascade-sort
           data-task-id={id}
-          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition"
+          className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30 active:scale-95 transition motion-reduce:transition-none"
           title="Force every descendant branch to inherit this branch's sort"
           onClick={() => ctx.onIntent({ kind: "cascadeSort", id })}
         >

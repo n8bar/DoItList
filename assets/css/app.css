@@ -691,4 +691,82 @@ input.doit-reveal-busy ~ .doit-reveal-slot .doit-reveal-spinner { visibility: vi
 .doit-busy-spinner { visibility: hidden; }
 .doit-busy ~ .doit-busy-slot .doit-busy-spinner { visibility: visible; }
 
+/* Reduced motion (UX_GUARDRAILS 1.2): the in-flight cues keep their hue,
+   dim and ellipsis; only their motion goes. Unlayered, after the rules it
+   quiets, so it wins on order. */
+@media (prefers-reduced-motion: reduce) {
+  .is-saving {
+    transition: none;
+  }
+  [data-task-index].is-saving,
+  .is-recomputing [role="progressbar"] > div:first-child,
+  .chat-flash {
+    animation: none;
+  }
+}
+
+/* Touch targets (UX_GUARDRAILS 5.1). On a touch surface, or in a window under
+   `sm:`, the tree's small controls take a tap anywhere in 44×44 about their
+   centre through an invisible ::before, so what is drawn stays exactly the
+   workspace's. `min(0px, calc(50% - 22px))` reaches only as far as 44px needs
+   and never shrinks a control already past it. Unlayered: `position` here
+   beats the utilities, so the completion box (already `absolute`) is left out
+   of that list; the handle is in it only so it paints over the title line,
+   whose box overlaps the handle's negative margin. The Add child button is not positioned either: its wrapper
+   clips overflow for its rounded corners, so the reach is anchored on the
+   `relative` box outside it and kept 44px wide from the left, clear of the
+   Add-sibling chevron that joins the group from `sm:` up.
+
+   The row's left column stacks the handle, the chevron and the completion box
+   in less than three targets' worth of height, so under the handle the reach
+   is sideways: the chevron keeps to the room down to the box; the box, on a
+   branch, to the room up to the chevron; on a leaf, where nothing sits above
+   it, the box reaches the full 44px — up to the handle, and 4px into the gap
+   below the row, short of the next row's handle. */
+@media (pointer: coarse), (max-width: 639px) {
+  [data-add-root],
+  #task-tree [data-drag-handle],
+  #task-tree [id^="collapse-"],
+  #details-rail button[data-close-panel] {
+    position: relative;
+  }
+  [data-add-root]::before,
+  #task-tree [id^="collapse-"]::before,
+  #task-tree [data-complete-toggle]::before,
+  #task-tree [data-add-child]::before,
+  #details-rail button[data-close-panel]::before {
+    content: "";
+    position: absolute;
+    left: min(0px, calc(50% - 22px));
+    right: min(0px, calc(50% - 22px));
+    top: min(0px, calc(50% - 22px));
+    bottom: min(0px, calc(50% - 22px));
+  }
+  #task-tree [data-add-child]::before {
+    right: auto;
+    width: 44px;
+  }
+  /* Over the count badge beside it, which is positioned and only decorative. */
+  #task-tree [id^="collapse-"] {
+    z-index: 1;
+  }
+  #task-tree [id^="collapse-"]::before {
+    top: 0;
+    bottom: -4px;
+  }
+  /* The box's offsets count from its padding box, inside its 2px border, so
+     each is 2px more than the reach past the drawn edge: 18px up and 6px down
+     on a leaf. */
+  #task-tree [data-complete-toggle]::before {
+    top: -20px;
+    bottom: -8px;
+  }
+  /* The chevron precedes the box on the same line, so a sibling selector tells
+     a branch from a leaf — no `:has()`, which cost every row toggle dearly. */
+  #task-tree [id^="collapse-"] ~ [data-complete-toggle]::before {
+    top: -6px;
+    bottom: -4px;
+  }
+}
+
 /* This file is for your main application CSS */

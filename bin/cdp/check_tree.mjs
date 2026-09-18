@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-// The tree harness (m04.02 items 8.3, 8.4, 8.5): drive a REAL browser through the
+// The tree harness (m04.02 items 8.3, 8.4, 8.5, 8.6): drive a REAL browser through the
 // client's own tree at `/app/initiatives/:id` and report PASS/FAIL for add,
 // edit, completion, the cascade confirm, the delete confirm and delete, undo
 // and redo (7.3, 7.6), then
 // reorder, reparent, the forbidden drop, the root and tail zones, the
 // move-flip confirm and sort (7.4), then selection, the Details pane and its
-// flyout, references, presence and the deep link (8.5). Drags are real mouse
+// flyout, references, presence and the deep link (8.5), then readable width,
+// wrapping, sideways and pane scrolling, responsive panes, themes, touch
+// targets and reduced motion (8.6). Drags are real mouse
 // gestures over the row handles — press, glide past the threshold, release.
 //
 // Opt-in, like `check_client.mjs`: NOT part of `mix test` or `mix precommit`.
@@ -13,6 +15,9 @@
 //   CDP_URL       DevTools endpoint          (default http://localhost:9222)
 //   APP_URL       app origin                 (default http://localhost:4000)
 //   CDP_OPTIONAL  =1 → exit 0 when no endpoint answers (default: exit 2)
+//   CDP_FROM      start at the first check whose name contains this (the
+//                 earlier ones are skipped) — the 8.6 checks seed their own
+//                 rows, so `CDP_FROM="readable width"` runs them alone
 //
 // ONE tab, for every check and every run: the tab already open on APP_URL is
 // reused (a new one is opened only when there is none), every step navigates
@@ -912,8 +917,8 @@ export async function checkReferences(ctx) {
   const { bravo, charlie } = ctx.ids;
 
   // Numbering on, so a live reference reads as a label rather than "↗". The
-  // Initiative channel ignores `initiative_updated` on purpose (it says so),
-  // so a style set from outside the tab reaches it only by a fresh read.
+  // channel forwards `initiative_updated` (7.7), so the tab would relabel on
+  // its own; reopening makes the numbered rows a precondition, not a race.
   await pageOperation(session, `cdp-tree-${ctx.stamp}-numbering`, {
     op: "update",
     type: "initiative",
@@ -1121,6 +1126,514 @@ export async function checkDeepLink(ctx) {
   return `arrived with "Bravo" open, "Charlie" selected ${arrival.selected === charlie ? "in the tree's first paint" : `${sinceTree}ms after the tree`}, in view, pane open; address bar followed to "${followed}" and cleared with Escape; nothing fetched`;
 }
 
+// ---------------------------------------------------------------------------
+// 8.6: readable width, wrapping, scrolling, panes, themes, touch, motion.
+// ---------------------------------------------------------------------------
+
+/** The touch-target floor (UX_GUARDRAILS 5.1). */
+const TOUCH_TARGET_PX = 44;
+/**
+ * How deep the layout rows nest. Deep enough that the deepest visible indent
+ * plus the row floor (`TREE_WIDTH_FLOOR_PX`, 240) exceeds the tree column at
+ * phone width (6px a level) and at tablet width (24px a level), so §6.2's
+ * scroll-over-squeeze is on the glass — not so deep it also exceeds desktop.
+ */
+const DEEP_LEVELS = 24;
+const LAYOUT_TITLES = {
+  hotel: "Hotel",
+  india:
+    "India: a title long enough to need several lines at a narrow row, because a title wraps to as many lines as it takes and is never clipped with an ellipsis, however far the tree nests beside it",
+};
+const LONG_DESCRIPTION = Array.from({ length: 40 }, (_, i) => `Line ${i + 1} of a long description that the pane scrolls within itself.`).join("\n");
+
+/**
+ * The layout rows (§6.2): "Hotel", a chain nested `DEEP_LEVELS` deep, and
+ * "India", a top-level row with a very long title and a long description.
+ */
+async function seedLayoutRows(ctx) {
+  const { session, initiativeId } = ctx;
+  const operations = [{ op: "add", type: "task", lid: "hotel-0", data: { initiative_id: initiativeId, title: LAYOUT_TITLES.hotel } }];
+  for (let level = 1; level <= DEEP_LEVELS; level += 1) {
+    operations.push({
+      op: "add",
+      type: "task",
+      lid: `hotel-${level}`,
+      data: { parent_lid: `hotel-${level - 1}`, title: `Hotel ${String(level).padStart(2, "0")}` },
+    });
+  }
+  operations.push({ op: "add", type: "task", data: { initiative_id: initiativeId, title: LAYOUT_TITLES.india, description: LONG_DESCRIPTION } });
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-layout`, operations);
+  const ids = results.map((r) => r?.data?.id);
+  if (!ids.every((id) => typeof id === "number")) throw new Error(`the layout seed did not name every task: ${JSON.stringify(results)}`);
+  ctx.ids.hotel = ids[0];
+  ctx.ids.hotelDeepest = ids[DEEP_LEVELS];
+  ctx.ids.india = ids[DEEP_LEVELS + 1];
+  await waitForRows(session, ids, "the layout rows");
+}
+
+/** Every top-level row's width, the tree box's overflow, and the long title's box. */
+const LAYOUT_JS = `
+  const lis = [...document.querySelectorAll("#task-tree > li[data-task-id]")];
+  const box = document.getElementById("tree-scroll");
+  const page = document.getElementById("client-scroll");
+  const title = document.querySelector("#task-" + INDIA + " > [data-task-row] [data-task-title]");
+  const ts = getComputedStyle(title);
+  const tr = title.getBoundingClientRect();
+  return {
+    widths: lis.map((li) => Math.round(li.getBoundingClientRect().width)),
+    treeMinWidth: document.getElementById("task-tree").style.minWidth,
+    box: { scrollWidth: box.scrollWidth, clientWidth: box.clientWidth, overflowX: getComputedStyle(box).overflowX },
+    page: { scrollWidth: page.scrollWidth, clientWidth: page.clientWidth },
+    doc: { scrollWidth: document.documentElement.scrollWidth, innerWidth: window.innerWidth },
+    title: {
+      lines: Math.round(tr.height / parseFloat(ts.lineHeight)),
+      clipped: title.scrollWidth > title.clientWidth + 1,
+      whiteSpace: ts.whiteSpace,
+      textOverflow: ts.textOverflow,
+      overflow: ts.overflow,
+    },
+  };
+`;
+
+async function readLayout(session, indiaId) {
+  return evaluate(session, LAYOUT_JS.replace("INDIA", String(indiaId)));
+}
+
+/** Each of §6.2's readability rules, as a thrown reason or nothing. */
+function assertReadable(layout, where) {
+  const { uniform, min, max } = uniformWidths(layout.widths);
+  if (!uniform) throw new Error(`top-level rows are not one width at ${where}: ${min}–${max}px (${layout.widths.join(", ")})`);
+  if (layout.title.whiteSpace.startsWith("nowrap") || layout.title.whiteSpace === "pre") throw new Error(`the long title does not wrap at ${where} (white-space ${layout.title.whiteSpace})`);
+  if (layout.title.textOverflow === "ellipsis" || layout.title.clipped) throw new Error(`the long title is clipped at ${where} (text-overflow ${layout.title.textOverflow}, overflow ${layout.title.overflow})`);
+  if (layout.page.scrollWidth > layout.page.clientWidth) throw new Error(`the page scrolls sideways at ${where} (${layout.page.scrollWidth} > ${layout.page.clientWidth}); only the task area should`);
+  if (layout.doc.scrollWidth > layout.doc.innerWidth) throw new Error(`the document scrolls sideways at ${where} (${layout.doc.scrollWidth} > ${layout.doc.innerWidth})`);
+}
+
+/**
+ * ProductSpec §6.2 at desktop width: every top-level row is one width, the
+ * long title wraps rather than clips and does not widen the tree, and a
+ * tree that fits (24 levels at 24px is under the desktop column) scrolls
+ * nothing.
+ */
+export async function checkReadableWidth(ctx) {
+  const { session } = ctx;
+  await pressKey(session, "Escape");
+  await seedLayoutRows(ctx);
+  await waitFor(session, `return document.getElementById("task-tree").style.minWidth !== "";`, { timeoutMs: 2_000, what: "the tree to claim its width" });
+
+  const layout = await readLayout(session, ctx.ids.india);
+  assertReadable(layout, "desktop width");
+  if (layout.box.overflowX !== "auto" && layout.box.overflowX !== "scroll") throw new Error(`the task area is overflow-x ${layout.box.overflowX}, not a scroll box`);
+  if (layout.box.scrollWidth > layout.box.clientWidth) throw new Error(`the task area scrolls sideways at desktop width (${layout.box.scrollWidth} > ${layout.box.clientWidth}) though ${DEEP_LEVELS} levels fit`);
+  if (layout.title.lines < 2) throw new Error(`the long title sits on ${layout.title.lines} line at desktop width; it should wrap`);
+  const claimed = parseInt(layout.treeMinWidth, 10);
+  if (!(claimed > 0) || claimed > layout.box.clientWidth) throw new Error(`the tree claims ${layout.treeMinWidth} against a ${layout.box.clientWidth}px column`);
+
+  return `${layout.widths.length} top-level rows at ${layout.widths[0]}px; title wraps to ${layout.title.lines} lines (white-space ${layout.title.whiteSpace}); tree claims ${layout.treeMinWidth} of ${layout.box.clientWidth}px, no sideways scroll`;
+}
+
+/**
+ * ProductSpec §6.2 at phone and tablet width: the task area scrolls sideways
+ * rather than squeezing (the deepest row keeps the floor), the long title
+ * wraps to many lines without widening the tree, top-level rows stay one
+ * width, and collapsing the deep branch takes the sideways scroll away —
+ * depth drives width, text does not.
+ */
+export async function checkScrollOverSqueeze(ctx) {
+  const { session } = ctx;
+  const { hotel, hotelDeepest, india } = ctx.ids;
+  const deepest = async () => evaluate(session, `return Math.round(__tree.rowEl(${hotelDeepest}).getBoundingClientRect().width);`);
+
+  try {
+    const notes = [];
+    for (const [name, viewport] of [["phone", PHONE], ["tablet", TABLET]]) {
+      await setViewport(session, viewport, true);
+      await waitFor(session, `return document.getElementById("tree-scroll").clientWidth < ${viewport.width};`, { timeoutMs: 2_000, what: `the ${name} layout` });
+      const open = await readLayout(session, india);
+      assertReadable(open, `${name} width`);
+      if (open.box.scrollWidth <= open.box.clientWidth) throw new Error(`the task area does not scroll sideways at ${name} width with ${DEEP_LEVELS} levels open (${open.box.scrollWidth} ≤ ${open.box.clientWidth})`);
+      const floor = await deepest();
+      if (floor < TREE_WIDTH_FLOOR_PX) throw new Error(`the deepest row is squeezed to ${floor}px at ${name} width; the floor is ${TREE_WIDTH_FLOOR_PX}px`);
+      if (name === "phone" && open.title.lines < 3) throw new Error(`the long title sits on ${open.title.lines} lines at phone width; it should wrap to more`);
+
+      await collapseBranch(session, hotel);
+      const closed = await waitFor(
+        session,
+        `${LAYOUT_JS.replace("INDIA", String(india))}`.replace("return {", "const out = {").replace(/;\s*$/, "; return out.box.scrollWidth < " + open.box.scrollWidth + " ? out : null;"),
+        { timeoutMs: 2_000, what: `the tree to narrow once "${LAYOUT_TITLES.hotel}" is collapsed` },
+      );
+      if (closed.box.scrollWidth > closed.box.clientWidth) throw new Error(`the task area still scrolls sideways at ${name} width with the deep branch collapsed (${closed.box.scrollWidth} > ${closed.box.clientWidth})`);
+      assertReadable(closed, `${name} width, collapsed`);
+
+      await clickElement(session, `#collapse-${hotel}`);
+      await waitFor(session, `return document.getElementById("children-${hotel}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"${LAYOUT_TITLES.hotel}" to expand again` });
+      notes.push(`${name}: open ${open.box.scrollWidth}/${open.box.clientWidth}px (deepest row ${floor}px, title ${open.title.lines} lines) → collapsed ${closed.box.scrollWidth}/${closed.box.clientWidth}px`);
+    }
+    return notes.join("; ");
+  } finally {
+    await setViewport(session, VIEWPORT, false);
+  }
+}
+
+/** The Details pane's box, its description field's overflow, and the scroll regions. */
+const PANE_JS = `
+  const rail = document.getElementById("details-rail");
+  const page = document.getElementById("client-scroll");
+  const field = document.getElementById("task-field-description");
+  if (rail === null || field === null) return null;
+  const r = rail.getBoundingClientRect();
+  const p = page.getBoundingClientRect();
+  return {
+    rail: { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height), overflowY: getComputedStyle(rail).overflowY, position: getComputedStyle(rail).position },
+    page: { top: Math.round(p.top), bottom: Math.round(p.bottom), scrollTop: page.scrollTop, scrollHeight: page.scrollHeight, clientHeight: page.clientHeight },
+    field: { scrollHeight: field.scrollHeight, clientHeight: field.clientHeight, overflowY: getComputedStyle(field).overflowY },
+    doc: { scrollHeight: document.documentElement.scrollHeight, innerHeight: window.innerHeight },
+  };
+`;
+
+/**
+ * The Details pane scrolls within itself, never the page: the long
+ * description scrolls inside its field, the pane fits the frame's scroll
+ * region at desktop width and stays put (sticky) while the tree scrolls
+ * under it; at phone width the flyout is its own scroll box, no taller than
+ * the viewport, and the tree keeps scrolling on its own behind it.
+ */
+export async function checkPaneScrolling(ctx) {
+  const { session } = ctx;
+  const { india } = ctx.ids;
+
+  try {
+    await selectRow(session, india);
+    const desktop = await evaluate(session, PANE_JS);
+    if (desktop === null) throw new Error("the pane did not open on the long description");
+    if (desktop.doc.scrollHeight > desktop.doc.innerHeight) throw new Error(`the document grew past the viewport (${desktop.doc.scrollHeight} > ${desktop.doc.innerHeight}); only the frame's region scrolls`);
+    if (desktop.field.scrollHeight <= desktop.field.clientHeight) throw new Error("the long description does not overflow its field; nothing to scroll");
+    if (desktop.field.overflowY !== "auto" && desktop.field.overflowY !== "scroll") throw new Error(`the description field is overflow-y ${desktop.field.overflowY}; it should scroll within itself`);
+    if (desktop.rail.position !== "sticky") throw new Error(`the pane is ${desktop.rail.position} at desktop width, not sticky`);
+    if (desktop.rail.bottom > desktop.page.bottom + 1) throw new Error(`the pane runs ${desktop.rail.bottom - desktop.page.bottom}px past the scroll region at desktop width (${desktop.rail.height}px tall); it should scroll within itself`);
+    if (desktop.page.scrollHeight <= desktop.page.clientHeight) throw new Error("the tree does not scroll at desktop width; nothing to scroll under the pane");
+
+    await evaluate(session, `const p = document.getElementById("client-scroll"); p.scrollTop = p.scrollHeight; return true;`);
+    const scrolled = await waitFor(session, `${PANE_JS}`.replace("return {", "const out = {").replace(/;\s*$/, "; return out.page.scrollTop > 0 ? out : null;"), { timeoutMs: 2_000, what: "the tree to scroll under the pane" });
+    if (Math.abs(scrolled.rail.top - desktop.rail.top) > 1) throw new Error(`the pane moved from ${desktop.rail.top} to ${scrolled.rail.top} when the tree scrolled; it should stay put`);
+    await evaluate(session, `document.getElementById("client-scroll").scrollTop = 0; return true;`);
+    await clickElement(session, "#details-rail [data-close-task]");
+    await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: "the pane to close" });
+
+    await setViewport(session, PHONE, true);
+    await selectRow(session, india);
+    const phone = await evaluate(session, PANE_JS);
+    if (phone.rail.position !== "fixed") throw new Error(`the pane is ${phone.rail.position} at phone width, not the fixed flyout`);
+    if (phone.rail.overflowY !== "auto" && phone.rail.overflowY !== "scroll") throw new Error(`the flyout is overflow-y ${phone.rail.overflowY}; it should scroll within itself`);
+    if (phone.rail.height > phone.doc.innerHeight + 1) throw new Error(`the flyout is ${phone.rail.height}px tall in an ${phone.doc.innerHeight}px viewport`);
+    if (phone.doc.scrollHeight > phone.doc.innerHeight) throw new Error(`the document grew past the viewport at phone width (${phone.doc.scrollHeight} > ${phone.doc.innerHeight})`);
+    if (phone.page.scrollHeight <= phone.page.clientHeight) throw new Error("the tree does not scroll at phone width behind the flyout");
+    await clickElement(session, "#details-rail button[data-close-panel]");
+    await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: "the flyout to close" });
+
+    return `desktop: description scrolls in its field (${desktop.field.scrollHeight}/${desktop.field.clientHeight}px), pane ${desktop.rail.height}px sticky at ${desktop.rail.top} while the tree scrolled ${Math.round(scrolled.page.scrollTop)}px; phone: flyout ${phone.rail.height}px overflow-y ${phone.rail.overflowY}`;
+  } finally {
+    await setViewport(session, VIEWPORT, false);
+  }
+}
+
+/**
+ * Responsive panes: at desktop width the pane takes a column beside the
+ * tree (the tree column narrows and keeps one width); at tablet and phone
+ * width it lies over the tree, which keeps its full width. The flyout's own
+ * behaviour is `checkPaneFlyout`'s; this is the tree column under each.
+ */
+export async function checkResponsivePanes(ctx) {
+  const { session } = ctx;
+  const { india } = ctx.ids;
+  const measure = async () =>
+    evaluate(
+      session,
+      `
+      const main = document.getElementById("client-main").getBoundingClientRect();
+      const rail = document.getElementById("details-rail")?.getBoundingClientRect() ?? null;
+      return {
+        main: { left: Math.round(main.left), right: Math.round(main.right), width: Math.round(main.width) },
+        rail: rail === null ? null : { left: Math.round(rail.left), width: Math.round(rail.width) },
+        widths: [...document.querySelectorAll("#task-tree > li[data-task-id]")].map((li) => Math.round(li.getBoundingClientRect().width)),
+      };
+    `,
+    );
+
+  try {
+    const notes = [];
+    for (const [name, viewport, mobile] of [["desktop", VIEWPORT, false], ["tablet", TABLET, true], ["phone", PHONE, true]]) {
+      await setViewport(session, viewport, mobile);
+      await waitFor(session, `return window.innerWidth === ${viewport.width};`, { timeoutMs: 2_000, what: `the ${name} viewport` });
+      const closed = await measure();
+      await selectRow(session, india);
+      const open = await measure();
+      const rows = uniformWidths(open.widths);
+      if (!rows.uniform) throw new Error(`top-level rows are not one width with the pane open at ${name} width: ${rows.min}–${rows.max}px`);
+      if (open.rail === null) throw new Error(`no pane at ${name} width`);
+      if (name === "desktop") {
+        if (open.main.width >= closed.main.width) throw new Error(`the tree column did not make room for the pane at desktop width (${closed.main.width} → ${open.main.width}px)`);
+        if (open.rail.left < open.main.right) throw new Error(`the pane overlaps the tree at desktop width (pane left ${open.rail.left}, tree right ${open.main.right})`);
+        await clickElement(session, "#details-rail [data-close-task]");
+      } else {
+        if (open.main.width !== closed.main.width) throw new Error(`the tree column changed width under the flyout at ${name} width (${closed.main.width} → ${open.main.width}px)`);
+        await clickElement(session, "#details-rail button[data-close-panel]");
+      }
+      await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: `the pane to close at ${name} width` });
+      notes.push(`${name}: tree ${closed.main.width} → ${open.main.width}px, pane ${open.rail.width}px, rows ${rows.min}px`);
+    }
+    return notes.join("; ");
+  } finally {
+    await setViewport(session, VIEWPORT, false);
+  }
+}
+
+/** The pressed segment, the document's theme, and a sampled row's colours. */
+const THEME_JS = `
+  const on = document.querySelector('#client-theme-toggle [data-theme-choice][aria-pressed="true"]');
+  // The li carries the row's background; the title carries its text colour.
+  const li = document.querySelector("#task-tree > li[data-task-id]");
+  const title = li?.querySelector(":scope > [data-task-row] [data-task-title]");
+  if (on === null || !li || !title) return null;
+  return {
+    pressed: on.dataset.themeChoice,
+    attr: document.documentElement.getAttribute("data-theme"),
+    system: document.documentElement.hasAttribute("data-theme-system"),
+    saved: localStorage.getItem("phx:theme"),
+    bg: getComputedStyle(li).backgroundColor,
+    text: getComputedStyle(title).color,
+    prefersDark: window.matchMedia("(prefers-color-scheme: dark)").matches,
+  };
+`;
+
+async function themeState(session, want, what) {
+  return waitFor(session, `${THEME_JS}`.replace("return {", "const out = {").replace(/;\s*$/, `; return (${want}) ? out : null;`), { timeoutMs: 3_000, what });
+}
+
+/**
+ * The three-way theme control over the tree: Light and Dark put their theme
+ * on the document and paint a row differently (background and text); System
+ * follows the OS both ways, emulated dark then light. The operator's own
+ * choice is put back at the end.
+ */
+export async function checkThemes(ctx) {
+  const { session } = ctx;
+  const before = await evaluate(session, THEME_JS);
+  if (before === null) throw new Error("no theme control or no row to sample");
+
+  try {
+    await clickElement(session, "#client-theme-toggle-light");
+    const light = await themeState(session, `out.pressed === "light" && out.attr === "light" && out.saved === "light" && !out.system`, "Light to take");
+    await clickElement(session, "#client-theme-toggle-dark");
+    const dark = await themeState(session, `out.pressed === "dark" && out.attr === "dark" && out.saved === "dark" && !out.system`, "Dark to take");
+    if (dark.bg === light.bg) throw new Error(`a row's background is ${dark.bg} in both themes`);
+    if (dark.text === light.text) throw new Error(`a row's text is ${dark.text} in both themes`);
+
+    await clickElement(session, "#client-theme-toggle-system");
+    await themeState(session, `out.pressed === "system" && out.saved === null && out.system`, "System to take");
+    await session.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "dark" }] });
+    const osDark = await themeState(session, `out.prefersDark && out.attr === "dark"`, "System to follow a dark OS");
+    if (osDark.bg !== dark.bg) throw new Error(`System under a dark OS paints ${osDark.bg}, Dark painted ${dark.bg}`);
+    await session.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: "light" }] });
+    const osLight = await themeState(session, `!out.prefersDark && out.attr === "light"`, "System to follow a light OS");
+    if (osLight.bg !== light.bg) throw new Error(`System under a light OS paints ${osLight.bg}, Light painted ${light.bg}`);
+
+    return `Light ${light.bg}/${light.text}, Dark ${dark.bg}/${dark.text}; System followed the OS dark → light; "${before.pressed}" put back`;
+  } finally {
+    await session.send("Emulation.setEmulatedMedia", { features: [] }).catch(() => {});
+    await clickElement(session, `#client-theme-toggle-${before.pressed}`).catch(() => {});
+    await themeState(session, `out.pressed === ${JSON.stringify(before.pressed)}`, "the operator's theme to come back").catch(() => {});
+  }
+}
+
+/**
+ * How far a tap reaches from a control's centre: walks out 1px at a time in
+ * each direction until the point no longer lands on the control (whatever
+ * paints the reach — the control's own box or an invisible pseudo-element).
+ */
+const REACH_JS = `
+  const el = document.querySelector(SELECTOR);
+  if (el === null) return { missing: true };
+  el.scrollIntoView({ block: "center", inline: "center" });
+  const r = el.getBoundingClientRect();
+  const c = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  const hits = (x, y) => { const at = document.elementFromPoint(x, y); return at === el || el.contains(at); };
+  const name = (at) => at === null ? "nothing" : at.tagName.toLowerCase() + (at.id ? "#" + at.id : "") + [...at.attributes].filter((a) => a.name.startsWith("data-")).slice(0, 2).map((a) => "[" + a.name + "]").join("");
+  const walk = (dx, dy) => { let n = 0; while (n < 60 && hits(c.x + dx * (n + 0.5), c.y + dy * (n + 0.5))) n += 1; return { n, then: name(document.elementFromPoint(c.x + dx * (n + 0.5), c.y + dy * (n + 0.5))) }; };
+  const left = walk(-1, 0), right = walk(1, 0), up = walk(0, -1), down = walk(0, 1);
+  return {
+    box: { w: Math.round(r.width), h: Math.round(r.height), top: Math.round(r.top * 10) / 10 },
+    width: left.n + right.n, height: up.n + down.n,
+    reach: "left " + left.n + " (" + left.then + "), right " + right.n + " (" + right.then + "), up " + up.n + " (" + up.then + "), down " + down.n + " (" + down.then + ")",
+  };
+`;
+
+/** Measures every named target at phone width; throws naming all that fall short of 44×44. */
+async function measureTargets(session, targets) {
+  const measured = [];
+  for (const [name, selector] of targets) {
+    const reach = await evaluate(session, REACH_JS.replace("SELECTOR", JSON.stringify(selector)));
+    if (reach.missing) throw new Error(`no ${name} (${selector}) at phone width`);
+    measured.push({ name, ...reach });
+  }
+  const short = shortfalls(measured, TOUCH_TARGET_PX);
+  if (short.length > 0) throw new Error(`under ${TOUCH_TARGET_PX}×${TOUCH_TARGET_PX} at phone width: ${short.join("; ")}`);
+  return measured.map((m) => `${m.name} ${m.width}×${m.height} (drawn ${m.box.w}×${m.box.h})`).join(", ");
+}
+
+/**
+ * UX_GUARDRAILS 5.1 at phone width: the New List button, a row's handle and
+ * Add child, a leaf's completion box and the flyout's X each take a tap
+ * anywhere in 44×44 about their centre, whatever paints the reach.
+ */
+export async function checkTouchTargets(ctx) {
+  const { session } = ctx;
+  const { hotel, hotelDeepest, india } = ctx.ids;
+
+  try {
+    await setViewport(session, PHONE, true);
+    await waitFor(session, `return window.innerWidth === ${PHONE.width};`, { timeoutMs: 2_000, what: "the phone viewport" });
+    const rows = await measureTargets(session, [
+      ["New List", "[data-add-root]"],
+      ["drag handle", `[data-drag-handle][data-task-id="${hotel}"]`],
+      ["Add child", `#task-${hotel} > [data-task-row] [data-add-child="${hotel}"]`],
+      ["leaf completion box", `#task-${hotelDeepest} > [data-task-row] [data-complete-toggle]`],
+    ]);
+    await selectRow(session, india);
+    const flyout = await measureTargets(session, [["flyout X", "#details-rail button[data-close-panel]"]]);
+    await clickElement(session, "#details-rail button[data-close-panel]");
+    await waitFor(session, `return __tree.paneClosed();`, { timeoutMs: 2_000, what: "the flyout to close" });
+    return `${rows}, ${flyout}`;
+  } finally {
+    await setViewport(session, VIEWPORT, false);
+  }
+}
+
+/**
+ * UX_GUARDRAILS 5.1 for a branch row's left column at phone width: the
+ * chevron and the completion box sit between the handle and the next row,
+ * and each must still take a tap anywhere in 44×44 about its centre.
+ */
+export async function checkTouchTargetsBranchColumn(ctx) {
+  const { session } = ctx;
+  const { hotel } = ctx.ids;
+
+  try {
+    await setViewport(session, PHONE, true);
+    await waitFor(session, `return window.innerWidth === ${PHONE.width};`, { timeoutMs: 2_000, what: "the phone viewport" });
+    return await measureTargets(session, [
+      ["chevron", `#collapse-${hotel}`],
+      ["branch completion box", `#task-${hotel} > [data-task-row] [data-complete-toggle]`],
+    ]);
+  } finally {
+    await setViewport(session, VIEWPORT, false);
+  }
+}
+
+/** Every animated thing in the tree, as computed motion, with the in-flight marks forced on. */
+const MOTION_JS = `
+  const pick = (name, el) => {
+    if (el === null || el === undefined) return { name, missing: true };
+    const s = getComputedStyle(el);
+    return { name, transitionProperty: s.transitionProperty, transitionDuration: s.transitionDuration, animationName: s.animationName, animationDuration: s.animationDuration };
+  };
+  const row = __tree.rowEl(HOTEL);
+  const leaf = __tree.rowEl(LEAF);
+  row.classList.add("is-saving");
+  leaf.classList.add("is-recomputing");
+  try {
+    return {
+      reduced: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      items: [
+        pick("chevron", document.getElementById("collapse-" + HOTEL)),
+        pick("completion box", leaf.querySelector("[data-complete-toggle]")),
+        pick("copy index", row.querySelector("[data-copy-index]")),
+        pick("theme segment", document.querySelector("#client-theme-toggle [data-theme-choice]")),
+        pick("saving row", row),
+        pick("recomputing fill", leaf.querySelector('[role="progressbar"] > div:first-child')),
+        pick("add form submit", document.querySelector('#add-task-form button[type="submit"]')),
+      ],
+    };
+  } finally {
+    row.classList.remove("is-saving");
+    leaf.classList.remove("is-recomputing");
+  }
+`;
+
+/**
+ * UX_GUARDRAILS 1.2: with `prefers-reduced-motion: reduce` emulated, nothing
+ * in the tree transitions or animates — the chevron, the completion box,
+ * the copy button, the theme segments, a saving row's hue, the recomputing
+ * pulse, the add form's button. Without it, the same things do move, so the
+ * guard is known to bite.
+ */
+export async function checkReducedMotion(ctx) {
+  const { session } = ctx;
+  const { hotel, hotelDeepest } = ctx.ids;
+  const js = MOTION_JS.replaceAll("HOTEL", String(hotel)).replaceAll("LEAF", String(hotelDeepest));
+
+  await clickElement(session, "[data-add-root]");
+  await waitFor(session, `return document.querySelector('#add-task-form button[type="submit"]') !== null;`, { timeoutMs: 2_000, what: "the add form" });
+  try {
+    await session.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "no-preference" }] });
+    // The copy button exists only on a numbered row; the rest must be there.
+    const optional = new Set(["copy index"]);
+    const present = (read) => read.items.filter((m) => !m.missing);
+    const moving = await evaluate(session, js);
+    const missing = moving.items.filter((m) => m.missing && !optional.has(m.name)).map((m) => m.name);
+    if (missing.length > 0) throw new Error(`nothing to measure for ${missing.join(", ")}`);
+    const measured = present(moving);
+    const moves = measured.filter((m) => !motionOff(m)).map((m) => m.name);
+    if (moves.length === 0) throw new Error("nothing in the tree moves even without the preference; the guard has nothing to bite");
+
+    await session.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+    const reduced = await evaluate(session, js);
+    if (!reduced.reduced) throw new Error("the page does not see the reduced-motion preference");
+    const running = present(reduced).filter((m) => !motionOff(m));
+    if (running.length > 0) {
+      throw new Error(`still moving under reduced motion: ${running.map((m) => `${m.name} (transition ${m.transitionProperty} ${m.transitionDuration}; animation ${m.animationName} ${m.animationDuration})`).join("; ")}`);
+    }
+    const skipped = moving.items.filter((m) => m.missing).map((m) => m.name);
+    return `${moves.length} of ${measured.length} things move by default (${moves.join(", ")}); all ${measured.length} still under reduced motion${skipped.length > 0 ? ` (no ${skipped.join(", ")} on an unnumbered row)` : ""}`;
+  } finally {
+    await session.send("Emulation.setEmulatedMedia", { features: [] }).catch(() => {});
+    await pressKey(session, "Escape").catch(() => {});
+  }
+}
+
+// --- Pure helpers for the 8.6 checks (unit-tested in check_tree.test.mjs) ---
+
+/** The narrowest a row is ever drawn (`TREE_WIDTH_FLOOR_PX` in `tree_model.ts`). */
+export const TREE_WIDTH_FLOOR_PX = 240;
+
+/** Whether every width is the same, to within `tolerance` px. */
+export function uniformWidths(widths, tolerance = 1) {
+  if (widths.length === 0) return { uniform: false, min: 0, max: 0 };
+  const min = Math.min(...widths);
+  const max = Math.max(...widths);
+  return { uniform: max - min <= tolerance, min, max };
+}
+
+/**
+ * Whether computed motion is off: a transition is off when its property is
+ * `none` or every duration is 0 (Tailwind's `transition-none` takes the
+ * property away and leaves the duration); an animation when its name is
+ * `none` or every duration is 0.
+ */
+export function motionOff({ transitionProperty, transitionDuration, animationName, animationDuration }) {
+  const zero = (list) => String(list).split(",").every((d) => parseFloat(d) === 0);
+  const transitionOff = transitionProperty === "none" || zero(transitionDuration);
+  const animationOff = animationName === "none" || zero(animationDuration);
+  return transitionOff && animationOff;
+}
+
+/** The targets under `floor` px in either direction, each as "name width×height". */
+export function shortfalls(measured, floor) {
+  return measured
+    .filter((m) => m.width < floor || m.height < floor)
+    .map((m) => `${m.name} ${m.width}×${m.height}${m.reach === undefined ? "" : ` — ${m.reach}`}`);
+}
+
 /** The title element of row `id`, for a selecting click. */
 function titleOf(id) {
   return `#task-${id} > [data-task-row] [data-task-title]`;
@@ -1280,6 +1793,14 @@ const CHECKS = [
   ["references: render and reveal", checkReferences],
   ["presence: another member's selection", checkPresence],
   ["deep link: ?task= reveals", checkDeepLink],
+  ["readable width at desktop", checkReadableWidth],
+  ["scroll over squeeze at phone and tablet", checkScrollOverSqueeze],
+  ["pane scrolls within itself", checkPaneScrolling],
+  ["responsive panes: tree column", checkResponsivePanes],
+  ["themes: Light, Dark, System", checkThemes],
+  ["reduced motion", checkReducedMotion],
+  ["touch targets at phone width", checkTouchTargets],
+  ["touch targets: a branch row's chevron and box", checkTouchTargetsBranchColumn],
 ];
 
 // ---------------------------------------------------------------------------
@@ -1930,8 +2451,14 @@ async function main() {
         await session.send("Network.emulateNetworkConditions", { ...FAST_LINK, latency: LINK_LATENCY_MS });
 
         const ctx = { session, appUrl: APP_URL, initiativeId: throwaway.id, stamp, ids: {} };
+        let reached = process.env.CDP_FROM === undefined;
         for (const [name, check] of CHECKS) {
           const started = Date.now();
+          reached ||= name.includes(process.env.CDP_FROM);
+          if (!reached) {
+            results.push({ name, status: "SKIP", ms: 0, note: `before CDP_FROM "${process.env.CDP_FROM}"` });
+            continue;
+          }
           if (failed) {
             results.push({ name, status: "SKIP", ms: 0, note: "an earlier check failed" });
             continue;

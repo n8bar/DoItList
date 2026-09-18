@@ -122,7 +122,7 @@ function CopyIndexButton({ label }: { label: string }) {
           })
           .catch(() => undefined);
       }}
-      className="flex-none inline-flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity"
+      className="flex-none inline-flex items-center justify-center w-4 h-4 rounded text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200 opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity motion-reduce:transition-none"
     >
       {copied ? (
         <span data-copied-icon className="inline-flex text-emerald-600 dark:text-emerald-400">

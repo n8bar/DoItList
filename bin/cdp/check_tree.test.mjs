@@ -107,3 +107,32 @@ test("a throwaway that could not be created is never trashed and never run in", 
 
   assert.deepEqual(trash.trashed, []);
 });
+
+// --- 8.6: the pure halves of the layout, touch and motion checks ---------
+
+import { motionOff, shortfalls, uniformWidths } from "./check_tree.mjs";
+
+test("uniformWidths: one width within a pixel is uniform, a ragged stack is not, nothing is not", () => {
+  assert.deepEqual(uniformWidths([640, 640, 641]), { uniform: true, min: 640, max: 641 });
+  assert.deepEqual(uniformWidths([640, 600, 641]), { uniform: false, min: 600, max: 641 });
+  assert.deepEqual(uniformWidths([]), { uniform: false, min: 0, max: 0 });
+});
+
+test("motionOff: transition-none takes the property, a zero duration or a nameless animation is off, anything else moves", () => {
+  const still = { transitionProperty: "none", transitionDuration: "0.15s", animationName: "none", animationDuration: "0s" };
+  assert.equal(motionOff(still), true);
+  assert.equal(motionOff({ ...still, transitionProperty: "color, background-color", transitionDuration: "0s, 0s" }), true);
+  assert.equal(motionOff({ ...still, transitionProperty: "color", transitionDuration: "0.15s" }), false);
+  assert.equal(motionOff({ ...still, animationName: "doit-recompute-pulse", animationDuration: "2s" }), false);
+  assert.equal(motionOff({ ...still, animationName: "doit-recompute-pulse", animationDuration: "0s" }), true);
+});
+
+test("shortfalls: names each target under the floor in either direction, and nothing when all reach it", () => {
+  const measured = [
+    { name: "handle", width: 44, height: 44 },
+    { name: "chevron", width: 44, height: 24 },
+    { name: "New List", width: 94, height: 28 },
+  ];
+  assert.deepEqual(shortfalls(measured, 44), ["chevron 44×24", "New List 94×28"]);
+  assert.deepEqual(shortfalls(measured.slice(0, 1), 44), []);
+});

@@ -86,7 +86,7 @@ export function AddForm({ model, slot, title, onTitleChange, onMove, onClose, on
       />
       <button
         type="submit"
-        className="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition"
+        className="text-sm px-3 py-1.5 rounded bg-emerald-600 text-white hover:bg-emerald-700 active:bg-emerald-800 active:scale-95 transition motion-reduce:transition-none"
       >
         Add
       </button>
