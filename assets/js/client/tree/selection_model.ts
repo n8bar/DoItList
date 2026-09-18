@@ -101,3 +101,19 @@ export function stillClosed(
 ): readonly number[] {
   return expanding.filter(collapsed);
 }
+
+/**
+ * The branches pruning must wait on after one more reveal: the ones it was
+ * already waiting on, plus the ones this reveal asks to open.
+ *
+ * A reveal reads the closed set as it stands, which a reveal a moment ago may
+ * already have opened, while the render — and the prune that reads it — has
+ * not caught up. Replacing the list with this reveal's (possibly empty) plan
+ * would let that prune clear the row the earlier reveal had just revealed.
+ */
+export function pendingBranches(
+  expanding: readonly number[],
+  expand: readonly number[],
+): readonly number[] {
+  return [...new Set([...expanding, ...expand])];
+}

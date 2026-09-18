@@ -10,6 +10,7 @@ import {
   noSelection,
   rememberSelection,
   selectionOf,
+  pendingBranches,
   stillClosed,
 } from "./selection_model.ts";
 
@@ -112,5 +113,13 @@ describe("pruning while a reveal is still opening branches", () => {
 
   it("has nothing to wait for when no branch had to open", () => {
     assert.deepEqual(stillClosed([], () => true), []);
+  });
+
+  // A second reveal before the first's render lands finds its branches already
+  // open in the store and asks for nothing — it must not forget the first's.
+  it("keeps waiting on an earlier reveal's branches through a later reveal", () => {
+    assert.deepEqual(pendingBranches([10], []), [10]);
+    assert.deepEqual(pendingBranches([10], [10, 12]), [10, 12]);
+    assert.deepEqual(pendingBranches([], [12]), [12]);
   });
 });

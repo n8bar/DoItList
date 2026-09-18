@@ -26,13 +26,7 @@ import type { CollapseStore } from "./tree_model.ts";
 import { collapsedOf, createCollapseStore, setCollapsedIn } from "./collapse_model.ts";
 import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
 import { initialSelection, revealPlan } from "./reveal_model.ts";
-import {
-  forgetMissing,
-  keptSelection,
-  noSelection,
-  rememberSelection,
-  stillClosed,
-} from "./selection_model.ts";
+import { forgetMissing, keptSelection, noSelection, pendingBranches, rememberSelection, stillClosed } from "./selection_model.ts";
 import type { Selected, SelectionState } from "./selection_model.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
 
@@ -196,7 +190,11 @@ export function useTree(options: UseTreeOptions): TreeState {
       const plan = revealPlan(model, id, (other) => collapseStore.get().has(other));
       // Pruning must not act until these have actually opened: until then the
       // task the link named is still buried, and a prune would clear it.
-      expanding.current = plan.expand;
+      // Merged, not replaced: the plan reads the store, which a reveal a
+      // moment ago already opened, while the prune still reads the render
+      // that has not caught up — forgetting that reveal's branches here let
+      // the prune clear the row it had just revealed.
+      expanding.current = pendingBranches(expanding.current, plan.expand);
       for (const branchId of plan.expand) setCollapsed(branchId, false);
       if (plan.select === null) return;
       setSelectedId(plan.select);
@@ -212,9 +210,9 @@ export function useTree(options: UseTreeOptions): TreeState {
     [collapseStore, model, setCollapsed, setSelectedId],
   );
 
-  // One reveal per `?task=` value. Keyed on the id rather than on `reveal`,
-  // whose identity changes every time a branch opens or closes — key it on the
-  // callback and collapsing an ancestor of the selected row snaps it open again.
+  // One reveal per `?task=` value. Keyed on the id rather than on `reveal` —
+  // key it on the callback and a new identity of it would run the link again,
+  // snapping a collapsed ancestor of the selected row back open.
   const revealRef = useRef(reveal);
   revealRef.current = reveal;
   const settled = useRef(false);
@@ -234,7 +232,6 @@ export function useTree(options: UseTreeOptions): TreeState {
   }, [deepLinkTaskId]);
 
   const visible = useMemo(() => visibleRows(model, collapsed), [model, collapsed]);
-  const slots = useMemo(() => addSlots(model, collapsed), [model, collapsed]);
 
   // A selected task that has been deleted, or hidden by a collapse, is not a
   // selection any more — otherwise the arrows navigate from a row nobody sees.
@@ -396,13 +393,17 @@ export function useTree(options: UseTreeOptions): TreeState {
       (dir: -1 | 1) => {
         setAddSlot((current) => {
           if (current === null) return current;
+          // Walked from the store when asked, not memoized on the closed set:
+          // a callback that changed on every toggle changed the `form` prop of
+          // every branch, and every row rendered for one chevron (7.9.1).
+          const slots = addSlots(model, (id) => collapseStore.get().has(id));
           // At either end of the walk the form stays put, as the LiveView's
           // `move()` does when it runs out of slots.
           const next = moveSlot(slots, current, dir);
           return next === null ? current : next;
         });
       },
-      [slots],
+      [collapseStore, model],
     ),
     onAddClose: useCallback(() => {
       setAddSlot(null);

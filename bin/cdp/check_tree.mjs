@@ -17,8 +17,9 @@
 //   APP_URL       app origin                 (default http://localhost:4000)
 //   CDP_OPTIONAL  =1 → exit 0 when no endpoint answers (default: exit 2)
 //   CDP_FROM      start at the first check whose name contains this (the
-//                 earlier ones are skipped) — the 8.6 checks seed their own
-//                 rows, so `CDP_FROM="readable width"` runs them alone
+//                 earlier ones are skipped) — the reveal and 8.6 checks seed
+//                 their own rows, so `CDP_FROM="deep link"` runs from there
+//   CDP_PROFILE   =1 → CPU-profile the reference click and print what rendered
 //
 // ONE tab, for every check and every run: the tab already open on APP_URL is
 // reused (a new one is opened only when there is none), every step navigates
@@ -915,6 +916,7 @@ export async function checkPaneFlyout(ctx) {
  */
 export async function checkReferences(ctx) {
   const { session, initiativeId } = ctx;
+  await seedRevealRows(ctx);
   const { bravo, charlie } = ctx.ids;
 
   // Numbering on, so a live reference reads as a label rather than "↗". The
@@ -983,6 +985,7 @@ export async function checkReferences(ctx) {
   await clickElement(session, `#task-${referrer} > [data-task-row] a.doit-ref[data-task-id="${charlie}"]`);
   const ack = await readStopwatch(session, `"Charlie" revealed by its reference`, { expectReply: false });
   await profile.stop("references-reveal");
+  if (process.env.CDP_PROFILE === "1") process.stdout.write(`prof  rendered on the reveal: ${await evaluate(session, RENDERED_JS)}\n`);
   assertAcknowledged(ack, "the revealed target");
   if (ack.detail.referrerSelected) throw new Error("the referring row was selected too");
   await waitFor(session, `return __tree.inView(${charlie});`, { timeoutMs: 2_000, everyMs: 10, what: `"Charlie" scrolled into view` });
@@ -1081,6 +1084,7 @@ export async function checkPresence(ctx) {
  */
 export async function checkDeepLink(ctx) {
   const { session } = ctx;
+  await seedRevealRows(ctx);
   const { bravo, charlie, echo } = ctx.ids;
   const title = MOVE_TITLES.charlie;
 
@@ -1097,7 +1101,10 @@ export async function checkDeepLink(ctx) {
     return { at: performance.now() };
   `,
     { timeoutMs: 5_000, everyMs: 5, what: `"Charlie" revealed by the link` },
-  );
+  ).catch(async (error) => {
+    const state = await evaluate(session, `return { selected: __tree.selected(), open: !document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek"), search: window.location.search };`);
+    throw new Error(`${error.message} (selected ${state.selected}, "Bravo" ${state.open ? "open" : "closed"}, address bar "${state.search}")`);
+  });
   const sinceTree = Math.round(revealed.at - arrival.at);
   if (arrival.selected !== charlie && sinceTree > ACK_BUDGET_MS) {
     throw new Error(`the tree was up ${sinceTree}ms before the link's task was selected`);
@@ -1686,6 +1693,19 @@ export async function checkChevronOnBorder(ctx) {
   }
 }
 
+/** 2.5s of animation frames: how many came, and the longest wait between two. */
+const FPS_JS = `
+  return new Promise((done) => {
+    const gaps = []; let last = performance.now(); const t0 = last;
+    const tick = () => {
+      const now = performance.now(); gaps.push(Math.round(now - last)); last = now;
+      if (now - t0 < 2500) requestAnimationFrame(tick);
+      else done({ frames: gaps.length, maxGap: Math.max(...gaps), visibility: document.visibilityState, focused: document.hasFocus(), size: innerWidth + "x" + innerHeight + "@" + devicePixelRatio, animations: document.getAnimations().length });
+    };
+    requestAnimationFrame(tick);
+  });
+`;
+
 /**
  * Arms a chevron: when its click handler starts, the first frame that sees
  * the glyph flipped, and when the branch's children list changes state.
@@ -1695,7 +1715,7 @@ const FLIP_JS = `
   const list = document.getElementById("children-" + ID);
   const was = el.getAttribute("aria-expanded");
   const wasCollapsed = list.classList.contains("collapsed-peek");
-  window.__flip = { was, handler: null, seen: null, moved: null, down: null, up: null, longtasks: [], frames: [] };
+  window.__flip = { was, handler: null, seen: null, moved: null, down: null, up: null, longtasks: [], frames: [], visibility: document.visibilityState, focused: document.hasFocus() };
   el.addEventListener("mousedown", () => { window.__flip.down = performance.now(); }, { capture: true, once: true });
   el.addEventListener("mouseup", () => { window.__flip.up = performance.now(); }, { capture: true, once: true });
   el.addEventListener("click", () => { window.__flip.handler = performance.now(); }, { capture: true, once: true });
@@ -1739,6 +1759,23 @@ export async function checkChevronFlipsFirst(ctx) {
   if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
   const { hotel } = ctx.ids;
   const times = [];
+  if (process.env.CDP_PROFILE === "1") {
+    // 7.9 (b): how fast this tab paints on the tree page, with the harness's
+    // emulation on, then off — the frame stall's suspects, one at a time.
+    await settle(session);
+    const fps = async (label) => {
+      const r = await evaluate(session, FPS_JS);
+      process.stdout.write(`fps   ${label}: ${r.frames} frames in 2.5s, longest gap ${r.maxGap}ms, tab ${r.visibility}, ${r.focused ? "focused" : "not focused"}, ${r.size}, ${r.animations} animations\n`);
+    };
+    await fps("tree page, harness emulation on");
+    await session.send("Network.emulateNetworkConditions", FAST_LINK);
+    await fps("network emulation off");
+    await session.send("Emulation.clearDeviceMetricsOverride");
+    await fps("viewport override off too");
+    await setViewport(session, VIEWPORT, false);
+    await session.send("Network.emulateNetworkConditions", { ...FAST_LINK, latency: LINK_LATENCY_MS });
+    await fps("both back on");
+  }
   for (const step of ["collapse", "expand"]) {
     await settle(session);
     const was = await evaluate(session, FLIP_JS.replace(/\bID\b/g, String(hotel)));
@@ -1749,6 +1786,8 @@ export async function checkChevronFlipsFirst(ctx) {
     const moved = Math.round(flip.moved - flip.handler);
     if (flip.seen > flip.moved) throw new Error(`on ${step} the branch moved (${moved}ms) before the glyph was on screen (${seen}ms; was aria-expanded=${was})`);
     const gaps = flip.frames.filter((f) => f.at > flip.handler - 50).map((f) => f.gap);
+    const timeline = flip.frames.map((f) => `${Math.round(f.at - flip.handler)}(${f.gap})`).join(" ");
+    if (process.env.CDP_PROFILE === "1") process.stdout.write(`frames ${step}: tab ${flip.visibility}, ${flip.focused ? "focused" : "not focused"}; mousedown ${Math.round(flip.down - flip.handler)}, mouseup ${Math.round(flip.up - flip.handler)}; rAF ticks (ms after the handler, gap): ${timeline}\n`);
     const long = flip.longtasks.filter((t) => t.start > flip.handler - 50).map((t) => `${t.ms}ms at +${Math.round(t.start - flip.handler)}`);
     times.push(`${step}: glyph on screen ${seen}ms after the handler, branch moved at ${moved}ms (mousedown→up ${Math.round(flip.up - flip.down)}ms, longest frame gap ${Math.max(0, ...gaps)}ms, long tasks: ${long.join(", ") || "none"})`);
   }
@@ -1772,6 +1811,10 @@ export async function checkLiveViewWorkspace(ctx) {
     await session.send("Network.emulateNetworkConditions", FAST_LINK);
     await session.send("Page.navigate", { url: `${ctx.appUrl}/initiatives/${ctx.initiativeId}` });
     await waitFor(session, `return document.getElementById("collapse-${hotel}") !== null && document.getElementById("touch-switch")?.dataset.touchHooked === "true";`, { timeoutMs: READY_TIMEOUT_MS, what: "the LiveView workspace" });
+    if (process.env.CDP_PROFILE === "1") {
+      const r = await evaluate(session, FPS_JS);
+      process.stdout.write(`fps   LiveView workspace: ${r.frames} frames in 2.5s, longest gap ${r.maxGap}ms, tab ${r.visibility}, ${r.focused ? "focused" : "not focused"}, ${r.size}, ${r.animations} animations\n`);
+    }
     const m = await evaluate(session, CHEVRON_JS.replace("ID", String(hotel)));
     if (!centredOn(m.centre.x, m.line)) throw new Error(`LiveView chevron off the tree's rule by ${(m.centre.x - m.line).toFixed(1)}px`);
     if (!centredOn(m.centre.y, m.titleLine)) throw new Error(`LiveView chevron off its title line by ${(m.centre.y - m.titleLine).toFixed(1)}px`);
@@ -2172,6 +2215,29 @@ async function seedMoveRows(ctx) {
   await waitForRows(session, [bravo, charlie, delta, echo, foxtrot], "the seeded rows");
 }
 
+/**
+ * The reveal checks (references, deep link) run alone: started at with
+ * CDP_FROM, they seed the shape the move checks would have left — Bravo with
+ * Charlie under it, Delta, Echo and Foxtrot under Bravo too.
+ */
+async function seedRevealRows(ctx) {
+  if (ctx.ids.charlie !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-reveal`, [
+    { op: "add", type: "task", lid: "bravo", data: { initiative_id: initiativeId, title: MOVE_TITLES.bravo } },
+    { op: "add", type: "task", data: { parent_lid: "bravo", title: MOVE_TITLES.charlie } },
+    { op: "add", type: "task", data: { initiative_id: initiativeId, title: MOVE_TITLES.delta } },
+    { op: "add", type: "task", data: { parent_lid: "bravo", title: MOVE_TITLES.echo } },
+    { op: "add", type: "task", data: { parent_lid: "bravo", title: MOVE_TITLES.foxtrot } },
+  ]);
+  const [bravo, charlie, delta, echo, foxtrot] = results.map((r) => r?.data?.id);
+  if (![bravo, charlie, delta, echo, foxtrot].every((id) => typeof id === "number")) {
+    throw new Error(`the reveal seed did not name five tasks: ${JSON.stringify(results)}`);
+  }
+  Object.assign(ctx.ids, { bravo, charlie, delta, echo, foxtrot });
+  await waitForRows(session, [bravo, charlie, delta, echo, foxtrot], "the reveal rows");
+}
+
 /** `CASCADE_SORT_BRANCHES` branches of one leaf each under "Delta". */
 async function seedCascadeBranches(ctx) {
   const { session, initiativeId, ids } = ctx;
@@ -2451,6 +2517,43 @@ async function startProfile(session) {
     },
   };
 }
+
+/**
+ * CDP_PROFILE=1: which components React rendered since the stopwatch's t0
+ * (fibers that did work in a commit after it), by name, with the tree
+ * context's identity before and after — the question 7.9.1 asks.
+ */
+const RENDERED_JS = `
+  const el = document.getElementById("task-tree");
+  const key = Object.keys(el).find((k) => k.startsWith("__reactFiber$"));
+  let fiber = el[key];
+  while (fiber.return) fiber = fiber.return;
+  const root = fiber.stateNode.current;
+  const t0 = window.__sw.t0;
+  const counts = new Map();
+  let treeCtxChanged = null;
+  let branchChanged = null;
+  const changedKeys = (a, b) => Object.keys(a).filter((k) => a[k] !== b[k]);
+  const walk = (f) => {
+    for (; f; f = f.sibling) {
+      const name = typeof f.type === "function" ? f.type.displayName || f.type.name : typeof f.type === "object" && f.type?.type ? "memo(" + (f.type.type.displayName || f.type.type.name) + ")" : null;
+      if (name === "Tree" && f.alternate) {
+        const now = f.memoizedProps.ctx, was = f.alternate.memoizedProps.ctx;
+        treeCtxChanged = now === was ? "no" : "yes: " + changedKeys(now, was).join(",");
+      }
+      if (name?.startsWith("Branch") && f.alternate && branchChanged === null) branchChanged = changedKeys(f.memoizedProps, f.alternate.memoizedProps).join(",") || "none";
+      if (name && (f.flags & 1) && f.actualStartTime >= t0) {
+        const c = counts.get(name) ?? { n: 0, ms: 0 };
+        c.n += 1; c.ms += f.actualDuration ?? 0;
+        counts.set(name, c);
+      }
+      walk(f.child);
+    }
+  };
+  walk(root.child);
+  const list = [...counts.entries()].sort((a, b) => b[1].ms - a[1].ms).map(([n, c]) => n + "×" + c.n + " " + c.ms.toFixed(0) + "ms");
+  return "Tree ctx changed: " + treeCtxChanged + "; first Branch's changed props: " + branchChanged + "; " + list.join(", ");
+`;
 
 /** Waits for `at` (and, unless told otherwise, the reply that followed t0). */
 async function readStopwatch(session, what, { expectReply = true } = {}) {
