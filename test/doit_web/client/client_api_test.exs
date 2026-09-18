@@ -130,6 +130,9 @@ defmodule DoItWeb.Client.ClientApiTest do
       # null until the reader drags the list into a manual order.
       assert Map.has_key?(summary, "sort_order")
       assert is_binary(summary["updated_at"])
+      # The index card's second line and its Created sort (m04.02 item 4.3).
+      assert Map.has_key?(summary, "description")
+      assert is_binary(summary["created_at"])
     end
 
     test "the bearer API still filters the same Initiative out", ctx do

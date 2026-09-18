@@ -57,13 +57,15 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 `update task` with `ids` in place of `id` moves many tasks as one block: `data` carries `parent_id` (or `parent_lid`) and an optional `position`, nothing else. The tasks land under that parent in list order, from `position` or the top when omitted, as one undo step and one activity line. The result's `id` is the first moved task and `records` carries every moved record in order. Every listed task must be reachable with edit rights and share the destination's Initiative; one bad entry fails the op with nothing moved. Both `id` and `ids`, an empty list, or a non-integer entry is rejected at `ids`.
 
+`update task` with `sort_mode` and/or `sort_reverse` sets how that branch orders its children: `sort_mode` is one of `manual`, `alphabetical`, `completion`, `priority`, `created`, `updated`, or `null` to inherit the nearest ancestor's; `sort_reverse` flips the direction; a key left out keeps its current value. `cascade_sort: true` makes every descendant branch inherit, so the whole subtree follows this branch from then on; given with a mode it sets first, then cascades, as one op and one activity line each. The result's `records` carry the target and every branch the cascade changed, each with its `sort_mode` and `sort_reverse`; read the tree for the children's new order.
+
 A response carries `results`, one entry per operation, in order. Each names a `status` — `ok`, `error`, or `not_applied` — and a failure's `pointer` names the field at fault. One failure rolls the whole batch back, so every other entry reads `not_applied`.
 
 <!-- generated: DoItWeb.Api.Operations -->
 | Op | Type | Data keys |
 |---|---|---|
 | add | task | assignee_id, description, done, initiative, initiative_id, initiative_lid, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, status, title |
-| update | task | assignee_id, co_assignee_ids, description, done, expected_version, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, reorder, title |
+| update | task | assignee_id, cascade_sort, co_assignee_ids, description, done, expected_version, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, reorder, sort_mode, sort_reverse, title |
 | remove | task | expected_version |
 | add | initiative | auto_promote_co_assignees, description, index_style, name, progress_calc, subtitle, viewer_plus |
 | update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, progress_calc, state, subtitle, viewer_plus |
@@ -93,7 +95,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 
 ### Read-only and writable fields
 
-`progress` is the rolled-up number the server maintains; writing it is refused. Leaves take `manual_progress`; branches don't — a branch's progress comes from its children. A task node also names the `sort_mode` and `sort_reverse` its children are ordered by; `null` inherits.
+An Initiative list item also carries its `description` and `created_at`, so a list can be shown and ordered without reading each tree. `progress` is the rolled-up number the server maintains; writing it is refused. Leaves take `manual_progress`; branches don't — a branch's progress comes from its children. A task node also names the `sort_mode` and `sort_reverse` its children are ordered by; `null` inherits.
 
 
 ## Scripted client

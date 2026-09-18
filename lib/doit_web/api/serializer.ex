@@ -286,12 +286,15 @@ defmodule DoItWeb.Api.Serializer do
   @doc """
   An Initiative list item (`GET /api/v1/initiatives`). `unit_count` comes from
   the controller's batched `Tasks.unit_counts_for_initiatives/1` lookup.
+  `description` and `created_at` are what the index card shows and sorts by
+  (m04.02 item 4.3).
   """
   def initiative_summary(initiative, role, progress, unit_count) do
     %{
       id: initiative.id,
       name: initiative.name,
       subtitle: blank_to_empty(initiative.subtitle),
+      description: initiative.description,
       url: initiative_url(initiative.id),
       repo_marker: AgentConnect.repo_marker(initiative),
       role: role,
@@ -301,6 +304,7 @@ defmodule DoItWeb.Api.Serializer do
       version: initiative.version,
       sort_order: initiative.my_sort_order,
       archived: initiative.archived? == true,
+      created_at: iso8601(initiative.inserted_at),
       updated_at: iso8601(initiative.updated_at)
     }
   end

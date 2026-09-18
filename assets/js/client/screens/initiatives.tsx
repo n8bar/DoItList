@@ -1,39 +1,75 @@
-// The Initiatives index (m04.01 items 3.2, 4.1, 4.6).
+// The Initiatives index (m04.02 items 4.1–4.3; m04.01 items 3.2, 4.1, 4.6).
+//
+// The M02 page, built against its LiveView template
+// (`InitiativeWorkspaceLive` index branch): the same header, Sort control and
+// card, with the same classes and copy. The rules — order, dates, badge
+// colours, the create request — are in `initiatives_model.ts`; this file draws.
 //
 // The heading and the frame paint before the read starts; the list arrives in
 // space that was already reserved for it (`layout_budget`), so nothing on the
 // page moves when it lands. A failure is recoverable in place.
 //
-// Each row is a navigation action that looks like one (item 4.4): a real link,
-// with a visible boundary, a name, the user's role and rolled-up progress. This
-// is the Arc 1 stand-in; m04.02 worklist 3 replaces it with the M02 page.
+// Still to come, and shaped to slot in here: dragging to reorder (4.4, the
+// handle in `Card`), the Archived and Trash drawer (4.5, after the list), and
+// live list changes (4.6, into the domain store this screen already reads).
 
-import { useCallback } from "react";
+import type { CSSProperties, FormEvent } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import type { InitiativeSummary, Role } from "../api/types.ts";
-import { controlClass } from "../frame/button_styles.ts";
-import { COUNT_MIN_WIDTH, LIST_ROW_HEIGHT } from "../frame/layout_budget.ts";
+import type { InitiativeSummary } from "../api/types.ts";
+import { actionClass } from "../frame/button_styles.ts";
+import { LIST_ROW_HEIGHT } from "../frame/layout_budget.ts";
 import { Link } from "../router/link.tsx";
-import { ROUTE_HEADING_ID } from "../router/router.tsx";
+import { ROUTE_HEADING_ID, useRouter } from "../router/router.tsx";
 import type { DomainState } from "../state/domain.ts";
+import { pushNotice } from "../state/ui.ts";
 import { useStoreValue } from "../state/use_store.ts";
+import { browserKeyValueStore } from "../storage/last_user.ts";
 import { useServices } from "../services.tsx";
-import { EmptyState, InlineError, Skeleton } from "../ui/feedback.tsx";
+import { InlineError, Skeleton } from "../ui/feedback.tsx";
+import { TextArea, TextInput } from "../ui/form.tsx";
+import { Icon } from "../ui/icon.tsx";
+import { useForm } from "../ui/use_form.ts";
 import { Heading } from "./chrome.tsx";
+import type { IndexSortMode, IndexSortState, NewInitiativeValues } from "./initiatives_model.ts";
+import {
+  SORT_OPTIONS,
+  createdInitiative,
+  descriptionText,
+  isSortMode,
+  newInitiativeRequest,
+  percentText,
+  progressValue,
+  readSortState,
+  reversed,
+  roleBadgeClass,
+  sortInitiatives,
+  subtitleText,
+  summaryForCreated,
+  updatedText,
+  withMode,
+  withReverse,
+  writeSortState,
+} from "./initiatives_model.ts";
 import { useResource } from "./use_resource.ts";
 
 const selectSummaries = (state: DomainState) => state.initiativeSummaries;
 
-/** Mirrors the LiveView rail's role badge — same words, same weight. */
-const ROLE_BADGE: Record<Role, string> = {
-  owner: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-200",
-  editor: "border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-700 dark:bg-sky-900/40 dark:text-sky-200",
-  viewer: "border-zinc-300 bg-zinc-100 text-zinc-700 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300",
-};
+/** The sort choice, remembered in this browser (see `initiatives_model.ts`). */
+function useSortState(): [IndexSortState, (next: IndexSortState) => void] {
+  const [state, setState] = useState<IndexSortState>(() => readSortState(browserKeyValueStore()));
+  const update = useCallback((next: IndexSortState) => {
+    setState(next);
+    writeSortState(browserKeyValueStore(), next);
+  }, []);
+  return [state, update];
+}
 
 export function InitiativesScreen() {
   const { api, stores, escalate } = useServices();
   const summaries = useStoreValue(stores.domain, selectSummaries);
+  const [sort, setSort] = useSortState();
+  const [creating, setCreating] = useState(false);
 
   const resource = useResource<InitiativeSummary[]>({
     key: "initiatives",
@@ -48,9 +84,47 @@ export function InitiativesScreen() {
     escalate,
   });
 
+  const count = summaries === null ? 0 : summaries.length;
+  const sorted = summaries === null ? [] : sortInitiatives(summaries, sort);
+
   return (
     <section aria-labelledby={ROUTE_HEADING_ID}>
-      <Heading>Initiatives</Heading>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
+        <div>
+          <Heading className="text-2xl font-semibold text-zinc-800 dark:text-zinc-100">
+            My Initiatives
+          </Heading>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            An Initiative holds multiple Lists. Each List is a tree of nested tasks.
+          </p>
+        </div>
+        <button
+          type="button"
+          id="new-initiative-toggle"
+          aria-expanded={creating}
+          aria-controls="new-initiative"
+          onClick={() => setCreating((open) => !open)}
+          className="w-fit self-center inline-flex items-center gap-1 px-2 py-0.5 rounded text-sm font-bold border border-emerald-600 dark:border-emerald-500 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+        >
+          <Icon name="plus" className="w-4 h-4" />
+          <span>New Initiative</span>
+        </button>
+      </div>
+
+      {/* Client-toggled, like the template's <details>: nothing between the
+          user and typing (§6.5). */}
+      {creating && (
+        <NewInitiativeForm
+          onClose={() => setCreating(false)}
+          onCreated={(summary) => {
+            stores.domain.set((state) => ({
+              ...state,
+              initiativeSummaries: [summary, ...(state.initiativeSummaries ?? [])],
+            }));
+            setCreating(false);
+          }}
+        />
+      )}
 
       {/* The skeleton is for having nothing to show. A revisit that already has
           the list keeps showing it while the refresh runs — replacing real rows
@@ -62,65 +136,239 @@ export function InitiativesScreen() {
         <InlineError message={resource.message} onRetry={resource.reload} />
       )}
 
-      {summaries !== null && summaries.length === 0 && resource.status === "ready" && (
-        <EmptyState id="initiatives-empty" title="You don’t have any Initiatives yet.">
-          Start one from the current Initiatives page, or ask a colleague to share theirs with you.
-        </EmptyState>
+      {count > 0 && <SortControl state={sort} onChange={setSort} />}
+
+      {count > 0 && (
+        <div id="initiatives" className="space-y-2">
+          {sorted.map((initiative) => (
+            <Card key={initiative.id} initiative={initiative} />
+          ))}
+        </div>
       )}
 
-      {summaries !== null && summaries.length > 0 && (
-        <ul id="initiatives-list" className="mt-4 flex flex-col gap-2">
-          {summaries.map((initiative) => (
-            <li key={initiative.id}>
-              <Link
-                id={`initiative-link-${initiative.id}`}
-                to={`/app/initiatives/${initiative.id}`}
-                className={controlClass({ stack: true })}
-                // The skeleton row renders the same number, from the same
-                // constant — that is what makes the swap free of movement.
-                style={{ minHeight: `${LIST_ROW_HEIGHT}px` }}
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate text-zinc-900 dark:text-zinc-100">
-                    {initiative.name}
-                  </span>
-                  {initiative.subtitle !== null && initiative.subtitle !== "" && (
-                    <span className="hidden min-w-0 flex-1 truncate font-normal text-zinc-500 sm:inline dark:text-zinc-400">
-                      {initiative.subtitle}
-                    </span>
-                  )}
-                  <span
-                    className={`flex-none rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${ROLE_BADGE[initiative.role]}`}
-                  >
-                    {initiative.role}
-                  </span>
-                  {/* Reserved width: a percentage arriving must not shove the
-                      role badge sideways (item 4.6). */}
-                  <span
-                    className="flex-none text-right tabular-nums text-zinc-600 dark:text-zinc-300"
-                    style={{ minWidth: COUNT_MIN_WIDTH }}
-                  >
-                    {initiative.progress}%
-                  </span>
-                </span>
-                <span
-                  className="h-1 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700"
-                  role="progressbar"
-                  aria-valuenow={initiative.progress}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label={`${initiative.name} progress`}
-                >
-                  <span
-                    className="block h-full bg-emerald-500"
-                    style={{ width: `${initiative.progress}%` }}
-                  />
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+      {summaries !== null && count === 0 && resource.status === "ready" && (
+        <p id="initiatives-empty" className="text-zinc-500 dark:text-zinc-400 mt-4">
+          No initiatives yet. Create one to get started.
+        </p>
       )}
     </section>
+  );
+}
+
+// --- Sort ------------------------------------------------------------------
+
+function SortControl({
+  state,
+  onChange,
+}: {
+  state: IndexSortState;
+  onChange: (next: IndexSortState) => void;
+}) {
+  return (
+    <form
+      id="initiative-sort"
+      onSubmit={(event: FormEvent) => event.preventDefault()}
+      className="flex items-center justify-end gap-2 mb-3 text-zinc-600 dark:text-zinc-300"
+    >
+      <label htmlFor="initiative-sort-mode" className="text-xs">
+        Sort
+      </label>
+      <select
+        id="initiative-sort-mode"
+        name="mode"
+        value={state.mode}
+        onChange={(event) => {
+          const mode: IndexSortMode = isSortMode(event.target.value) ? event.target.value : "";
+          onChange(withMode(state, mode));
+        }}
+        className="select select-bordered select-sm"
+      >
+        {SORT_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <label className="flex items-center gap-1 text-xs select-none">
+        <input
+          type="checkbox"
+          name="reverse"
+          value="true"
+          checked={reversed(state)}
+          onChange={(event) => onChange(withReverse(state, event.target.checked))}
+          className="checkbox checkbox-xs"
+        />{" "}
+        Reverse
+      </label>
+    </form>
+  );
+}
+
+// --- Card ------------------------------------------------------------------
+
+function Card({ initiative }: { initiative: InitiativeSummary }) {
+  const progress = progressValue(initiative.progress);
+  const subtitle = subtitleText(initiative);
+  const description = descriptionText(initiative);
+
+  return (
+    <div
+      id={`initiatives-${initiative.id}`}
+      data-initiative-id={initiative.id}
+      className="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:shadow-sm transition motion-reduce:transition-none"
+      // The skeleton row renders the same number, from the same constant —
+      // that is what makes the swap free of movement (m04.01 item 4.6).
+      style={{ minHeight: `${LIST_ROW_HEIGHT}px` }}
+    >
+      <Link
+        id={`initiative-link-${initiative.id}`}
+        to={`/app/initiatives/${initiative.id}`}
+        draggable={false}
+        className="block p-4"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
+          <span className="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
+            {/* The drag handle goes here (item 4.4). */}
+            <span className="truncate">{initiative.name}</span>
+          </span>
+          <div className="flex items-center gap-2 flex-none">
+            <span
+              className={`text-[10px] uppercase tracking-wide font-semibold px-1.5 py-0.5 rounded ${roleBadgeClass(initiative.role)}`}
+              title={`Your role: ${initiative.role}`}
+            >
+              {initiative.role}
+            </span>
+            <span className="text-xs text-zinc-500 dark:text-zinc-400">
+              {updatedText(initiative.updated_at)}
+            </span>
+          </div>
+        </div>
+        {subtitle !== null && (
+          <p
+            data-initiative-card-field=""
+            className="mt-1 text-sm text-zinc-600 dark:text-zinc-300 line-clamp-1"
+          >
+            {subtitle}
+          </p>
+        )}
+        {description !== null && (
+          <p
+            data-initiative-card-field=""
+            className="mt-1 text-sm text-zinc-500 dark:text-zinc-400 line-clamp-2"
+          >
+            {description}
+          </p>
+        )}
+
+        <div
+          className="relative mt-2 h-4 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden"
+          role="progressbar"
+          aria-valuenow={progress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`Progress: ${percentText(progress)}`}
+          style={{ "--progress": `${progress}%` } as CSSProperties}
+        >
+          <div
+            className="absolute inset-y-0 left-0 bg-emerald-400 rounded-full"
+            style={{ width: "var(--progress)" }}
+          />
+          <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-zinc-900 dark:text-zinc-50 progress-bar-text">
+            {percentText(progress)}
+          </span>
+        </div>
+      </Link>
+    </div>
+  );
+}
+
+// --- New Initiative --------------------------------------------------------
+
+const FORM_ID = "new-initiative-form";
+
+function NewInitiativeForm({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: (summary: InitiativeSummary) => void;
+}) {
+  const { api, stores } = useServices();
+  const { navigate } = useRouter();
+
+  const form = useForm<NewInitiativeValues, unknown>({
+    initial: { name: "", description: "" },
+    submit: (values) => api.post<unknown>("/operations", newInitiativeRequest(values)),
+    onSuccess: (data, values) => {
+      const created = createdInitiative(data);
+      if (created === null) {
+        // The write landed but the reply is not one this client can read. The
+        // next read of the list will show the row; say so rather than nothing.
+        pushNotice(stores.ui, { kind: "info", message: "Initiative created." });
+        onClose();
+        return;
+      }
+      onCreated(summaryForCreated(created, values, new Date().toISOString()));
+      navigate(`/app/initiatives/${created.id}`);
+    },
+  });
+
+  // The name field takes focus the moment the form opens, as the pointer would
+  // land there next anyway.
+  useEffect(() => {
+    document.getElementById(`${FORM_ID}-name`)?.focus();
+  }, []);
+
+  return (
+    <div id="new-initiative" className="mb-6">
+      <div className="rounded border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 p-4">
+        <form id={FORM_ID} onSubmit={form.onSubmit} className="space-y-3">
+          <TextInput
+            formId={FORM_ID}
+            name="name"
+            label="Name"
+            required
+            value={form.values.name}
+            onChange={(value) => form.setValue("name", value)}
+            error={form.errors["name"] ?? null}
+          />
+          <TextArea
+            formId={FORM_ID}
+            name="description"
+            label="Description (optional)"
+            value={form.values.description}
+            onChange={(value) => form.setValue("description", value)}
+            error={form.errors["description"] ?? null}
+          />
+          {form.formError !== null && (
+            <p role="alert" className="text-sm text-red-700 dark:text-red-300">
+              {form.formError}
+            </p>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              id={`${FORM_ID}-cancel`}
+              onClick={onClose}
+              className="px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700 text-sm text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-800"
+            >
+              Cancel
+            </button>
+            {/* The press is acknowledged in the same box it was made in: the
+                label latches to "Creating…" (§6.7), width held. */}
+            <button
+              type="submit"
+              id={`${FORM_ID}-submit`}
+              disabled={form.busy}
+              aria-busy={form.busy}
+              className={`${actionClass({ variant: "primary", ...(form.busy ? { disabled: true } : {}) })} min-w-36`}
+            >
+              {form.busy && <Icon name="arrow-path" spin />}
+              {form.busy ? "Creating…" : "Create initiative"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   );
 }

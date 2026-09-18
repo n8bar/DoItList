@@ -85,11 +85,11 @@ describe("the layout budget", () => {
     );
   });
 
-  // Concrete numbers, not the formula restated: six 48px rows plus five 8px
-  // gaps between them is 328px, full stop.
+  // Concrete numbers, not the formula restated: six 80px cards plus five 8px
+  // gaps between them is 520px, full stop.
   it("reserves the Initiatives list's six rows plus the gaps between them", () => {
     assert.equal(reservation("initiatives-list").rows, 6);
-    assert.equal(reservedHeight("initiatives-list"), "328px");
+    assert.equal(reservedHeight("initiatives-list"), "520px");
   });
 
   it("gives the single-row Initiative header no gap to pay for", () => {

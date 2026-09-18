@@ -17,12 +17,17 @@ import type { ReactNode } from "react";
 
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
 
-export function Heading({ children }: { children: ReactNode }) {
+export function Heading({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <h1
       id={ROUTE_HEADING_ID}
       tabIndex={-1}
-      className="text-xl font-semibold tracking-tight text-zinc-900 outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:text-zinc-100 dark:focus-visible:ring-emerald-400"
+      // A screen ported from a LiveView template keeps that template's heading
+      // classes (m04.02 item 4.1); the focus behaviour is the same either way.
+      className={[
+        className ?? "text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100",
+        "outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:focus-visible:ring-emerald-400",
+      ].join(" ")}
     >
       {children}
     </h1>

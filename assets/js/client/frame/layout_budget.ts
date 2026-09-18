@@ -25,12 +25,15 @@ export interface Reservation {
 }
 
 /**
- * The height of one Initiatives row, in px. THE source of truth: the skeleton
- * row and the real row both render exactly this, so a skeleton row and the row
- * that replaces it are the same size and the list cannot collapse when the data
- * lands (item 4.6). Change it here or not at all.
+ * The height of one Initiatives card, in px. THE source of truth: the skeleton
+ * row and the real card both render exactly this, so a skeleton row and the
+ * card that replaces it are the same size and the list cannot collapse when the
+ * data lands (item 4.6). Change it here or not at all.
+ *
+ * The M02 card (m04.02 item 4.3): 16px padding top and bottom, the name line
+ * with its badge, and the 16px progress bar 8px under it.
  */
-export const LIST_ROW_HEIGHT = 48;
+export const LIST_ROW_HEIGHT = 80;
 
 /**
  * The height of one task row, in px. A title line, a second line for the
@@ -39,8 +42,8 @@ export const LIST_ROW_HEIGHT = 48;
 export const TREE_ROW_HEIGHT = 72;
 
 const BUDGET: Record<AsyncRegion, Reservation> = {
-  // A row is a name line plus the progress bar under it, matching the real row
-  // in `InitiativesScreen` — which renders `LIST_ROW_HEIGHT` too.
+  // A card is a name line plus the progress bar under it, matching the real
+  // card in `InitiativesScreen` — which renders `LIST_ROW_HEIGHT` too.
   "initiatives-list": { rows: 6, rowHeight: LIST_ROW_HEIGHT, label: "Loading…" },
   // The heading, the subtitle line and the progress line, stacked.
   "initiative-header": { rows: 1, rowHeight: 80, label: "Loading…" },

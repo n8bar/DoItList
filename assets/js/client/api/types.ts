@@ -35,14 +35,18 @@ export interface InitiativeSummary {
   id: number;
   name: string;
   subtitle: string | null;
+  /** The card's second line. `null` when the Initiative has none. */
+  description: string | null;
   role: Role;
   /** Rolled-up progress, 0..100. */
   progress: number;
   unit_count: number;
   root_task_id: number;
   version: number;
+  /** This user's manual position in the index, or `null` before a drag. */
   sort_order: number | null;
   archived: boolean;
+  created_at: string;
   updated_at: string;
 }
 
