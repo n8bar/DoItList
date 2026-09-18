@@ -322,27 +322,61 @@ export function useTree(options: UseTreeOptions): TreeState {
     enabled: !shortcutsOpen,
   });
 
-  const ctx: TreeContext = {
-    model,
-    initiativeId,
-    progressCalc: model.progressCalc,
-    permissions,
-    rows,
-    members,
-    presence: options.presence ?? noPresence,
-    selectedTaskId: selectedId,
-    savingIds: options.savingIds ?? EMPTY_IDS,
-    recomputingIds: options.recomputingIds ?? EMPTY_IDS,
-    rowKeys: options.rowKeys ?? EMPTY_KEYS,
-    rejection: options.rejection ?? null,
-    canProgress: (id: number) => canProgress(permissions, id),
-    collapsed,
-    onToggleCollapse,
-    onSelect: setSelectedId,
-    onOpenAdd: openAdd,
-    onIntent,
-    ...(onDragHint === undefined ? {} : { onDragHint }),
-  };
+  const canProgressId = useCallback((id: number) => canProgress(permissions, id), [permissions]);
+  const presence = options.presence ?? noPresence;
+  const savingIds = options.savingIds ?? EMPTY_IDS;
+  const recomputingIds = options.recomputingIds ?? EMPTY_IDS;
+  const rowKeys = options.rowKeys ?? EMPTY_KEYS;
+  const rejection = options.rejection ?? null;
+
+  // One identity per set of inputs: `tree.tsx` memoizes each branch on it, so
+  // a re-render of the screen that changes none of these — a confirm opening,
+  // the pane's own state — costs no row at all. Every input is stable between
+  // renders (store values, memoized derivations, stable callbacks); a literal
+  // here would defeat that on every render.
+  const ctx: TreeContext = useMemo(
+    () => ({
+      model,
+      initiativeId,
+      progressCalc: model.progressCalc,
+      permissions,
+      rows,
+      members,
+      presence,
+      selectedTaskId: selectedId,
+      savingIds,
+      recomputingIds,
+      rowKeys,
+      rejection,
+      canProgress: canProgressId,
+      collapsed,
+      onToggleCollapse,
+      onSelect: setSelectedId,
+      onOpenAdd: openAdd,
+      onIntent,
+      ...(onDragHint === undefined ? {} : { onDragHint }),
+    }),
+    [
+      model,
+      initiativeId,
+      permissions,
+      rows,
+      members,
+      presence,
+      selectedId,
+      savingIds,
+      recomputingIds,
+      rowKeys,
+      rejection,
+      canProgressId,
+      collapsed,
+      onToggleCollapse,
+      setSelectedId,
+      openAdd,
+      onIntent,
+      onDragHint,
+    ],
+  );
 
   return {
     ctx,

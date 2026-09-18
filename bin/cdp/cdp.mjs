@@ -246,6 +246,38 @@ export async function clickElement(session, selector) {
   return hit;
 }
 
+/**
+ * The halves of a mouse drag, for gestures a click cannot make. Points are
+ * viewport CSS px (`getBoundingClientRect` space). `mouseGlide` moves a
+ * pressed mouse from `from` to `to` in `steps` moves, so a threshold-gated
+ * drag sees motion rather than one jump.
+ */
+export async function mouseMove(session, { x, y }, { pressed = false } = {}) {
+  await session.send("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x,
+    y,
+    button: pressed ? "left" : "none",
+    buttons: pressed ? 1 : 0,
+  });
+}
+
+export async function mouseDown(session, { x, y }) {
+  await session.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+}
+
+export async function mouseUp(session, { x, y }) {
+  await session.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+}
+
+export async function mouseGlide(session, from, to, steps = 4) {
+  for (let i = 1; i <= steps; i += 1) {
+    const x = Math.round(from.x + ((to.x - from.x) * i) / steps);
+    const y = Math.round(from.y + ((to.y - from.y) * i) / steps);
+    await mouseMove(session, { x, y }, { pressed: true });
+  }
+}
+
 /** Presses one key (a "raw" down/up pair), e.g. `pressKey(session, "Escape")`. */
 export async function pressKey(session, key, { code = key, windowsVirtualKeyCode = 0 } = {}) {
   const base = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode };

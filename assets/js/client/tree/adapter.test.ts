@@ -289,6 +289,27 @@ describe("deltaFromReply", () => {
     assert.deepEqual(delta.upserts[1]?.co_assignee_ids, [8]);
   });
 
+  it("a move carries its slot: the one asked for, the top for a plain reparent, the end for a reorder with none", () => {
+    const operations: Operation[] = [
+      { op: "update", type: "task", id: 11, data: { parent_id: 10, position: 1, reorder: true } },
+      { op: "update", type: "task", id: 12, data: { parent_id: 10 } },
+      { op: "update", type: "task", id: 13, data: { parent_id: 10, reorder: true } },
+      { op: "update", type: "task", id: 14, data: { title: "Not a move" } },
+    ];
+    const delta = deltaFromReply(operations, {
+      results: [
+        { index: 0, status: "ok", data: result({ id: 11 }) },
+        { index: 1, status: "ok", data: result({ id: 12 }) },
+        { index: 2, status: "ok", data: result({ id: 13 }) },
+        { index: 3, status: "ok", data: result({ id: 14 }) },
+      ],
+    });
+    assert.equal(delta.upserts[0]?.position, 1);
+    assert.equal(delta.upserts[1]?.position, 0);
+    assert.equal(delta.upserts[2]?.position, Number.MAX_SAFE_INTEGER);
+    assert.equal(delta.upserts[3]?.position, undefined);
+  });
+
   it("a history result is its own delta and carries refetch", () => {
     const delta = deltaFromReply([], {
       results: [

@@ -444,12 +444,32 @@ export function deltaFromReply(operations: readonly Operation[], reply: BatchRep
     if (Array.isArray(data["co_assignee_ids"])) {
       upsert.co_assignee_ids = data["co_assignee_ids"] as number[];
     }
-    const slot = operation?.op === "add" ? operation.data["position"] : undefined;
-    if (typeof slot === "number") upsert.position = slot;
+    const slot = requestedSlot(operation);
+    if (slot !== undefined) upsert.position = slot;
     upserts.push(upsert);
   }
 
   return { upserts, removed, refetch };
+}
+
+/** Past any sibling list: `applyDelta` clamps it to the end. */
+const END_SLOT = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The slot an add or a move asked for. The server honors it and its result
+ * does not repeat it, so without this the canonical model would fall back to
+ * the old order until the refetch — a flicker the user would see. A reparent
+ * with no slot lands at the top; a reorder with none (a bottom zone) appends.
+ */
+function requestedSlot(operation: Operation | undefined): number | undefined {
+  if (operation === undefined || operation.type !== "task") return undefined;
+  const { data } = operation;
+  const move =
+    operation.op === "update" && ("parent_id" in data || "position" in data || "reorder" in data);
+  if (operation.op !== "add" && !move) return undefined;
+  if (typeof data["position"] === "number") return data["position"];
+  if (!move) return undefined;
+  return data["reorder"] === true ? END_SLOT : 0;
 }
 
 /**

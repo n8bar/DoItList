@@ -28,7 +28,7 @@
 // reach anyway.
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react";
 
 import { childIdsOf } from "./model.ts";
 import { resolveSort } from "./sort.ts";
@@ -177,8 +177,15 @@ function Children({
   );
 }
 
-/** One task: its row, its add slot, its children. */
-function Branch({
+/**
+ * One task: its row, its add slot, its children. Memoized on its props, and
+ * every prop is stable between renders that do not concern it (`ctx` is one
+ * identity per set of inputs, `form` is a callback, `slot` is state), so a
+ * screen re-render that changes nothing in the tree — a confirm opening —
+ * skips every branch. A change in the model gives `ctx` a new identity and
+ * every branch renders, as before; the memo only removes the wasted case.
+ */
+const Branch = memo(function Branch({
   ctx,
   id,
   depth,
@@ -207,7 +214,7 @@ function Branch({
       {sameSlot(slot, siblingSlot) && <li>{form(siblingSlot)}</li>}
     </>
   );
-}
+});
 
 export function Tree({
   ctx,
