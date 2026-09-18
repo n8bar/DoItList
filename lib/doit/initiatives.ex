@@ -656,6 +656,27 @@ defmodule DoIt.Initiatives do
     :ok
   end
 
+  @doc """
+  The user's Initiatives index in Manual order, as ids: the rows they have
+  dragged by `sort_order`, then the never-dragged ones in the list's own order
+  (owner-first, most recently updated) — the order the index shows under
+  Manual. One query, no avatars; feeds the `update initiative {position}` op.
+  """
+  def index_order(%User{id: user_id}) do
+    from(i in Initiative,
+      join: m in InitiativeMember,
+      on: m.initiative_id == i.id and m.user_id == ^user_id,
+      where: is_nil(i.trashed_at) and is_nil(m.archived_at) and is_nil(m.hidden_at),
+      order_by: [
+        asc_nulls_last: m.sort_order,
+        asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
+        desc: i.updated_at
+      ],
+      select: i.id
+    )
+    |> Repo.all()
+  end
+
   defp parse_id(id) when is_integer(id), do: id
 
   defp parse_id(id) when is_binary(id) do

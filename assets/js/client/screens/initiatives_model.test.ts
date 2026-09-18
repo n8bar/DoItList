@@ -5,16 +5,22 @@ import type { InitiativeSummary } from "../api/types.ts";
 import type { KeyValueStore } from "../storage/last_user.ts";
 import {
   SORT_STORAGE_KEY,
+  applyOrder,
   createdInitiative,
   descriptionText,
+  dropSide,
+  droppedOrder,
   initialSortState,
   manualOrder,
   newInitiativeRequest,
   percentText,
+  positionRequest,
   readSortState,
   reversed,
+  revertOrder,
   roleBadgeClass,
   sortInitiatives,
+  storedOrder,
   subtitleText,
   summaryForCreated,
   updatedText,
@@ -206,5 +212,105 @@ describe("New Initiative (item 4.1)", () => {
     assert.equal(summary.progress, 0);
     assert.equal(summary.description, "why");
     assert.equal(summary.updated_at, "2026-09-17T12:00:00Z");
+  });
+});
+
+describe("dropSide", () => {
+  it("is before above the midline and after below it", () => {
+    assert.equal(dropSide(100, 40, 110), "before");
+    assert.equal(dropSide(100, 40, 120), "before");
+    assert.equal(dropSide(100, 40, 121), "after");
+  });
+});
+
+describe("droppedOrder", () => {
+  const shown = [1, 2, 3, 4];
+
+  it("moves the row before or after the target", () => {
+    assert.deepEqual(droppedOrder(shown, 4, 1, "before"), [4, 1, 2, 3]);
+    assert.deepEqual(droppedOrder(shown, 1, 4, "after"), [2, 3, 4, 1]);
+    assert.deepEqual(droppedOrder(shown, 1, 2, "after"), [2, 1, 3, 4]);
+    assert.deepEqual(droppedOrder(shown, 4, 3, "before"), [1, 2, 4, 3]);
+  });
+
+  it("is null when nothing would move", () => {
+    assert.equal(droppedOrder(shown, 2, 2, "after"), null);
+    assert.equal(droppedOrder(shown, 2, 9, "after"), null);
+    assert.equal(droppedOrder(shown, 9, 2, "after"), null);
+    // Its own slot, approached from either neighbour.
+    assert.equal(droppedOrder(shown, 2, 1, "after"), null);
+    assert.equal(droppedOrder(shown, 2, 3, "before"), null);
+  });
+
+  it("does not touch the input", () => {
+    const input = [1, 2, 3];
+    droppedOrder(input, 3, 1, "before");
+    assert.deepEqual(input, [1, 2, 3]);
+  });
+});
+
+describe("storedOrder", () => {
+  it("is the shown order, reversed only when Manual is reversed", () => {
+    const manual = withMode(initialSortState, "manual");
+    assert.deepEqual(storedOrder([3, 1, 2], manual), [3, 1, 2]);
+    assert.deepEqual(storedOrder([3, 1, 2], withReverse(manual, true)), [2, 1, 3]);
+  });
+
+  it("ignores another mode's reverse", () => {
+    const state = withReverse(withMode(initialSortState, "name"), true);
+    assert.deepEqual(storedOrder([3, 1, 2], withMode(state, "manual")), [3, 1, 2]);
+  });
+});
+
+describe("applyOrder / revertOrder", () => {
+  const three = [row({ id: 1, sort_order: null }), row({ id: 2, sort_order: 0 }), row({ id: 3, sort_order: 1 })];
+
+  it("numbers every listed row by its slot and keeps the rest", () => {
+    const next = applyOrder(three, [3, 1]);
+    assert.deepEqual(
+      next.map((r) => [r.id, r.sort_order]),
+      [
+        [1, 1],
+        [2, 0],
+        [3, 0],
+      ],
+    );
+    // Unchanged rows are the same objects, so nothing re-renders for them.
+    assert.equal(next[1], three[1]);
+  });
+
+  it("revert puts the prior sort_order back, leaving rows it never saw alone", () => {
+    const moved = applyOrder(three, [3, 1, 2]);
+    const added = row({ id: 4, sort_order: 7 });
+    const back = revertOrder([...moved, added], three);
+    assert.deepEqual(
+      back.map((r) => [r.id, r.sort_order]),
+      [
+        [1, null],
+        [2, 0],
+        [3, 1],
+        [4, 7],
+      ],
+    );
+  });
+
+  it("a drop in manual sorts to where it was dropped", () => {
+    const manual = withMode(initialSortState, "manual");
+    const shown = sortInitiatives(three, manual).map((r) => r.id);
+    assert.deepEqual(shown, [2, 3, 1]);
+    const next = droppedOrder(shown, 1, 2, "before") as number[];
+    const placed = applyOrder(three, storedOrder(next, manual));
+    assert.deepEqual(
+      sortInitiatives(placed, manual).map((r) => r.id),
+      [1, 2, 3],
+    );
+  });
+});
+
+describe("positionRequest", () => {
+  it("is one update initiative op with the slot", () => {
+    assert.deepEqual(positionRequest(7, 2), {
+      operations: [{ op: "update", type: "initiative", id: 7, data: { position: 2 } }],
+    });
   });
 });

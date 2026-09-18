@@ -59,6 +59,8 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 `update task` with `sort_mode` and/or `sort_reverse` sets how that branch orders its children: `sort_mode` is one of `manual`, `alphabetical`, `completion`, `priority`, `created`, `updated`, or `null` to inherit the nearest ancestor's; `sort_reverse` flips the direction; a key left out keeps its current value. `cascade_sort: true` makes every descendant branch inherit, so the whole subtree follows this branch from then on; given with a mode it sets first, then cascades, as one op and one activity line each. The result's `records` carry the target and every branch the cascade changed, each with its `sort_mode` and `sort_reverse`; read the tree for the children's new order.
 
+`update initiative` with `position` puts that Initiative at a 0-based slot in your own Manual order of the index — the list the app shows under Sort: Manual. It is your view alone: any member may set it, nobody else's order moves, and the Initiative's `version` does not change. Rows you have never placed sit after the placed ones, owners' first then most recently updated; a slot past the end lands last. The result carries the resolved `sort_order` and `order`, the full id list as it now reads. `position` travels alone — no content field in the same op.
+
 A response carries `results`, one entry per operation, in order. Each names a `status` — `ok`, `error`, or `not_applied` — and a failure's `pointer` names the field at fault. One failure rolls the whole batch back, so every other entry reads `not_applied`.
 
 <!-- generated: DoItWeb.Api.Operations -->
@@ -68,7 +70,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 | update | task | assignee_id, cascade_sort, co_assignee_ids, description, done, expected_version, manual_progress, numbered_title, parent, parent_id, parent_lid, position, priority, reorder, sort_mode, sort_reverse, title |
 | remove | task | expected_version |
 | add | initiative | auto_promote_co_assignees, description, index_style, name, progress_calc, subtitle, viewer_plus |
-| update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, progress_calc, state, subtitle, viewer_plus |
+| update | initiative | auto_promote_co_assignees, description, expected_version, index_style, name, position, progress_calc, state, subtitle, viewer_plus |
 | add | comment | body, task, task_id, task_lid |
 | update | comment | body |
 | remove | comment | — |

@@ -9,12 +9,14 @@
 // space that was already reserved for it (`layout_budget`), so nothing on the
 // page moves when it lands. A failure is recoverable in place.
 //
-// Still to come, and shaped to slot in here: dragging to reorder (4.4, the
-// handle in `Card`), the Archived and Trash drawer (4.5, after the list), and
-// live list changes (4.6, into the domain store this screen already reads).
+// Dragging a card's handle reorders the list (4.4): the card lands the moment
+// it is dropped, the sort becomes Manual, and `update initiative {position}`
+// follows; a refusal puts the old order back and says so. Still to come, and
+// shaped to slot in here: the Archived and Trash drawer (4.5, after the list),
+// and live list changes (4.6, into the domain store this screen already reads).
 
 import type { CSSProperties, FormEvent } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { InitiativeSummary } from "../api/types.ts";
 import { actionClass } from "../frame/button_styles.ts";
@@ -31,19 +33,26 @@ import { TextArea, TextInput } from "../ui/form.tsx";
 import { Icon } from "../ui/icon.tsx";
 import { useForm } from "../ui/use_form.ts";
 import { Heading } from "./chrome.tsx";
+import { useInitiativeDrag } from "./initiative_drag.tsx";
+import type { InitiativeDrop } from "./initiative_drag.tsx";
 import type { IndexSortMode, IndexSortState, NewInitiativeValues } from "./initiatives_model.ts";
 import {
   SORT_OPTIONS,
+  applyOrder,
   createdInitiative,
   descriptionText,
+  droppedOrder,
   isSortMode,
   newInitiativeRequest,
   percentText,
+  positionRequest,
   progressValue,
   readSortState,
+  revertOrder,
   reversed,
   roleBadgeClass,
   sortInitiatives,
+  storedOrder,
   subtitleText,
   summaryForCreated,
   updatedText,
@@ -86,6 +95,51 @@ export function InitiativesScreen() {
 
   const count = summaries === null ? 0 : summaries.length;
   const sorted = summaries === null ? [] : sortInitiatives(summaries, sort);
+
+  // A drop reads the sort as it is at that moment, not as it was when the
+  // gesture was bound.
+  const sortRef = useRef(sort);
+  sortRef.current = sort;
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  const onDrop = useCallback(
+    (drop: InitiativeDrop) => {
+      const prior = stores.domain.get().initiativeSummaries ?? [];
+      const shown = sortInitiatives(prior, sortRef.current).map((row) => row.id);
+      const next = droppedOrder(shown, drop.sourceId, drop.targetId, drop.side);
+      if (next === null) return;
+
+      // A drop lands the list in Manual, as the hook's does.
+      const manual = withMode(sortRef.current, "manual");
+      const order = storedOrder(next, manual);
+      // The card is where it was dropped before the write goes out (§6.2).
+      stores.domain.set((state) => ({
+        ...state,
+        initiativeSummaries: applyOrder(state.initiativeSummaries ?? [], order),
+      }));
+      setSort(manual);
+
+      // One key per drop: a retry of this write replays, never re-applies.
+      void api
+        .post<unknown>("/operations", positionRequest(drop.sourceId, order.indexOf(drop.sourceId)), {
+          "idempotency-key": crypto.randomUUID(),
+        })
+        .then((result) => {
+          if (result.ok) return;
+          // Honest revert: the order the server still has, and why.
+          stores.domain.set((state) => ({
+            ...state,
+            initiativeSummaries: revertOrder(state.initiativeSummaries ?? [], prior),
+          }));
+          pushNotice(stores.ui, {
+            kind: "error",
+            message: `Could not save the new order. ${result.error.message}`,
+          });
+        });
+    },
+    [api, stores, setSort],
+  );
+  useInitiativeDrag(listRef, count > 0, onDrop);
 
   return (
     <section aria-labelledby={ROUTE_HEADING_ID}>
@@ -139,7 +193,7 @@ export function InitiativesScreen() {
       {count > 0 && <SortControl state={sort} onChange={setSort} />}
 
       {count > 0 && (
-        <div id="initiatives" className="space-y-2">
+        <div id="initiatives" ref={listRef} className="space-y-2">
           {sorted.map((initiative) => (
             <Card key={initiative.id} initiative={initiative} />
           ))}
@@ -228,7 +282,21 @@ function Card({ initiative }: { initiative: InitiativeSummary }) {
       >
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
           <span className="font-medium text-zinc-800 dark:text-zinc-100 inline-flex items-center gap-2 min-w-0">
-            {/* The drag handle goes here (item 4.4). */}
+            {/* The handle sits inside the card's link; on touch, a long-press
+                would otherwise open the link's callout and cancel the drag. */}
+            <span
+              id={`init-drag-${initiative.id}`}
+              data-drag-handle=""
+              aria-hidden="true"
+              title="Drag to reorder"
+              onContextMenu={(event) => event.preventDefault()}
+              style={{ WebkitTouchCallout: "none" } as CSSProperties}
+              className="flex-none inline-flex items-center gap-0.5 text-emerald-600 dark:text-emerald-400 cursor-grab active:cursor-grabbing touch-none select-none"
+            >
+              <Icon name="ellipsis-vertical" className="w-3 h-3 text-zinc-600 dark:text-zinc-500" />
+              <GroveIcon className="w-5 h-5" />
+              <Icon name="ellipsis-vertical" className="w-3 h-3 text-zinc-600 dark:text-zinc-500" />
+            </span>
             <span className="truncate">{initiative.name}</span>
           </span>
           <div className="flex items-center gap-2 flex-none">
@@ -279,6 +347,28 @@ function Card({ initiative }: { initiative: InitiativeSummary }) {
         </div>
       </Link>
     </div>
+  );
+}
+
+/** `botanical_icon(:grove)`, path for path — the Initiative's own glyph. */
+function GroveIcon({ className }: { className: string }) {
+  return (
+    <svg
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 10v.2A3 3 0 0 1 8.9 16H5a3 3 0 0 1-1-5.8V10a3 3 0 0 1 6 0Z" />
+      <path d="M7 16v6" />
+      <path d="M13 19v3" />
+      <path d="M12 19h8.3a1 1 0 0 0 .7-1.7L18 14h.3a1 1 0 0 0 .7-1.7L16 9h.2a1 1 0 0 0 .8-1.7L13 3l-1.4 1.5" />
+    </svg>
   );
 }
 

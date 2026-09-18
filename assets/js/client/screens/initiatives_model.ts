@@ -211,6 +211,83 @@ export function writeSortState(store: KeyValueStore | null, state: IndexSortStat
   }
 }
 
+// --- Dragging to reorder ----------------------------------------------------
+//
+// The `InitiativeDrag` hook's drop arithmetic, without the DOM: which side of
+// the card under the pointer the row lands on, the list that results, and what
+// to tell the server. The hook reads the new order off the cards and pushes
+// the whole list; here the same order is decided from ids, and the server is
+// told the one slot (`update initiative {position}`), which it turns into the
+// same whole-list write.
+
+export type DropSide = "before" | "after";
+
+/** The hook's midline rule: below the card's middle is "after". */
+export function dropSide(top: number, height: number, y: number): DropSide {
+  return y > top + height / 2 ? "after" : "before";
+}
+
+/**
+ * The shown ids after `sourceId` is dropped on the given side of `targetId`.
+ * `null` when nothing would move — onto itself, an unknown card, or the slot
+ * it already holds — so no write goes out for a drop that changes nothing.
+ */
+export function droppedOrder(
+  shown: readonly number[],
+  sourceId: number,
+  targetId: number,
+  side: DropSide,
+): number[] | null {
+  if (sourceId === targetId || !shown.includes(sourceId) || !shown.includes(targetId)) return null;
+  const next = shown.filter((id) => id !== sourceId);
+  const at = next.indexOf(targetId) + (side === "after" ? 1 : 0);
+  next.splice(at, 0, sourceId);
+  return next.every((id, index) => id === shown[index]) ? null : next;
+}
+
+/**
+ * The order to store behind what is shown. A drop lands the list in Manual;
+ * with Manual's Reverse on, the page shows the stored order backwards, so the
+ * stored list is the shown one reversed — the card stays where it was dropped.
+ */
+export function storedOrder(shown: readonly number[], manual: IndexSortState): number[] {
+  return reversed(manual) ? [...shown].reverse() : [...shown];
+}
+
+/** Every row's `sort_order` set to its slot in `order`; rows not listed keep theirs. */
+export function applyOrder(
+  rows: readonly InitiativeSummary[],
+  order: readonly number[],
+): InitiativeSummary[] {
+  const slot = new Map(order.map((id, index) => [id, index]));
+  return rows.map((row) => {
+    const next = slot.get(row.id);
+    return next === undefined || next === row.sort_order ? row : { ...row, sort_order: next };
+  });
+}
+
+/** The `sort_order` each row had in `prior`, put back — the revert on a refused write. */
+export function revertOrder(
+  rows: readonly InitiativeSummary[],
+  prior: readonly InitiativeSummary[],
+): InitiativeSummary[] {
+  const was = new Map(prior.map((row) => [row.id, row.sort_order]));
+  return rows.map((row) => {
+    const back = was.get(row.id);
+    return back === undefined || back === row.sort_order ? row : { ...row, sort_order: back };
+  });
+}
+
+/** The `update initiative {position}` operation for one dropped row. */
+export function positionRequest(
+  id: number,
+  position: number,
+): {
+  operations: { op: "update"; type: "initiative"; id: number; data: { position: number } }[];
+} {
+  return { operations: [{ op: "update", type: "initiative", id, data: { position } }] };
+}
+
 // --- New Initiative ---------------------------------------------------------
 
 export interface NewInitiativeValues extends Record<string, string | boolean> {

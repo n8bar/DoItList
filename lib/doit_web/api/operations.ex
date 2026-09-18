@@ -70,6 +70,7 @@ defmodule DoItWeb.Api.Operations do
   | `update` | `initiative`   | content: `name`/`subtitle`/`progress_calc`/`index_style`/… | `Initiatives.update_initiative/2` + `update_subtitle/2` | edit |
   | `update` | `initiative`   | `state: "archived"`/`"unarchived"`/`"hidden"`/`"unhidden"` | `Initiatives.archive/hide…`         | view (own membership) |
   | `update` | `initiative`   | `state: "trashed"`/`"restored"`                | `Initiatives.trash/restore_initiative/1`| admin             |
+  | `update` | `initiative`   | `position` — the caller's own slot for it in their Manual index order | `Initiatives.set_index_order/2` | view (own membership) |
   | `add`    | `comment`      | `task_id`/`task_lid`, `body`                   | `Tasks.add_comment/3`                   | edit              |
   | `update` | `comment`      | `body`                                         | `Tasks.edit_comment/3` (author-only)    | edit              |
   | `remove` | `comment`      | —                                              | `Tasks.delete_comment/2` (author-only, tombstone) | edit    |
@@ -290,7 +291,7 @@ defmodule DoItWeb.Api.Operations do
     {"remove", "task"} => ~w(expected_version),
     {"add", "initiative"} => @initiative_content_fields ++ ~w(subtitle),
     {"update", "initiative"} =>
-      @initiative_content_fields ++ ~w(subtitle state owner_id expected_version),
+      @initiative_content_fields ++ ~w(subtitle state position owner_id expected_version),
     {"add", "comment"} => ~w(task_id task_lid task body),
     {"update", "comment"} => ~w(body),
     {"remove", "comment"} => [],
@@ -791,6 +792,11 @@ defmodule DoItWeb.Api.Operations do
       Map.has_key?(data, "state") ->
         with {:ok, expected} <- fetch_expected_version(data) do
           update_initiative_state(user, op, data["state"], expected, changes)
+        end
+
+      Map.has_key?(data, "position") ->
+        with {:ok, expected} <- fetch_expected_version(data) do
+          update_initiative_position(user, op, data, expected, changes)
         end
 
       true ->
@@ -1513,6 +1519,55 @@ defmodule DoItWeb.Api.Operations do
   # can call every lifecycle fn with a uniform (user, initiative) arity.
   defp trash(_user, initiative), do: Initiatives.trash_initiative(initiative)
   defp restore(_user, initiative), do: Initiatives.restore_initiative(initiative)
+
+  # `position` is the caller's own slot in their Manual index order (m04.02
+  # 4.4) — a membership-row write, never the Initiative's content, so any
+  # member may do it and the version stays put. The stored order is rebuilt
+  # whole, as the LiveView's drag pushes it: the target lifted out, put back at
+  # the slot (clamped like a task move), every row renumbered.
+  defp update_initiative_position(user, op, data, expected, changes) do
+    others = data |> Map.drop(~w(position expected_version)) |> Map.keys()
+
+    with :ok <- position_alone(others),
+         {:ok, position} <- fetch_position(data["position"]),
+         {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
+         {:ok, initiative} <- authorize(user, initiative_id, :view),
+         :ok <- check_initiative_version(initiative, expected) do
+      rest = user |> Initiatives.index_order() |> List.delete(initiative.id)
+      slot = position |> max(0) |> min(length(rest))
+      order = List.insert_at(rest, slot, initiative.id)
+      :ok = Initiatives.set_index_order(user, order)
+
+      ok(nil, initiative.id, "initiative", %{
+        type: "initiative",
+        id: initiative.id,
+        sort_order: slot,
+        order: order
+      })
+    end
+  end
+
+  defp position_alone([]), do: :ok
+
+  defp position_alone(keys) do
+    {:error,
+     err(
+       :unprocessable_entity,
+       "position is the caller's index order and travels alone; #{inspect(hd(keys))} needs its own op.",
+       422,
+       hd(keys)
+     )}
+  end
+
+  defp fetch_position(value) do
+    case normalize_int(value) do
+      nil ->
+        {:error, err(:unprocessable_entity, "position must be an integer.", 422, "position")}
+
+      n ->
+        {:ok, n}
+    end
+  end
 
   defp update_initiative_content(user, op, data, expected, changes) do
     with {:ok, initiative_id} <- fetch_target_ref(op, changes, "initiative"),
