@@ -6001,7 +6001,7 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
             <button
               type="button"
               data-add-child={@task.id}
-              class="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+              class="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:min-h-6 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
               aria-label={if(@depth == 0, do: "New task", else: "New subtask")}
               title={if(@depth == 0, do: "New task", else: "New subtask")}
             >

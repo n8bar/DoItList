@@ -398,7 +398,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
                   setAddMenuOpen(false);
                   ctx.onOpenAdd({ kind: "child", taskId: id });
                 }}
-                className="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
+                className="inline-flex items-center justify-center gap-1 w-8 h-8 sm:w-auto sm:h-auto sm:min-w-11 sm:min-h-6 sm:px-2 sm:py-0.5 text-xs font-bold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/30"
                 aria-label={depth === 0 ? "New task" : "New subtask"}
                 title={depth === 0 ? "New task" : "New subtask"}
               >
