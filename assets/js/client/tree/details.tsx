@@ -42,6 +42,8 @@ import {
   sortModeFrom,
   sortModeLabel,
   titleEdit,
+  updatedAtText,
+  updatedTitleText,
 } from "./details_model.ts";
 import type { EditableFields } from "./details_model.ts";
 import type { TaskRecord } from "./model.ts";
@@ -321,10 +323,29 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
       )}
 
       <div className="flex items-center justify-between gap-2 border-t border-zinc-100 dark:border-zinc-700 pt-3">
-        {/* "Last updated by …" needs `updated_by` / `updated_at`, which the tree
-            read does not carry. The slot keeps its place so Delete sits where it
-            does in the LiveView. */}
-        <div className={LABEL} data-updated-slot />
+        {/* "Last updated by …", word for word from `task_editor/1`. Empty only on
+            a record from a read that predates the pair (m04.02 2.4). */}
+        <div className={LABEL} data-updated-slot>
+          {record.updated_at !== null &&
+            (record.updated_by !== null ? (
+              <>
+                Last updated by{" "}
+                <span className="font-medium text-zinc-700 dark:text-zinc-200 inline-flex items-center gap-1 align-bottom">
+                  <CoAvatar
+                    user={record.updated_by}
+                    online={ctx.presence.online.has(record.updated_by.id)}
+                    size="w-4 h-4 text-[8px]"
+                  />
+                  {record.updated_by.name}
+                </span>{" "}
+                <span title={updatedTitleText(record.updated_at)}>
+                  ({updatedAtText(record.updated_at)})
+                </span>
+              </>
+            ) : (
+              <>Updated {updatedAtText(record.updated_at)}</>
+            ))}
+        </div>
         <div className="flex items-center gap-2">
           {canEdit && (
             <button
@@ -650,13 +671,24 @@ function InfoHint({
   );
 }
 
-/** The co-assignee list's disc, lit when they are online (`avatar/1`). */
-function CoAvatar({ user, online }: { user: RowUser | null; online: boolean }) {
+/**
+ * A member's disc, lit when they are online (`avatar/1`): the co-assignee
+ * list's at its size, the "Last updated by" line's one step smaller.
+ */
+function CoAvatar({
+  user,
+  online,
+  size = "w-5 h-5 text-[10px]",
+}: {
+  user: RowUser | null;
+  online: boolean;
+  size?: string;
+}) {
   return (
     <span
       data-pill-avatar
       aria-hidden="true"
-      className={`avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none w-5 h-5 text-[10px]${
+      className={`avatar-emboss relative inline-flex flex-none items-center justify-center rounded-full font-semibold select-none ${size}${
         online ? " chip-online" : ""
       }`}
       style={user === null ? undefined : avatarStyle(user)}

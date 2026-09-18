@@ -153,7 +153,7 @@ function attach(
  * Re-orders each parent's children by its resolved sort mode, at most once per
  * parent — `maybe_resort_children/1`'s dedup, without the batch scope.
  */
-function resortParents(model: TreeModel, parentIds: Iterable<number>): TreeModel {
+export function resortParents(model: TreeModel, parentIds: Iterable<number>): TreeModel {
   let current = model;
   for (const parentId of new Set(parentIds)) {
     const [mode, reverse] = resolveSort(current, parentId);
@@ -216,6 +216,8 @@ export function addTask(model: TreeModel, args: AddTaskArgs): MoveResult {
     referenced_by: [],
     sort_mode: null,
     sort_reverse: false,
+    updated_by: null,
+    updated_at: null,
     version: 0,
   };
 

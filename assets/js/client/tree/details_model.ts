@@ -19,6 +19,36 @@ import { canProgress } from "./permissions.ts";
 import type { RowUser } from "./row_model.ts";
 import { resolveSort } from "./sort.ts";
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+const two = (n: number): string => String(n).padStart(2, "0");
+
+/**
+ * The "Last updated by" line's time: the template's `%b %-d %H:%M` in the
+ * viewer's local time, as `<.local_time>` renders it. An unreadable or missing
+ * timestamp gives an empty string rather than "Invalid Date".
+ */
+export function updatedAtText(iso: string | null): string {
+  if (iso === null) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${MONTHS[date.getMonth()]} ${date.getDate()} ${two(date.getHours())}:${two(date.getMinutes())}`;
+}
+
+/**
+ * The line's hover title: the full local instant, as `LocalTime.from_utc/1`
+ * prints it (`YYYY-MM-DD HH:MM:SS`).
+ */
+export function updatedTitleText(iso: string | null): string {
+  if (iso === null) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return (
+    `${date.getFullYear()}-${two(date.getMonth() + 1)}-${two(date.getDate())} ` +
+    `${two(date.getHours())}:${two(date.getMinutes())}:${two(date.getSeconds())}`
+  );
+}
+
 /** `DoIt.Tasks.Task.priorities/0`, in the select's order. */
 export const PRIORITIES: readonly Priority[] = ["low", "normal", "high"];
 

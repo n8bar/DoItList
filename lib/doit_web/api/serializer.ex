@@ -119,6 +119,8 @@ defmodule DoItWeb.Api.Serializer do
         ],
         "sort_mode": "alphabetical",
         "sort_reverse": false,
+        "updated_by": {"id": 7, "name": "Ada Lovelace", "username": "ada"},
+        "updated_at": "2026-06-26T22:00:00Z",
         "version": 5,
         "children": [ <task node>, ... ]
       }
@@ -167,6 +169,10 @@ defmodule DoItWeb.Api.Serializer do
     `alphabetical` | `completion` | `priority` | `created` | `updated`), or
     `null` to inherit the nearest ancestor's rule (the root's default is
     `manual`). `sort_reverse` flips that order; it means nothing under `manual`.
+  * `updated_by` — who last changed the task, as `{id, name, username}`, or
+    `null` before anyone has; `updated_at` — when, in UTC. The Details pane's
+    "Last updated by" line (m04.02 2.4). Both are the server's; the op set
+    refuses them as input.
   * `version` — the record's revision counter (m03.04 2.7.4): bumped on every
     intent-bearing write to the record itself, never by derived roll-up
     recomputes. Pass it back as `expected_version` on an update to refuse a
@@ -279,6 +285,7 @@ defmodule DoItWeb.Api.Serializer do
 
   use DoItWeb, :verified_routes
 
+  alias DoIt.Accounts.User
   alias DoIt.Tasks
   alias DoIt.Tasks.{ActivityEvent, Comment, Progress, Task}
   alias DoItWeb.AgentConnect
@@ -408,11 +415,23 @@ defmodule DoItWeb.Api.Serializer do
         referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
         sort_mode: task.sort_mode,
         sort_reverse: task.sort_reverse,
+        updated_by: updated_by(task),
+        updated_at: iso8601(task.updated_at),
         version: task.version,
         children: task_nodes(task.children, ctx, positions, depth + 1)
       }
     end)
   end
+
+  # Who last changed the task, as the Details pane names them (`task_editor/1`
+  # prints `updated_by.name` beside the avatar). The tree read preloads the
+  # association in one batch (`Tasks.list_initiative_tasks/1`); an op result
+  # preloads its own record. `nil` when no one has written it yet.
+  @doc false
+  def updated_by(%Task{updated_by: %User{} = user}),
+    do: %{id: user.id, name: user.name, username: user.username}
+
+  def updated_by(%Task{}), do: nil
 
   @doc """
   The Initiative's web URL — the operator-facing handle (m03.04 2.1.3) —

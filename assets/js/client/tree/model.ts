@@ -78,6 +78,8 @@ export function fromSnapshot(tree: InitiativeTree): TreeModel {
         ...record,
         sort_mode: record.sort_mode ?? null,
         sort_reverse: record.sort_reverse ?? false,
+        updated_by: record.updated_by ?? null,
+        updated_at: record.updated_at ?? null,
       };
       order.push(node.id);
       walk(children, node.id);

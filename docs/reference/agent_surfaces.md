@@ -99,7 +99,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 
 ### Read-only and writable fields
 
-An Initiative list item also carries its `description` and `created_at`, so a list can be shown and ordered without reading each tree. `progress` is the rolled-up number the server maintains; writing it is refused. Leaves take `manual_progress`; branches don't — a branch's progress comes from its children. A task node also names the `sort_mode` and `sort_reverse` its children are ordered by; `null` inherits.
+An Initiative list item also carries its `description` and `created_at`, so a list can be shown and ordered without reading each tree. `progress` is the rolled-up number the server maintains; writing it is refused. Leaves take `manual_progress`; branches don't — a branch's progress comes from its children. A task node also names the `sort_mode` and `sort_reverse` its children are ordered by; `null` inherits. A task node, and every task record an op answers with, carries `updated_by` (`{id, name, username}` of whoever last changed it, `null` before anyone has) and `updated_at` (UTC); both are the server's, and an op that sends them is refused as an unknown key.
 
 
 ## Scripted client

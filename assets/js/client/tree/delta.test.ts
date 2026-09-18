@@ -58,6 +58,18 @@ describe("deltaFromOpResult", () => {
       "version",
     ]);
   });
+
+  it("carries who wrote it and when once the result says (m04.02 2.4)", () => {
+    const editor = { id: 7, name: "Ada", username: "ada" };
+    const delta = deltaFromOpResult(
+      result({ updated_by: editor, updated_at: "2026-09-17T14:05:00Z" }),
+    );
+    assert.deepEqual(delta.upserts[0]?.updated_by, editor);
+    assert.equal(delta.upserts[0]?.updated_at, "2026-09-17T14:05:00Z");
+    const next = ok(applyDelta(base(), delta).model);
+    assert.deepEqual(next.tasks[11]?.updated_by, editor);
+    assert.equal(next.tasks[11]?.updated_at, "2026-09-17T14:05:00Z");
+  });
 });
 
 describe("applyDelta from an op result", () => {
@@ -80,6 +92,31 @@ describe("applyDelta from an op result", () => {
     assert.deepEqual([...(model.childIds[10] ?? [])], [12]);
     assert.equal(model.tasks[11]?.index, "2.1");
     assert.equal(model.tasks[12]?.index, "1.1");
+  });
+
+  it("re-sorts a branch's children when the delta changes its sort rule", () => {
+    const model = fromSnapshot(
+      buildTree([
+        {
+          id: 10,
+          title: "Cabinets",
+          children: [{ id: 11, title: "Doors" }, { id: 12, title: "Brackets" }],
+        },
+      ]),
+    );
+
+    const { model: next, affected } = applyDelta(model, {
+      upserts: [{ id: 10, sort_mode: "alphabetical", sort_reverse: false }],
+      removed: [],
+    });
+
+    assert.deepEqual([...(ok(next).childIds[10] ?? [])], [12, 11]);
+    assert.equal(next.tasks[12]?.index, "1.1");
+    assert.ok(affected.includes(11) && affected.includes(12));
+
+    // The same rule again is not a change, so the order is not touched.
+    const again = applyDelta(next, { upserts: [{ id: 10, sort_mode: "alphabetical", sort_reverse: false }], removed: [] });
+    assert.deepEqual([...(again.model.childIds[10] ?? [])], [12, 11]);
   });
 
   it("leaves records it did not mention with their identity", () => {

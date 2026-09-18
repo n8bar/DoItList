@@ -8,7 +8,7 @@
 // Seeded on purpose, and with no new dependency: a failure names the seed that
 // produced it, and re-running that seed reproduces the exact tree.
 
-import type { InitiativeTree, Priority, SortMode, TaskNode, TaskStatus } from "../api/types.ts";
+import type { InitiativeTree, Priority, SortMode, TaskEditor, TaskNode, TaskStatus } from "../api/types.ts";
 import { label } from "./labels.ts";
 
 /** A deterministic PRNG (mulberry32). Same seed, same sequence, everywhere. */
@@ -35,6 +35,8 @@ export interface TaskSpec {
   co_assignee_ids?: number[];
   sort_mode?: SortMode | null;
   sort_reverse?: boolean;
+  updated_by?: TaskEditor | null;
+  updated_at?: string | null;
   children?: TaskSpec[];
 }
 
@@ -83,6 +85,8 @@ export function buildTree(specs: readonly TaskSpec[], options: TreeOptions = {})
       referenced_by: [],
       sort_mode: spec.sort_mode ?? null,
       sort_reverse: spec.sort_reverse ?? false,
+      updated_by: spec.updated_by ?? null,
+      updated_at: spec.updated_at ?? null,
       version: 1,
       children,
     };

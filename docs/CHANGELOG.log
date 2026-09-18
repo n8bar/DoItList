@@ -704,3 +704,4 @@ Prior history (2026-05-05 … 2026-06-15) is in CHANGELOG.archive.log.
 2026-09-17  M04.02 client fix: Enter in the Details title field blurred it before the tree's key listener ran, which then read the Enter as a deselect and closed the pane; the listener now also checks the key's target. Found by 7.3.
 2026-09-17  M04.02 2.2 Block moves land in list order: a stale struct made Ecto skip a sort_order that matched its old value, so the task kept its renumbered source slot; the slot is now force-written.
 2026-09-17  M04.02 2.3 Details pane at phone width: the client pane is the workspace's `#details-rail` flyout below `lg:` (backdrop, rail X, `data-open`); the column now starts at `lg:` like the workspace's, not `xl:`.
+2026-09-17  M04.02 2.4 Last updated by: task nodes and op records carry `updated_by` ({id, name, username}) and `updated_at`; the client Details pane fills its slot with the workspace's copy and `%b %-d %H:%M` local time.

@@ -68,6 +68,8 @@ const withOneTask = (): InitiativeTree =>
         referenced_by: [],
         sort_mode: null,
         sort_reverse: false,
+        updated_by: null,
+        updated_at: null,
         version: 1,
         children: [],
       },

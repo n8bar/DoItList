@@ -24,6 +24,8 @@ import {
   sortModeFrom,
   sortModeLabel,
   titleEdit,
+  updatedAtText,
+  updatedTitleText,
 } from "./details_model.ts";
 import { buildTree } from "./gen.ts";
 import { fromSnapshot } from "./model.ts";
@@ -244,6 +246,16 @@ describe("what an edit commits", () => {
     assert.deepEqual(assigneeEdit(record(11), ""), { assignee_id: null });
     assert.equal(assigneeEdit(record(11), "1"), null);
     assert.equal(assigneeEdit(record(11), "x"), null);
+  });
+
+  it("formats the last-updated time the way <.local_time> does", () => {
+    // Built from local components so the expectation holds in any zone.
+    const at = new Date(2026, 8, 7, 9, 5, 3).toISOString();
+    assert.equal(updatedAtText(at), "Sep 7 09:05");
+    assert.equal(updatedTitleText(at), "2026-09-07 09:05:03");
+    assert.equal(updatedAtText(null), "");
+    assert.equal(updatedAtText("not a date"), "");
+    assert.equal(updatedTitleText("not a date"), "");
   });
 
   it("clamps and snaps the slider, and skips a no-op", () => {

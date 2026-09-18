@@ -250,7 +250,7 @@ defmodule DoItWeb.Api.Operations do
   alias DoIt.Initiatives.Initiative
   alias DoIt.Notifications.Notification
   alias DoIt.Tasks.{Comment, Index, Task}
-  alias DoItWeb.Api.Authz
+  alias DoItWeb.Api.{Authz, Serializer}
 
   @types ~w(task initiative comment member notification link history)
   @verbs ~w(add update remove)
@@ -1151,7 +1151,10 @@ defmodule DoItWeb.Api.Operations do
          {:ok, cascade?} <- fetch_cascade_sort(data),
          {:ok, task} <- maybe_set_sort(user, task, data, mode, reverse),
          {:ok, branches} <- maybe_cascade_sort(user, task, cascade?) do
-      records = Enum.map([Tasks.get_task!(task.id) | branches], &sort_task_result/1)
+      records =
+        [Tasks.get_task!(task.id) | branches]
+        |> Repo.preload(:updated_by)
+        |> Enum.map(&sort_task_result/1)
 
       ok(nil, task.id, "task", %{id: task.id, type: "task", records: records})
     end
@@ -1319,7 +1322,7 @@ defmodule DoItWeb.Api.Operations do
           ok(nil, first.id, "task", %{
             id: first.id,
             type: "task",
-            records: Enum.map(moved, &task_result/1)
+            records: moved |> Repo.preload(:updated_by) |> Enum.map(&task_result/1)
           })
 
         {:error, reason} ->
@@ -2175,7 +2178,13 @@ defmodule DoItWeb.Api.Operations do
     {:ok, %{lid: lid, id: id, type: type, data: data}}
   end
 
+  # `updated_by` / `updated_at` fill the Details pane's "Last updated by" line
+  # the moment an edit is acknowledged (m04.02 2.4). The preload is a no-op on
+  # a record that already carries the editor; list sites (`sort`, a many-move,
+  # history) preload the whole list first so it stays one query.
   defp task_result(%Task{} = task) do
+    task = Repo.preload(task, :updated_by)
+
     %{
       id: task.id,
       type: "task",
@@ -2187,6 +2196,8 @@ defmodule DoItWeb.Api.Operations do
       manual_progress: task.manual_progress,
       priority: task.priority,
       assignee_id: task.assignee_id,
+      updated_by: Serializer.updated_by(task),
+      updated_at: DateTime.to_iso8601(task.updated_at),
       version: task.version
     }
   end
@@ -2328,6 +2339,7 @@ defmodule DoItWeb.Api.Operations do
       order_by: [asc: t.sort_order, asc: t.inserted_at, asc: t.id]
     )
     |> Repo.all()
+    |> Repo.preload(:updated_by)
     |> Enum.group_by(& &1.parent_id)
     |> Enum.flat_map(fn {_parent_id, siblings} ->
       Enum.with_index(siblings, fn task, position ->

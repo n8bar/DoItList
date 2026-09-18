@@ -69,6 +69,13 @@ export interface InitiativeArchive {
   retention_days: number;
 }
 
+/** Who last changed a task: what the Details pane's "Last updated by" names. */
+export interface TaskEditor {
+  id: number;
+  name: string;
+  username: string;
+}
+
 /** A node of the nested tree. */
 export interface TaskNode {
   id: number;
@@ -97,6 +104,13 @@ export interface TaskNode {
    */
   sort_mode: SortMode | null;
   sort_reverse: boolean;
+  /**
+   * Who last changed the task and when (m04.02 2.4). `updated_by` is `null`
+   * before anyone has; `updated_at` is `null` only on a read that predates the
+   * pair, which the pane shows as nothing.
+   */
+  updated_by: TaskEditor | null;
+  updated_at: string | null;
   version: number;
   children: TaskNode[];
 }

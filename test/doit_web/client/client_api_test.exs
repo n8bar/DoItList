@@ -154,8 +154,10 @@ defmodule DoItWeb.Client.ClientApiTest do
       assert data["role"] == "owner"
       assert data["root_task_id"] == ctx.ini.root_task_id
       assert data["progress_calc"] in ["leaf_average", "single_level"]
-      assert [%{"id" => id, "title" => "Phase 1", "children" => []}] = data["tasks"]
+      assert [%{"id" => id, "title" => "Phase 1", "children" => []} = node] = data["tasks"]
       assert id == ctx.phase1.id
+      assert node["updated_by"]["id"] == ctx.owner.id
+      assert is_binary(node["updated_at"])
     end
 
     test "a stranger is forbidden and an unknown id is not found", ctx do

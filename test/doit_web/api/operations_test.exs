@@ -475,6 +475,26 @@ defmodule DoItWeb.Api.OperationsTest do
       assert Repo.get(Task, b.id).status == "done"
     end
 
+    test "task: an update's record names who changed it and when (m04.02 2.4)", ctx do
+      a = top_task(ctx.owner, ctx.ini, "A")
+
+      {status, body} =
+        post_ops(ctx.editor, [
+          %{"op" => "update", "type" => "task", "id" => a.id, "data" => %{"title" => "A2"}}
+        ])
+
+      assert status == 200
+      record = Enum.at(body["results"], 0)["data"]
+
+      assert record["updated_by"] == %{
+               "id" => ctx.editor.id,
+               "name" => ctx.editor.name,
+               "username" => ctx.editor.username
+             }
+
+      assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(record["updated_at"])
+    end
+
     test "task: reparent via parent_lid + soft-delete are reversible ops", ctx do
       existing = top_task(ctx.owner, ctx.ini, "Existing")
 

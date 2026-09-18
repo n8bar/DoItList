@@ -164,6 +164,30 @@ defmodule DoItWeb.Api.InitiativeReadTest do
       assert build["sort_reverse"] == false
     end
 
+    test "task nodes carry who last changed them and when (m04.02 2.4)", ctx do
+      {:ok, _} = Tasks.update_task(ctx.phase2, ctx.editor, %{"title" => "Phase 2 (edited)"})
+
+      conn =
+        build_conn() |> bearer(token(ctx.owner)) |> get(~p"/api/v1/initiatives/#{ctx.ini.id}")
+
+      assert %{"data" => %{"tasks" => tasks}} = json_response(conn, 200)
+
+      phase2 = find_node(tasks, "Phase 2 (edited)")
+
+      assert phase2["updated_by"] == %{
+               "id" => ctx.editor.id,
+               "name" => ctx.editor.name,
+               "username" => ctx.editor.username
+             }
+
+      assert {:ok, %DateTime{}, 0} = DateTime.from_iso8601(phase2["updated_at"])
+
+      # A task its creator last touched names the creator; nested nodes carry it too.
+      build = find_node(tasks, "Build API")
+      assert build["updated_by"]["id"] == ctx.owner.id
+      assert is_binary(build["updated_at"])
+    end
+
     test "the tree root carries unit_count under both calc modes (m03.04 6.5)", ctx do
       # Phase 1's two leaves + Phase 2 = 3 leaves; 2 top-level tasks.
       conn =

@@ -10,12 +10,12 @@
 // first time: a duplicate broadcast, a retried operation and a replayed queue
 // entry all have to be harmless.
 
-import type { InitiativeTree, Priority, TaskStatus } from "../api/types.ts";
+import type { InitiativeTree, Priority, TaskEditor, TaskStatus } from "../api/types.ts";
 import type { InitiativeHeader, TaskRecord, TreeModel } from "./model.ts";
 import { ancestors, headerFrom } from "./model.ts";
 import { relabel } from "./labels.ts";
 import { predictHeader } from "./progress.ts";
-import { putRecord, setChildOrder } from "./ops.ts";
+import { putRecord, resortParents, setChildOrder } from "./ops.ts";
 import { InvalidTreeError, validateSnapshot } from "./validate.ts";
 
 /** A partial record: whatever the server said about this task, plus its id. */
@@ -39,6 +39,9 @@ export interface TaskResult {
   manual_progress: number;
   priority: Priority;
   assignee_id: number | null;
+  /** Who made this write and when (m04.02 2.4); left alone when absent. */
+  updated_by?: TaskEditor | null;
+  updated_at?: string;
   version: number;
 }
 
@@ -92,6 +95,8 @@ function upsertFromResult(result: TaskResult): TaskUpsert {
     priority: result.priority,
     assignee_id: result.assignee_id,
     version: result.version,
+    ...(result.updated_by !== undefined ? { updated_by: result.updated_by } : {}),
+    ...(result.updated_at !== undefined ? { updated_at: result.updated_at } : {}),
   };
 }
 
@@ -148,6 +153,10 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
   let next = model;
   const affected: number[] = [];
   const touchedParents = new Set<number>();
+  // Branches whose sort rule the delta changed: a sort result names the
+  // branch and its new mode, not its children's new order, so the order is
+  // derived here — as `setSort` predicts it — rather than left to the refetch.
+  const resorted = new Set<number>();
 
   for (const id of delta.removed) {
     const record = next.tasks[id];
@@ -174,6 +183,12 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
     const merged: TaskRecord = existing === undefined ? blank(upsert) : { ...existing, ...upsert };
     const oldParentId = existing?.parent_id;
     const parentId = merged.parent_id;
+    if (
+      existing !== undefined &&
+      (existing.sort_mode !== merged.sort_mode || existing.sort_reverse !== merged.sort_reverse)
+    ) {
+      resorted.add(merged.id);
+    }
 
     next = putRecord(next, merged);
     if (next.childIds[merged.id] === undefined) {
@@ -206,6 +221,13 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
   for (const parentId of touchedParents) {
     next = relabel(next, parentId);
     for (const childId of next.childIds[parentId] ?? []) affected.push(childId);
+  }
+
+  if (resorted.size > 0) {
+    next = resortParents(next, resorted);
+    for (const parentId of resorted) {
+      for (const childId of next.childIds[parentId] ?? []) affected.push(childId);
+    }
   }
 
   if (delta.initiative !== undefined) {
@@ -279,6 +301,8 @@ function blank(upsert: TaskUpsert): TaskRecord {
     referenced_by: [],
     sort_mode: null,
     sort_reverse: false,
+    updated_by: null,
+    updated_at: null,
     version: 0,
     ...upsert,
   };
