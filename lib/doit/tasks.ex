@@ -990,13 +990,17 @@ defmodule DoIt.Tasks do
 
     new_sort_order = (insert_index + 1) * @sort_gap
 
+    # `task` may be stale: a block move (m04.02 2.2) renumbers this task's
+    # source siblings — and the task itself — before its own turn, so a cast
+    # that happens to equal the stale value would skip the write and leave the
+    # renumbered slot in place. Force it so the slot always lands.
     {:ok, moved} =
       task
       |> Task.update_changeset(%{
         "parent_id" => new_parent_id,
-        "sort_order" => new_sort_order,
         "updated_by_id" => actor.id
       })
+      |> Ecto.Changeset.force_change(:sort_order, new_sort_order)
       |> Repo.update()
 
     # A move is intent on the MOVED task (item 32); the sibling renumbers

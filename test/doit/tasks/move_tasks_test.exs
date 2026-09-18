@@ -86,6 +86,47 @@ defmodule DoIt.Tasks.MoveTasksTest do
       assert child_ids(b) == [b1.id, b3.id]
     end
 
+    test "a block whose sort order differs from creation order lands in list order (2.2)" do
+      %{owner: owner, init: init} = setup_init()
+      %{a: a, c: c, a1: a1, a2: a2, a3: a3} = three_parents(owner, init)
+      c1 = task(owner, init, c, "c1")
+
+      # A reads a3, a1, a2 — a3's slot no longer matches when it was created.
+      {:ok, _} =
+        Tasks.move_task(a3, owner, %{"parent_id" => a.id, "position" => 0, "reorder" => true})
+
+      assert child_ids(a) == [a3.id, a1.id, a2.id]
+
+      assert {:ok, moved} =
+               Tasks.move_tasks([get(a3.id), get(a1.id), get(a2.id)], owner, %{
+                 "parent_id" => c.id
+               })
+
+      assert ids(moved) == [a3.id, a1.id, a2.id]
+      assert child_ids(c) == [a3.id, a1.id, a2.id, c1.id]
+      assert child_ids(a) == []
+    end
+
+    test "the same block at an explicit position, and appended, keeps list order (2.2)" do
+      %{owner: owner, init: init} = setup_init()
+      %{a: a, c: c, a1: a1, a2: a2, a3: a3} = three_parents(owner, init)
+      [c1, c2] = for t <- ~w(c1 c2), do: task(owner, init, c, t)
+
+      {:ok, _} =
+        Tasks.move_task(a3, owner, %{"parent_id" => a.id, "position" => 0, "reorder" => true})
+
+      assert {:ok, _} =
+               Tasks.move_tasks([get(a3.id), get(a1.id)], owner, %{
+                 "parent_id" => c.id,
+                 "position" => 1
+               })
+
+      assert child_ids(c) == [c1.id, a3.id, a1.id, c2.id]
+
+      assert {:ok, _} = Tasks.move_tasks([get(a2.id), get(a3.id)], owner, %{"parent_id" => c.id, "position" => 99})
+      assert child_ids(c) == [c1.id, a1.id, c2.id, a2.id, a3.id]
+    end
+
     test "sources from several parents leave tidy siblings behind" do
       %{owner: owner, init: init} = setup_init()
 

@@ -137,6 +137,27 @@ defmodule DoItWeb.Api.OperationsMoveManyTest do
       assert child_ids(a.id) == [Repo.get_by!(Task, title: "a2").id]
     end
 
+    test "ids in an order unlike their current slots land in that order (2.2)", ctx do
+      %{a: a, c: c, a1: a1, a2: a2, a3: a3} = three_parents(ctx.owner, ctx.ini)
+      c1 = task(ctx.owner, ctx.ini, "c1", c.id)
+
+      {:ok, _} =
+        Tasks.move_task(a3, ctx.owner, %{"parent_id" => a.id, "position" => 0, "reorder" => true})
+
+      assert child_ids(a.id) == [a3.id, a1.id, a2.id]
+
+      {status, body} =
+        post_ops(ctx.owner, [
+          move_many([a3.id, a1.id, a2.id], %{"parent_id" => c.id, "position" => 1})
+        ])
+
+      assert status == 200
+      assert [%{"status" => "ok", "data" => %{"records" => records}}] = body["results"]
+      assert Enum.map(records, & &1["id"]) == [a3.id, a1.id, a2.id]
+      assert child_ids(c.id) == [c1.id, a3.id, a1.id, a2.id]
+      assert child_ids(a.id) == []
+    end
+
     test "parent_lid targets a parent added earlier in the same batch", ctx do
       %{a1: a1, b2: b2} = three_parents(ctx.owner, ctx.ini)
 
