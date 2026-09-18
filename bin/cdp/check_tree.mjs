@@ -979,8 +979,10 @@ export async function checkReferences(ctx) {
     return { referrerSelected: document.querySelector("#task-${referrer}[data-selected]") !== null };
   `,
   );
+  const profile = await startProfile(session);
   await clickElement(session, `#task-${referrer} > [data-task-row] a.doit-ref[data-task-id="${charlie}"]`);
   const ack = await readStopwatch(session, `"Charlie" revealed by its reference`, { expectReply: false });
+  await profile.stop("references-reveal");
   assertAcknowledged(ack, "the revealed target");
   if (ack.detail.referrerSelected) throw new Error("the referring row was selected too");
   await waitFor(session, `return __tree.inView(${charlie});`, { timeoutMs: 2_000, everyMs: 10, what: `"Charlie" scrolled into view` });
@@ -1693,8 +1695,25 @@ const FLIP_JS = `
   const list = document.getElementById("children-" + ID);
   const was = el.getAttribute("aria-expanded");
   const wasCollapsed = list.classList.contains("collapsed-peek");
-  window.__flip = { was, handler: null, seen: null, moved: null };
+  window.__flip = { was, handler: null, seen: null, moved: null, down: null, up: null, longtasks: [], frames: [] };
+  el.addEventListener("mousedown", () => { window.__flip.down = performance.now(); }, { capture: true, once: true });
+  el.addEventListener("mouseup", () => { window.__flip.up = performance.now(); }, { capture: true, once: true });
   el.addEventListener("click", () => { window.__flip.handler = performance.now(); }, { capture: true, once: true });
+  // 7.9 (b): what holds the frame after the handler — long tasks, and the
+  // gap between successive animation frames, from now until the branch moves.
+  window.__flipLong?.disconnect();
+  window.__flipLong = new PerformanceObserver((entries) => {
+    for (const e of entries.getEntries()) window.__flip.longtasks.push({ start: e.startTime, ms: Math.round(e.duration) });
+  });
+  window.__flipLong.observe({ type: "longtask" });
+  let last = performance.now();
+  const frame = () => {
+    const now = performance.now();
+    window.__flip.frames.push({ at: now, gap: Math.round(now - last) });
+    last = now;
+    if (window.__flip.moved === null || now < window.__flip.moved + 100) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
   window.__flipObs?.disconnect();
   window.__flipObs = new MutationObserver(() => {
     if (window.__flip.moved === null && list.classList.contains("collapsed-peek") !== wasCollapsed) window.__flip.moved = performance.now();
@@ -1729,9 +1748,11 @@ export async function checkChevronFlipsFirst(ctx) {
     const seen = Math.round(flip.seen - flip.handler);
     const moved = Math.round(flip.moved - flip.handler);
     if (flip.seen > flip.moved) throw new Error(`on ${step} the branch moved (${moved}ms) before the glyph was on screen (${seen}ms; was aria-expanded=${was})`);
-    times.push(`${step}: glyph on screen ${seen}ms after the handler, branch moved at ${moved}ms`);
+    const gaps = flip.frames.filter((f) => f.at > flip.handler - 50).map((f) => f.gap);
+    const long = flip.longtasks.filter((t) => t.start > flip.handler - 50).map((t) => `${t.ms}ms at +${Math.round(t.start - flip.handler)}`);
+    times.push(`${step}: glyph on screen ${seen}ms after the handler, branch moved at ${moved}ms (mousedown→up ${Math.round(flip.up - flip.down)}ms, longest frame gap ${Math.max(0, ...gaps)}ms, long tasks: ${long.join(", ") || "none"})`);
   }
-  await evaluate(session, `window.__flipObs?.disconnect(); return true;`);
+  await evaluate(session, `window.__flipObs?.disconnect(); window.__flipLong?.disconnect(); return true;`);
   return `glyph first on the 24-deep branch — ${times.join("; ")} (frame timing is item 7.9)`;
 }
 
@@ -2356,7 +2377,7 @@ async function armStopwatch(session, trigger, predicate, { transient = false } =
     if (window.__sw?.observer) window.__sw.observer.disconnect();
     const pred = () => { try { return (() => { ${predicate} })(); } catch { return false; } };
     const sw = {
-      t0: null, at: null, detail: null, flips: 0, log: [], was: Boolean(pred()), observer: null,
+      t0: null, at: null, detail: null, flips: 0, log: [], was: Boolean(pred()), observer: null, longtasks: [],
       // A wait mark is MEANT to go away once the reply lands; a row is not.
       transient: ${transient},
     };
@@ -2383,6 +2404,12 @@ async function armStopwatch(session, trigger, predicate, { transient = false } =
     };
     sw.observer = new MutationObserver(look);
     sw.observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    // 7.9: what held the main thread between t0 and the acknowledgement.
+    window.__swLong?.disconnect();
+    window.__swLong = new PerformanceObserver((entries) => {
+      for (const e of entries.getEntries()) sw.longtasks.push({ start: e.startTime, ms: Math.round(e.duration) });
+    });
+    window.__swLong.observe({ type: "longtask" });
     document.addEventListener(${JSON.stringify(trigger)}, () => {
       sw.t0 = performance.now();
       // The handler may have painted synchronously, before any mutation
@@ -2392,6 +2419,37 @@ async function armStopwatch(session, trigger, predicate, { transient = false } =
     return true;
   `,
   );
+}
+
+/**
+ * CDP_PROFILE=1: a CPU profile of the page across a click, written to
+ * tmp/cdp/<name>.cpuprofile with its heaviest functions (self time) printed,
+ * for reading where an acknowledgement's milliseconds go (7.9).
+ */
+async function startProfile(session) {
+  if (process.env.CDP_PROFILE !== "1") return { stop: async () => {} };
+  await session.send("Profiler.enable");
+  await session.send("Profiler.setSamplingInterval", { interval: 100 });
+  await session.send("Profiler.start");
+  return {
+    stop: async (name) => {
+      const { profile } = await session.send("Profiler.stop");
+      await session.send("Profiler.disable");
+      await mkdir(SHOT_DIR, { recursive: true });
+      await writeFile(resolve(SHOT_DIR, `${name}.cpuprofile`), JSON.stringify(profile));
+      const self = new Map();
+      const byId = new Map(profile.nodes.map((n) => [n.id, n]));
+      profile.samples.forEach((id, i) => {
+        const n = byId.get(id);
+        const f = n.callFrame;
+        const key = `${f.functionName || "(anonymous)"} ${f.url.replace(/^.*\/assets\//, "")}:${f.lineNumber + 1}`;
+        self.set(key, (self.get(key) ?? 0) + (profile.timeDeltas[i] ?? 0));
+      });
+      const top = [...self.entries()].sort((a, b) => b[1] - a[1]).slice(0, 25);
+      process.stdout.write(`prof  ${name}: ${Math.round((profile.endTime - profile.startTime) / 1000)}ms sampled\n`);
+      for (const [key, us] of top) process.stdout.write(`      ${String(Math.round(us / 1000)).padStart(5)}ms  ${key}\n`);
+    },
+  };
 }
 
 /** Waits for `at` (and, unless told otherwise, the reply that followed t0). */
@@ -2413,6 +2471,7 @@ async function readStopwatch(session, what, { expectReply = true } = {}) {
       // A transient mark's second change is it going away; when, in ms after t0.
       goneMs: sw.log.length > 1 && !sw.log[1].holds ? sw.log[1].t : null,
       detail: sw.detail,
+      longtasks: sw.longtasks.filter((t) => t.start + 60 >= sw.t0).map((t) => Math.round(t.start - sw.t0) + "→" + Math.round(t.start - sw.t0 + t.ms)),
       // For the failure report: when the predicate changed, and every fetch since t0.
       trace: {
         flips: sw.log,
@@ -2424,12 +2483,15 @@ async function readStopwatch(session, what, { expectReply = true } = {}) {
   `,
     { timeoutMs: 10_000, everyMs: 10, what },
   );
+  // Long tasks are reported once the task ends: give the observer a beat.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  read.longtasks = await evaluate(session, `const sw = window.__sw; window.__swLong?.disconnect(); return sw.longtasks.filter((t) => t.start + 60 >= sw.t0).map((t) => Math.round(t.start - sw.t0) + "→" + Math.round(t.start - sw.t0 + t.ms));`);
   await evaluate(session, `window.__sw?.observer?.disconnect(); return true;`);
   return read;
 }
 
 function assertAcknowledged(ack, what) {
-  if (ack.ackMs > ACK_BUDGET_MS) throw new Error(`${what} took ${ack.ackMs}ms to show`);
+  if (ack.ackMs > ACK_BUDGET_MS) throw new Error(`${what} took ${ack.ackMs}ms to show (long tasks, ms after the event: ${ack.longtasks?.join(", ") || "none"})`);
   if (ack.replyAt !== null && ack.at > ack.replyAt) {
     throw new Error(`${what} waited for the reply (shown ${ack.ackMs}ms, reply ${ack.replyMs}ms)`);
   }

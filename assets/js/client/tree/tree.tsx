@@ -28,7 +28,7 @@
 // reach anyway.
 
 import type { ReactNode } from "react";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 
 import { childIdsOf } from "./model.ts";
 import { resolveSort } from "./sort.ts";
@@ -141,6 +141,13 @@ function Children({
   form: (anchor: AddSlot) => ReactNode;
   dragging: boolean;
 }) {
+  // This list's own subscription (7.9.1): the toggle that closes it re-renders
+  // it and its chevron's row, not the tree.
+  const collapsed = useSyncExternalStore(
+    ctx.collapse.subscribe,
+    () => ctx.collapse.get(parentId),
+    () => false,
+  );
   const childIds = childIdsOf(ctx.model, parentId);
   if (childIds.length === 0) return null;
 
@@ -154,7 +161,7 @@ function Children({
         "pl-1.5 sm:pl-6 space-y-1",
         // The 6px sliver that says "there is work under me" — the same class
         // the LiveView's collapse toggle sets, so one CSS rule serves both.
-        ctx.collapsed(parentId) ? "collapsed-peek" : "",
+        collapsed ? "collapsed-peek" : "",
       ]
         .filter((part) => part !== "")
         .join(" ")}
@@ -172,7 +179,7 @@ function Children({
       ))}
       {/* "Last child of this branch" — only reachable while the branch is open,
           so a closed one gets no strip at all. */}
-      {dragging && !ctx.collapsed(parentId) && <TailZone branchId={parentId} />}
+      {dragging && !collapsed && <TailZone branchId={parentId} />}
     </ul>
   );
 }

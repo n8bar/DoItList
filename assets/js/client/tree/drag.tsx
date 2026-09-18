@@ -270,7 +270,7 @@ class DragSession {
     // The row strip only, not the subtree under it.
     const rect = (li.firstElementChild ?? li).getBoundingClientRect();
     const ctx = this.ctx();
-    const expanded = childIdsOf(ctx.model, anchorId).length > 0 && !ctx.collapsed(anchorId);
+    const expanded = childIdsOf(ctx.model, anchorId).length > 0 && !ctx.collapse.get(anchorId);
     return { kind: "row", anchorId, band: bandFor(rect.top, rect.height, y, expanded) };
   }
 

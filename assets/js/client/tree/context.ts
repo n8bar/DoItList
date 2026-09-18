@@ -10,6 +10,7 @@ import type { RowPreferences } from "../state/preferences.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
 import type { RowPresence, RowUser } from "./row_model.ts";
+import type { Collapsed } from "./collapse_model.ts";
 import type { Selected } from "./selection_model.ts";
 
 /** A write the user asked for. Arc 3's adapter is what eventually answers one. */
@@ -86,7 +87,12 @@ export interface TreeContext {
   readonly rejection?: EditRejection | null;
 
   canProgress(id: number): boolean;
-  collapsed(id: number): boolean;
+  /**
+   * The closed branches, read by each branch for itself (item 7.9.1) — like
+   * `selection`, a reader rather than a value, so a toggle re-renders the one
+   * branch it concerns and not the tree.
+   */
+  readonly collapse: Collapsed;
   onToggleCollapse(id: number): void;
   /** Select `id`, or clear (`null`) — a click on the selected row clears it. */
   onSelect(id: number | null): void;

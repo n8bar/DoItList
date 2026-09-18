@@ -10,7 +10,7 @@
 // `add_form_model.ts`); this hook is the wiring: React state, `localStorage`,
 // the window listener, and turning a `KeyOutcome` into a call.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import type { RowPreferences } from "../state/preferences.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
@@ -23,6 +23,7 @@ import type { RowPresence, RowUser } from "./row_model.ts";
 import { noPresence } from "./row_model.ts";
 import { canProgress } from "./permissions.ts";
 import type { CollapseStore } from "./tree_model.ts";
+import { collapsedOf, createCollapseStore, setCollapsedIn } from "./collapse_model.ts";
 import { readCollapsed, seedCollapsed, visibleRows, writeCollapsed } from "./tree_model.ts";
 import { initialSelection, revealPlan } from "./reveal_model.ts";
 import {
@@ -122,12 +123,20 @@ export function useTree(options: UseTreeOptions): TreeState {
     [options.store],
   );
 
-  // Seeded SYNCHRONOUSLY, before the first render decides what is visible. Read
-  // in an effect instead and a deep link would look at an empty set on mount,
+  // The closed set is a store of its own (item 7.9.1): each chevron and
+  // children list subscribes for its branch, and this hook reads the whole set
+  // below for the keyboard walks and pruning — one source of truth. Seeded
+  // SYNCHRONOUSLY, before the first render decides what is visible. Read in an
+  // effect instead and a deep link would look at an empty set on mount,
   // conclude there was nothing to expand, and leave its task buried.
-  const [collapsedIds, setCollapsedIds] = useState<ReadonlySet<number>>(() =>
-    seedCollapsed(model, (id) => readCollapsed(store, initiativeId, id)),
+  const collapseStore = useMemo(
+    () => createCollapseStore(seedCollapsed(model, (id) => readCollapsed(store, initiativeId, id))),
+    // Seeded once per Initiative; the effect below folds in later reads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [initiativeId, store],
   );
+  const collapsedIds = useSyncExternalStore(collapseStore.subscribe, collapseStore.get, collapseStore.get);
+  const collapseReader = useMemo(() => collapsedOf(collapseStore), [collapseStore]);
   const [addSlot, setAddSlot] = useState<AddSlot | null>(null);
   // The typed title lives here, not in the form: walking to another slot
   // re-parents the form element and React remounts it, and the whole point of
@@ -139,10 +148,10 @@ export function useTree(options: UseTreeOptions): TreeState {
   // was saved for them. Already-known ids are never re-read, so a branch the
   // user collapsed since is not re-opened by the next read landing.
   useEffect(() => {
-    setCollapsedIds((current) =>
+    collapseStore.set((current) =>
       seedCollapsed(model, (id) => readCollapsed(store, initiativeId, id), current),
     );
-  }, [model, initiativeId, store]);
+  }, [model, initiativeId, store, collapseStore]);
 
   const collapsed = useCallback((id: number) => collapsedIds.has(id), [collapsedIds]);
 
@@ -150,20 +159,16 @@ export function useTree(options: UseTreeOptions): TreeState {
     (id: number, value: boolean) => {
       // Saved first, so a re-render cannot race the write and read back stale.
       writeCollapsed(store, initiativeId, id, value);
-      setCollapsedIds((current) => {
-        if (current.has(id) === value) return current;
-        const next = new Set(current);
-        if (value) next.add(id);
-        else next.delete(id);
-        return next;
-      });
+      setCollapsedIn(collapseStore, id, value);
     },
-    [initiativeId, store],
+    [initiativeId, store, collapseStore],
   );
 
+  // Reads the store, not a captured set: stable across toggles, so the context
+  // built on it is too (7.9.1).
   const onToggleCollapse = useCallback(
-    (id: number) => setCollapsed(id, !collapsedIds.has(id)),
-    [collapsedIds, setCollapsed],
+    (id: number) => setCollapsed(id, !collapseStore.get().has(id)),
+    [collapseStore, setCollapsed],
   );
 
   const deepLinkTaskId = options.deepLinkTaskId ?? null;
@@ -188,7 +193,7 @@ export function useTree(options: UseTreeOptions): TreeState {
 
   const reveal = useCallback(
     (id: number) => {
-      const plan = revealPlan(model, id, (other) => collapsedIds.has(other));
+      const plan = revealPlan(model, id, (other) => collapseStore.get().has(other));
       // Pruning must not act until these have actually opened: until then the
       // task the link named is still buried, and a prune would clear it.
       expanding.current = plan.expand;
@@ -204,7 +209,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       const target = plan.select;
       requestAnimationFrame(() => scrollRowIntoView(target));
     },
-    [collapsedIds, model, setCollapsed, setSelectedId],
+    [collapseStore, model, setCollapsed, setSelectedId],
   );
 
   // One reveal per `?task=` value. Keyed on the id rather than on `reveal`,
@@ -351,7 +356,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       rowKeys,
       rejection,
       canProgress: canProgressId,
-      collapsed,
+      collapse: collapseReader,
       onToggleCollapse,
       onSelect: setSelectedId,
       onReveal: reveal,
@@ -372,7 +377,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       rowKeys,
       rejection,
       canProgressId,
-      collapsed,
+      collapseReader,
       onToggleCollapse,
       setSelectedId,
       reveal,

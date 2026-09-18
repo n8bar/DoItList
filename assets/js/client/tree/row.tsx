@@ -161,6 +161,13 @@ export function Row({ ctx, id, depth, children }: RowProps) {
     () => ctx.selection.get() === id,
     () => false,
   );
+  // Likewise the branch's own open state (7.9.1): a toggle re-renders this
+  // row and its children list, not every row.
+  const expanded = useSyncExternalStore(
+    ctx.collapse.subscribe,
+    () => !ctx.collapse.get(id),
+    () => true,
+  );
 
   const record = ctx.model.tasks[id];
   if (record === undefined) return null;
@@ -171,7 +178,6 @@ export function Row({ ctx, id, depth, children }: RowProps) {
   const done = record.status === "done";
   const progress = progressValue(ctx.model, id);
   const canProgress = ctx.canProgress(id);
-  const expanded = !ctx.collapsed(id);
   const assignee = assigneeView(record, ctx.members);
   const display = ctx.rows;
   const badges = rowBadges(ctx.presence, id);
