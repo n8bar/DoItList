@@ -28,7 +28,7 @@ Keep this doc tight. If the universal baseline grows past ~25 rules, it stops be
 4.2 Text meets WCAG AA contrast (4.5:1 normal, 3:1 large). Verify before shipping.
 
 ### 5. Touch & sizing
-5.1 Touch targets ≥ 44×44px on mobile/touch surfaces.
+5.1 Touch targets ≥ 24×24px (WCAG 2.5.8) in the default layout, allowed only because the touch layout (a device-saved switch) gives every target ≥ 44×44px.
 5.2 Layouts tolerate ~30% string growth without breaking — for translations and longer-than-expected content.
 
 ### 6. Loading & action feedback
