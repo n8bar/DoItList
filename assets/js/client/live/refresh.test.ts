@@ -245,6 +245,21 @@ describe("what a `changed` event makes the client do (item 1.5)", () => {
 
     assert.equal(domain.get().trees[12]?.header.name, "Old");
   });
+
+  it("an initiative_updated event re-reads and relabels from the new index style (item 7.7)", async () => {
+    const before = buildTree([{ id: 121 }], { id: 12, indexStyle: "numerical" });
+    const domain = createDomainStore({ trees: { 12: fromSnapshot(before) } });
+    assert.equal(domain.get().trees[12]?.tasks[121]?.index, "1");
+
+    const after = buildTree([{ id: 121 }], { id: 12, indexStyle: "roman" });
+    const { api } = fakeApi({ "/initiatives/12": after });
+
+    sync({ api, domain }).onChanged({ initiativeId: 12, kind: "initiative_updated", id: 12 });
+    await settle();
+
+    assert.equal(domain.get().trees[12]?.indexStyle, "roman");
+    assert.equal(domain.get().trees[12]?.tasks[121]?.index, "I");
+  });
 });
 
 describe("a refresh that cannot be a tree (item 1.6.2)", () => {

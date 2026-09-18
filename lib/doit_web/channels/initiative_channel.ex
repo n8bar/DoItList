@@ -23,8 +23,11 @@ defmodule DoItWeb.InitiativeChannel do
   Every other change collapses to ONE client event, `"changed"`, carrying the
   kind and the id that moved. There is no tree payload: Arc 3 defines the delta envelope,
   and until it does the honest thing is to tell the client *that* something
-  changed and let it refetch. Messages this arc has no client story for
-  (`:initiative_updated`, chat) are ignored rather than guessed at.
+  changed and let it refetch. `:initiative_updated` (a render-affecting
+  Initiative field, e.g. `index_style`) forwards the same way, so a numbering
+  style changed elsewhere relabels an open tree rather than going stale
+  (m04.02 item 7.7). Messages this arc has no client story for (chat) are
+  still ignored rather than guessed at.
 
   ## Selection presence (m04.02 item 2.4.1)
 
@@ -42,7 +45,14 @@ defmodule DoItWeb.InitiativeChannel do
   alias DoItWeb.Api.Authz
   alias DoItWeb.Presence
 
-  @kinds [:task_created, :task_updated, :task_moved, :task_deleted, :members_changed]
+  @kinds [
+    :task_created,
+    :task_updated,
+    :task_moved,
+    :task_deleted,
+    :members_changed,
+    :initiative_updated
+  ]
 
   @impl true
   def join("initiative:" <> id, _params, socket) do

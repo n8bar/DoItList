@@ -171,8 +171,15 @@ defmodule DoItWeb.InitiativeChannelTest do
       assert id == initiative.id
     end
 
-    test "a message this arc has no story for is ignored", %{initiative: initiative} do
+    test "an Initiative-record change is a change too", %{initiative: initiative} do
       Tasks.notify_initiative_updated(initiative.id)
+
+      assert_push "changed", %{kind: "initiative_updated", id: id}
+      assert id == initiative.id
+    end
+
+    test "a message this arc has no story for is ignored", %{channel: channel} do
+      send(channel.channel_pid, {:something_unmodeled, 999})
 
       refute_push "changed", %{}, 100
     end

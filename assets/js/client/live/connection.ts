@@ -32,6 +32,7 @@ export const CHANGED_KINDS = [
   "task_moved",
   "task_deleted",
   "members_changed",
+  "initiative_updated",
 ] as const;
 
 export type ChangedKind = (typeof CHANGED_KINDS)[number];
@@ -40,7 +41,7 @@ export interface ChangedEvent {
   /** The Initiative whose channel carried the event. */
   readonly initiativeId: number;
   readonly kind: ChangedKind;
-  /** The record that moved — a task id, except `members_changed`. */
+  /** The record that moved — a task id, except `members_changed` and `initiative_updated`, which carry the Initiative id. */
   readonly id: number;
 }
 

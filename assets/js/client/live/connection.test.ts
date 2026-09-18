@@ -148,6 +148,11 @@ describe("server changes", () => {
       kind: "members_changed",
       id: 7,
     });
+    assert.deepEqual(parseChanged(7, { kind: "initiative_updated", id: 7 }), {
+      initiativeId: 7,
+      kind: "initiative_updated",
+      id: 7,
+    });
     assert.equal(parseChanged(7, { kind: "task_updated", id: "9" }), null);
     assert.equal(parseChanged(7, null), null);
   });
