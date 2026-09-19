@@ -3243,8 +3243,10 @@ export async function checkTailZonesStayLast(ctx) {
   paint = await dragOver(session, pointer, await zonePoint(session, `#task-tree > li.drop-root-zone[data-zone="top"]`, "the top root zone"));
   if (paint.zone !== "top") throw new Error(`the top root zone is not lit: ${JSON.stringify(paint)}`);
   await armStopwatch(session, "pointerup", `const o = __tree.order(null); return o !== null && o[0] === ${november};`);
+  const rootDrop = await startProfile(session);
   await mouseUp(session, pointer);
   ack = await readStopwatch(session, `"November" first at the root`);
+  await rootDrop.stop("root-zone-drop");
   assertAcknowledged(ack, "the row moved to the root's start");
   settled = await settle(session);
   after = await evaluate(session, `return { order: __tree.order(null), depth: document.getElementById("task-${november}")?.dataset.depth };`);
@@ -3401,7 +3403,7 @@ async function zonePoint(session, selector, what) {
 }
 
 /** `ids` with `id` moved to just before `anchor`. */
-function movedBefore(ids, id, anchor) {
+export function movedBefore(ids, id, anchor) {
   const rest = ids.filter((x) => x !== id);
   const at = rest.indexOf(anchor);
   return [...rest.slice(0, at), id, ...rest.slice(at)];
@@ -3510,6 +3512,48 @@ async function waitForRows(session, ids, what) {
 // ---------------------------------------------------------------------------
 // In-page helpers. Installed once the tree is up; every check reads through them.
 // ---------------------------------------------------------------------------
+
+/**
+ * The page's fetch, tapped: every request counted, every operations reply
+ * stamped, so a stopwatch can say whether a change showed before or after
+ * the reply. Installed once per page load; shared with the index harness.
+ */
+export const OPS_TAP = `
+  // Every fetch the client makes, counted; operations replies stamped.
+  if (window.__ops === undefined) {
+    const original = window.fetch;
+    window.__ops = { sent: 0, replied: 0, inflight: 0, replies: [], log: [], lastActivity: performance.now() };
+    window.fetch = function (input, init) {
+      const url = typeof input === "string" ? input : input.url;
+      const method = (init?.method ?? "GET").toUpperCase();
+      const isOp = method === "POST" && /\\/app\\/api\\/operations$/.test(url);
+      const ops = window.__ops;
+      ops.inflight += 1;
+      ops.lastActivity = performance.now();
+      if (isOp) ops.sent += 1;
+      const entry = { method, url, start: Math.round(performance.now()), end: null, body: isOp && typeof init?.body === "string" ? init.body.slice(0, 400) : null };
+      ops.log.push(entry);
+      const settle = () => {
+        ops.inflight -= 1;
+        entry.end = Math.round(performance.now());
+        ops.lastActivity = performance.now();
+        if (isOp) {
+          ops.replied += 1;
+          ops.replies.push(performance.now());
+        }
+      };
+      return original.call(this, input, init).then(
+        (response) => {
+          settle();
+          if (isOp) response.clone().text().then((text) => { entry.reply = text.slice(0, 600); }).catch(() => {});
+          return response;
+        },
+        (error) => { settle(); throw error; },
+      );
+    };
+  }
+  return true;
+`;
 
 const PAGE_HELPERS = `
   window.__tree = {
@@ -3677,39 +3721,7 @@ const PAGE_HELPERS = `
     },
   };
 
-  // Every fetch the client makes, counted; operations replies stamped.
-  if (window.__ops === undefined) {
-    const original = window.fetch;
-    window.__ops = { sent: 0, replied: 0, inflight: 0, replies: [], log: [], lastActivity: performance.now() };
-    window.fetch = function (input, init) {
-      const url = typeof input === "string" ? input : input.url;
-      const method = (init?.method ?? "GET").toUpperCase();
-      const isOp = method === "POST" && /\\/app\\/api\\/operations$/.test(url);
-      const ops = window.__ops;
-      ops.inflight += 1;
-      ops.lastActivity = performance.now();
-      if (isOp) ops.sent += 1;
-      const entry = { method, url, start: Math.round(performance.now()), end: null, body: isOp && typeof init?.body === "string" ? init.body.slice(0, 400) : null };
-      ops.log.push(entry);
-      const settle = () => {
-        ops.inflight -= 1;
-        entry.end = Math.round(performance.now());
-        ops.lastActivity = performance.now();
-        if (isOp) {
-          ops.replied += 1;
-          ops.replies.push(performance.now());
-        }
-      };
-      return original.call(this, input, init).then(
-        (response) => {
-          settle();
-          if (isOp) response.clone().text().then((text) => { entry.reply = text.slice(0, 600); }).catch(() => {});
-          return response;
-        },
-        (error) => { settle(); throw error; },
-      );
-    };
-  }
+${OPS_TAP}
   return true;
 `;
 
@@ -3722,7 +3734,7 @@ const PAGE_HELPERS = `
  * as 3, not 1. A `transient` predicate (an in-flight mark, an open dialog) is
  * expected to stop holding, so `settle` does not read its flips as flicker.
  */
-async function armStopwatch(session, trigger, predicate, { transient = false } = {}) {
+export async function armStopwatch(session, trigger, predicate, { transient = false } = {}) {
   await evaluate(
     session,
     `
@@ -3842,7 +3854,7 @@ const RENDERED_JS = `
 `;
 
 /** Waits for `at` (and, unless told otherwise, the reply that followed t0). */
-async function readStopwatch(session, what, { expectReply = true } = {}) {
+export async function readStopwatch(session, what, { expectReply = true } = {}) {
   const read = await waitFor(
     session,
     `
@@ -3879,7 +3891,7 @@ async function readStopwatch(session, what, { expectReply = true } = {}) {
   return read;
 }
 
-function assertAcknowledged(ack, what) {
+export function assertAcknowledged(ack, what) {
   if (ack.ackMs > ACK_BUDGET_MS) throw new Error(`${what} took ${ack.ackMs}ms to show (long tasks, ms after the event: ${ack.longtasks?.join(", ") || "none"})`);
   if (ack.replyAt !== null && ack.at > ack.replyAt) {
     throw new Error(`${what} waited for the reply (shown ${ack.ackMs}ms, reply ${ack.replyMs}ms)`);
@@ -3972,13 +3984,13 @@ export async function withThrowaway({ create, run, trash, onLeak }) {
 }
 
 /** One operation through the page's own session; its result. */
-async function pageOperation(session, key, operation) {
+export async function pageOperation(session, key, operation) {
   const [result] = await pageOperations(session, key, [operation]);
   return result ?? null;
 }
 
 /** One batch through the page's own session — its cookie, its CSRF token. All or nothing; the results in order. */
-async function pageOperations(session, key, operations) {
+export async function pageOperations(session, key, operations) {
   const reply = await evaluate(
     session,
     `

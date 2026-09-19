@@ -112,25 +112,35 @@ defmodule DoIt.Api.Idempotency do
   end
 
   @doc """
-  `prior_commit/3` with the batch in hand (m04.02 item 7.15): a batch of
-  `add history` ops alone is never a duplicate by payload. An undo or redo has
-  no distinguishing content — the second press of the day is byte-identical
-  to the first — so the payload rule that guards content ops would wall off
-  every Undo after the first. An exact key replay still returns the stored
+  `prior_commit/3` with the batch in hand (m04.02 items 7.15 and 7.20): a
+  batch that creates no record is never a duplicate by payload. The payload
+  rule exists to stop a re-sent `add` making a second copy; an update, a
+  remove, or an undo/redo applied twice lands on the same state, and a user
+  legitimately repeats them — Sort back to Name, a second Undo of the day —
+  with byte-identical payloads. An exact key replay still returns the stored
   response through `fetch/3`, which runs first.
   """
   @spec prior_commit(User.t(), String.t(), binary(), [map()]) ::
           {String.t(), DateTime.t()} | nil
   def prior_commit(%User{} = user, key, payload_hash, operations) when is_binary(key) do
-    if history_only?(operations), do: nil, else: prior_commit_query(user, key, payload_hash)
+    if repeatable?(operations), do: nil, else: prior_commit_query(user, key, payload_hash)
   end
 
-  @doc "True for a non-empty batch made only of `add history` ops (an undo or redo)."
-  @spec history_only?(term()) :: boolean()
-  def history_only?([_ | _] = operations),
-    do: Enum.all?(operations, &match?(%{"op" => "add", "type" => "history"}, &1))
+  @doc """
+  True for a non-empty batch that creates no record: updates, removes, and
+  `add history` (an undo or redo). Any other `add` makes the batch guarded.
+  """
+  @spec repeatable?(term()) :: boolean()
+  def repeatable?([_ | _] = operations) do
+    Enum.all?(operations, fn
+      %{"op" => "add", "type" => "history"} -> true
+      %{"op" => "add"} -> false
+      %{"op" => _} -> true
+      _ -> false
+    end)
+  end
 
-  def history_only?(_operations), do: false
+  def repeatable?(_operations), do: false
 
   defp prior_commit_query(user, key, payload_hash) do
     cutoff = DateTime.add(DateTime.utc_now(), -@retention_hours, :hour)

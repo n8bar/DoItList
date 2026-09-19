@@ -109,12 +109,28 @@ defmodule DoIt.Api.IdempotencyTest do
   # m04.02 item 7.15: an undo/redo batch has no distinguishing content, so two
   # presses under two keys are two commits, never a payload duplicate — while an
   # exact key replay still returns the stored response.
-  describe "history batches and prior_commit/4" do
+  describe "repeatable batches and prior_commit/4" do
     setup do
       %{
         history: [%{"op" => "add", "type" => "history", "data" => %{"initiative_id" => 7, "action" => "undo"}}],
-        content: [%{"op" => "add", "type" => "task", "data" => %{"initiative_id" => 7, "title" => "Alpha"}}]
+        content: [%{"op" => "add", "type" => "task", "data" => %{"initiative_id" => 7, "title" => "Alpha"}}],
+        update: [%{"op" => "update", "type" => "account", "data" => %{"index_sort" => "name"}}]
       }
+    end
+
+    test "an update-only batch under two keys both commit (7.20)", %{update: ops} do
+      u = user()
+      h = hash(ops)
+      assert :ok = Idempotency.store(u, "sort-1", h, 200, %{"results" => []})
+      assert Idempotency.prior_commit(u, "sort-2", h, ops) == nil
+    end
+
+    test "an update beside an add is still guarded", %{update: update, content: content} do
+      u = user()
+      ops = update ++ content
+      h = hash(ops)
+      assert :ok = Idempotency.store(u, "both-1", h, 200, %{"results" => []})
+      assert {"both-1", %DateTime{}} = Idempotency.prior_commit(u, "both-2", h, ops)
     end
 
     test "two history batches under two keys both commit", %{history: ops} do

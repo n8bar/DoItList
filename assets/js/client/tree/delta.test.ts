@@ -119,6 +119,27 @@ describe("applyDelta from an op result", () => {
     assert.deepEqual([...(again.model.childIds[10] ?? [])], [12, 11]);
   });
 
+  it("lands an added row where a sorted parent puts it, not at the slot asked for (7.19)", () => {
+    const model = fromSnapshot(
+      buildTree([
+        {
+          id: 10,
+          title: "Cabinets",
+          sort_mode: "alphabetical",
+          children: [{ id: 11, title: "Brackets" }, { id: 12, title: "Doors" }],
+        },
+      ]),
+    );
+
+    const { model: next } = applyDelta(model, {
+      upserts: [{ id: 13, parent_id: 10, title: "Catches", position: 0 }],
+      removed: [],
+    });
+
+    assert.deepEqual([...(ok(next).childIds[10] ?? [])], [11, 13, 12]);
+    assert.equal(next.tasks[13]?.index, "1.2");
+  });
+
   it("leaves records it did not mention with their identity", () => {
     const model = base();
     const { model: next } = applyDelta(model, deltaFromOpResult(result({ title: "Handles" })));

@@ -1,6 +1,6 @@
 # Agent Surfaces
 
-How to reach Do It List as an agent: the HTTP API, the MCP server, and the scripted client. The promises these surfaces keep are in [`agent_integration.md`](../specs/agent_integration.md), stated once there and linked from here.
+How to reach Do It List as an agent: the HTTP API, the MCP server, and the scripted client. The promises they keep are in [`agent_integration.md`](../specs/agent_integration.md).
 
 Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` are written by `mix doit.docs.gen` from the code. Hand-edits inside a fence are lost on the next run.
 
@@ -8,9 +8,9 @@ Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` ar
 
 ### Authentication
 
-Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page. The server keeps only a hash, so a lost token is replaced, never recovered.
+Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page; the server keeps only a hash, so a lost token is replaced, never recovered.
 
-The browser client has its own private surface under `/app/api`, authenticated by the web session and sharing this API's operations engine and read serializers. A bearer token never works there; a session never works on `/api/v1`. The same session also authenticates its live socket at `/socket`, which pushes change notices for an Initiative the user may already read, and carries a `user:<id>` channel — joinable only as yourself — whose `notification` event is one of the user's own notifications, already worded and linked. That surface also answers `GET /app/api/notifications` with the user's recent notifications and unread count; marking them read is the ordinary `update notification` operation. It answers three more Initiative reads: `/members`, with roles, `/history`, what this user can undo and redo, and `/summary`, that Initiative's one index row, so a live change patches a row instead of re-reading the list. `GET /app/api/initiatives/archive` is the index's Archived and Trash drawer: `archived`, the Initiatives this user has archived or hidden (each summary row plus `archived` and `hidden`), and `trashed`, the ones they own that sit in Trash (plus `trashed_at`). Restoring any of them is the ordinary `update initiative {state}` operation, and the Trash's Delete is `remove initiative`. The session read's `preferences` also carries `index_sort` (`null` for Recent) and `index_sort_reverse` — the index's Sort and Reverse choice as the workspace saved it — and the client writes the choice back with `update account`. Its `initiative:<id>` channel carries selection presence too — a client sends `select` with a task id or null, and gets `presence_state` on join and `presence_diff` after, so each route sees the other's people. It is not an agent surface — agents use the endpoints below.
+The browser client has its own session-authenticated surface under `/app/api` and a live socket at `/socket`, sharing this API's operations engine and serializers. A bearer token never works there; a session never works on `/api/v1`. Its extra reads feed the app alone and its writes are the operations below. It is not an agent surface.
 
 ### Endpoints
 
@@ -39,11 +39,11 @@ The browser client has its own private surface under `/app/api`, authenticated b
 | 422 | the batch was rejected | read `results` for the failing index |
 | 429 | over 120 requests a minute | wait the `Retry-After` seconds |
 
-An [Initiative with agent access off](../specs/agent_integration.md#safety-and-authorization) reads as not found, never forbidden. The API does not confirm that a record you cannot reach exists.
+An [Initiative with agent access off](../specs/agent_integration.md#safety-and-authorization) reads as not found, never forbidden.
 
 ### The operations envelope
 
-`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` that later operations in the same batch point at; a lid used before it is defined fails the request. Resending with the same `Idempotency-Key` replays the stored result instead of applying twice; the same payload under a new key is refused with code `duplicate`.
+`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` that later operations in the batch point at; a lid used before it is defined fails the request. The same `Idempotency-Key` replays the stored result; a payload that creates records is refused under a new key with code `duplicate`.
 
 ```json
 {"operations": [
@@ -53,19 +53,19 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 ]}
 ```
 
-`add history` reverses the Initiative's newest reversible action: `data` takes an `initiative_id` and an `action` of `undo` or `redo`. The stack is shared, and reversing is role-gated like the original write, so an action you may not reverse reads as nothing to undo. The result names the kind it reversed and carries a delta: `upserts` for the tasks still live, each with its slot and description, `removed` for the ones gone, and `refetch` when the reversal changed something a delta can't carry, like a comment.
+`add history` reverses the Initiative's newest reversible action: `data` takes an `initiative_id` and an `action` of `undo` or `redo`. The stack is shared and role-gated like the original write. The result names the kind reversed and carries a delta: `upserts`, `removed`, and `refetch` when a delta can't carry the change.
 
-`update task` with `ids` in place of `id` moves many tasks as one block: `data` carries `parent_id` (or `parent_lid`) and an optional `position`, nothing else. The tasks land under that parent in list order, from `position` or the top when omitted, as one undo step and one activity line. The result's `id` is the first moved task and `records` carries every moved record in order. Every listed task must be reachable with edit rights and share the destination's Initiative; one bad entry fails the op with nothing moved. Both `id` and `ids`, an empty list, or a non-integer entry is rejected at `ids`.
+`update task` with `ids` in place of `id` moves many tasks as one block: `data` carries `parent_id` (or `parent_lid`) and an optional `position`, nothing else. They land in list order, from `position` or the top, as one undo step and one activity line; `id` is the first moved task and `records` carries them all. Every task must be editable and share the destination's Initiative; one bad entry, an empty list, or `id` beside `ids` fails the op at `ids` with nothing moved.
 
-`update task` with `sort_mode` and/or `sort_reverse` sets how that branch orders its children: `sort_mode` is one of `manual`, `alphabetical`, `completion`, `priority`, `created`, `updated`, or `null` to inherit the nearest ancestor's; `sort_reverse` flips the direction; a key left out keeps its current value. `cascade_sort: true` makes every descendant branch inherit, so the whole subtree follows this branch from then on; given with a mode it sets first, then cascades, as one op and one activity line each. The result's `records` carry the target and every branch the cascade changed, each with its `sort_mode` and `sort_reverse`; read the tree for the children's new order.
+`update task` with `sort_mode` and/or `sort_reverse` sets how that branch orders its children: `sort_mode` is `manual`, `alphabetical`, `completion`, `priority`, `created`, `updated`, or `null` to inherit; `sort_reverse` flips it; a key left out keeps its value. `cascade_sort: true` makes every descendant branch inherit (a mode sent with it sets first, then cascades). `records` carry the target and every branch changed; read the tree for the new order.
 
-`update initiative` with `position` puts that Initiative at a 0-based slot in your own Manual order of the index — the list the app shows under Sort: Manual. It is your view alone: any member may set it, nobody else's order moves, and the Initiative's `version` does not change. Rows you have never placed sit after the placed ones, owners' first then most recently updated; a slot past the end lands last. The result carries the resolved `sort_order` and `order`, the full id list as it now reads. `position` travels alone — no content field in the same op.
+`update initiative` with `position` puts that Initiative at a 0-based slot in your own Manual order of the index. It is your view alone: any member may set it, nobody else's order moves, and `version` does not change. Unplaced rows sit after placed ones; a slot past the end lands last. The result carries `sort_order` and `order`, the full id list. `position` travels alone.
 
-`remove initiative` deletes an Initiative forever — the Trash's Delete button. It takes only an Initiative already in Trash and only from its owner: a live one is refused as irreversible, so a permanent delete is always two steps (`update initiative {state: "trashed"}`, then this), and anyone but the owner is refused. An optional `expected_version` guards against a stale read. Its tasks, members, comments, and activity go with it, nothing brings it back, and it drops out of the archive read at once. The result carries the id and `removed: true`.
+`remove initiative` deletes an Initiative forever — the Trash's Delete button. Only its owner may, and only once it is in Trash (`update initiative {state: "trashed"}` first); a live one is refused as irreversible. An optional `expected_version` guards a stale read. Tasks, members, comments, and activity go with it. The result carries the id and `removed: true`.
 
-`update account` sets your own Initiatives index sort — the choice the app's Sort control saves — and nothing else about the account: `index_sort` is one of `manual`, `name`, `progress`, `created`, `updated`, or `null` for Recent; `index_sort_reverse` flips it. It takes no `id`; the target is always you. Reverse is remembered per mode, so a mode sent alone comes back with the reverse that mode last had, and a flag sent alone lands on the current mode. The result carries the resolved pair.
+`update account` sets your own index sort and nothing else: `index_sort` is `manual`, `name`, `progress`, `created`, `updated`, or `null` for Recent; `index_sort_reverse` flips it. It takes no `id`. Reverse is remembered per mode, so a mode sent alone comes back with its last reverse. The result carries the resolved pair.
 
-A response carries `results`, one entry per operation, in order. Each names a `status` — `ok`, `error`, or `not_applied` — and a failure's `pointer` names the field at fault. One failure rolls the whole batch back, so every other entry reads `not_applied`.
+`results` holds one entry per operation, in order, each with a `status` of `ok`, `error`, or `not_applied`; a failure's `pointer` names the field at fault. One failure rolls the batch back, so every other entry reads `not_applied`.
 
 <!-- generated: DoItWeb.Api.Operations -->
 | Op | Type | Data keys |
@@ -105,7 +105,7 @@ A response carries `results`, one entry per operation, in order. Each names a `s
 
 ### Read-only and writable fields
 
-An Initiative list item also carries its `description` and `created_at`, so a list can be shown and ordered without reading each tree. `progress` is the rolled-up number the server maintains; writing it is refused. Leaves take `manual_progress`; branches don't — a branch's progress comes from its children. A task node also names the `sort_mode` and `sort_reverse` its children are ordered by; `null` inherits. A task node, and every task record an op answers with, carries `updated_by` (`{id, name, username}` of whoever last changed it, `null` before anyone has) and `updated_at` (UTC); both are the server's, and an op that sends them is refused as an unknown key.
+An Initiative list item carries `description` and `created_at`, so a list can be ordered without reading each tree. `progress` is the server's roll-up; writing it is refused. Leaves take `manual_progress`; branches don't. A task node names its children's `sort_mode` and `sort_reverse` (`null` inherits) and carries `updated_by` (`{id, name, username}`, `null` before anyone) and `updated_at` (UTC); sending either is refused as an unknown key.
 
 
 ## Scripted client
@@ -131,13 +131,13 @@ An Initiative list item also carries its `description` and `created_at`, so a li
 | retry | [key] | --out | resend writes whose outcome is unknown |
 <!-- /generated: scripts/doitlist.py -->
 
-`move` takes one Task or a comma-separated list: `move %12,%15,%9 %7 0` lands the three under Task 7 in that order as one write. A single Task still sends its `expected_version`; a list cannot.
+`move` takes one Task or a comma-separated list: `move %12,%15,%9 %7 0` lands the three under Task 7 in that order as one write. Only a single Task sends `expected_version`.
 
 `show <task>` prints a Task's outline line, then its description or `(no description)`.
 
 ### Walkthrough
 
-Import a plan, tick a Task against it, read the tree back.
+Import a plan, tick a Task, read the tree back.
 
 ```sh
 doitlist.py import PLAN.md --as "Q3 plan" --preview   # then re-run without --preview to apply
@@ -147,15 +147,15 @@ doitlist.py tree 12 --depth 2
 
 ### The mirror workflow
 
-A mirror is a [Markdown file standing in for an Initiative](../specs/agent_integration.md#shared-work). Its import writes each Task's `%<id>` onto the source line, so [completions](../specs/agent_integration.md#completion-mirroring) read the file, not the tree. It writes nothing else, so name the Initiative with `--initiative` unless the file already links it. Live reads are for writes and drift.
+A mirror is a [Markdown file standing in for an Initiative](../specs/agent_integration.md#shared-work). Import writes each Task's `%<id>` onto its line, so [completions](../specs/agent_integration.md#completion-mirroring) read the file, not the tree. Name the Initiative with `--initiative` unless the file links it.
 
 ### Import format
 
-Headings are branches. List items are Tasks, nested by indent. A ticked box imports done. [Order and wording stay as written](../specs/agent_integration.md#import-fidelity); a trailing `%<id>` is stripped.
+Headings are branches; list items are Tasks, nested by indent; a ticked box imports done. [Order and wording stay as written](../specs/agent_integration.md#import-fidelity); a trailing `%<id>` is stripped.
 
 ### Recovery
 
-A write whose outcome is unknown prints the command that settles it. Run it first; the same key replays rather than reapplying.
+A write whose outcome is unknown prints the command that settles it; run it first. The same key replays rather than reapplying.
 
 
 ## MCP server
@@ -188,11 +188,11 @@ A write whose outcome is unknown prints the command that settles it. Run it firs
 
 ### Tools and the endpoints behind them
 
-Every write tool is one operation in a batch of one, posted to the operations endpoint; `apply_operations` passes a whole batch through. Read tools map to the read endpoints one for one. Anything the tools do not cover, the API still does.
+Every write tool is one operation in a batch of one; `apply_operations` passes a whole batch through. Read tools map to the read endpoints one for one. Anything the tools do not cover, the API still does.
 
 ### Setup
 
-Paste the block for your client, in the variant for your shell. Immediately after minting only, the account page shows it with your token.
+Paste the block for your client, in the variant for your shell. Only right after minting does the account page show it with your token.
 
 <!-- generated: DoItWeb.AgentConnect -->
 #### Claude Code
@@ -248,7 +248,7 @@ py -3 --version   # if missing: winget install --id Python.Python.3.13 -e
 
 ### Walkthrough
 
-Ask your agent for these in its own chat; the tools it reaches for are named beside each.
+Ask your agent for these in its chat; the tool it reaches for is named beside each.
 
 1. Confirm the connection — `get_me`. It answers only with a working token.
 2. Import a plan into a new Initiative — `import_text`.

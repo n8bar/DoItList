@@ -13,7 +13,7 @@
 // nothing a user does to a row waits on the network.
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Icon } from "../ui/icon.tsx";
 import { afterPaint } from "./after_paint.ts";
@@ -34,7 +34,8 @@ import {
 import type { Selection } from "../live/presence_model.ts";
 import type { TreeContext } from "./context.ts";
 import { clickedSelection } from "./selection_model.ts";
-import { useRow } from "./use_task_store.ts";
+import { useLabel, useRow } from "./use_task_store.ts";
+import type { TaskReader } from "./task_store.ts";
 
 const NO_BADGES: readonly Selection[] = [];
 
@@ -148,6 +149,25 @@ function Avatar({ user, className }: { user: RowUser; className: string }) {
     </span>
   );
 }
+
+/**
+ * The number label ("3.2.1"), reading its index for itself (7.21): a move
+ * that renumbers the tree re-renders these — a few elements each — and not
+ * the rows. Empty under the "none" style = no element.
+ */
+const IndexLabel = memo(function IndexLabel({ tasks, id }: { tasks: TaskReader; id: number }) {
+  const label = useLabel(tasks, id);
+  if (label === "") return null;
+  return (
+    <span
+      data-task-index
+      className="group/idx flex-none inline-flex items-center gap-1 font-mono text-xs font-medium text-zinc-500 dark:text-zinc-400 tabular-nums select-none"
+    >
+      {label}
+      <CopyIndexButton label={label} />
+    </span>
+  );
+});
 
 export function Row({ ctx, id, depth, children }: RowProps) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -301,16 +321,8 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           />
         )}
 
-        {/* The positional label. Empty under the "none" style = no element. */}
-        {record.index !== "" && (
-          <span
-            data-task-index
-            className="group/idx flex-none inline-flex items-center gap-1 font-mono text-xs font-medium text-zinc-500 dark:text-zinc-400 tabular-nums select-none"
-          >
-            {record.index}
-            <CopyIndexButton label={record.index} />
-          </span>
-        )}
+        {/* The positional label, on its own subscription (7.21). */}
+        <IndexLabel tasks={ctx.tasks} id={id} />
 
         {/* Row 1: the attribute chips, clipping together rather than wrapping. */}
         <div className="flex flex-1 items-center gap-2 min-w-0 overflow-hidden">

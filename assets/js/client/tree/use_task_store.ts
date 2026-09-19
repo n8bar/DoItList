@@ -13,6 +13,12 @@ export function useRow(tasks: TaskReader, id: number): RowView | null {
   return useSyncExternalStore(tasks.subscribe, read, read);
 }
 
+/** This row's number label — the one thing a renumbering changes (7.21). */
+export function useLabel(tasks: TaskReader, id: number): string {
+  const read = useCallback(() => tasks.label(id), [tasks, id]);
+  return useSyncExternalStore(tasks.subscribe, read, read);
+}
+
 /** One branch's children list — the same object until its order or sort changes. */
 export function useChildren(tasks: TaskReader, id: number): ChildrenView {
   const read = useCallback(() => tasks.children(id), [tasks, id]);

@@ -50,7 +50,10 @@ defmodule DoIt.Initiatives do
       },
       order_by: [
         asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
-        desc: i.updated_at
+        desc: i.updated_at,
+        # Same-second ties (second-precision timestamps) fall the same way on
+        # every read, so the index and a position write agree (7.22).
+        desc: i.id
       ]
     )
     |> Repo.all()
@@ -694,7 +697,8 @@ defmodule DoIt.Initiatives do
       order_by: [
         asc_nulls_last: m.sort_order,
         asc: fragment("CASE WHEN ? = 'owner' THEN 0 ELSE 1 END", m.role),
-        desc: i.updated_at
+        desc: i.updated_at,
+        desc: i.id
       ],
       select: i.id
     )

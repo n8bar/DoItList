@@ -6,7 +6,7 @@ import type { TaskSpec } from "./gen.ts";
 import { buildTree } from "./gen.ts";
 import type { TreeModel } from "./model.ts";
 import { fromSnapshot } from "./model.ts";
-import { addTask } from "./ops.ts";
+import { addTask, moveTask } from "./ops.ts";
 import { predictLineage } from "./progress.ts";
 import type { RowMarks } from "./task_store.ts";
 import { NO_MARKS, createTaskReader } from "./task_store.ts";
@@ -97,14 +97,17 @@ describe("task reader (item 7.18)", () => {
     assert.equal(rows.get(12)?.renders, 1);
   });
 
-  it("a rename re-renders that row, and the rows whose references read its label", () => {
+  it("a relabel re-renders the label and the rows whose references read it, not the row itself", () => {
     const { model, reader, rendered } = harness();
     const current = model.get() as TreeModel;
     const gamma = current.tasks[12];
     assert.ok(gamma !== undefined);
+    const label = probe(reader.subscribe, () => reader.label(12));
     model.set({ ...current, tasks: { ...current.tasks, 12: { ...gamma, index: "9.9.9" } } });
-    // Eta says "see %<12>", and paints Gamma's label.
-    assert.deepEqual(rendered(), [12, 21]);
+    // Eta says "see %<12>", and paints Gamma's label; Gamma's own label reads for itself (7.21).
+    assert.deepEqual(rendered(), [21]);
+    assert.equal(label.renders, 1);
+    assert.equal(label.value, "9.9.9");
     const eta = reader.row(21);
     assert.deepEqual(eta?.description?.map((part) => (part.kind === "link" ? part.label : part.kind)), ["text", "9.9.9"]);
   });
@@ -144,9 +147,9 @@ describe("task reader (item 7.18)", () => {
 
     assert.deepEqual(listsRendered(), [11]);
     assert.deepEqual(reader.children(11).ids, [-1, 12, 13]);
-    // Beta's and Alpha's roll-ups moved, the two rows behind it took new
-    // labels, and Eta paints Gamma's label — nothing under Zeta besides.
-    assert.deepEqual(rendered(), [10, 11, 12, 13, 21]);
+    // Beta's and Alpha's roll-ups moved and Eta paints Gamma's label; the two
+    // rows behind the new one only took new labels, which are not the row's (7.21).
+    assert.deepEqual(rendered(), [10, 11, 21]);
     const standIn = reader.row(-1);
     assert.deepEqual(standIn?.title, [{ kind: "text", text: "Kilo" }]);
     assert.equal(standIn?.saving, true);
@@ -163,6 +166,43 @@ describe("task reader (item 7.18)", () => {
     assert.equal(reader.keyOf(99), -1);
     assert.equal(reader.row(-1), null);
     assert.equal(reader.row(99)?.saving, false);
+  });
+
+  it("a move to the root's start renumbers every label and re-renders the moved chain only", () => {
+    // Ten rows: the seven, plus three more leaves under Zeta so the tree is wide enough to count.
+    const wide: TaskSpec[] = [
+      ...specs.slice(0, 1),
+      { id: 20, title: "Zeta", children: [
+        { id: 21, title: "Eta", description: "see %<12>", manual_progress: 0 },
+        { id: 22, title: "Theta", manual_progress: 10 },
+        { id: 23, title: "Iota", manual_progress: 20 },
+        { id: 24, title: "Kappa", manual_progress: 30 },
+      ] },
+    ];
+    const all = [10, 11, 12, 13, 14, 20, 21, 22, 23, 24];
+    const model = createStore<TreeModel | undefined>(fromSnapshot(buildTree(wide)));
+    const reader = createTaskReader(model, createStore(NO_MARKS));
+    const rows = new Map(all.map((id) => [id, probe(reader.subscribe, () => reader.row(id))]));
+    const labels = new Map(all.map((id) => [id, probe(reader.subscribe, () => reader.label(id))]));
+    const current = model.get() as TreeModel;
+    assert.equal(reader.label(12), "1.1.1");
+
+    // Kappa, from the end of Zeta to the top of the tree.
+    const moved = moveTask(current, { id: 24, parentId: current.rootId, position: 0 });
+    assert.ok("model" in moved);
+    model.set(moved.model);
+
+    const rowsRendered = all.filter((id) => (rows.get(id)?.renders ?? 0) > 0);
+    const labelsRendered = all.filter((id) => (labels.get(id)?.renders ?? 0) > 0);
+    // The moved row (new parent), Zeta (its roll-up and unit count moved), and
+    // Eta, whose description paints Gamma's label — no other row.
+    assert.deepEqual(rowsRendered, [20, 21, 24]);
+    // Every label but Kappa's own children (it has none): all ten renumbered.
+    assert.deepEqual(labelsRendered, all);
+    assert.equal(reader.label(24), "1");
+    assert.equal(reader.label(12), "2.1.1");
+    assert.equal(rows.get(12)?.renders, 0);
+    assert.equal(rows.get(10)?.renders, 0);
   });
 
   it("a branch's view carries its unit counts and a leaf's carries none", () => {

@@ -9,6 +9,7 @@
 //   APP_URL       app origin                 (default http://localhost:4000)
 //   CDP_OPTIONAL  =1 → exit 0 when no endpoint answers (default: exit 2)
 //   CDP_REUSE_TAB =1 → fall back to an existing page target if /json/new fails
+//   CDP_FROM      =<text> → start at the first check whose name contains it
 //
 // It runs from the HOST: the container cannot reach the operator's bridge.
 // Node 22+ (or Node 20 with --experimental-websocket) — it needs global WebSocket.
@@ -31,10 +32,25 @@ import {
   connect,
   evaluate,
   listTargets,
+  mouseDown,
+  mouseGlide,
+  mouseMove,
+  mouseUp,
   openTarget,
   pressKey,
   waitFor,
 } from "./cdp.mjs";
+// The tree harness's page-side stopwatch and operations helpers (7.9), shared
+// so the index measures its writes the same way the tree does.
+import {
+  OPS_TAP,
+  armStopwatch,
+  assertAcknowledged,
+  movedBefore,
+  pageOperation,
+  pageOperations,
+  readStopwatch,
+} from "./check_tree.mjs";
 // The bell's write, from the module the browser itself bundles — so this check
 // cannot assert a shape the client stopped sending (or never sent).
 import { markAllReadRequest } from "../../assets/js/client/state/notification_ops.js";
@@ -1786,6 +1802,349 @@ export async function checkAccountMenu(ctx) {
   return `${opened.labels.join(", ")}; Escape closed it and returned focus`;
 }
 
+// ---------------------------------------------------------------------------
+// The Initiatives index's own writes (m04.02 item 8.14): sort, reverse, drag,
+// and the Archived and Trash drawer. Each check seeds throwaway Initiatives
+// through the page's own session, drives the real controls, times the
+// acknowledgement the way the tree harness does (§6: under 100ms, before the
+// reply), asks the server what it holds after each write, and trashes what it
+// made — on a failure too.
+// ---------------------------------------------------------------------------
+
+/**
+ * `sort_initiatives/2` for the rows a check seeded: their ids in the order the
+ * page must show them. Recent keeps the server's order; Manual follows
+ * `sort_order` with unplaced rows last; the rest sort ascending on their key,
+ * ties keeping server order; Reverse flips the whole result.
+ */
+export function indexOrder(rows, mode, reverse = false) {
+  const key = (row) => {
+    switch (mode) {
+      case "name":
+        return (row.name ?? "").toLowerCase();
+      case "progress":
+        return row.progress ?? 0;
+      case "created":
+        return row.created_at;
+      case "updated":
+        return row.updated_at;
+      default:
+        return 0;
+    }
+  };
+  let sorted;
+  if (mode === "") {
+    sorted = [...rows];
+  } else if (mode === "manual") {
+    const placed = rows.filter((row) => row.sort_order !== null).sort((a, b) => a.sort_order - b.sort_order);
+    sorted = [...placed, ...rows.filter((row) => row.sort_order === null)];
+  } else {
+    sorted = [...rows].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+  }
+  const ids = sorted.map((row) => row.id);
+  return reverse ? ids.reverse() : ids;
+}
+
+const sameIds = (a, b) => Array.isArray(a) && a.length === b.length && a.every((id, i) => id === b[i]);
+/** The same rule as a page expression, for a stopwatch predicate. */
+const SAME_IDS = "((a, b) => Array.isArray(a) && a.length === b.length && a.every((id, i) => id === b[i]))";
+
+/** A page expression: the seeded ids, in the order the index shows them. */
+function shownOrder(ids) {
+  return `[...document.querySelectorAll("#initiatives > [data-initiative-id]")].map((el) => Number(el.dataset.initiativeId)).filter((id) => ${JSON.stringify(ids)}.includes(id))`;
+}
+
+/** A read through the page's own session: the `data` of `/app/api<path>`. */
+async function pageRead(session, path) {
+  const reply = await evaluate(
+    session,
+    `
+    return (async () => {
+      const response = await fetch(${JSON.stringify(`/app/api${path}`)}, { headers: { accept: "application/json" }, credentials: "same-origin" });
+      if (!response.ok) return { ok: false, why: "the read of ${path} answered " + response.status };
+      return { ok: true, data: (await response.json()).data };
+    })();
+  `,
+  );
+  if (!reply.ok) throw new Error(reply.why);
+  return reply.data;
+}
+
+/** The index, freshly loaded in our own tab, with the fetch tap installed. */
+async function openIndex(ctx, ready) {
+  const { session } = ctx;
+  await session.send("Page.navigate", { url: `${ctx.appUrl}/app/initiatives` });
+  await waitFor(session, `return window.__doit_client_ready === true && (() => { ${ready} })() ? true : null;`, {
+    timeoutMs: READY_TIMEOUT_MS,
+    what: "the index to come up",
+  });
+  await evaluate(session, OPS_TAP);
+}
+
+/** Every reply landed and nothing in flight. */
+async function indexSettled(session) {
+  await waitFor(session, `const ops = window.__ops; return ops.inflight === 0 && ops.sent === ops.replied ? true : null;`, {
+    timeoutMs: 10_000,
+    everyMs: 20,
+    what: "the index's writes to land",
+  });
+}
+
+async function seedInitiatives(session, stamp, names) {
+  const results = await pageOperations(
+    session,
+    `cdp-index-${stamp}-seed-${names.length}`,
+    names.map((name) => ({ op: "add", type: "initiative", data: { name } })),
+  );
+  const ids = results.map((r) => r?.data?.id);
+  if (!ids.every((id) => typeof id === "number")) throw new Error(`the seed did not name ${names.length} Initiatives: ${JSON.stringify(results)}`);
+  return ids;
+}
+
+async function trashInitiatives(session, stamp, ids, label) {
+  if (ids.length === 0) return;
+  await pageOperations(
+    session,
+    `cdp-index-${stamp}-trash-${label}`,
+    ids.map((id) => ({ op: "update", type: "initiative", id, data: { state: "trashed" } })),
+  );
+}
+
+/**
+ * Sort, Reverse and a drag. Three throwaway rows whose name, progress and
+ * creation orders all differ; every mode of the Sort control reorders them on
+ * the spot and the account remembers it; Reverse flips them both ways; a drag
+ * of the last to the top lands in Manual before the reply and the server's
+ * order agrees. The operator's own sort choice is put back at the end.
+ */
+export async function checkIndexSortAndDrag(ctx) {
+  const { session } = ctx;
+  const stamp = Date.now();
+  // Created in this order, named out of it, progressed out of both.
+  const names = [`CDP index B ${stamp}`, `CDP index C ${stamp}`, `CDP index A ${stamp}`];
+  let ids = [];
+  // On the app first: the page's own session does the seeding and the reads.
+  await openIndex(ctx, "return true;");
+  const saved = (await pageRead(session, "/session")).preferences ?? {};
+  const savedMode = saved.index_sort ?? "";
+
+  try {
+    ids = await seedInitiatives(session, stamp, names);
+    const [b, c, a] = ids;
+    await pageOperations(session, `cdp-index-${stamp}-progress`, [
+      { op: "add", type: "task", data: { initiative_id: c, title: "quarter", manual_progress: 25 } },
+      { op: "add", type: "task", data: { initiative_id: b, title: "three quarters", manual_progress: 75 } },
+    ]);
+    // Recent for the run, whatever the operator keeps, so the seeded rows sit
+    // together and the Sort control's own changes are what is measured.
+    await pageOperation(session, `cdp-index-${stamp}-recent`, { op: "update", type: "account", data: { index_sort: null } });
+
+    await openIndex(ctx, `return ${JSON.stringify(ids)}.every((id) => document.getElementById("initiatives-" + id) !== null);`);
+    const rows = (await pageRead(session, "/initiatives")).filter((row) => ids.includes(row.id));
+    if (rows.length !== 3) throw new Error(`the index read holds ${rows.length} of the 3 seeded rows`);
+    const progress = Object.fromEntries(rows.map((row) => [row.id, row.progress]));
+    if (progress[b] !== 75 || progress[c] !== 25 || progress[a] !== 0) throw new Error(`the seeded progress reads ${JSON.stringify(progress)}, not 75 / 25 / 0`);
+    await waitFor(session, `return ${JSON.stringify(ids)}.every((id) => document.querySelector("#initiatives-" + id + " [role=progressbar]")?.getAttribute("aria-valuenow") === String(${JSON.stringify(progress)}[id])) ? true : null;`, {
+      timeoutMs: 10_000,
+      what: "the seeded progress on the cards",
+    });
+
+    const timings = [];
+    const choose = (mode) =>
+      evaluate(
+        session,
+        `
+        const select = document.getElementById("initiative-sort-mode");
+        select.focus();
+        select.value = ${JSON.stringify(mode)};
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      `,
+      );
+    const pick = async (mode, expected) => {
+      const current = await evaluate(session, `return { mode: document.getElementById("initiative-sort-mode").value, shown: ${shownOrder(ids)} };`);
+      if (current.mode === mode) return (await pageRead(session, "/session")).preferences?.index_sort_reverse === true;
+      // Two modes can agree on these three rows; then there is nothing to
+      // time, and only the save is checked.
+      const moves = !sameIds(current.shown, expected);
+      if (moves) await armStopwatch(session, "change", `return ${SAME_IDS}(${shownOrder(ids)}, ${JSON.stringify(expected)});`);
+      const sent = await evaluate(session, `return window.__ops.sent;`);
+      await choose(mode);
+      if (moves) {
+        const ack = await readStopwatch(session, `the index sorted by ${JSON.stringify(mode || "Recent")}`);
+        // A mode the account keeps reversed flips once more when the reply
+        // says so — the one change after the reply the client cannot know before it.
+        if (ack.flips === 2 && ack.replyMs !== null && ack.trace.flips[1].t >= ack.replyMs) {
+          if (ack.ackMs > 100) throw new Error(`the ${mode} order took ${ack.ackMs}ms to show`);
+        } else {
+          assertAcknowledged(ack, `the ${mode || "Recent"} order`);
+        }
+        timings.push(`${mode || "Recent"} ${ack.ackMs}ms`);
+      } else {
+        await waitFor(session, `return window.__ops.sent > ${sent} ? true : null;`, { timeoutMs: 5_000, everyMs: 10, what: `the ${mode || "Recent"} save to go out` });
+        timings.push(`${mode || "Recent"} (same order)`);
+      }
+      await indexSettled(session);
+      const prefs = (await pageRead(session, "/session")).preferences ?? {};
+      if ((prefs.index_sort ?? "") !== mode) throw new Error(`the account saved sort ${JSON.stringify(prefs.index_sort)}, not ${JSON.stringify(mode)}`);
+      return prefs.index_sort_reverse === true;
+    };
+    const flipReverse = async (mode, expected, on) => {
+      await armStopwatch(session, "click", `return ${SAME_IDS}(${shownOrder(ids)}, ${JSON.stringify(expected)});`);
+      await clickElement(session, '#initiative-sort input[name="reverse"]');
+      const ack = await readStopwatch(session, `the ${mode} order reversed ${on ? "on" : "off"}`);
+      assertAcknowledged(ack, `Reverse ${on ? "on" : "off"}`);
+      await indexSettled(session);
+      const prefs = (await pageRead(session, "/session")).preferences ?? {};
+      if (prefs.index_sort !== mode || prefs.index_sort_reverse !== on) throw new Error(`the account saved ${JSON.stringify(prefs)} after Reverse ${on ? "on" : "off"}`);
+      timings.push(`reverse ${on ? "on" : "off"} ${ack.ackMs}ms`);
+    };
+
+    // Every mode, ascending as the account last had it; Name gets Reverse both ways.
+    for (const mode of ["name", "progress", "created", "updated"]) {
+      const reverse = await pick(mode, indexOrder(rows, mode, false));
+      // The account may keep this mode reversed: the page then shows it so.
+      if (reverse) {
+        const shown = await evaluate(session, `return ${shownOrder(ids)};`);
+        if (!sameIds(shown, indexOrder(rows, mode, true))) throw new Error(`${mode} reversed shows ${JSON.stringify(shown)}`);
+      }
+      if (mode === "name") {
+        await flipReverse(mode, indexOrder(rows, mode, !reverse), !reverse);
+        await flipReverse(mode, indexOrder(rows, mode, reverse), reverse);
+      }
+    }
+
+    // Manual, then the last seeded card dragged above the first.
+    const manualReverse = await pick("manual", indexOrder(rows, "manual", false));
+    const before = await evaluate(session, `return ${shownOrder(ids)};`);
+    const source = before[before.length - 1];
+    const anchor = before[0];
+    const expected = movedBefore(before, source, anchor);
+    // The throwaway cards sit at the end of a long list: bring the source
+    // on screen before measuring, or the pointer lands on nothing.
+    const handle = await evaluate(session, `const h = document.getElementById("init-drag-${source}"); h.scrollIntoView({ block: "center" }); const r = h.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };`);
+    await mouseMove(session, handle);
+    await mouseDown(session, handle);
+    const pointer = { x: handle.x, y: handle.y + 12 };
+    await mouseGlide(session, handle, pointer, 3);
+    await waitFor(session, `return document.getElementById("initiatives-${source}").style.opacity === "0.5" ? true : null;`, { timeoutMs: 2_000, everyMs: 10, what: "the card drag to begin" });
+    // The upper part of the first card, far enough in that the marker's own
+    // height (inserted above it) leaves the pointer on the card.
+    const target = await evaluate(session, `const r = document.getElementById("initiatives-${anchor}").getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + 24) };`);
+    await mouseGlide(session, pointer, target, 4);
+    await mouseMove(session, target, { pressed: true });
+    await waitFor(session, `const ph = document.querySelector("#initiatives > .init-drop-placeholder"); return ph !== null && ph.nextElementSibling?.id === "initiatives-${anchor}" ? true : null;`, { timeoutMs: 2_000, everyMs: 10, what: "the drop placeholder above the first card" });
+    await armStopwatch(session, "pointerup", `return ${SAME_IDS}(${shownOrder(ids)}, ${JSON.stringify(expected)});`);
+    await mouseUp(session, target);
+    const dropped = await readStopwatch(session, "the dragged card in its new slot");
+    assertAcknowledged(dropped, "the dropped card");
+    await indexSettled(session);
+    const after = (await pageRead(session, "/initiatives")).filter((row) => ids.includes(row.id));
+    const stored = indexOrder(after, "manual", false);
+    const shownStored = manualReverse ? [...expected].reverse() : expected;
+    if (!sameIds(stored, shownStored)) throw new Error(`the server's manual order is ${JSON.stringify(stored)}, not ${JSON.stringify(shownStored)}`);
+    timings.push(`drag ${dropped.ackMs}ms (${dropped.replyMs - dropped.ackMs}ms before the reply)`);
+
+    // The operator's own sort, back through the same control.
+    await pick(savedMode, indexOrder(after, savedMode, saved.index_sort_reverse === true));
+    return timings.join(", ");
+  } finally {
+    await trashInitiatives(session, stamp, ids, "sort").catch((error) => {
+      process.stdout.write(`LEAK  index sort rows could not be trashed: ${error.message}\n`);
+    });
+    await pageOperation(session, `cdp-index-${stamp}-restore-sort`, {
+      op: "update",
+      type: "account",
+      data: { index_sort: savedMode === "" ? null : savedMode, index_sort_reverse: saved.index_sort_reverse === true },
+    }).catch(() => {});
+  }
+}
+
+/**
+ * The Archived and Trash drawer. Four throwaway rows put away by the API — one
+ * hidden, one archived, two in Trash — then, from the drawer: Show hidden and
+ * Show trash reveal them without a fetch; Unhide, Restore and the Trash's
+ * Restore each move the row onto the index before the reply; Delete asks
+ * first, client-side, and the row is gone for good once confirmed. The server
+ * is asked after each write.
+ */
+export async function checkIndexDrawer(ctx) {
+  const { session } = ctx;
+  const stamp = Date.now();
+  let ids = [];
+  let deleted = false;
+  await openIndex(ctx, "return true;");
+
+  try {
+    ids = await seedInitiatives(session, stamp, ["hidden", "archived", "trashed", "deleted"].map((what) => `CDP drawer ${what} ${stamp}`));
+    const [hidden, archived, trashed, doomed] = ids;
+    await pageOperations(session, `cdp-index-${stamp}-put-away`, [
+      { op: "update", type: "initiative", id: hidden, data: { state: "hidden" } },
+      { op: "update", type: "initiative", id: archived, data: { state: "archived" } },
+      { op: "update", type: "initiative", id: trashed, data: { state: "trashed" } },
+      { op: "update", type: "initiative", id: doomed, data: { state: "trashed" } },
+    ]);
+
+    await openIndex(ctx, `return document.querySelector("#archived summary") !== null;`);
+    const sentBefore = await evaluate(session, `return window.__ops.sent;`);
+    await clickElement(session, "#archived summary");
+    await waitFor(session, `return document.getElementById("archived").open ? true : null;`, { timeoutMs: 2_000, what: "the drawer to open" });
+    // Show hidden and Show trash: the viewer's own view, nothing sent.
+    await clickElement(session, "#show-hidden");
+    await waitFor(session, `return document.getElementById("archived-${hidden}") !== null ? true : null;`, { timeoutMs: 2_000, everyMs: 10, what: "the hidden row under Show hidden" });
+    await clickElement(session, "#show-trash");
+    await waitFor(session, `return document.getElementById("trashed-${trashed}") !== null && document.getElementById("trashed-${doomed}") !== null ? true : null;`, { timeoutMs: 2_000, everyMs: 10, what: "the Trash rows under Show trash" });
+    const sentAfter = await evaluate(session, `return window.__ops.sent;`);
+    if (sentAfter !== sentBefore) throw new Error(`opening the drawer and its Show boxes sent ${sentAfter - sentBefore} operation(s)`);
+    if (await evaluate(session, `return document.getElementById("archived-${archived}") === null;`)) throw new Error("the archived row is not in the drawer");
+
+    const timings = [];
+    const moveOut = async (button, id, what) => {
+      await armStopwatch(session, "click", `return document.getElementById("initiatives-${id}") !== null && document.getElementById("archived-${id}") === null && document.getElementById("trashed-${id}") === null;`);
+      await clickElement(session, button);
+      const ack = await readStopwatch(session, `${what} onto the index`);
+      assertAcknowledged(ack, what);
+      await indexSettled(session);
+      const archive = await pageRead(session, "/initiatives/archive");
+      const still = archive.archived.some((row) => row.id === id) || archive.trashed.some((row) => row.id === id);
+      if (still) throw new Error(`the server still holds the ${what} row put away`);
+      const live = (await pageRead(session, "/initiatives")).some((row) => row.id === id);
+      if (!live) throw new Error(`the server's index does not list the ${what} row`);
+      timings.push(`${what} ${ack.ackMs}ms`);
+    };
+    await moveOut(`#archived-${hidden}-unhide`, hidden, "Unhide");
+    await moveOut(`#archived-${archived}-restore`, archived, "Restore");
+    await moveOut(`#trashed-${trashed}-restore`, trashed, "Trash's Restore");
+
+    // Delete: the confirm opens on the spot and sends nothing; Delete in it empties the slot.
+    const sentBeforeDelete = await evaluate(session, `return window.__ops.sent;`);
+    await armStopwatch(session, "click", `return document.getElementById("purge-initiative-confirm")?.open === true;`);
+    await clickElement(session, `#trashed-${doomed}-delete`);
+    const asked = await readStopwatch(session, "the Delete forever confirm", { expectReply: false });
+    assertAcknowledged(asked, "the confirm");
+    if ((await evaluate(session, `return window.__ops.sent;`)) !== sentBeforeDelete) throw new Error("opening the confirm sent an operation");
+    await armStopwatch(session, "click", `return document.getElementById("trashed-${doomed}") === null && document.getElementById("initiatives-${doomed}") === null;`);
+    await clickElement(session, "#purge-initiative-confirm-confirm");
+    const purged = await readStopwatch(session, "the deleted row gone");
+    assertAcknowledged(purged, "the deleted row");
+    await indexSettled(session);
+    const archive = await pageRead(session, "/initiatives/archive");
+    if (archive.trashed.some((row) => row.id === doomed)) throw new Error("the server still holds the deleted row in Trash");
+    if ((await pageRead(session, "/initiatives")).some((row) => row.id === doomed)) throw new Error("the deleted row is back on the server's index");
+    deleted = true;
+    timings.push(`confirm ${asked.ackMs}ms, Delete ${purged.ackMs}ms`);
+    return timings.join(", ");
+  } finally {
+    // The three back on the index go to Trash; the fourth is deleted here if the check did not get to it.
+    await trashInitiatives(session, stamp, ids.slice(0, 3), "drawer").catch((error) => {
+      process.stdout.write(`LEAK  index drawer rows could not be trashed: ${error.message}\n`);
+    });
+    if (!deleted && ids.length === 4) {
+      await pageOperation(session, `cdp-index-${stamp}-purge`, { op: "remove", type: "initiative", id: ids[3] }).catch(() => {});
+    }
+  }
+}
+
 const CHECKS = [
   ["client ready", checkClientReady],
   ["no layout shift", checkNoLayoutShift],
@@ -1798,6 +2157,8 @@ const CHECKS = [
   ["nav click \u2192 Assigned to Me", checkNavClickToAssigned],
   ["no shift across routes", checkNoShiftAcrossRoutes],
   ["deep link, back and forward", checkDeepLinkAndHistory],
+  ["index: sort, reverse, drag", checkIndexSortAndDrag],
+  ["index: hidden, archived, trash", checkIndexDrawer],
   ["acknowledgement under latency", checkAckUnderLatency],
   ["narrow viewport menu", checkNarrowMenu],
   ["menu sign out reaches the form", checkMenuSignOutSubmits],
@@ -1945,8 +2306,15 @@ async function main() {
       mobile: false,
     });
 
+    // CDP_FROM=<substring>: skip the checks before the first whose name has it.
+    let reached = process.env.CDP_FROM === undefined;
     for (const [name, check] of CHECKS) {
       const started = Date.now();
+      reached ||= name.includes(process.env.CDP_FROM);
+      if (!reached) {
+        results.push({ name, status: "SKIP", ms: 0, note: `before CDP_FROM "${process.env.CDP_FROM}"` });
+        continue;
+      }
       if (failed) {
         results.push({ name, status: "SKIP", ms: 0, note: "an earlier check failed" });
         continue;

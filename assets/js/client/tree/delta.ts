@@ -239,6 +239,9 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
   next = rolled.model;
   affected.push(...rolled.affected);
 
+  // 7.19: a row placed by a reply lands where the parent's sort puts it,
+  // not at the slot the op asked for. Manual parents are left alone.
+  for (const parentId of touchedParents) resorted.add(parentId);
   if (resorted.size > 0) {
     next = resortParents(next, resorted);
     for (const parentId of resorted) {

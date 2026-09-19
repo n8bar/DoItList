@@ -46,7 +46,11 @@ export const NO_MARKS: RowMarks = {
   rejection: null,
 };
 
-/** Everything one row paints from the model. Same object back until it changes. */
+/**
+ * Everything one row paints from the model. Same object back until it changes.
+ * `record.index` and `record.depth` are not kept current here — the label has
+ * its own reader (`label(id)`), so a renumbering leaves the row alone (7.21).
+ */
 export interface RowView {
   readonly record: TaskRecord;
   /** Whether it has children — the order is the children list's business, not the row's. */
@@ -77,6 +81,8 @@ export interface TaskReader {
   rootId(): number;
   calc(): ProgressCalc;
   row(id: number): RowView | null;
+  /** The positional label ("3.2.1"), or "" when the style shows none — a string, so a change is one by value (7.21). */
+  label(id: number): string;
   children(id: number): ChildrenView;
   /** The React key for `id`'s row: its stand-in id if it was drawn under one. */
   keyOf(id: number): number;
@@ -113,11 +119,20 @@ function sameValue(a: unknown, b: unknown): boolean {
   return false;
 }
 
-export function sameRecord(a: TaskRecord, b: TaskRecord): boolean {
+/**
+ * What only the number label paints (7.21). A move to the root's start
+ * renumbers every row ("3.2.1" → "4.2.1") and shifts its siblings' slots; the
+ * label reads its index through its own subscription and nothing on the row
+ * paints the slot or the depth (the row's depth is its branch's prop), so the
+ * row's view must not change for them.
+ */
+const LABEL_KEYS: ReadonlySet<keyof TaskRecord> = new Set<keyof TaskRecord>(["index", "depth", "position"]);
+
+export function sameRecord(a: TaskRecord, b: TaskRecord, ignoring: ReadonlySet<keyof TaskRecord> = LABEL_KEYS): boolean {
   if (a === b) return true;
   const keys = Object.keys(a) as (keyof TaskRecord)[];
   if (keys.length !== Object.keys(b).length) return false;
-  return keys.every((key) => sameValue(a[key], b[key]));
+  return keys.every((key) => ignoring.has(key) || sameValue(a[key], b[key]));
 }
 
 function sameRow(a: RowView, b: RowView): boolean {
@@ -216,6 +231,7 @@ export function createTaskReader(
         null,
         (a, b) => (a === null ? b === null : b !== null && sameRow(a, b)),
       ),
+    label: (id) => modelSource.get()?.tasks[id]?.index ?? lastModel?.tasks[id]?.index ?? "",
     children: (id) =>
       read(
         lists,

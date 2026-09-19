@@ -22,7 +22,7 @@
 // it to revalidate the list behind what is already drawn — no skeleton.
 
 import type { CSSProperties, FormEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 
 import type {
   ArchivedInitiative,
@@ -351,17 +351,24 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
     },
     [api, stores],
   );
+  const onArchivedAct = useCallback(
+    (row: ArchivedInitiative, action: ArchiveAction) => act("archived", row.id, action),
+    [act],
+  );
 
   const title = archiveDrawerTitle(archive, showHidden);
   const shown = visibleArchived(archive.archived, showHidden);
 
-  const onTrashAct = (row: TrashedInitiative, action: ArchiveAction) => {
-    if (action === "delete") {
-      setPurging(row);
-      return;
-    }
-    act("trashed", row.id, action);
-  };
+  const onTrashAct = useCallback(
+    (row: TrashedInitiative, action: ArchiveAction) => {
+      if (action === "delete") {
+        setPurging(row);
+        return;
+      }
+      act("trashed", row.id, action);
+    },
+    [act],
+  );
 
   const purge = () => {
     if (purging === null) return;
@@ -429,7 +436,7 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
           </div>
           <ul className="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
             {shown.map((row) => (
-              <ArchivedRow key={row.id} row={row} onAct={(action) => act("archived", row.id, action)} />
+              <ArchivedRow key={row.id} row={row} onAct={onArchivedAct} />
             ))}
           </ul>
           {archive.trashed.length > 0 && showTrash && (
@@ -442,7 +449,7 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
               </h3>
               <ul className="mt-2 space-y-1 max-h-[40vh] overflow-y-auto">
                 {archive.trashed.map((row) => (
-                  <TrashedRow key={row.id} row={row} onAct={(action) => onTrashAct(row, action)} />
+                  <TrashedRow key={row.id} row={row} onAct={onTrashAct} />
                 ))}
               </ul>
             </div>
@@ -466,12 +473,14 @@ function ArchiveDrawer({ archive }: { archive: InitiativeArchive }) {
   );
 }
 
-function ArchivedRow({
+// The drawer rows are memoized (7.23): a Restore or Unhide repaints the row
+// that left, not the whole Trash.
+const ArchivedRow = memo(function ArchivedRow({
   row,
   onAct,
 }: {
   row: ArchivedInitiative;
-  onAct: (action: ArchiveAction) => void;
+  onAct: (row: ArchivedInitiative, action: ArchiveAction) => void;
 }) {
   const actions = archivedRowActions(row);
   return (
@@ -491,7 +500,7 @@ function ArchivedRow({
             <button
               type="button"
               id={`archived-${row.id}-restore`}
-              onClick={() => onAct("restore")}
+              onClick={() => onAct(row, "restore")}
               className={RESTORE_CLASS}
             >
               <Icon name="arrow-uturn-left" className="w-3.5 h-3.5" /> Restore
@@ -501,7 +510,7 @@ function ArchivedRow({
             <button
               type="button"
               id={`archived-${row.id}-unhide`}
-              onClick={() => onAct("unhide")}
+              onClick={() => onAct(row, "unhide")}
               className={UNHIDE_CLASS}
             >
               <Icon name="eye" className="w-3.5 h-3.5" /> Unhide
@@ -511,14 +520,14 @@ function ArchivedRow({
       </div>
     </li>
   );
-}
+});
 
-function TrashedRow({
+const TrashedRow = memo(function TrashedRow({
   row,
   onAct,
 }: {
   row: TrashedInitiative;
-  onAct: (action: ArchiveAction) => void;
+  onAct: (row: TrashedInitiative, action: ArchiveAction) => void;
 }) {
   const actions = trashedRowActions(row);
   return (
@@ -536,7 +545,7 @@ function TrashedRow({
             <button
               type="button"
               id={`trashed-${row.id}-restore`}
-              onClick={() => onAct("restore")}
+              onClick={() => onAct(row, "restore")}
               className={RESTORE_CLASS}
             >
               <Icon name="arrow-uturn-left" className="w-3.5 h-3.5" /> Restore
@@ -546,7 +555,7 @@ function TrashedRow({
             <button
               type="button"
               id={`trashed-${row.id}-delete`}
-              onClick={() => onAct("delete")}
+              onClick={() => onAct(row, "delete")}
               className={DELETE_CLASS}
             >
               <Icon name="x-mark" className="w-3.5 h-3.5" /> Delete
@@ -556,7 +565,7 @@ function TrashedRow({
       </div>
     </li>
   );
-}
+});
 
 // --- Sort ------------------------------------------------------------------
 
@@ -609,7 +618,9 @@ function SortControl({
 
 // --- Card ------------------------------------------------------------------
 
-function Card({ initiative }: { initiative: InitiativeSummary }) {
+// Memoized (7.23): a card repaints only when its own summary changes, so an
+// Unhide or Restore repaints the list and the one card that arrived.
+const Card = memo(function Card({ initiative }: { initiative: InitiativeSummary }) {
   const progress = progressValue(initiative.progress);
   const subtitle = subtitleText(initiative);
   const description = descriptionText(initiative);
@@ -697,7 +708,7 @@ function Card({ initiative }: { initiative: InitiativeSummary }) {
       </Link>
     </div>
   );
-}
+});
 
 /** `botanical_icon(:grove)`, path for path — the Initiative's own glyph. */
 function GroveIcon({ className }: { className: string }) {
