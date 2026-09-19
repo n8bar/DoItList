@@ -1143,6 +1143,7 @@ defmodule DoIt.Tasks do
         initiative_id = task.initiative_id
         title = task.title
         ids = subtree_ids(task.id)
+        slot = slot_of(task)
         now = DateTime.utc_now() |> DateTime.truncate(:second)
 
         {_n, _} =
@@ -1159,7 +1160,7 @@ defmodule DoIt.Tasks do
                  actor,
                  "child_deleted",
                  %{title: title},
-                 %{"deleted_ids" => ids, "task_id" => task.id}
+                 %{"deleted_ids" => ids, "task_id" => task.id, "position" => slot}
                ) do
             {:ok, _} -> :ok
             {:error, cs} -> Repo.rollback(cs)
@@ -1358,7 +1359,7 @@ defmodule DoIt.Tasks do
 
     case outcome do
       {:ok, :ok} ->
-        set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
+        set_undone(event, if(direction == :undo, do: DateTime.utc_now(), else: nil))
         record_undo_meta(event, user, direction)
         broadcast_reversal(event, direction)
         {:ok, describe_event(event)}
@@ -1366,7 +1367,7 @@ defmodule DoIt.Tasks do
       {:ok, {:error, _reason}} ->
         # Conflict (target deleted, parent gone…): step past the dead entry so
         # the stack never stalls (item 7).
-        set_undone(event, if(direction == :undo, do: now_seconds(), else: nil))
+        set_undone(event, if(direction == :undo, do: DateTime.utc_now(), else: nil))
         {:error, {:conflict, describe_event(event)}}
     end
   end
@@ -1493,15 +1494,21 @@ defmodule DoIt.Tasks do
   defp reverse(%{kind: "child_deleted"} = event, direction) do
     ids = event.inverse_payload["deleted_ids"] || []
     parent_id = event.task_id
+    root_id = event.inverse_payload["task_id"]
 
-    {_n, _} =
-      if direction == :undo do
+    if direction == :undo do
+      {_n, _} =
         from(t in Task, where: t.id in ^ids)
         |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
-      else
+
+      restore_slot(root_id, event.inverse_payload["position"])
+    else
+      remember_slot(event, root_id)
+
+      {_n, _} =
         from(t in Task, where: t.id in ^ids)
         |> Repo.update_all(set: [deleted_at: now_seconds()], inc: [version: 1])
-      end
+    end
 
     if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(event.initiative_id))
     :ok
@@ -1515,14 +1522,19 @@ defmodule DoIt.Tasks do
       %Task{} = task ->
         ids = subtree_ids_any(task.id)
 
-        {_n, _} =
-          if direction == :undo do
+        if direction == :undo do
+          remember_slot(event, task.id)
+
+          {_n, _} =
             from(t in Task, where: t.id in ^ids)
             |> Repo.update_all(set: [deleted_at: now_seconds()], inc: [version: 1])
-          else
+        else
+          {_n, _} =
             from(t in Task, where: t.id in ^ids)
             |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
-          end
+
+          restore_slot(task.id, (event.inverse_payload || %{})["position"])
+        end
 
         if task.parent_id,
           do: recompute_ancestors(task.parent_id, progress_calc_mode(task.initiative_id))
@@ -1673,6 +1685,43 @@ defmodule DoIt.Tasks do
        |> with_cte("tree", as: ^union_all(initial, ^descendants))
        |> Repo.all())
   end
+
+  # m04.02 item 7.16: a soft-deleted row keeps a sort_order its live siblings
+  # may have been renumbered around (perform_move/insert_at_position hand out
+  # fresh multiples of @sort_gap to the LIVE rows only), so putting it back by
+  # that stale number lands it in the wrong slot. Instead, the slot it leaves
+  # is remembered on the event when it is soft-deleted, and a restore
+  # re-inserts it there (clamped to the end), renumbering like a move.
+  defp slot_of(%Task{parent_id: nil}), do: nil
+
+  defp slot_of(%Task{} = task),
+    do: task.parent_id |> ordered_child_ids() |> Enum.find_index(&(&1 == task.id))
+
+  defp remember_slot(event, task_id) do
+    case get_task(task_id) do
+      %Task{} = task ->
+        payload = Map.put(event.inverse_payload || %{}, "position", slot_of(task))
+
+        event
+        |> Ecto.Changeset.change(inverse_payload: payload)
+        |> Repo.update!()
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp restore_slot(task_id, position) when is_integer(position) do
+    case get_task(task_id) do
+      %Task{parent_id: parent_id} = task when not is_nil(parent_id) ->
+        insert_at_position(task, parent_id, position)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp restore_slot(_task_id, _position), do: :ok
 
   defp set_undone(event, value) do
     event

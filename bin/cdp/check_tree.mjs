@@ -3268,7 +3268,8 @@ export async function checkHistoryMatchesServer(ctx) {
   notes.push("Undo ×4 matched the server at every step and put the branch back");
   for (let i = 1; i <= 4; i += 1) await step("redo-button", "Redo", i);
   const redone = await evaluate(session, `return { zeta: __tree.row(${JSON.stringify(MIX_TITLES.zeta)}) !== null, order: __tree.order(${yankee}), zuluDone: __tree.rowEl(${zulu})?.dataset.done === "true", title: __tree.title(${zephyr}) };`);
-  if (!redone.zeta || !redone.zuluDone || redone.title !== MIX_TITLES.renamed || JSON.stringify(redone.order) !== JSON.stringify([zephyr, zulu])) {
+  const zeta = await evaluate(session, `const li = __tree.row(${JSON.stringify(MIX_TITLES.zeta)}); return li === null ? null : Number(li.dataset.taskId);`);
+  if (!redone.zeta || !redone.zuluDone || redone.title !== MIX_TITLES.renamed || JSON.stringify(redone.order) !== JSON.stringify([zeta, zephyr, zulu])) {
     throw new Error(`four Redos did not bring the four ops back: ${JSON.stringify(redone)}`);
   }
   notes.push("Redo ×4 matched the server at every step and brought all four back");

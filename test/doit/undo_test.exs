@@ -286,6 +286,63 @@ defmodule DoIt.UndoTest do
 
   # --- Completion is undoable (item 14) -------------------------------------
 
+  test "create, reorder, complete, retitle round-trip losslessly through undo x4 / redo x4 (m04.02 item 7.16)" do
+    %{owner: owner, init: init} = setup_init()
+    parent = task(owner, init, nil, "Yankee")
+    zulu = task(owner, init, parent, "Zulu")
+    zephyr = task(owner, init, parent, "Zephyr")
+    assert child_ids(parent) == [zulu.id, zephyr.id]
+
+    # The four ops, in the order the harness mix check performs them. The add
+    # lands at the top, as the client's add-child form places it.
+    {:ok, _} = Tasks.update_task(get(zephyr.id), owner, %{"title" => "Zephyr renamed"})
+    {:ok, _} = Tasks.toggle_complete(get(zulu.id), owner)
+
+    {:ok, _} =
+      Tasks.move_task(get(zephyr.id), owner, %{"parent_id" => parent.id, "position" => 0})
+
+    zeta = task(owner, init, parent, "Zeta", %{"position" => 0})
+    assert child_ids(parent) == [zeta.id, zephyr.id, zulu.id]
+
+    snapshot = fn ->
+      for id <- child_ids(parent), t = get(id) do
+        {id, t.title, t.status, t.manual_progress, t.deleted_at}
+      end
+    end
+
+    before = snapshot.()
+
+    for _ <- 1..4, do: assert({:ok, _} = Tasks.undo(owner, init.id))
+    assert child_ids(parent) == [zulu.id, zephyr.id]
+    assert get(zeta.id).deleted_at
+    assert get(zulu.id).status == "open"
+    assert get(zephyr.id).title == "Zephyr"
+
+    for _ <- 1..4, do: assert({:ok, _} = Tasks.redo(owner, init.id))
+    assert child_ids(parent) == [zeta.id, zephyr.id, zulu.id]
+    assert snapshot.() == before
+  end
+
+  test "a deleted row comes back in its slot after its siblings were renumbered (m04.02 item 7.16)" do
+    %{owner: owner, init: init} = setup_init()
+    parent = task(owner, init, nil, "P")
+    a = task(owner, init, parent, "a")
+    b = task(owner, init, parent, "b")
+    c = task(owner, init, parent, "c")
+
+    {:ok, _} = Tasks.delete_task(get(b.id), owner)
+    {:ok, _} = Tasks.move_task(get(c.id), owner, %{"parent_id" => parent.id, "position" => 0})
+    assert child_ids(parent) == [c.id, a.id]
+
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert {:ok, _} = Tasks.undo(owner, init.id)
+    assert child_ids(parent) == [a.id, b.id, c.id]
+
+    assert {:ok, _} = Tasks.redo(owner, init.id)
+    assert {:ok, _} = Tasks.redo(owner, init.id)
+    assert child_ids(parent) == [c.id, a.id]
+  end
+
   test "completing a leaf records one atomic status event; undo reopens the whole up-cascade (item 14)" do
     %{owner: owner, init: init} = setup_init()
     branch = task(owner, init, nil, "branch")

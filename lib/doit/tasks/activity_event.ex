@@ -14,7 +14,7 @@ defmodule DoIt.Tasks.ActivityEvent do
     field :inverse_payload, :map
     # When this event was undone (m02.06 item 3); nil = still applied. Drives
     # the per-(user, Initiative) undo / redo stack.
-    field :undone_at, :utc_datetime
+    field :undone_at, :utc_datetime_usec
 
     # Execution provenance (m03.04 2.10.1): who actually performed the
     # write, beside the authorizing `user_id`. Nil = recorded before
