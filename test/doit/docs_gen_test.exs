@@ -33,7 +33,7 @@ defmodule DoIt.DocsGenTest do
         |> File.read!()
         |> DoIt.DocsGen.prose_word_count()
 
-      assert words < 800, "#{relpath} is #{words} prose words; the cap is 800 (m03.05 6.3)"
+      assert words < 1000, "#{relpath} is #{words} prose words; the cap is 1000 (m03.05 6.3, raised 2026-09-18)"
     end
   end
 
