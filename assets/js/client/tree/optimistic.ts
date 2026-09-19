@@ -61,13 +61,21 @@ export function succeed(
   key: string,
   delta: TreeDelta,
 ): { state: OptimisticState; shown: TreeModel; createdId: number | null } {
-  const createdId =
-    delta.upserts.find((upsert) => state.canonical.tasks[upsert.id] === undefined)?.id ?? null;
+  const createdId = createdBy(state.canonical, delta);
   const next = {
     canonical: applyDelta(state.canonical, delta).model,
     flights: state.flights.filter((flight) => flight.key !== key),
   };
   return { state: next, shown: shown(next), createdId };
+}
+
+/**
+ * The record `delta` brings that `canonical` does not hold — the server id
+ * that replaces an add's stand-in. One rule, whether the reply or its own
+ * broadcast lands first (m04.03 1.4.1).
+ */
+export function createdBy(canonical: TreeModel, delta: TreeDelta): number | null {
+  return delta.upserts.find((upsert) => canonical.tasks[upsert.id] === undefined)?.id ?? null;
 }
 
 /** Drops one prediction. What is shown is canonical plus what is still pending. */

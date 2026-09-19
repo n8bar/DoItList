@@ -12,10 +12,13 @@
 // Every write the tree asks for goes out through the operation adapter
 // (`tree/adapter.ts`, item 5.1.1): one batch per intent, in order, under an
 // idempotency key. The moment a batch is queued its prediction is on screen
-// and its rows are pending (item 5.2); the reply's delta lands on canonical
-// truth and the prediction is dropped (`tree/optimistic.ts`); a rejection
-// reverts the tree and is said out loud — or, for a pane edit, kept in the
-// field with the reason beside it.
+// and its rows are pending (item 5.2); the reply's delta — or the write's own
+// broadcast, whichever lands first (m04.03 1.4.1) — lands on canonical truth
+// and the prediction is dropped; a rejection reverts the tree and is said out
+// loud — or, for a pane edit, kept in the field with the reason beside it.
+// Canonical truth, the sequence and the predictions live in the Initiative's
+// sync session (`live/refresh.ts`), outside React: this screen only keeps the
+// marks (pink rows, stand-in keys, a refused edit) that go with them.
 //
 // This is also where the connection seam is exercised — the screen subscribes
 // on mount and unsubscribes on unmount, while the connection object itself
@@ -31,20 +34,17 @@ import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
 import { onlineIds, selectionsOf } from "../live/presence_model.ts";
 import type { DomainState } from "../state/domain.ts";
-import { members as membersOf, presence as presenceOf, putMembers, putTree } from "../state/domain.ts";
+import { members as membersOf, presence as presenceOf, putMembers } from "../state/domain.ts";
 import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader as HeaderRecord, TreeModel } from "../tree/model.ts";
-import { fromSnapshot } from "../tree/model.ts";
 import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
 import { createAdapter, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
 import { REJECTED_TITLE, historySentence, rejectionSentence, warnRejection } from "../tree/notice_model.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
 import { CONFIRM_CLASSES, dialogIdFor, skippable } from "../tree/confirm_model.ts";
 import type { EditRejection, TreeIntent } from "../tree/context.ts";
-import { applyDelta, deltaFromSnapshot } from "../tree/delta.ts";
 import { TaskDetails } from "../tree/details.tsx";
-import type { OptimisticState } from "../tree/optimistic.ts";
-import { alias, begin as beginFlight, idle, reject, shown as shownModel, succeed } from "../tree/optimistic.ts";
+import { alias } from "../tree/optimistic.ts";
 import type { PendingMap } from "../tree/pending_model.ts";
 import {
   NO_PENDING,
@@ -83,7 +83,7 @@ import { adoptHeaderReply, headerCounts, headerEdit, revertHeader } from "./init
 import { useResource } from "./use_resource.ts";
 
 export function InitiativeScreen({ id }: { id: number }) {
-  const { api, stores, connection, cache, escalate } = useServices();
+  const { api, stores, connection, sync, cache, escalate } = useServices();
 
   const select = useCallback((state: DomainState) => state.trees[id], [id]);
   const model = useStoreValue(stores.domain, select);
@@ -112,27 +112,12 @@ export function InitiativeScreen({ id }: { id: number }) {
     key: `initiative:${id}`,
     loaded: model !== undefined,
     read: () => api.get<InitiativeTree>(`/initiatives/${id}`),
-    onData: useCallback(
-      (data: InitiativeTree) => {
-        // The nested read becomes the client's own model here and nowhere else;
-        // a snapshot that cannot be a tree throws instead of being half-drawn.
-        //
-        // A refetch goes through the delta rather than replacing the model
-        // wholesale, so what the read no longer holds is *removed* rather than
-        // merely absent — the set Arc 3's echo cleanup needs, and the only path
-        // canonical records are allowed to enter the model by (item 1.5.1).
-        const previous = stores.domain.get().trees[id];
-        const next =
-          previous === undefined
-            ? fromSnapshot(data)
-            : applyDelta(previous, deltaFromSnapshot(data, previous)).model;
-        putTree(stores.domain, next);
-        // Same path as the store write, so a tree the guard rejected is never
-        // the one that gets cached.
-        cache.cacheTree(next);
-      },
-      [cache, id, stores.domain],
-    ),
+    // The read goes to the Initiative's sync session, which the channel was
+    // joined for before the read went out: deltas that arrived meanwhile
+    // follow the snapshot in order, and one older than what the session
+    // already holds is refused (m04.03 1.4). A snapshot that cannot be a tree
+    // throws instead of being half-drawn.
+    onData: useCallback((data: InitiativeTree) => sync.install(data), [sync]),
     // Two reads in a row that could not be a tree. The screen stays on its own
     // error with Try again, and a notice says so, rather than the user staring
     // at a header that will never get a tree (item 1.6.2).
@@ -314,7 +299,7 @@ function TreeSection({
   model: TreeModel;
   actions: RefObject<HeaderActions | null>;
 }) {
-  const { api, stores, connection, escalate } = useServices();
+  const { api, stores, connection, sync, escalate } = useServices();
   const rows = useStoreValue(
     stores.preferences,
     useCallback((state: PreferencesState) => state.rows, []),
@@ -402,12 +387,24 @@ function TreeSection({
     () => createTaskReader(derive(stores.domain, (state: DomainState) => state.trees[id]), marks),
     [stores.domain, id, marks],
   );
-  // Canonical truth plus the predictions still unanswered. A ref, not state:
-  // it is read and written only inside the adapter's hooks, never rendered.
-  const flights = useRef<OptimisticState | null>(null);
   // Stand-in ids for added rows, unique across this tree's life: negative by
   // contract, and never reused so two adds in flight cannot share a key.
   const standIn = useRef(0);
+
+  // A write's own broadcast can settle it before its reply does (1.4.1): the
+  // session says so, and the marks clear then — the row stops being pink the
+  // moment truth is on screen, whichever way truth arrived.
+  useEffect(
+    () =>
+      sync.onSettled(id, ({ flight, createdId }) => {
+        inFlight.set((current) => ({
+          ...current,
+          pending: settle(current.pending, flight.key),
+          rowKeys: alias(current.rowKeys, createdId, flight.tempId),
+        }));
+      }),
+    [id, inFlight, sync],
+  );
 
   // One adapter per mounted tree. It reads the model and the members off the
   // store at submit time, so a batch is always built from what is current —
@@ -426,16 +423,11 @@ function TreeSection({
       const current = stores.domain.get().trees[initiativeId];
       if (current === undefined) return;
 
-      // With nothing in flight, whatever the store holds IS canonical — a
-      // refetch that landed since the last write is picked up here.
-      const previous = flights.current;
-      const base = previous === null || previous.flights.length === 0 ? idle(current) : previous;
-
       // An undo or redo predicts nothing — what it reverses is the server's to
       // say — but it holds its place in line, so its reply lands on the
       // canonical it was sent from and never on a stale one.
       if (write === null) {
-        flights.current = beginFlight(base, { key, predict: (model) => model, tempId: null }).state;
+        sync.begin(initiativeId, { key, predict: (model) => model, tempId: null });
         return;
       }
 
@@ -444,10 +436,11 @@ function TreeSection({
       const predict = (base: TreeModel): TreeModel =>
         predictWrite(write, contextFor(initiativeId, base), tempId ?? -1) ?? base;
 
-      const begun = beginFlight(base, { key, predict, tempId });
-      flights.current = begun.state;
+      // The session puts the fold on screen; the marks follow in the same step.
+      const shown = sync.begin(initiativeId, { key, predict, tempId });
+      if (shown === undefined) return;
 
-      const scope = scopeFor(current, begun.shown, [targetOf(write, tempId ?? -1)], submission.affectedIds);
+      const scope = scopeFor(current, shown, [targetOf(write, tempId ?? -1)], submission.affectedIds);
       inFlight.set((state) => ({
         ...state,
         pending: beginPending(state.pending, key, scope),
@@ -455,35 +448,29 @@ function TreeSection({
         rejection:
           write.kind === "edit" && state.rejection?.id === write.id ? null : state.rejection,
       }));
-      putTree(stores.domain, begun.shown);
     };
 
     const onResult = (submission: Submission, result: SubmitResult): void => {
-      const state = flights.current;
-      if (state === null) return;
-      const { key, write } = submission;
-      const flight = state.flights.find((candidate) => candidate.key === key);
+      const { initiativeId, key, write } = submission;
 
       if (result.ok) {
         // Item 5.2.2: truth lands on canonical; the prediction is dropped and
         // the ones still pending are re-run on top. An added row's server id
-        // is aliased to its stand-in key before the tree re-renders.
-        const landed = succeed(state, key, result.delta);
-        flights.current = landed.state;
+        // is aliased to its stand-in key before the tree re-renders. A write
+        // its own broadcast already settled has nothing left to do here.
+        const { createdId, tempId } = sync.succeed(initiativeId, key, result.delta, result.seq);
         inFlight.set((current) => ({
           ...current,
           pending: settle(current.pending, key),
-          rowKeys: alias(current.rowKeys, landed.createdId, flight?.tempId ?? null),
+          rowKeys: alias(current.rowKeys, createdId, tempId),
         }));
-        putTree(stores.domain, landed.shown);
         return;
       }
 
       // Item 5.2.3: the revert is canonical plus what is still pending. A pane
       // edit keeps its text in the field with the reason beside it; anything
       // else is said out loud.
-      const dropped = reject(state, key);
-      flights.current = dropped.state;
+      sync.reject(initiativeId, key);
       // The field beside a refused edit keeps the API's own words (it names
       // the field); a notice gets one plain sentence by code (item 7.14), and
       // the API's words go to the console.
@@ -500,7 +487,6 @@ function TreeSection({
         pending: settle(current.pending, key),
         rejection: refusedEdit ?? current.rejection,
       }));
-      putTree(stores.domain, dropped.shown);
       if (refusedHistory !== null) {
         pushNotice(stores.ui, {
           kind: "info",
@@ -519,19 +505,15 @@ function TreeSection({
         return current === undefined ? undefined : contextFor(initiativeId, current);
       },
       // The batch itself is built from truth, never from a guess: canonical as
-      // the previous reply left it (or the store, when nothing is in flight).
+      // the previous reply (or the last delta) left it.
       sendContext: (initiativeId) => {
-        const state = flights.current;
-        const canonical =
-          state !== null && state.flights.length > 0
-            ? state.canonical
-            : stores.domain.get().trees[initiativeId];
+        const canonical = sync.canonical(initiativeId);
         return canonical === undefined ? undefined : contextFor(initiativeId, canonical);
       },
       onSubmit,
       onResult,
     });
-  }, [api, inFlight, stores.domain, stores.ui]);
+  }, [api, inFlight, stores.domain, stores.ui, sync]);
 
   const submit = useCallback(
     (write: TreeWrite) => {
@@ -569,21 +551,11 @@ function TreeSection({
 
   // A header edit (7.10.1, 7.10.3): predicted on the header at once and sent
   // as one `update initiative`, outside the tree's queue — it touches no row.
-  // While task writes are in flight the prediction goes on canonical, so the
-  // next reply's rebase keeps it; a refusal puts the field back and says so.
+  // The prediction goes on canonical, so the next reply's or delta's rebase
+  // keeps it; a refusal puts the field back and says so.
   const patchHeader = useCallback(
-    (patch: (header: HeaderRecord) => HeaderRecord): void => {
-      const state = flights.current;
-      if (state !== null && state.flights.length > 0) {
-        const canonical = { ...state.canonical, header: patch(state.canonical.header) };
-        flights.current = { canonical, flights: state.flights };
-        putTree(stores.domain, shownModel(flights.current));
-        return;
-      }
-      const current = stores.domain.get().trees[id];
-      if (current !== undefined) putTree(stores.domain, { ...current, header: patch(current.header) });
-    },
-    [id, stores.domain],
+    (patch: (header: HeaderRecord) => HeaderRecord): void => sync.patchHeader(id, patch),
+    [id, sync],
   );
   const commitHeader = useCallback(
     (fields: HeaderFields): void => {

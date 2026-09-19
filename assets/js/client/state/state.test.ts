@@ -37,6 +37,7 @@ const tree = (id: number, name: string) =>
     index_style: "numerical",
     root_task_id: id * 10,
     version: 1,
+    seq: 1,
     tasks: [],
   });
 

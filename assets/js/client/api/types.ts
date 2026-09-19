@@ -140,5 +140,7 @@ export interface InitiativeTree {
   index_style: string;
   root_task_id: number;
   version: number;
+  /** The live-delivery sequence this read is current to (m04.03 1.2). */
+  seq: number;
   tasks: TaskNode[];
 }

@@ -39,6 +39,7 @@ const read = (overrides: Partial<InitiativeTree> = {}): InitiativeTree => ({
   index_style: "numerical",
   root_task_id: 1,
   version: 7,
+  seq: 7,
   tasks: [],
   ...overrides,
 });

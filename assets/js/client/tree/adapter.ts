@@ -385,6 +385,8 @@ function one(operation: Operation, affectedIds: number[]): Batch {
 /** What the server answers a batch with (`DoItWeb.Api.OperationsEndpoint`). */
 export interface BatchReply {
   results: Array<{ index: number; status: string; data?: unknown }>;
+  /** The delivery sequence each Initiative the batch touched advanced to (m04.03 1.2). */
+  seq?: Record<string, number>;
 }
 
 /** The sort concern's result: the target and every branch the cascade re-sorted. */
@@ -491,7 +493,14 @@ export function rejectionMessage(error: ApiError): string {
 // --- the adapter ------------------------------------------------------------
 
 export type SubmitResult =
-  | { ok: true; delta: TreeDelta; refetch: boolean; affectedIds: number[] }
+  | {
+      ok: true;
+      delta: TreeDelta;
+      refetch: boolean;
+      affectedIds: number[];
+      /** The Initiative's sequence this reply is at, when the server said (m04.03 1.4.1). */
+      seq?: number;
+    }
   | { ok: false; error: ApiError; affectedIds: number[] };
 
 /** What a submission looks like the moment it is queued — item 5.2's pending scope. */
@@ -560,7 +569,14 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
     }
     if (!result.ok) return { ok: false, error: result.error, affectedIds: submission.affectedIds };
     const { refetch, ...delta } = deltaFromReply(operations, result.data);
-    return { ok: true, delta, refetch, affectedIds: submission.affectedIds };
+    const seq = result.data.seq?.[String(submission.initiativeId)];
+    return {
+      ok: true,
+      delta,
+      refetch,
+      affectedIds: submission.affectedIds,
+      ...(typeof seq === "number" ? { seq } : {}),
+    };
   }
 
   function queue(

@@ -36,6 +36,7 @@ const tree = (id = 12, version = 7) =>
     index_style: "numerical",
     root_task_id: 1,
     version,
+    seq: version,
     tasks: [],
   } satisfies InitiativeTree);
 

@@ -1,35 +1,54 @@
-// What the client does when the server says something changed (m04.01 item 1.5).
+// What the client does with what the live channel says (m04.01 1.5, m04.03 1.4).
 //
-// Deliberately blunt: the channel carries no tree, so a `changed` is a signal
-// to re-read the Initiative through the ordinary `/app/api` path — the same
-// read the screen made on mount, through the same client. Arc 3 replaces this
-// with a delta envelope; until it does, refetching is the honest version and it
-// is one round trip on a change the user can see.
+// One sync session per Initiative (`session.ts` holds the rules; this file
+// holds the state and does the reading). Everything that changes a tree goes
+// through here — the snapshot the screen reads on mount, the delta envelopes
+// off the channel, the screen's own writes as they are queued and answered —
+// so there is one place canonical truth, the sequence and the predictions
+// meet, and what the domain store holds is always `shown(session)`: truth
+// with the unanswered predictions folded on top. A delta landing under a
+// pending write never erases the write's guess.
 //
-// The Initiatives list has no topic of its own, so a change on an Initiative
+// The gap rule is the one impure part: an envelope that skips ahead starts a
+// short hold (a later one may fill the gap), and a hold that expires with the
+// gap still open re-reads the tree. Reads are guarded (`SyncGuard`): the
+// newest wins, and a read still out when access is taken away is dropped on
+// arrival rather than written over the forget.
+//
+// The Initiatives list has no topic of its own, so a delta on an Initiative
 // the tab is watching also refreshes that Initiative's row in the list (m04.02
 // item 4.6) — one summary read, patched in place, never the whole index — and
-// only when the list has actually been read, so a deep link never fetches a
-// screen nobody asked for. A burst of changes on one Initiative is coalesced
-// into one read (`coalesce`). Returning to the index re-reads the list in the
-// background (`revalidateList`) and patches the rows that differ.
-//
-// Refetching and revocation are ONE unit (`createInitiativeSync`), because they
-// race: a read already in flight when access is taken away would otherwise
-// resolve afterwards and quietly write the tree back. They share a sequence, so
-// revoking is also an invalidation.
+// only when the list has actually been read. A burst is coalesced into one
+// read. Returning to the index re-reads the list in the background
+// (`revalidateList`) and patches the rows that differ.
 
 import type { ApiClient } from "../api/client.ts";
-import type { InitiativeSummary, InitiativeTree } from "../api/types.ts";
+import type { InitiativeSummary, InitiativeTree, Member } from "../api/types.ts";
 import { mergeSummaries, patchSummary } from "../screens/initiatives_model.ts";
 import type { DomainStore } from "../state/domain.ts";
-import { forgetInitiative, putTree } from "../state/domain.ts";
-import { fromSnapshot } from "../tree/model.ts";
+import { forgetInitiative, putMembers, putTree } from "../state/domain.ts";
+import type { TreeDelta } from "../tree/delta.ts";
+import type { InitiativeHeader, TreeModel } from "../tree/model.ts";
+import type { Flight } from "../tree/optimistic.ts";
 import { UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
 import type { UiStore } from "../state/ui.ts";
 import { pushNotice } from "../state/ui.ts";
 import type { TreeCache } from "../storage/snapshots.ts";
-import type { ChangedEvent, Timers } from "./connection.ts";
+import type { Timers } from "./connection.ts";
+import type { DeltaEnvelope } from "./envelope.ts";
+import type { Outcome, SessionState, Settled } from "./session.ts";
+import {
+  GAP_HOLD_MS,
+  acknowledge,
+  begin,
+  emptySession,
+  gapOpen,
+  install,
+  patchHeader,
+  receive,
+  reject,
+  shown,
+} from "./session.ts";
 
 /** How long a burst of changes on one Initiative is held before one summary read. */
 export const SUMMARY_DEBOUNCE_MS = 300;
@@ -85,12 +104,16 @@ export function coalesce<K>(timers: Timers, ms: number, run: (key: K) => void): 
 export interface SyncGuard {
   /** Claim a sequence for a read of `id`'s tree. */
   beginTree(id: number): number;
+  /** Claim a sequence for a read of `id`'s members. */
+  beginMembers(id: number): number;
   /** Claim a sequence for a read of the Initiatives index. */
   beginList(): number;
   /** Claim a sequence for a read of `id`'s index row. */
   beginSummary(id: number): number;
   /** May a tree read holding `seq` still write? */
   currentTree(id: number, seq: number): boolean;
+  /** May a members read holding `seq` still write? */
+  currentMembers(id: number, seq: number): boolean;
   /** May a list read holding `seq` still write? */
   currentList(seq: number): boolean;
   /** May a row read holding `seq` still write? A newer list read outranks it too. */
@@ -101,6 +124,7 @@ export interface SyncGuard {
 
 export function createSyncGuard(): SyncGuard {
   const trees = new Map<number, number>();
+  const members = new Map<number, number>();
   const summaries = new Map<number, number>();
   let list = 0;
 
@@ -112,6 +136,7 @@ export function createSyncGuard(): SyncGuard {
 
   return {
     beginTree: (id) => bump(trees, id),
+    beginMembers: (id) => bump(members, id),
     // A whole-list read supersedes every row read still out: its answer
     // carries every row, newer than any of them.
     beginList: () => {
@@ -120,12 +145,14 @@ export function createSyncGuard(): SyncGuard {
     },
     beginSummary: (id) => bump(summaries, id),
     currentTree: (id, seq) => trees.get(id) === seq,
+    currentMembers: (id, seq) => members.get(id) === seq,
     currentList: (seq) => list === seq,
     currentSummary: (id, seq) => summaries.get(id) === seq,
     revoke(id) {
       // The index carries a row for `id` too, so a list read from before the
       // revocation would put it straight back — and so would a row read.
       bump(trees, id);
+      bump(members, id);
       bump(summaries, id);
       list += 1;
     },
@@ -147,13 +174,15 @@ export interface SyncDeps {
   snapshots?: Pick<TreeCache, "cacheTree" | "forgetTree">;
   /** Injected in tests; one is made per client otherwise. */
   guard?: SyncGuard;
-  /** Injected in tests so the summary debounce is assertable. */
+  /** Injected in tests so the debounce and the gap hold are assertable. */
   timers?: Timers;
+  /** How long a gap is given to fill before the tree is re-read. */
+  gapHoldMs?: number;
 }
 
 export interface InitiativeSync {
-  /** For `Connection.onChanged`. Never throws, never rejects. */
-  onChanged(event: ChangedEvent): void;
+  /** For `Connection.onDelta`. Never throws, never rejects. */
+  onDelta(envelope: DeltaEnvelope): void;
   /** For `Connection.onAccessRevoked`. */
   onAccessRevoked(initiativeId: number): void;
   /**
@@ -163,44 +192,139 @@ export interface InitiativeSync {
    * throws, never rejects.
    */
   revalidateList(): void;
+  /**
+   * A snapshot the screen read (on mount, or Try again). Installed forward
+   * only, and every envelope held while it was in flight follows it. Throws
+   * when the read cannot be a tree — the screen reads once more, then says so.
+   */
+  install(tree: InitiativeTree): void;
+  /** Server truth for `id` — no predictions — or `undefined` before a snapshot. */
+  canonical(id: number): TreeModel | undefined;
+  /** A write queued: its prediction is shown at once. Returns what is now shown. */
+  begin(id: number, flight: Flight): TreeModel | undefined;
+  /**
+   * A write's reply. `seq` is the reply's own sequence, when the server sent
+   * one. `createdId` is the row the write added and `tempId` the stand-in it
+   * was drawn under — both `null` when there was none, or when the write's
+   * broadcast settled it first (`onSettled` said so then).
+   */
+  succeed(
+    id: number,
+    key: string,
+    delta: TreeDelta,
+    seq?: number,
+  ): { createdId: number | null; tempId: number | null };
+  /** A write refused: the prediction goes. */
+  reject(id: number, key: string): void;
+  /** A header edit, predicted or answered, onto canonical. */
+  patchHeader(id: number, patch: (header: InitiativeHeader) => InitiativeHeader): void;
+  /**
+   * Told when a write's own broadcast settles it before its reply does — the
+   * screen clears the write's marks then, not when the reply comes.
+   */
+  onSettled(id: number, listener: (settled: Settled) => void): () => void;
 }
 
 /**
- * The client's two answers to the live channel, built together so they cannot
- * be wired up with separate state (m04.01 1.5).
- *
- *   * a change — re-read what we are holding, newest answer wins;
- *   * access taken away — forget the copy we hold, including the row in the
- *     index, invalidate anything still in flight for it, and, if that
- *     Initiative is the screen the user is on, say so rather than leaving a
- *     tree on the glass that the server would now refuse.
+ * The client's answers to the live channel and to its own writes, built
+ * together so they cannot be wired up with separate state (m04.01 1.5, m04.03 1.4).
  */
 export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
   const { api, domain, ui, onForbidden } = deps;
   const guard = deps.guard ?? createSyncGuard();
+  const gapHoldMs = deps.gapHoldMs ?? GAP_HOLD_MS;
   const timers: Timers = deps.timers ?? {
     setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
     clearTimeout: (handle) => globalThis.clearTimeout(handle as number),
   };
 
+  const sessions = new Map<number, SessionState>();
+  const holds = new Map<number, unknown>();
+  const listeners = new Map<number, Set<(settled: Settled) => void>>();
+  /** Initiatives with a re-read out: one at a time, a burst past the buffer asks once. */
+  const reading = new Set<number>();
+
+  const sessionOf = (id: number): SessionState => sessions.get(id) ?? emptySession;
+
   /**
-   * Re-reads one tree. A read that cannot be a tree is read once more — the
-   * same rule the screen follows — and a second failure is said out loud rather
-   * than dropped, because the copy on screen is now known to be stale and
-   * nothing else will tell the user (item 1.6.2).
+   * Files a session and everything that follows from it: what is shown, the
+   * hold on an open gap, the marks a broadcast settled, and the reads an
+   * applied envelope asks for.
    */
-  const refreshTree = async (initiativeId: number, retry: boolean): Promise<void> => {
-    const seq = guard.beginTree(initiativeId);
-    const tree = await api.get<InitiativeTree>(`/initiatives/${initiativeId}`);
-    if (!tree.ok || !guard.currentTree(initiativeId, seq)) return;
+  const commit = (id: number, outcome: Outcome): void => {
+    const { state } = outcome;
+    sessions.set(id, state);
+    const model = shown(state);
+    if (model !== null) putTree(domain, model);
+
+    if (gapOpen(state)) hold(id);
+    else release(id);
+
+    for (const settled of outcome.settled) {
+      for (const listener of listeners.get(id) ?? []) listener(settled);
+    }
+
+    if (outcome.applied.length > 0) {
+      if (domain.get().initiativeSummaries !== null) rowReads.request(id);
+      if (outcome.applied.some((envelope) => envelope.membersChanged)) void refreshMembers(id);
+    }
+
+    if (outcome.overflow) void resnapshot(id, true);
+  };
+
+  const only = (state: SessionState): Outcome => ({
+    state,
+    applied: [],
+    settled: [],
+    overflow: false,
+  });
+
+  /** Starts the gap hold for `id` unless one is already running. */
+  const hold = (id: number): void => {
+    if (holds.has(id)) return;
+    holds.set(
+      id,
+      timers.setTimeout(() => {
+        holds.delete(id);
+        // The gap may have filled while we waited; only an open one is read for.
+        if (gapOpen(sessionOf(id))) void resnapshot(id, true);
+      }, gapHoldMs),
+    );
+  };
+
+  const release = (id: number): void => {
+    const handle = holds.get(id);
+    if (handle === undefined) return;
+    timers.clearTimeout(handle);
+    holds.delete(id);
+  };
+
+  /**
+   * Re-reads one tree and installs it. A read that cannot be a tree is read
+   * once more — the same rule the screen follows — and a second failure is
+   * said out loud rather than dropped, because the copy on screen is now known
+   * to be behind and nothing else will tell the user (item 1.6.2).
+   */
+  const resnapshot = async (id: number, retry: boolean): Promise<void> => {
+    if (reading.has(id)) return;
+    reading.add(id);
+    try {
+      await readTree(id, retry);
+    } finally {
+      reading.delete(id);
+    }
+  };
+
+  const readTree = async (id: number, retry: boolean): Promise<void> => {
+    const seq = guard.beginTree(id);
+    const tree = await api.get<InitiativeTree>(`/initiatives/${id}`);
+    if (!tree.ok || !guard.currentTree(id, seq)) return;
 
     try {
-      const model = fromSnapshot(tree.data);
-      putTree(domain, model);
-      deps.snapshots?.cacheTree(model);
+      installTree(tree.data);
     } catch {
       if (retry) {
-        await refreshTree(initiativeId, false);
+        await readTree(id, false);
         return;
       }
       pushNotice(ui, {
@@ -209,6 +333,38 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
         message: UNUSABLE_TREE_NOTICE,
       });
     }
+  };
+
+  const installTree = (tree: InitiativeTree): void => {
+    const id = tree.id;
+    const outcome = install(sessionOf(id), tree);
+    if (!outcome.installed) return;
+    commit(id, outcome);
+    // Same path as the store write, so a tree the guard rejected is never
+    // the one that gets cached.
+    const canonical = outcome.state.canonical;
+    if (canonical !== null) deps.snapshots?.cacheTree(canonical);
+  };
+
+  /**
+   * The member list changed: re-read it, and with it this user's own role,
+   * which the broadcast cannot carry (it goes to everyone) and the header
+   * needs (it decides what the tree lets the user do).
+   */
+  const refreshMembers = async (id: number): Promise<void> => {
+    const seq = guard.beginMembers(id);
+    const result = await api.get<Member[]>(`/initiatives/${id}/members`);
+    if (!result.ok || !guard.currentMembers(id, seq)) return;
+    putMembers(domain, id, result.data);
+
+    const me = domain.get().user?.id ?? null;
+    const mine = me === null ? undefined : result.data.find((member) => member.user_id === me);
+    const state = sessionOf(id);
+    if (mine === undefined || state.canonical === null || state.canonical.header.role === mine.role) {
+      return;
+    }
+    const role = mine.role;
+    commit(id, only(patchHeader(state, (header) => ({ ...header, role }))));
   };
 
   /**
@@ -230,21 +386,51 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
     });
   };
 
-  // A burst of task changes on one Initiative is one row read.
+  // A burst of changes on one Initiative is one row read.
   const rowReads = coalesce<number>(timers, SUMMARY_DEBOUNCE_MS, (initiativeId) => {
     void refreshSummary(initiativeId);
   });
 
   return {
-    onChanged(event: ChangedEvent) {
-      const { initiativeId } = event;
+    onDelta(envelope) {
+      const id = envelope.initiativeId;
+      commit(id, receive(sessionOf(id), envelope));
+    },
 
-      // Only a list already on the glass has a row to patch.
-      if (domain.get().initiativeSummaries !== null) rowReads.request(initiativeId);
+    install: installTree,
 
-      if (domain.get().trees[initiativeId] !== undefined) {
-        void refreshTree(initiativeId, true);
-      }
+    canonical: (id) => sessionOf(id).canonical ?? undefined,
+
+    begin(id, flight) {
+      const state = sessionOf(id);
+      if (state.canonical === null) return undefined;
+      const next = begin(state, flight);
+      commit(id, only(next));
+      return shown(next) ?? undefined;
+    },
+
+    succeed(id, key, delta, seq) {
+      const answered = acknowledge(sessionOf(id), key, delta, seq);
+      commit(id, only(answered.state));
+      return { createdId: answered.createdId, tempId: answered.flight?.tempId ?? null };
+    },
+
+    reject(id, key) {
+      commit(id, only(reject(sessionOf(id), key)));
+    },
+
+    patchHeader(id, patch) {
+      commit(id, only(patchHeader(sessionOf(id), patch)));
+    },
+
+    onSettled(id, listener) {
+      const set = listeners.get(id) ?? new Set();
+      set.add(listener);
+      listeners.set(id, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) listeners.delete(id);
+      };
     },
 
     revalidateList() {
@@ -263,6 +449,11 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
     },
 
     onAccessRevoked(initiativeId: number) {
+      // The session goes whole: its truth, its held envelopes, its hold.
+      release(initiativeId);
+      sessions.delete(initiativeId);
+      // A read still out is the guard's to drop; a new one may start at once.
+      reading.delete(initiativeId);
       rowReads.cancel(initiativeId);
       guard.revoke(initiativeId);
       forgetInitiative(domain, initiativeId);

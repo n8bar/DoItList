@@ -101,9 +101,11 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
   // The tab's one live connection. A route change must never recreate it — and
   // it opens no socket until the effect below says we have an identity, so a
   // signed-out tab never hammers a handshake it cannot pass.
-  // One unit: a refetch in flight when access is taken away must not land
+  // One unit: a re-read in flight when access is taken away must not land
   // after the forget and put the tree back. Screens reach it through the
-  // services too (the index revalidates behind its list, item 4.6).
+  // services too: every tree — the snapshot, the deltas, the screen's own
+  // writes — goes through its sessions (m04.03 1.4), and the index
+  // revalidates behind its list (item 4.6).
   const [sync] = useState(() =>
     createInitiativeSync({
       api,
@@ -117,7 +119,7 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     return initConnection({
       transport: (options) => phoenixTransport(options, () => api.csrfToken()),
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
-      onChanged: sync.onChanged,
+      onDelta: sync.onDelta,
       onAccessRevoked: sync.onAccessRevoked,
       // Who else is on the Initiative and what they have selected. Filed as
       // the server sends it; the tree reads its badges and dots from here.

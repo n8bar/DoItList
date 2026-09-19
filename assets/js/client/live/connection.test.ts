@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
-import type { ChangedEvent, ConnectionDeps, PresenceEvent } from "./connection.ts";
-import { createConnection, getConnection, initConnection, parseChanged, resetConnection } from "./connection.ts";
+import type { ConnectionDeps, PresenceEvent } from "./connection.ts";
+import { createConnection, getConnection, initConnection, resetConnection } from "./connection.ts";
 import type { ConnectionStatus } from "../state/recovery.ts";
 import { RECONNECT_BUDGET } from "./connection_state.ts";
+import type { DeltaEnvelope } from "./envelope.ts";
+import { envelope, wire } from "./fake_envelope.ts";
 import { fakeTimers, fakeTransport } from "./fake_transport.ts";
 import type { NetworkSignal } from "./network.ts";
 import { matchRoute } from "../router/route.ts";
@@ -13,14 +15,14 @@ function harness(overrides: Partial<ConnectionDeps> = {}) {
   const socket = fakeTransport();
   const clock = fakeTimers();
   const statuses: ConnectionStatus[] = [];
-  const changes: ChangedEvent[] = [];
+  const deltas: DeltaEnvelope[] = [];
   const revoked: number[] = [];
   const presence: Array<{ initiativeId: number; event: PresenceEvent }> = [];
 
   const connection = createConnection({
     transport: socket.factory,
     onStatus: (status) => statuses.push(status),
-    onChanged: (event) => changes.push(event),
+    onDelta: (delta) => deltas.push(delta),
     onAccessRevoked: (id) => revoked.push(id),
     onPresence: (initiativeId, event) => presence.push({ initiativeId, event }),
     // Mid-jitter, so the delays a test reads back are the scheduled ones.
@@ -30,7 +32,7 @@ function harness(overrides: Partial<ConnectionDeps> = {}) {
     ...overrides,
   });
 
-  return { connection, socket, clock, statuses, changes, revoked, presence };
+  return { connection, socket, clock, statuses, deltas, revoked, presence };
 }
 
 /** A connection that is up, with the socket open. */
@@ -44,7 +46,7 @@ function live(overrides: Partial<ConnectionDeps> = {}) {
 const bareDeps = (socket: ReturnType<typeof fakeTransport>): ConnectionDeps => ({
   transport: socket.factory,
   onStatus: () => {},
-  onChanged: () => {},
+  onDelta: () => {},
   onAccessRevoked: () => {},
 });
 
@@ -109,52 +111,46 @@ describe("subscriptions (item 1.5)", () => {
   });
 });
 
-describe("server changes", () => {
-  it("reports a change on the Initiative whose channel carried it", () => {
-    const { connection, socket, changes } = harness();
+describe("server deltas (m04.03 1.4)", () => {
+  it("hands up a delta on the Initiative whose channel carried it", () => {
+    const { connection, socket, deltas } = harness();
+    connection.subscribeInitiative(12);
+    socket.get().channels[0]?.emit("delta", wire(envelope(4, { originKey: "k-1" })));
+
+    assert.deepEqual(deltas, [envelope(4, { originKey: "k-1" })]);
+  });
+
+  it("drops a malformed envelope whole, and one meant for another Initiative", () => {
+    const { connection, socket, deltas } = harness();
+    connection.subscribeInitiative(12);
+    const channel = socket.get().channels[0];
+    channel?.emit("delta", "nope");
+    channel?.emit("delta", { ...wire(envelope(4)), seq: "4" });
+    channel?.emit("delta", wire({ ...envelope(4), initiativeId: 13 }));
+    channel?.emit("delta", { ...wire(envelope(4)), upserts: [{ id: 1 }] });
+
+    assert.deepEqual(deltas, []);
+  });
+
+  it("no longer listens to the legacy `changed` push", () => {
+    const { connection, socket, deltas } = harness();
     connection.subscribeInitiative(12);
     socket.get().channels[0]?.emit("changed", { kind: "task_updated", id: 444 });
 
-    assert.deepEqual(changes, [{ initiativeId: 12, kind: "task_updated", id: 444 }]);
-  });
-
-  it("ignores a payload it does not understand", () => {
-    const { connection, socket, changes } = harness();
-    connection.subscribeInitiative(12);
-    const channel = socket.get().channels[0];
-    channel?.emit("changed", { kind: "who_knows", id: 1 });
-    channel?.emit("changed", { kind: "task_updated" });
-    channel?.emit("changed", "nope");
-
-    assert.deepEqual(changes, []);
+    assert.deepEqual(deltas, []);
   });
 
   it("stops listening once the channel is left", () => {
-    const { connection, socket, clock, changes } = harness();
+    const { connection, socket, clock, deltas } = harness();
     connection.subscribeInitiative(12);
     connection.unsubscribeInitiative(12);
     clock.flush();
-    socket.get().channels[0]?.emit("changed", { kind: "task_updated", id: 1 });
+    socket.get().channels[0]?.emit("delta", wire(envelope(1)));
 
     // The fake still delivers to a left channel; what matters is that the real
     // one is gone from the connection's books, so nothing re-joins it.
     assert.deepEqual(connection.joined(), []);
-    assert.equal(changes.length, 1);
-  });
-
-  it("parses only the kinds the server actually sends", () => {
-    assert.deepEqual(parseChanged(7, { kind: "members_changed", id: 7 }), {
-      initiativeId: 7,
-      kind: "members_changed",
-      id: 7,
-    });
-    assert.deepEqual(parseChanged(7, { kind: "initiative_updated", id: 7 }), {
-      initiativeId: 7,
-      kind: "initiative_updated",
-      id: 7,
-    });
-    assert.equal(parseChanged(7, { kind: "task_updated", id: "9" }), null);
-    assert.equal(parseChanged(7, null), null);
+    assert.equal(deltas.length, 1);
   });
 });
 

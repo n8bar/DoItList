@@ -110,7 +110,7 @@ export function createTreeCache(deps: {
     async writeTree(model) {
       const written = await storage.putSnapshot({
         initiativeId: model.initiativeId,
-        seq: model.header.version,
+        seq: model.seq,
         payload: treeSummary(model),
       });
       if (!written.ok) return false;

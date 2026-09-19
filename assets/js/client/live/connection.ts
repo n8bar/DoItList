@@ -8,8 +8,13 @@
 // of leaving and re-joining it.
 //
 // The transport is injected (`transport.ts`), so everything here — the
-// refcounting, the grace, the state mapping, the refetch fan-out — is exercised
+// refcounting, the grace, the state mapping, the delta fan-out — is exercised
 // by `node --test` against a fake socket. `phoenix_transport.ts` is the real one.
+//
+// A joined Initiative's channel carries one `delta` per committed change
+// (m04.03 1.3). It is checked (`envelope.ts`) and handed up whole; what to do
+// with it — apply, hold, drop, re-read — is the sync session's call
+// (`refresh.ts`), not the socket's.
 //
 // Presence (m04.02 item 3.4.2) rides the same channel: the server's
 // `presence_state` / `presence_diff` are handed up as they arrive, and the
@@ -23,27 +28,9 @@ import type { LinkState } from "./connection_state.ts";
 import { initialLinkState, nextLinkState, reconnectDelayMs } from "./connection_state.ts";
 import type { NetworkSignal } from "./network.ts";
 import { browserNetwork } from "./network.ts";
+import type { DeltaEnvelope } from "./envelope.ts";
+import { parseDelta } from "./envelope.ts";
 import type { LiveChannel, LiveTransport, TransportFactory } from "./transport.ts";
-
-/** The kinds of change the server announces on a joined Initiative. */
-export const CHANGED_KINDS = [
-  "task_created",
-  "task_updated",
-  "task_moved",
-  "task_deleted",
-  "members_changed",
-  "initiative_updated",
-] as const;
-
-export type ChangedKind = (typeof CHANGED_KINDS)[number];
-
-export interface ChangedEvent {
-  /** The Initiative whose channel carried the event. */
-  readonly initiativeId: number;
-  readonly kind: ChangedKind;
-  /** The record that moved — a task id, except `members_changed` and `initiative_updated`, which carry the Initiative id. */
-  readonly id: number;
-}
 
 export interface Timers {
   setTimeout(callback: () => void, ms: number): unknown;
@@ -71,8 +58,8 @@ export interface ConnectionDeps {
   transport: TransportFactory;
   /** Called whenever the reported status changes. */
   onStatus(status: ConnectionStatus): void;
-  /** Called for every `changed` push on a joined Initiative. */
-  onChanged(event: ChangedEvent): void;
+  /** Called for every well-formed `delta` push on a joined Initiative. */
+  onDelta(envelope: DeltaEnvelope): void;
   /**
    * Called when the server says this user may no longer see an Initiative they
    * were watching. The channel is already gone by then — this is the client's
@@ -145,15 +132,6 @@ interface Subscription {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-
-/** A `changed` payload, or `null` when the server said something we don't know. */
-export function parseChanged(initiativeId: number, payload: unknown): ChangedEvent | null {
-  if (!isRecord(payload)) return null;
-  const { kind, id } = payload;
-  if (typeof kind !== "string" || !(CHANGED_KINDS as readonly string[]).includes(kind)) return null;
-  if (typeof id !== "number") return null;
-  return { initiativeId, kind: kind as ChangedKind, id };
-}
 
 /** A `notification` payload, or `null` when the server said something we don't know. */
 export function parseNotification(payload: unknown): NotificationPush | null {
@@ -272,9 +250,11 @@ export function createConnection(deps: ConnectionDeps): Connection {
 
   const join = (initiativeId: number): Subscription => {
     const channel = transport.channel(`initiative:${initiativeId}`);
-    channel.on("changed", (payload) => {
-      const event = parseChanged(initiativeId, payload);
-      if (event !== null) deps.onChanged(event);
+    channel.on("delta", (payload) => {
+      // A malformed envelope is dropped whole; the gap it leaves is the
+      // session's to heal with a fresh snapshot.
+      const envelope = parseDelta(initiativeId, payload);
+      if (envelope !== null) deps.onDelta(envelope);
     });
     channel.on("access_revoked", () => {
       // The server has already stopped the channel; drop our side of it and

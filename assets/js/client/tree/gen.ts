@@ -46,6 +46,7 @@ export interface TreeOptions {
   rootTaskId?: number;
   indexStyle?: string;
   progressCalc?: InitiativeTree["progress_calc"];
+  seq?: number;
 }
 
 /** A whole read built from a nested spec, with index, depth and position right. */
@@ -103,6 +104,7 @@ export function buildTree(specs: readonly TaskSpec[], options: TreeOptions = {})
     index_style: indexStyle,
     root_task_id: rootTaskId,
     version: 1,
+    seq: options.seq ?? 0,
     tasks: specs.map((spec, index) => node(spec, rootTaskId, [index], 0)),
   };
 }

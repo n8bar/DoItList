@@ -42,6 +42,12 @@ export interface TreeModel {
   readonly childIds: Readonly<Record<number, readonly number[]>>;
   readonly progressCalc: ProgressCalc;
   readonly indexStyle: string;
+  /**
+   * The Initiative's delivery sequence this canonical state is current to
+   * (m04.03 1.4). A live delta at `seq + 1` applies; anything else is old, a
+   * repeat, or a gap. Predictions carry it through untouched.
+   */
+  readonly seq: number;
 }
 
 /** The header slice of a read, on its own. */
@@ -97,6 +103,7 @@ export function fromSnapshot(tree: InitiativeTree): TreeModel {
     childIds,
     progressCalc: tree.progress_calc,
     indexStyle: tree.index_style,
+    seq: tree.seq,
   };
 }
 

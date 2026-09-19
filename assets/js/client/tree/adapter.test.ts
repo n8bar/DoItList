@@ -427,6 +427,26 @@ describe("createAdapter", () => {
     assert.ok(outcome.affectedIds.includes(11));
   });
 
+  it("the reply's sequence for the Initiative rides along; none when the server sent none (m04.03 1.4.1)", async () => {
+    const fake = fakeApi();
+    const { instance } = adapter(fake);
+
+    const first = instance.submit(5, { kind: "toggleComplete", id: 11, done: true });
+    await settle();
+    const reply = okReply(11);
+    fake.calls[0]?.resolve({ ...reply, ...(reply.ok ? { data: { ...reply.data, seq: { "5": 9, "6": 2 } } } : {}) });
+    const outcome = await first;
+    assert.ok(outcome.ok);
+    assert.equal(outcome.seq, 9);
+
+    const second = instance.submit(5, { kind: "toggleComplete", id: 11, done: false });
+    await settle();
+    fake.calls[1]?.resolve(okReply(11));
+    const bare = await second;
+    assert.ok(bare.ok);
+    assert.equal("seq" in bare, false);
+  });
+
   it("per Initiative, one batch in flight; creation order is send order", async () => {
     const fake = fakeApi();
     const { instance, results } = adapter(fake);
