@@ -152,7 +152,7 @@ defmodule DoItWeb.Api.OperationsEndpoint do
     Errors.send_error(
       conn,
       422,
-      :unprocessable_entity,
+      :duplicate,
       "Duplicate batch: this payload already committed under Idempotency-Key " <>
         "\"#{earlier_key}\" at #{DateTime.to_iso8601(committed_at)}. Replay with that " <>
         "key for its response, or change the payload if a second copy is meant."

@@ -192,7 +192,7 @@ defmodule DoItWeb.Api.OperationsIdempotencyTest do
     # its commit time, and both recoveries. No second subtree (m03.04 2.7.6).
     {s2, b2} = post_ops(ctx.owner, ops, "key-b-#{n}")
     assert s2 == 422
-    assert b2["error"]["code"] == "unprocessable_entity"
+    assert b2["error"]["code"] == "duplicate"
     assert b2["error"]["message"] =~ "Duplicate batch"
     assert b2["error"]["message"] =~ "\"#{key_a}\""
     assert b2["error"]["message"] =~ DateTime.to_iso8601(committed_at)

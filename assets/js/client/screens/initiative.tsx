@@ -37,6 +37,7 @@ import type { InitiativeHeader as HeaderRecord, TreeModel } from "../tree/model.
 import { fromSnapshot } from "../tree/model.ts";
 import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
 import { createAdapter, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
+import { REJECTED_TITLE, historySentence, rejectionSentence, warnRejection } from "../tree/notice_model.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
 import { CONFIRM_CLASSES, dialogIdFor, skippable } from "../tree/confirm_model.ts";
 import type { EditRejection, TreeIntent } from "../tree/context.ts";
@@ -203,8 +204,6 @@ export function InitiativeScreen({ id }: { id: number }) {
     </section>
   );
 }
-
-const REJECTED_TITLE = "That change was not saved";
 
 /** What the header asks of the tree section (item 7.10). */
 interface HeaderActions {
@@ -385,9 +384,14 @@ function TreeSection({
       // else is said out loud.
       const dropped = reject(state, key);
       flights.current = dropped.state;
-      const message = rejectionMessage(result.error);
+      // The field beside a refused edit keeps the API's own words (it names
+      // the field); a notice gets one plain sentence by code (item 7.14), and
+      // the API's words go to the console.
       const refusedEdit: EditRejection | null =
-        write?.kind === "edit" ? { id: write.id, fields: write.fields, message } : null;
+        write?.kind === "edit"
+          ? { id: write.id, fields: write.fields, message: rejectionMessage(result.error) }
+          : null;
+      warnRejection(write === null ? "undo/redo" : write.kind, result.error);
       // A refused undo or redo is not a lost change — "nothing to undo" is
       // the stack's answer, said in the stack's terms.
       const refusedHistory = write === null ? inFlight.get().history : null;
@@ -401,10 +405,10 @@ function TreeSection({
         pushNotice(stores.ui, {
           kind: "info",
           title: refusedHistory === "undo" ? "Undo" : "Redo",
-          message,
+          message: historySentence(refusedHistory, result.error),
         });
       } else if (refusedEdit === null) {
-        pushNotice(stores.ui, { kind: "error", title: REJECTED_TITLE, message });
+        pushNotice(stores.ui, { kind: "error", title: REJECTED_TITLE, message: rejectionSentence(result.error) });
       }
     };
 
@@ -499,10 +503,11 @@ function TreeSection({
             return;
           }
           patchHeader((header) => revertHeader(header, prior, fields));
+          warnRejection("the header edit", result.error);
           pushNotice(stores.ui, {
             kind: "error",
             title: REJECTED_TITLE,
-            message: rejectionMessage(result.error),
+            message: rejectionSentence(result.error),
           });
         });
     },

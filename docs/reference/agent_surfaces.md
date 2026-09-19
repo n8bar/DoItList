@@ -43,7 +43,7 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 ### The operations envelope
 
-`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` that later operations in the same batch point at; a lid used before it is defined fails the request. Resending with the same `Idempotency-Key` replays the stored result instead of applying twice.
+`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` that later operations in the same batch point at; a lid used before it is defined fails the request. Resending with the same `Idempotency-Key` replays the stored result instead of applying twice; the same payload under a new key is refused with code `duplicate`.
 
 ```json
 {"operations": [

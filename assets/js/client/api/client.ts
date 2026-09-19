@@ -12,6 +12,7 @@ export type ApiErrorCode =
   | "forbidden"
   | "not_found"
   | "conflict"
+  | "duplicate"
   | "unprocessable_entity"
   | "network"
   | "malformed";
@@ -74,6 +75,7 @@ const KNOWN_CODES: readonly string[] = [
   "forbidden",
   "not_found",
   "conflict",
+  "duplicate",
   "unprocessable_entity",
 ];
 
