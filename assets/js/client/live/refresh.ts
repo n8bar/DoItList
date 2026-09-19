@@ -291,6 +291,12 @@ export interface InitiativeSync {
    * nothing else is looked at.
    */
   onRemoteChange(id: number, listener: (change: RemoteChange) => void): () => void;
+  /**
+   * Told, before anything is forgotten, that access to `id` has been taken
+   * away (m04.03 4.7): the screen drops the Initiative's send lane and its
+   * marks then, so nothing queued for it goes out and no reply lands.
+   */
+  onRevoked(id: number, listener: () => void): () => void;
 }
 
 /** One applied envelope from someone else, as the pane needs it. */
@@ -319,6 +325,7 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
   const listeners = new Map<number, Set<(settled: Settled) => void>>();
   const syncedListeners = new Map<number, Set<() => void>>();
   const remoteListeners = new Map<number, Set<(change: RemoteChange) => void>>();
+  const revokedListeners = new Map<number, Set<() => void>>();
   /** Initiatives with a re-read out: one at a time, a burst past the buffer asks once. */
   const reading = new Set<number>();
   /** Screen reads out per Initiative: a re-read is not started under one. */
@@ -620,7 +627,19 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       })();
     },
 
+    onRevoked(id, listener) {
+      const set = revokedListeners.get(id) ?? new Set();
+      set.add(listener);
+      revokedListeners.set(id, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) revokedListeners.delete(id);
+      };
+    },
+
     onAccessRevoked(initiativeId: number) {
+      // The screen first, while it still has the tree: its lane and marks go.
+      for (const listener of [...(revokedListeners.get(initiativeId) ?? [])]) listener();
       // The session goes whole: its truth, its held envelopes, its hold.
       release(initiativeId);
       sessions.delete(initiativeId);

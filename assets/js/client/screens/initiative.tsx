@@ -15,7 +15,11 @@
 // and its rows are pending (item 5.2); the reply's delta — or the write's own
 // broadcast, whichever lands first (m04.03 1.4.1) — lands on canonical truth
 // and the prediction is dropped; a rejection reverts the tree and is said out
-// loud — or, for a pane edit, kept in the field with the reason beside it.
+// loud — or, for a pane edit, kept in the field with the reason beside it and
+// Retry / Discard (m04.03 4.6.2), and in the journal as `rejected` so a reload
+// shows it again. Losing access drops the adapter's lane for the Initiative
+// and every mark with it; a role change is applied as the header's role moves
+// (4.7) — the adapter refuses what the new role forbids as it is built.
 // Canonical truth, the sequence and the predictions live in the Initiative's
 // sync session (`live/refresh.ts`), outside React: this screen only keeps the
 // marks (pink rows, stand-in keys, a refused edit) that go with them.
@@ -52,6 +56,7 @@ import type { InitiativeHeader as HeaderRecord, TreeModel } from "../tree/model.
 import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
 import { createAdapter, intentToBatch, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
 import { REJECTED_TITLE, historySentence, rejectionSentence, warnRejection } from "../tree/notice_model.ts";
+import { NO_PERMISSION, TARGET_GONE } from "../tree/rebase.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
 import { CONFIRM_CLASSES, dialogIdFor, skippable } from "../tree/confirm_model.ts";
 import type { EditRejection, TreeIntent } from "../tree/context.ts";
@@ -66,7 +71,7 @@ import {
   scopeFor,
   settle,
 } from "../tree/pending_model.ts";
-import { permissionsFor } from "../tree/permissions.ts";
+import { permissionsFor, permitsWrite } from "../tree/permissions.ts";
 import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.ts";
 import { selectionOf } from "../tree/selection_model.ts";
 import type { RowPresence } from "../tree/row_model.ts";
@@ -87,7 +92,7 @@ import { useStore, useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import { browserKeyValueStore } from "../storage/last_user.ts";
 import type { PendingOp } from "../storage/pending_ops.ts";
-import { replayPlan } from "../storage/pending_ops.ts";
+import { rejectedRecords, replayPlan } from "../storage/pending_ops.ts";
 import { ConfirmDialog } from "../ui/dialog.tsx";
 import { InlineError } from "../ui/feedback.tsx";
 import { InitiativeHeader } from "./initiative_header.tsx";
@@ -224,7 +229,8 @@ interface HeaderActions {
 interface InFlightState {
   readonly pending: PendingMap;
   readonly rowKeys: ReadonlyMap<number, number>;
-  readonly rejection: EditRejection | null;
+  /** The refused pane edits still recoverable, by task (4.6.2). */
+  readonly rejections: ReadonlyMap<number, EditRejection>;
   /** The undo or redo in flight, if any — one at a time, its button latched. */
   readonly history: "undo" | "redo" | null;
 }
@@ -232,8 +238,23 @@ interface InFlightState {
 const NOTHING_IN_FLIGHT: InFlightState = {
   pending: NO_PENDING,
   rowKeys: new Map(),
-  rejection: null,
+  rejections: new Map(),
   history: null,
+};
+
+const withRejection = (
+  rejections: ReadonlyMap<number, EditRejection>,
+  rejection: EditRejection,
+): ReadonlyMap<number, EditRejection> => new Map(rejections).set(rejection.id, rejection);
+
+const withoutRejection = (
+  rejections: ReadonlyMap<number, EditRejection>,
+  id: number,
+): ReadonlyMap<number, EditRejection> => {
+  if (!rejections.has(id)) return rejections;
+  const next = new Map(rejections);
+  next.delete(id);
+  return next;
 };
 
 /** The tree, and everything that is true only once there is a tree. */
@@ -395,7 +416,7 @@ function TreeSection({
           savingIds: savingIds(state.pending),
           recomputingIds: recomputingIds(state.pending),
           rowKeys: state.rowKeys,
-          rejection: state.rejection,
+          rejections: state.rejections,
         }),
       ),
     [inFlight],
@@ -461,12 +482,14 @@ function TreeSection({
       if (shown === undefined) return;
 
       const scope = scopeFor(current, shown, [targetOf(write, tempId ?? -1)], submission.affectedIds);
+      // A new edit on the same task supersedes what was refused before — on
+      // screen and on the device, or a reload would show the old one again.
+      const superseded = write.kind === "edit" ? inFlight.get().rejections.get(write.id) : undefined;
+      if (superseded !== undefined && superseded.key !== key) void cache.deletePendingOp(superseded.key);
       inFlight.set((state) => ({
         ...state,
         pending: beginPending(state.pending, key, scope),
-        // A new edit on the same task supersedes what was refused before.
-        rejection:
-          write.kind === "edit" && state.rejection?.id === write.id ? null : state.rejection,
+        rejections: superseded === undefined ? state.rejections : withoutRejection(state.rejections, superseded.id),
       }));
     };
     const onSubmit = beginFlight;
@@ -489,15 +512,15 @@ function TreeSection({
       }
 
       // Item 5.2.3: the revert is canonical plus what is still pending. A pane
-      // edit keeps its text in the field with the reason beside it; anything
-      // else is said out loud.
+      // edit the journal kept keeps its text in the field with the reason
+      // beside it and Retry / Discard (4.6.2); anything else is said out loud.
       sync.reject(initiativeId, key);
       // The field beside a refused edit keeps the API's own words (it names
       // the field); a notice gets one plain sentence by code (item 7.14), and
       // the API's words go to the console.
       const refusedEdit: EditRejection | null =
-        write?.kind === "edit"
-          ? { id: write.id, fields: write.fields, message: rejectionMessage(result.error) }
+        write?.kind === "edit" && result.recoverable
+          ? { key, id: write.id, fields: write.fields, message: rejectionMessage(result.error) }
           : null;
       warnRejection(write === null ? "undo/redo" : write.kind, result.error);
       // A refused undo or redo is not a lost change — "nothing to undo" is
@@ -506,7 +529,7 @@ function TreeSection({
       inFlight.set((current) => ({
         ...current,
         pending: settle(current.pending, key),
-        rejection: refusedEdit ?? current.rejection,
+        rejections: refusedEdit === null ? current.rejections : withRejection(current.rejections, refusedEdit),
       }));
       if (refusedHistory !== null) {
         pushNotice(stores.ui, {
@@ -563,8 +586,69 @@ function TreeSection({
       void adapter.resubmit(record);
     };
 
-    return { adapter, replay };
+    /**
+     * A refused edit an earlier life of this tab kept (4.6.2): shown again in
+     * the pane, once. One whose task is gone has nothing to be shown against;
+     * it is said out loud and forgotten.
+     */
+    const restore = (record: PendingOp): void => {
+      const { key, initiativeId, payload } = record;
+      if (payload.kind !== "write" || payload.write.kind !== "edit") return;
+      const write = payload.write;
+      if (inFlight.get().rejections.get(write.id)?.key === key) return;
+      if (stores.domain.get().trees[initiativeId]?.tasks[write.id] === undefined) {
+        void cache.deletePendingOp(key);
+        pushNotice(stores.ui, { kind: "error", title: REJECTED_TITLE, message: rejectionSentence(TARGET_GONE) });
+        return;
+      }
+      const rejection: EditRejection = { key, id: write.id, fields: write.fields, message: payload.reason ?? "" };
+      inFlight.set((state) => ({ ...state, rejections: withRejection(state.rejections, rejection) }));
+    };
+
+    /** The pane's Retry: the record goes, and the edit goes again as a new submission — pending at once (§6.7). */
+    const retryEdit = (rejection: EditRejection): void => {
+      void cache.deletePendingOp(rejection.key);
+      inFlight.set((state) => ({ ...state, rejections: withoutRejection(state.rejections, rejection.id) }));
+      void adapter.submit(id, { kind: "edit", id: rejection.id, fields: rejection.fields });
+    };
+
+    /** The pane's Discard: the record goes and the field shows canonical. */
+    const discardEdit = (rejection: EditRejection): void => {
+      void cache.deletePendingOp(rejection.key);
+      inFlight.set((state) => ({ ...state, rejections: withoutRejection(state.rejections, rejection.id) }));
+    };
+
+    return { adapter, replay, restore, retryEdit, discardEdit };
   }, [api, cache, id, inFlight, stores.domain, stores.ui, sync]);
+
+  // Access taken away (4.7): the lane is dropped before the tree is forgotten,
+  // so nothing queued for this Initiative goes out, a reply on its way lands
+  // nowhere, and no mark outlives the tree it was painted on.
+  useEffect(
+    () =>
+      sync.onRevoked(id, () => {
+        writes.adapter.abandon(id);
+        inFlight.set(NOTHING_IN_FLIGHT);
+      }),
+    [id, inFlight, sync, writes],
+  );
+
+  // The role moved (4.7): the controls follow `permissions` on their own, and
+  // the adapter refuses a queued write the new role forbids as it is built.
+  // A refused edit held for Retry is refused the same way, now, rather than
+  // when Retry is pressed against a disabled field.
+  useEffect(() => {
+    const held = [...inFlight.get().rejections.values()].filter(
+      (rejection) => !permitsWrite(permissions, { kind: "edit", id: rejection.id, fields: rejection.fields }),
+    );
+    if (held.length === 0) return;
+    for (const rejection of held) void cache.deletePendingOp(rejection.key);
+    inFlight.set((state) => ({
+      ...state,
+      rejections: held.reduce((rejections, rejection) => withoutRejection(rejections, rejection.id), state.rejections),
+    }));
+    pushNotice(stores.ui, { kind: "error", title: REJECTED_TITLE, message: rejectionSentence(NO_PERMISSION) });
+  }, [cache, inFlight, permissions, stores.ui]);
 
   const submit = useCallback(
     (write: TreeWrite) => {
@@ -590,6 +674,7 @@ function TreeSection({
       void cache.pendingOps().then((records) => {
         if (!live) return;
         for (const record of replayPlan(records, id)) writes.replay(record);
+        for (const record of rejectedRecords(records, id)) writes.restore(record);
         writes.adapter.open(id);
         writes.adapter.resume(id);
       });
@@ -700,6 +785,8 @@ function TreeSection({
     onHistory,
     onEditField,
     remoteChanges,
+    onRetryEdit: writes.retryEdit,
+    onDiscardEdit: writes.discardEdit,
     onBlocked: useCallback(() => {
       pushNotice(stores.ui, {
         kind: "info",

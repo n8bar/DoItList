@@ -194,8 +194,8 @@ class DragSession {
         // triggers never meets the placeholder.
         this.teardown();
         if ("plan" in target) {
-          const { parentId, position, reorder } = target.plan;
-          this.ctx().onIntent({ kind: "move", id, parentId, position, reorder });
+          const { parentId, position, reorder, anchor } = target.plan;
+          this.ctx().onIntent({ kind: "move", id, parentId, position, reorder, ...(anchor === undefined ? {} : { anchor }) });
         }
         return;
       }

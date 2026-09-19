@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import { canProgress, permissionsFor } from "./permissions.ts";
+import { canProgress, permissionsFor, permitsWrite } from "./permissions.ts";
 
 describe("what a role may do", () => {
   it("lets an owner edit and administer", () => {
@@ -66,5 +66,31 @@ describe("viewer+", () => {
     const editor = permissionsFor("editor");
     assert.equal(canProgress(editor, 1), true);
     assert.equal(canProgress(editor, 99), true);
+  });
+});
+
+describe("what a role may send (m04.03 4.7)", () => {
+  const title = { kind: "edit", id: 11, fields: { title: "x" } } as const;
+  const progress = { kind: "edit", id: 11, fields: { manual_progress: 40 } } as const;
+  const done = { kind: "toggleComplete", id: 11, done: true } as const;
+  const move = { kind: "reorder", id: 11, dir: "up" } as const;
+
+  it("an editor may send anything; a viewer nothing", () => {
+    const editor = permissionsFor("editor");
+    const viewer = permissionsFor("viewer");
+    for (const write of [title, progress, done, move, null]) {
+      assert.equal(permitsWrite(editor, write), true);
+      assert.equal(permitsWrite(viewer, write), false);
+    }
+  });
+
+  it("a viewer+ may move the Progress of a task they lead, and nothing else", () => {
+    const led = permissionsFor("viewer", { enabled: true, ledTaskIds: [11] });
+    assert.equal(permitsWrite(led, progress), true);
+    assert.equal(permitsWrite(led, done), true);
+    assert.equal(permitsWrite(led, title), false);
+    assert.equal(permitsWrite(led, move), false);
+    assert.equal(permitsWrite(led, { ...done, id: 12 }), false);
+    assert.equal(permitsWrite(led, { kind: "edit", id: 11, fields: { manual_progress: 40, title: "x" } }), false);
   });
 });

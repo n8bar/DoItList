@@ -28,8 +28,12 @@ export type TreeIntent =
   /** P / A stepped a value; `back` is the Shift direction. */
   | { kind: "step"; id: number; field: "priority" | "assignee"; back: boolean }
   | { kind: "delete"; id: number }
-  /** A drop: `parentId` / `position` as `drag_model.ts` planned them. */
-  | { kind: "move"; id: number; parentId: number; position: number | null; reorder: boolean }
+  /**
+   * A drop: `parentId` / `position` as `drag_model.ts` planned them, and the
+   * sibling it landed beside when there was one — the slot is re-read from
+   * that sibling when the move is sent (m04.03 4.5).
+   */
+  | { kind: "move"; id: number; parentId: number; position: number | null; reorder: boolean; anchor?: MoveAnchor }
   /** The Details pane committed one field (item 3.4.3). */
   | {
       kind: "edit";
@@ -45,11 +49,20 @@ export type TreeIntent =
   /** "Make descendants inherit" — `cascade_sort`. */
   | { kind: "cascadeSort"; id: number };
 
+/** The sibling a drop landed beside, and which side of it. */
+export interface MoveAnchor {
+  readonly id: number;
+  readonly side: "before" | "after";
+}
+
 /**
  * A Details-pane edit the server refused (item 5.2.3): the fields as the user
- * typed them, kept in the pane with the server's sentence beside them.
+ * typed them, kept in the pane with the server's sentence beside them and the
+ * two ways out, Retry and Discard (m04.03 4.6.2). `key` names the journal
+ * record that keeps it across a reload.
  */
 export interface EditRejection {
+  readonly key: string;
   readonly id: number;
   readonly fields: Extract<TreeIntent, { kind: "edit" }>["fields"];
   readonly message: string;
@@ -117,4 +130,8 @@ export interface TreeContext {
   onEditField?(field: EditField | null): void;
   /** Someone else's writes, as the pane's focused field needs them (4.2). */
   readonly remoteChanges?: RemoteChangeSource;
+  /** Retry a refused pane edit as a new submission (4.6.2); the row goes pending at once. */
+  onRetryEdit?(rejection: EditRejection): void;
+  /** Drop a refused pane edit: the field shows canonical and the record goes. */
+  onDiscardEdit?(rejection: EditRejection): void;
 }

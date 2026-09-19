@@ -226,3 +226,16 @@ describe("task reader (item 7.18)", () => {
     assert.throws(() => createTaskReader(createStore<TreeModel | undefined>(undefined)).model());
   });
 });
+
+describe("a refused pane edit (m04.03 4.6.2)", () => {
+  it("is read per task, the same object back until it changes, and null once it is gone", () => {
+    const { marksStore, reader } = harness();
+    assert.equal(reader.rejection(12), null);
+    const rejection = { key: "k", id: 12, fields: { title: "x" }, message: "no" };
+    marksStore.set({ ...NO_MARKS, rejections: new Map([[12, rejection]]) });
+    assert.equal(reader.rejection(12), rejection);
+    assert.equal(reader.rejection(11), null);
+    marksStore.set(NO_MARKS);
+    assert.equal(reader.rejection(12), null);
+  });
+});

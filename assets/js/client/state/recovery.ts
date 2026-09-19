@@ -32,6 +32,13 @@ export interface PendingWrite {
   readonly operation: unknown;
   /** Milliseconds since the epoch, when the user made the change. */
   readonly queuedAt: number;
+  /**
+   * Where it stands: waiting to go, out with the outcome unknown, or refused
+   * and kept for the user's Retry or Discard (m04.03 4.6.2). A refused write
+   * is unsaved work — the sign-out warning counts it — but it is not waiting
+   * on the connection, so the summary's "waiting" count leaves it out.
+   */
+  readonly status: "queued" | "sent" | "rejected";
 }
 
 /**
@@ -128,7 +135,19 @@ export function pendingWriteFrom(record: PendingOpRecord): PendingWrite {
     initiativeId: record.initiativeId,
     operation: record.payload,
     queuedAt: record.createdAt,
+    status: statusOf(record.payload),
   };
+}
+
+function statusOf(payload: unknown): PendingWrite["status"] {
+  const status =
+    typeof payload === "object" && payload !== null ? (payload as { status?: unknown }).status : undefined;
+  return status === "sent" || status === "rejected" ? status : "queued";
+}
+
+/** The writes still waiting on the server — not the refused ones the user holds. */
+export function waitingCount(writes: readonly PendingWrite[]): number {
+  return writes.filter((write) => write.status !== "rejected").length;
 }
 
 /**

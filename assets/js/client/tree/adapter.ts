@@ -39,6 +39,17 @@
 // against current truth and sent once more under a NEW key (the old one names
 // bytes the server refused). A second conflict is a rejection. An intent whose
 // target is gone is refused here, visibly, rather than sent as nothing.
+//
+// Edits are the exception to "once" (m04.03 4.4): a stale edit is rebased
+// field by field onto the record the conflict reply carries — the user's
+// fields only, with the version the server is at — and sent again under a new
+// key, up to `MAX_EDIT_ATTEMPTS` sends counted in the journal; past that, or
+// on any other refusal, the edit is kept in the journal as `rejected` with its
+// reason, for the pane's Retry and Discard (4.6.2), instead of being removed.
+// A move is re-read against the tree as it stands before it goes (4.5), and a
+// write the user's current role forbids is refused without a request (4.7).
+// `abandon` drops an Initiative's lane when access to it is lost: nothing more
+// goes out for it, and a reply still on its way is ignored.
 
 import type { ApiClient, ApiError } from "../api/client.ts";
 import type { Priority } from "../api/types.ts";
@@ -49,8 +60,8 @@ import type { TreeIntent } from "./context.ts";
 import type { HistoryResult, TaskResult, TaskUpsert, TreeDelta } from "./delta.ts";
 import { deltaFromHistoryResult, deltaFromOpResult } from "./delta.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
-import { childIdsOf } from "./model.ts";
-import type { MoveArgs, OpResult } from "./ops.ts";
+import { clientRefusal } from "./notice_model.ts";
+import type { OpResult } from "./ops.ts";
 import {
   addTask,
   cascadeSort,
@@ -61,6 +72,20 @@ import {
   setSort,
   updateFields,
 } from "./ops.ts";
+import { permissionsFor, permitsWrite } from "./permissions.ts";
+import type { MoveWrite } from "./rebase.ts";
+import {
+  EDIT_CONTENDED,
+  MAX_EDIT_ATTEMPTS,
+  NO_PERMISSION,
+  TARGET_GONE,
+  currentFromConflict,
+  moveArgsFor,
+  rebaseEdit,
+  reevaluateMove,
+} from "./rebase.ts";
+
+export { TARGET_GONE, moveArgsFor } from "./rebase.ts";
 
 /** A write the tree can ask for: an intent, or the add form's submission. */
 export type TreeWrite = TreeIntent | { kind: "add"; request: AddRequest };
@@ -252,12 +277,11 @@ export function targetExists(write: TreeWrite, model: TreeModel): boolean {
   return write.kind === "move" ? holds(write.parentId) : true;
 }
 
-/** The refusal for an intent whose target is gone: said by the client, in the server's terms. */
-export const TARGET_GONE: ApiError = {
-  code: "conflict",
-  status: 409,
-  message: "The task this change was for is no longer there; nothing was applied.",
-};
+/** The refusal for a batch whose Initiative the user lost while it was queued or out (m04.03 4.7). */
+export const ACCESS_LOST: ApiError = clientRefusal("forbidden", "You no longer have access to this Initiative.");
+
+const isMove = (write: TreeWrite): write is MoveWrite =>
+  write.kind === "reorder" || write.kind === "indent" || write.kind === "outdent" || write.kind === "move";
 
 function changed(result: OpResult): TreeModel | null {
   return result.affected.length === 0 ? null : result.model;
@@ -270,49 +294,6 @@ function changedFor(
 ): Partial<Pick<TaskRecord, EditField>> {
   const record = model.tasks[id];
   return record === undefined ? {} : changedFields(record, fields);
-}
-
-/**
- * The slot a keyboard or drag move lands in, as `moveTask` reads it — shared
- * with the confirm (`confirm_model.ts`) so the flip it predicts is the move that
- * is sent. `null` when there is nowhere to go.
- */
-export function moveArgsFor(
-  model: TreeModel,
-  write: Extract<TreeWrite, { kind: "reorder" | "indent" | "outdent" | "move" }>,
-): MoveArgs | null {
-  const record = model.tasks[write.id];
-  if (record === undefined) return null;
-
-  switch (write.kind) {
-    case "reorder": {
-      const siblings = childIdsOf(model, record.parent_id);
-      const at = siblings.indexOf(write.id);
-      const position = write.dir === "up" ? at - 1 : at + 1;
-      if (at === -1 || position < 0 || position >= siblings.length) return null;
-      return { id: write.id, parentId: record.parent_id, position, reorder: true };
-    }
-
-    case "indent": {
-      // Alt+→: first child of the previous sibling (`kbd_indent/3`). A plain
-      // reparent with no slot lands at the top of the new parent.
-      const siblings = childIdsOf(model, record.parent_id);
-      const previous = siblings[siblings.indexOf(write.id) - 1];
-      if (previous === undefined) return null;
-      return { id: write.id, parentId: previous, position: null };
-    }
-
-    case "outdent": {
-      // Alt+←: a sibling of the parent, right after it (`kbd_dedent/1`).
-      const parent = model.tasks[record.parent_id];
-      if (parent === undefined) return null;
-      const grandSiblings = childIdsOf(model, parent.parent_id);
-      return { id: write.id, parentId: parent.parent_id, position: grandSiblings.indexOf(parent.id) + 1 };
-    }
-
-    case "move":
-      return { id: write.id, parentId: write.parentId, position: write.position, reorder: write.reorder };
-  }
 }
 
 /** The undo/redo batch: `add history` on the Initiative's shared stack. */
@@ -541,7 +522,19 @@ export type SubmitResult =
       /** The Initiative's sequence this reply is at, when the server said (m04.03 1.4.1). */
       seq?: number;
     }
-  | { ok: false; error: ApiError; affectedIds: number[] };
+  | {
+      ok: false;
+      error: ApiError;
+      affectedIds: number[];
+      /**
+       * The journal kept the write as `rejected` under the submission's key,
+       * with its reason: an edit the pane can offer Retry and Discard for
+       * (m04.03 4.6.2). `false` means the record is gone with the refusal.
+       */
+      recoverable: boolean;
+      /** The Initiative's lane was dropped (`abandon`): no one is told, nothing is journaled. */
+      abandoned?: true;
+    };
 
 /** What a submission looks like the moment it is queued — item 5.2's pending scope. */
 export interface Submission {
@@ -610,6 +603,13 @@ export interface OperationAdapter {
   open(initiativeId: number): void;
   /** The connection is back: a batch parked on an unknown outcome goes again. */
   resume(initiativeId: number): void;
+  /**
+   * Access to `initiativeId` is gone (m04.03 4.7): its lane is dropped. A
+   * batch waiting its turn never goes; one parked on an unknown outcome is
+   * not resent; a reply still on its way lands nowhere — `onResult` is not
+   * called and the journal is not touched (the cache has already purged it).
+   */
+  abandon(initiativeId: number): void;
 }
 
 interface Job {
@@ -618,14 +618,18 @@ interface Job {
   readonly intent: PendingIntent;
   /** A body already sent once, resent as it was; `null` builds one at send time. */
   readonly body: BatchBody | null;
+  /** Distinct bodies of this submission that have been on the wire so far (4.4). */
+  readonly attempts: number;
+  /** The lane's generation when it was queued: a bump since means `abandon` dropped it. */
+  readonly generation: number;
   /** The queued record's write, awaited before the send. Never rejects. */
   readonly journaled: Promise<unknown>;
 }
 
 /** What an intent comes to against truth now. */
 type Built =
-  /** The row or the parent it names is gone: it can never apply. */
-  | { kind: "gone" }
+  /** It cannot apply now — the target is gone, the move is impossible, the role forbids it — and the user is told. */
+  | { kind: "refused"; error: ApiError }
   /** It would change nothing now (already so): nothing to send. */
   | { kind: "nothing" }
   | { kind: "batch"; body: BatchBody };
@@ -678,6 +682,10 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
   // Every batch this adapter has queued and not yet answered, by key. A replay
   // of one of them is that batch, not a second copy of it.
   const active = new Map<string, Promise<SubmitResult>>();
+  // Bumped by `abandon`: a job compares the value it was queued under with the
+  // value now, and one that differs is a job for an Initiative the user lost.
+  const generations = new Map<number, number>();
+  const generation = (initiativeId: number): number => generations.get(initiativeId) ?? 0;
 
   const emptyOk = (affectedIds: number[]): SubmitResult => ({
     ok: true,
@@ -686,19 +694,38 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
     affectedIds,
   });
 
-  const recordOf = (job: Job, key: string, body: BatchBody | null, status: "queued" | "sent"): PendingOpRecord => ({
+  const recordOf = (
+    job: Job,
+    key: string,
+    body: BatchBody | null,
+    status: "queued" | "sent",
+    attempts: number,
+  ): PendingOpRecord => ({
     key,
     initiativeId: job.submission.initiativeId,
     createdAt: job.createdAt,
-    payload: { ...job.intent, body, status },
+    payload: { ...job.intent, body, status, attempts },
   });
 
-  /** The intent against canonical as it stands now — the rebase. */
+  const writeOf = (job: Job): TreeWrite | null => (job.intent.kind === "write" ? job.intent.write : null);
+
+  /**
+   * The intent against canonical as it stands now — the rebase. A target that
+   * is gone, a role that forbids the write (4.7) and a move that can no longer
+   * be made (4.5) are refused here, before anything is sent.
+   */
   const build = (job: Job): Built => {
     const { initiativeId } = job.submission;
     const context = sendContext(initiativeId);
     if (context === undefined) return { kind: "nothing" };
-    if (job.intent.kind === "write" && !targetExists(job.intent.write, context.model)) return { kind: "gone" };
+    const write = writeOf(job);
+    if (write !== null && !targetExists(write, context.model)) return { kind: "refused", error: TARGET_GONE };
+    const permissions = permissionsFor(context.model.header.role);
+    if (!permitsWrite(permissions, write)) return { kind: "refused", error: NO_PERMISSION };
+    if (write !== null && isMove(write)) {
+      const verdict = reevaluateMove(write, context.model, permissions);
+      if (verdict.kind !== "move") return verdict;
+    }
     const { operations } = buildIntent(job.intent, initiativeId, context);
     return operations.length === 0 ? { kind: "nothing" } : { kind: "batch", body: { operations } };
   };
@@ -706,31 +733,63 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
   async function send(job: Job): Promise<SubmitResult> {
     const { submission } = job;
     const { initiativeId, affectedIds } = submission;
+    const abandoned = (): boolean => generation(initiativeId) !== job.generation;
+    const dropped: SubmitResult = { ok: false, error: ACCESS_LOST, affectedIds, recoverable: false, abandoned: true };
+
     await job.journaled;
+    if (abandoned()) return dropped;
 
     // The key the bytes go out under. The submission's key, until a conflict
-    // on resent bytes makes the rebuilt batch a new request.
+    // makes the rebuilt batch a new request.
     let key = submission.key;
     let body = job.body;
     // Whether `body` has been on the wire before with its outcome unknown. A
     // conflict on such bytes is the world having moved meanwhile, and buys
-    // one rebuild; a conflict on bytes built just now is a rejection.
+    // one rebuild; a conflict on bytes built just now is a rejection — except
+    // for an edit, which is rebased field by field within its bound (4.4).
     let resent = body !== null;
     let rebuilt = false;
+    let attempts = job.attempts;
+
+    /**
+     * A refusal that will not change on its own. An edit whose row is still
+     * here is kept in the journal as `rejected`, under the key the screen
+     * knows it by, for Retry and Discard (4.6.2); anything else is forgotten.
+     */
+    const refuse = async (error: ApiError): Promise<SubmitResult> => {
+      const write = writeOf(job);
+      const model = sendContext(initiativeId)?.model;
+      const keep = write?.kind === "edit" && model?.tasks[write.id] !== undefined && !abandoned();
+      if (!keep) {
+        void journal.remove(key);
+        return { ok: false, error, affectedIds, recoverable: false };
+      }
+      await journal.put({
+        key: submission.key,
+        initiativeId,
+        createdAt: job.createdAt,
+        payload: { ...job.intent, body: null, status: "rejected", reason: rejectionMessage(error), attempts },
+      });
+      if (key !== submission.key) await journal.remove(key);
+      return { ok: false, error, affectedIds, recoverable: true };
+    };
 
     if (body === null) {
       // Built now, from truth as the previous reply (or the snapshot) left it.
       const built = build(job);
-      if (built.kind !== "batch") {
+      if (built.kind === "nothing") {
         await journal.remove(key);
-        return built.kind === "gone" ? { ok: false, error: TARGET_GONE, affectedIds } : emptyOk(affectedIds);
+        return emptyOk(affectedIds);
       }
+      if (built.kind === "refused") return refuse(built.error);
       body = built.body;
+      attempts += 1;
     }
 
     // The exact body under the exact key, on the device before it goes out:
     // a tab that dies mid-request comes back and sends this again.
-    await journal.put(recordOf(job, key, body, "sent"));
+    if (abandoned()) return dropped;
+    await journal.put(recordOf(job, key, body, "sent", attempts));
 
     for (;;) {
       const headers = { "idempotency-key": key };
@@ -738,15 +797,45 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
       // A reply that never arrived: the same key replays a commit the server
       // did make, and re-runs one it did not. Once — a link that is down
       // stays down.
-      if (!result.ok && result.error.code === "network") {
+      if (!result.ok && result.error.code === "network" && !abandoned()) {
         result = await options.api.post<BatchReply>("/operations", body, headers);
       }
+      // Access went while the request was out: whatever came back is not ours to apply.
+      if (abandoned()) return dropped;
       if (!result.ok && result.error.code === "network") {
         // Unknown outcome. The record stays, the prediction stays, the queue
         // behind this waits, and the same body goes again when told to.
         options.onUnknown?.(submission, result.error);
         await new Promise<void>((resolve) => parked.set(initiativeId, resolve));
+        if (abandoned()) return dropped;
         resent = true;
+        continue;
+      }
+
+      const write = writeOf(job);
+      if (!result.ok && result.error.code === "conflict" && write?.kind === "edit") {
+        // Stale (4.4): the user's fields onto the record as the server has it
+        // now — from the reply, else from canonical — under a new key. Only
+        // so many times: past the bound the edit is the user's to retry.
+        if (attempts >= MAX_EDIT_ATTEMPTS) return refuse(EDIT_CONTENDED);
+        const current = currentFromConflict(result.error) ?? sendContext(initiativeId)?.model.tasks[write.id];
+        if (current === undefined) return refuse(TARGET_GONE);
+        const operation = rebaseEdit(write, current);
+        if (operation === null) {
+          // Already so — someone else got there with the same value.
+          void journal.remove(key);
+          return emptyOk(affectedIds);
+        }
+        const stale = key;
+        key = keyGen();
+        body = { operations: [operation] };
+        attempts += 1;
+        resent = false;
+        // The new key is on the device before the old one goes, so a tab that
+        // dies between the two never loses the intent — and never resends
+        // the refused bytes. The count goes with it.
+        await journal.put(recordOf(job, key, body, "sent", attempts));
+        await journal.remove(stale);
         continue;
       }
 
@@ -754,24 +843,23 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
         // The bytes were stale, not the intent. Once more, from truth now.
         rebuilt = true;
         const built = build(job);
-        if (built.kind !== "batch") {
+        if (built.kind === "nothing") {
           void journal.remove(key);
-          return built.kind === "gone" ? { ok: false, error: result.error, affectedIds } : emptyOk(affectedIds);
+          return emptyOk(affectedIds);
         }
+        if (built.kind === "refused") return refuse(built.error);
         const stale = key;
         key = keyGen();
         body = built.body;
+        attempts += 1;
         resent = false;
-        // The new key is on the device before the old one goes, so a tab that
-        // dies between the two never loses the intent — and never resends
-        // the refused bytes.
-        await journal.put(recordOf(job, key, body, "sent"));
+        await journal.put(recordOf(job, key, body, "sent", attempts));
         await journal.remove(stale);
         continue;
       }
 
+      if (!result.ok) return refuse(result.error);
       void journal.remove(key);
-      if (!result.ok) return { ok: false, error: result.error, affectedIds };
       const { refetch, ...delta } = deltaFromReply(body.operations, result.data);
       const seq = result.data.seq?.[String(initiativeId)];
       return {
@@ -791,7 +879,8 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
       .then(() => send(job))
       .then((result) => {
         active.delete(key);
-        options.onResult?.(job.submission, result);
+        // A dropped lane's outcome is nobody's: the screen has already forgotten the tree.
+        if (result.ok || result.abandoned !== true) options.onResult?.(job.submission, result);
         return result;
       });
     active.set(key, running);
@@ -820,9 +909,9 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
       key: submission.key,
       initiativeId,
       createdAt,
-      payload: { ...intent, body: null, status: "queued" },
+      payload: { ...intent, body: null, status: "queued", attempts: 0 },
     });
-    const job: Job = { submission, createdAt, intent, body: null, journaled };
+    const job: Job = { submission, createdAt, intent, body: null, attempts: 0, generation: generation(initiativeId), journaled };
 
     const previous = tails.get(initiativeId) ?? gates.get(initiativeId)?.promise ?? Promise.resolve();
     const running = run(job, previous);
@@ -845,11 +934,17 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
       const context = options.context(initiativeId);
       const preview = context === undefined ? EMPTY : buildIntent(payload, initiativeId, context);
       const submission: Submission = { key, initiativeId, affectedIds: preview.affectedIds, write };
+      // A `rejected` record is not replayed (`replayPlan` leaves it out); one
+      // handed here anyway is built afresh, as a Retry would.
+      const sent = payload.status === "sent";
       const job: Job = {
         submission,
         createdAt,
         intent: payload.kind === "write" ? { kind: "write", write: payload.write } : { kind: "history", action: payload.action },
-        body: payload.status === "sent" ? payload.body : null,
+        body: sent ? payload.body : null,
+        // A record from before the count was kept has been out once if it was sent.
+        attempts: payload.attempts ?? (sent ? 1 : 0),
+        generation: generation(initiativeId),
         journaled: Promise.resolve(),
       };
       // While the gate is held, replays go ahead of the ordinary lane; once it
@@ -886,6 +981,20 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
       if (go === undefined) return;
       parked.delete(initiativeId);
       go();
+    },
+
+    abandon(initiativeId) {
+      generations.set(initiativeId, generation(initiativeId) + 1);
+      // The lane goes whole: what is chained on it finds itself abandoned and
+      // steps aside without sending; what comes after access is granted again
+      // starts a fresh chain.
+      tails.delete(initiativeId);
+      replays.delete(initiativeId);
+      gates.delete(initiativeId);
+      // A parked send is woken so it can see it is abandoned, not to go again.
+      const go = parked.get(initiativeId);
+      parked.delete(initiativeId);
+      go?.();
     },
   };
 }

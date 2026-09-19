@@ -15,6 +15,7 @@ import {
   targetExists,
 } from "./adapter.ts";
 import type { TaskResult } from "./delta.ts";
+import { EDIT_CONTENDED, NO_PERMISSION } from "./rebase.ts";
 import { applyDelta } from "./delta.ts";
 import { buildTree } from "./gen.ts";
 import { fromSnapshot } from "./model.ts";
@@ -869,6 +870,17 @@ const conflict = (): Result<BatchReply> => ({
 
 const edit = (id: number, title: string): TreeWrite => ({ kind: "edit", id, fields: { title } });
 
+/** A version conflict whose reply carries the record as the server holds it. */
+const conflictCarrying = (current: Partial<TaskResult> & { id: number; version: number }): Result<BatchReply> => ({
+  ok: false,
+  error: {
+    code: "conflict",
+    status: 409,
+    message: "stale",
+    payload: { results: [{ index: 0, status: "error", error: { code: "conflict", pointer: "expected_version", current } }] },
+  },
+});
+
 /** A rebase harness: the world (`truth`) moves; the adapter sends against it. */
 function rebasing(fake: ReturnType<typeof fakeApi>, disk: ReturnType<typeof fakeJournal>) {
   let n = 0;
@@ -927,38 +939,177 @@ describe("rebasing pending intent over canonical (m04.03 3.2)", () => {
     assert.equal(disk.rows.size, 0);
   });
 
-  it("a second conflict is a rejection", async () => {
+  it("a structural write's second conflict is a rejection: once rebuilt, not looped, and the record goes", async () => {
     const fake = fakeApi();
     const disk = fakeJournal();
     const { instance, results } = rebasing(fake, disk);
+    const staleToggle = { operations: [{ op: "update" as const, type: "task" as const, id: 11, data: { done: true, expected_version: 0 } }] };
 
-    const pending = instance.resubmit(kept("old-1", 10, { kind: "write", write: edit(11, "Cabinet doors"), body: staleEdit, status: "sent" }));
+    const pending = instance.resubmit(kept("old-1", 10, { kind: "write", write: toggle(11), body: staleToggle, status: "sent" }));
     await settle();
     fake.calls[0]?.resolve(conflict());
     await settle();
     await settle();
+    assert.equal(fake.calls[1]?.headers?.["idempotency-key"], "key-1", "one rebuild from truth");
     fake.calls[1]?.resolve(conflict());
     const outcome = await pending;
     assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok === false && outcome.recoverable, false, "nothing to keep for a toggle");
     assert.equal(fake.calls.length, 2, "once, not a loop");
     await settle();
     assert.deepEqual(results, ["old-1:conflict"]);
     assert.equal(disk.rows.size, 0);
   });
 
-  it("bytes built just now that conflict are a rejection, as before (4.4 bounds that)", async () => {
+  it("a stale edit is rebased onto the record the reply carries: the user's field only, at the version now (4.4)", async () => {
     const fake = fakeApi();
     const disk = fakeJournal();
     const { instance, results } = rebasing(fake, disk);
 
     const pending = instance.submit(5, edit(11, "Cabinet doors"));
     await settle();
-    fake.calls[0]?.resolve(conflict());
-    const outcome = await pending;
-    assert.equal(outcome.ok, false);
+    assert.deepEqual(fake.calls[0]?.body.operations[0]?.data, { title: "Cabinet doors", expected_version: version(11) });
+    // Someone else set the priority meanwhile; the reply says where the record stands.
+    fake.calls[0]?.resolve(conflictCarrying({ id: 11, version: 6, title: "Doors", priority: "high" }));
+    await settle();
+    await settle();
+    assert.equal(fake.calls.length, 2);
+    assert.equal(fake.calls[1]?.headers?.["idempotency-key"], "key-2");
+    assert.deepEqual(fake.calls[1]?.body.operations[0]?.data, { title: "Cabinet doors", expected_version: 6 }, "their priority is not written back");
+    assert.equal((disk.rows.get("key-2")?.payload as PendingPayload).attempts, 2);
+    fake.calls[1]?.resolve(okReply(11));
+    assert.ok((await pending).ok);
+    await settle();
+    assert.deepEqual(results, ["key-1:ok"]);
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("an edit that reads as the user wants after the rebase is done without another request", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const pending = instance.submit(5, edit(11, "Cabinet doors"));
+    await settle();
+    fake.calls[0]?.resolve(conflictCarrying({ id: 11, version: 6, title: "Cabinet doors" }));
+    assert.ok((await pending).ok);
     assert.equal(fake.calls.length, 1);
     await settle();
+    assert.deepEqual(results, ["key-1:ok"]);
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("an edit gets three sends; past that it is the user's, kept in the journal as rejected under the key the screen knows (4.4, 4.6.2)", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const pending = instance.submit(5, edit(11, "Cabinet doors"));
+    for (const at of [2, 3, 4]) {
+      await settle();
+      await settle();
+      fake.calls[fake.calls.length - 1]?.resolve(conflictCarrying({ id: 11, version: at, title: "Other" }));
+    }
+    const outcome = await pending;
+    assert.equal(fake.calls.length, 3, "the first, then two rebases");
+    assert.deepEqual(
+      fake.calls.map((call) => call.headers?.["idempotency-key"]),
+      ["key-1", "key-2", "key-3"],
+    );
+    assert.equal(outcome.ok, false);
+    assert.ok(outcome.ok === false && outcome.recoverable);
+    assert.equal(outcome.ok === false && outcome.error, EDIT_CONTENDED);
+    await settle();
     assert.deepEqual(results, ["key-1:conflict"]);
+    assert.deepEqual([...disk.rows.keys()], ["key-1"], "the rebased keys are gone; the submission's stays");
+    const row = disk.rows.get("key-1")?.payload as PendingPayload;
+    assert.equal(row.status, "rejected");
+    assert.equal(row.body, null);
+    assert.equal(row.reason, EDIT_CONTENDED.message);
+    assert.equal(row.attempts, 3);
+  });
+
+  it("the count comes back with the record: two sends in an earlier life leave one, and a reload cannot reset it", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const pending = instance.resubmit(kept("old-1", 10, { kind: "write", write: edit(11, "Cabinet doors"), body: staleEdit, status: "sent", attempts: 2 }));
+    await settle();
+    fake.calls[0]?.resolve(conflictCarrying({ id: 11, version: 8, title: "Other" }));
+    await settle();
+    await settle();
+    assert.equal(fake.calls.length, 2, "one more");
+    assert.deepEqual(fake.calls[1]?.body.operations[0]?.data, { title: "Cabinet doors", expected_version: 8 });
+    fake.calls[1]?.resolve(conflictCarrying({ id: 11, version: 9, title: "Other" }));
+    const outcome = await pending;
+    assert.equal(outcome.ok, false);
+    assert.equal(fake.calls.length, 2, "the bound held across the reload");
+    await settle();
+    assert.deepEqual(results, ["old-1:conflict"]);
+    assert.equal((disk.rows.get("old-1")?.payload as PendingPayload).status, "rejected");
+  });
+
+  it("a server refusal that will not change keeps an edit for the user and forgets anything else (4.6.1, 4.6.2)", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const kept1 = instance.submit(5, edit(11, ""));
+    await settle();
+    fake.calls[0]?.resolve({ ok: false, error: { code: "unprocessable_entity", status: 422, message: "title can't be blank" } });
+    const refused = await kept1;
+    assert.ok(refused.ok === false && refused.recoverable);
+    assert.equal((disk.rows.get("key-1")?.payload as PendingPayload).reason, "title can't be blank");
+
+    const gone = instance.resubmit(kept("old-2", 20, { kind: "write", write: toggle(12), body: { operations: [{ op: "update", type: "task", id: 12, data: { done: true, expected_version: 0 } }] }, status: "sent" }));
+    await settle();
+    fake.calls[1]?.resolve({ ok: false, error: { code: "forbidden", status: 403, message: "no" } });
+    const outcome = await gone;
+    assert.ok(outcome.ok === false && !outcome.recoverable);
+    await settle();
+    assert.deepEqual(results, ["key-1:unprocessable_entity", "old-2:forbidden"]);
+    assert.equal(disk.rows.has("old-2"), false, "a replayed structural rejection clears its record");
+  });
+
+  it("a write the role now forbids is refused without a request and its record goes; a role that allows it sends (4.7)", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, truth, results } = rebasing(fake, disk);
+    truth.set((model) => ({ ...model, header: { ...model.header, role: "viewer" } }));
+
+    const outcome = await instance.resubmit(kept("old-1", 10, { kind: "write", write: toggle(11), body: null, status: "queued" }));
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.ok === false && outcome.error, NO_PERMISSION);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(disk.log, ["remove:old-1"]);
+
+    truth.set((model) => ({ ...model, header: { ...model.header, role: "editor" } }));
+    void instance.resubmit(kept("old-2", 20, { kind: "write", write: toggle(11), body: null, status: "queued" }));
+    await settle();
+    assert.equal(fake.calls[0]?.headers?.["idempotency-key"], "old-2");
+    assert.deepEqual(results, ["old-1:forbidden"]);
+  });
+
+  it("abandon drops the lane: a reply on its way lands nowhere, nothing behind it goes, and no one is told (4.7)", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const first = instance.submit(5, toggle(11));
+    const second = instance.submit(5, toggle(12));
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    instance.abandon(5);
+    fake.calls[0]?.resolve(okReply(11));
+    const outcomes = await Promise.all([first, second]);
+    await settle();
+    assert.deepEqual(
+      outcomes.map((outcome) => outcome.ok),
+      [false, false],
+    );
+    assert.equal(fake.calls.length, 1, "the second never went");
+    assert.deepEqual(results, [], "a dropped lane's outcome is nobody's");
   });
 
   it("a batch parked on an unknown outcome and resumed is resent bytes: its conflict buys the one rebuild", async () => {

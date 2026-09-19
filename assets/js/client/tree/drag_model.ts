@@ -20,6 +20,7 @@
 //  * a center drop onto the source's own parent is a no-op shown as forbidden,
 //    while that row's edge strips still reorder around the parent.
 
+import type { MoveAnchor } from "./context.ts";
 import { childIdsOf, subtreeIds } from "./model.ts";
 import type { TreeModel } from "./model.ts";
 
@@ -34,6 +35,8 @@ export interface DropPlan {
   /** `null` appends. */
   readonly position: number | null;
   readonly reorder: boolean;
+  /** The sibling the drop landed beside, for a drop that had one (m04.03 4.5). */
+  readonly anchor?: MoveAnchor;
 }
 
 /** What is under the pointer, as the gesture layer measured it. */
@@ -165,6 +168,7 @@ export function resolveDrop(
           parentId: anchor.parent_id,
           position: siblingPosition(model, sourceId, anchorId, band),
           reorder: true,
+          anchor: { id: anchorId, side: band === "above" ? "before" : "after" },
         },
       };
     }

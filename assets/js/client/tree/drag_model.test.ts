@@ -192,7 +192,7 @@ describe("resolveDrop: center band", () => {
         kind: "placeholder",
         anchorId: 10,
         band: "above",
-        plan: { parentId: 99, position: 0, reorder: true },
+        plan: { parentId: 99, position: 0, reorder: true, anchor: { id: 10, side: "before" } },
       },
     );
     assert.deepEqual(
@@ -201,7 +201,7 @@ describe("resolveDrop: center band", () => {
         kind: "placeholder",
         anchorId: 10,
         band: "below",
-        plan: { parentId: 99, position: 1, reorder: true },
+        plan: { parentId: 99, position: 1, reorder: true, anchor: { id: 10, side: "after" } },
       },
     );
   });
@@ -215,7 +215,7 @@ describe("resolveDrop: edge bands", () => {
         kind: "placeholder",
         anchorId: 13,
         band: "above",
-        plan: { parentId: 12, position: 0, reorder: true },
+        plan: { parentId: 12, position: 0, reorder: true, anchor: { id: 13, side: "before" } },
       },
     );
   });
@@ -227,7 +227,7 @@ describe("resolveDrop: edge bands", () => {
         kind: "placeholder",
         anchorId: 30,
         band: "above",
-        plan: { parentId: 99, position: 1, reorder: true },
+        plan: { parentId: 99, position: 1, reorder: true, anchor: { id: 30, side: "before" } },
       },
     );
     assert.deepEqual(
@@ -236,7 +236,7 @@ describe("resolveDrop: edge bands", () => {
         kind: "placeholder",
         anchorId: 30,
         band: "below",
-        plan: { parentId: 99, position: 2, reorder: true },
+        plan: { parentId: 99, position: 2, reorder: true, anchor: { id: 30, side: "after" } },
       },
     );
   });
@@ -248,7 +248,7 @@ describe("resolveDrop: edge bands", () => {
         kind: "placeholder",
         anchorId: 10,
         band: "above",
-        plan: { parentId: 99, position: 0, reorder: true },
+        plan: { parentId: 99, position: 0, reorder: true, anchor: { id: 10, side: "before" } },
       },
     );
     assert.deepEqual(
@@ -257,7 +257,7 @@ describe("resolveDrop: edge bands", () => {
         kind: "placeholder",
         anchorId: 10,
         band: "below",
-        plan: { parentId: 99, position: 1, reorder: true },
+        plan: { parentId: 99, position: 1, reorder: true, anchor: { id: 10, side: "after" } },
       },
     );
   });

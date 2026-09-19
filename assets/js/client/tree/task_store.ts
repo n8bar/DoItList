@@ -36,14 +36,15 @@ export interface RowMarks {
   readonly recomputingIds: ReadonlySet<number>;
   /** Server id → the stand-in id its row was first drawn under (item 5.2.2). */
   readonly rowKeys: ReadonlyMap<number, number>;
-  readonly rejection: EditRejection | null;
+  /** The refused pane edits still recoverable, by task id (m04.03 4.6.2). */
+  readonly rejections: ReadonlyMap<number, EditRejection>;
 }
 
 export const NO_MARKS: RowMarks = {
   savingIds: new Set<number>(),
   recomputingIds: new Set<number>(),
   rowKeys: new Map<number, number>(),
-  rejection: null,
+  rejections: new Map<number, EditRejection>(),
 };
 
 /**
@@ -86,7 +87,8 @@ export interface TaskReader {
   children(id: number): ChildrenView;
   /** The React key for `id`'s row: its stand-in id if it was drawn under one. */
   keyOf(id: number): number;
-  rejection(): EditRejection | null;
+  /** The refused pane edit kept for `id`, if any — the same object back until it changes. */
+  rejection(id: number): EditRejection | null;
 }
 
 const NO_IDS: readonly number[] = [];
@@ -241,6 +243,6 @@ export function createTaskReader(
         (a, b) => a.sortMode === b.sortMode && sameIds(a.ids, b.ids),
       ),
     keyOf: (id) => marksSource.get().rowKeys.get(id) ?? id,
-    rejection: () => marksSource.get().rejection,
+    rejection: (id) => marksSource.get().rejections.get(id) ?? null,
   };
 }

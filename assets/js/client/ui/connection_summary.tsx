@@ -21,7 +21,7 @@
 
 import { useServices } from "../services.tsx";
 import type { RecoveryState } from "../state/recovery.ts";
-import { clearFatalError } from "../state/recovery.ts";
+import { clearFatalError, waitingCount } from "../state/recovery.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import type { SummaryTone } from "./connection_model.ts";
 import { describeConnection, storageLine, summaryState } from "./connection_model.ts";
@@ -29,7 +29,7 @@ import { Icon } from "./icon.tsx";
 
 const selectSummary = (state: RecoveryState) => ({
   connection: state.connection,
-  pendingCount: state.pendingWrites.length,
+  pendingCount: waitingCount(state.pendingWrites),
   fatal: state.fatalError,
   storage: state.storage,
   storageNote: state.storageNote,

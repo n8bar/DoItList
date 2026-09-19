@@ -28,12 +28,19 @@ export type PendingIntent =
 /**
  * `queued` — journaled, not yet sent; `body` is `null`. `sent` — the POST went
  * out at least once with `body`; the outcome may or may not be known.
+ * `rejected` — the server refused it for a reason that will not change on its
+ * own, and the user's content is kept for Retry or Discard (m04.03 4.6.2);
+ * `body` is `null`, `reason` says why, and it is never replayed.
  */
-export type PendingStatus = "queued" | "sent";
+export type PendingStatus = "queued" | "sent" | "rejected";
 
 export type PendingPayload = PendingIntent & {
   readonly body: BatchBody | null;
   readonly status: PendingStatus;
+  /** How many distinct bodies of this submission have been on the wire (m04.03 4.4's bound). */
+  readonly attempts?: number;
+  /** The refusal, in the words the pane shows. Only on `rejected`. */
+  readonly reason?: string;
 };
 
 /** A stored operation whose payload has been read back and checked. */
@@ -92,20 +99,29 @@ function parseWrite(value: unknown): TreeWrite | null {
 export function parsePendingPayload(value: unknown): PendingPayload | null {
   if (!isRecord(value)) return null;
   const status = value["status"];
-  if (status !== "queued" && status !== "sent") return null;
+  if (status !== "queued" && status !== "sent" && status !== "rejected") return null;
   const body = parseBody(value["body"]);
   if (body === undefined) return null;
   if (status === "sent" && body === null) return null;
+  if (status === "rejected" && (body !== null || typeof value["reason"] !== "string")) return null;
+  const attempts = value["attempts"];
+  if (attempts !== undefined && (typeof attempts !== "number" || !Number.isInteger(attempts) || attempts < 0)) {
+    return null;
+  }
+  const extras = {
+    ...(typeof attempts === "number" ? { attempts } : {}),
+    ...(status === "rejected" ? { reason: value["reason"] as string } : {}),
+  };
 
   if (value["kind"] === "history") {
     const action = value["action"];
     if (action !== "undo" && action !== "redo") return null;
-    return { kind: "history", action, body, status };
+    return { kind: "history", action, body, status, ...extras };
   }
   if (value["kind"] === "write") {
     const write = parseWrite(value["write"]);
     if (write === null) return null;
-    return { kind: "write", write, body, status };
+    return { kind: "write", write, body, status, ...extras };
   }
   return null;
 }
@@ -129,8 +145,18 @@ export function byCreation(a: PendingOp, b: PendingOp): number {
 
 /**
  * The records to replay for one Initiative, in creation order (item 2.3.1).
- * One record is one batch (2.3.2) — the plan never splits or merges them.
+ * One record is one batch (2.3.2) — the plan never splits or merges them. A
+ * `rejected` record is the user's to retry, never the plan's.
  */
 export function replayPlan(records: readonly PendingOp[], initiativeId: number): PendingOp[] {
-  return records.filter((record) => record.initiativeId === initiativeId).sort(byCreation);
+  return records
+    .filter((record) => record.initiativeId === initiativeId && record.payload.status !== "rejected")
+    .sort(byCreation);
+}
+
+/** The refused edits kept for one Initiative (m04.03 4.6.2), oldest first: the pane shows them again. */
+export function rejectedRecords(records: readonly PendingOp[], initiativeId: number): PendingOp[] {
+  return records
+    .filter((record) => record.initiativeId === initiativeId && record.payload.status === "rejected")
+    .sort(byCreation);
 }

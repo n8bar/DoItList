@@ -96,7 +96,12 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
   // The pane paints the whole record, so it reads the whole model (7.18): one
   // component re-rendering per write, where every row used to.
   const model = useModel(ctx.tasks);
-  const refusal = useSyncExternalStore(ctx.tasks.subscribe, ctx.tasks.rejection, ctx.tasks.rejection);
+  // The refused edit kept for this task, if any (5.2.3, 4.6.2).
+  const rejection = useSyncExternalStore(
+    ctx.tasks.subscribe,
+    () => ctx.tasks.rejection(id),
+    () => ctx.tasks.rejection(id),
+  );
   // Who else has this task selected, and the field they are in (4.1.2): the
   // same array back until it changes, so a presence echo costs nothing here.
   const badges = useSyncExternalStore(
@@ -124,9 +129,16 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
   const canEdit = fields.edit;
   const progress = progressView(model, record);
   const rows = coRows(record, ctx.members);
-  const rejection = refusal?.id === id ? refusal : null;
   const refused = (field: keyof EditableFields): string | null =>
     rejection !== null && rejection.fields[field] !== undefined ? rejection.message : null;
+  // Retry sends the kept fields (or, for a text field, what the field shows
+  // now) as a new submission; Discard drops them for canonical (4.6.2).
+  const retry = (fields?: EditableFields): void => {
+    if (rejection !== null) ctx.onRetryEdit?.(fields === undefined ? rejection : { ...rejection, fields });
+  };
+  const discard = (): void => {
+    if (rejection !== null) ctx.onDiscardEdit?.(rejection);
+  };
   const commit = (edit: EditableFields | null): void => {
     if (edit !== null) ctx.onIntent({ kind: "edit", id, fields: edit });
   };
@@ -169,8 +181,9 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             disabled={!canEdit}
             onCommit={commit}
             rejection={rejection}
+            onRetry={retry}
+            onDiscard={discard}
           />
-          <FieldError id="task-field-title" message={refused("title")} />
           {editors("title")}
         </div>
 
@@ -189,8 +202,9 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             disabled={!canEdit}
             onCommit={commit}
             rejection={rejection}
+            onRetry={retry}
+            onDiscard={discard}
           />
-          <FieldError id="task-field-description" message={refused("description")} />
           {editors("description")}
         </div>
 
@@ -219,7 +233,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             ariaLabel={progress.ariaLabel}
             onCommit={commit}
           />
-          <FieldError id="task-field-progress" message={refused("manual_progress")} />
+          <Refusal id="task-field-progress" message={refused("manual_progress")} onRetry={() => retry()} onDiscard={discard} />
           {editors("progress")}
           <p
             data-branch-note
@@ -264,7 +278,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
               </option>
             ))}
           </select>
-          <FieldError id="task-field-priority" message={refused("priority")} />
+          <Refusal id="task-field-priority" message={refused("priority")} onRetry={() => retry()} onDiscard={discard} />
           {editors("priority")}
         </div>
         <div>
@@ -290,7 +304,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
               </option>
             ))}
           </select>
-          <FieldError id="task-field-assignee" message={refused("assignee_id")} />
+          <Refusal id="task-field-assignee" message={refused("assignee_id")} onRetry={() => retry()} onDiscard={discard} />
           {editors("assignee")}
         </div>
       </div>
@@ -460,12 +474,54 @@ function RefPickerButton({ target }: { target: string }) {
 }
 
 /** The server's sentence for a refused edit, beside the field it refused. */
-function FieldError({ id, message }: { id: string; message: string | null }) {
+/**
+ * The reason a field's edit was refused, with the two ways out (4.6.2): Retry
+ * sends it again as a new submission, Discard drops it for canonical. Both are
+ * real buttons; a text field's blur knows them by id, so reaching them does
+ * not save the draft on the way, and leaving them for elsewhere is the blur.
+ */
+function Refusal({
+  id,
+  message,
+  onRetry,
+  onDiscard,
+  onLeave,
+}: {
+  id: string;
+  message: string | null;
+  onRetry: () => void;
+  onDiscard: () => void;
+  onLeave?: (e: FocusEvent<HTMLElement>) => void;
+}) {
   if (message === null) return null;
+  const action =
+    "flex-none rounded px-1.5 py-0.5 font-semibold text-zinc-700 dark:text-zinc-200 underline underline-offset-2 hover:no-underline hover:bg-zinc-100 dark:hover:bg-zinc-700";
   return (
-    <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
-      {message}
-    </p>
+    <div id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-600 dark:text-red-400">
+      <p>{message}</p>
+      <p className="mt-0.5 flex gap-2">
+        <button
+          id={`${id}-retry`}
+          type="button"
+          className={action}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onRetry}
+          onBlur={onLeave}
+        >
+          Retry
+        </button>
+        <button
+          id={`${id}-discard`}
+          type="button"
+          className={action}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onDiscard}
+          onBlur={onLeave}
+        >
+          Discard
+        </button>
+      </p>
+    </div>
   );
 }
 
@@ -543,6 +599,9 @@ interface FieldProps {
 
 interface TextFieldProps extends FieldProps {
   ctx: TreeContext;
+  /** Retry the refused edit with `fields` — what the field shows now (4.6.2). */
+  onRetry: (fields: EditableFields) => void;
+  onDiscard: () => void;
 }
 
 /**
@@ -555,12 +614,25 @@ function useRefusedDraft(
   rejection: EditRejection | null | undefined,
   setEdit: (update: (state: FieldEdit) => FieldEdit) => void,
 ): void {
+  // The text this hook put in the field, so that when the rejection goes
+  // (Retry, Discard, a new edit) the field shows the record again — unless
+  // the user has typed past it meanwhile, which is theirs to keep.
+  const applied = useRef<string | null>(null);
   useEffect(() => {
     if (rejection !== null && rejection !== undefined && typeof refusedText === "string") {
+      applied.current = refusedText;
       setEdit((state) => ({ ...state, draft: refusedText }));
+      return;
     }
+    const text = applied.current;
+    if (text === null) return;
+    applied.current = null;
+    setEdit((state) => (state.draft === text && state.incoming === null ? idle : state));
   }, [rejection, refusedText, setEdit]);
 }
+
+/** The field's own controls: focus moving to one of these is not the field's blur. */
+const OWN_BUTTONS = ["cancel", "retry", "discard"] as const;
 
 /**
  * One text field's edit state (`field_edit_model.ts`), fed with someone else's
@@ -623,8 +695,15 @@ function useFieldEdit(
       claim.input();
     },
     onBlur: (e: FocusEvent<HTMLElement>) => {
-      if (e.relatedTarget instanceof HTMLElement && e.relatedTarget.id === `${controlId}-cancel`) return;
+      if (e.relatedTarget instanceof HTMLElement && OWN_BUTTONS.some((suffix) => e.relatedTarget?.id === `${controlId}-${suffix}`)) return;
       leave();
+    },
+    /** The draft as it stands, for Retry to send what the field shows. */
+    draft: () => editRef.current.draft,
+    /** The draft goes without being committed (Retry took it, or Discard dropped it). */
+    drop: () => {
+      setEdit(blurEdit);
+      claim.blur();
     },
     onCancel: () => {
       setEdit(cancelEdit);
@@ -639,15 +718,27 @@ function useFieldEdit(
 }
 
 /** Draft while focused, the record otherwise; commits on blur or Enter. */
-function TitleField({ ctx, claim, record, disabled, onCommit, rejection }: TextFieldProps) {
+function TitleField({ ctx, claim, record, disabled, onCommit, rejection, onRetry, onDiscard }: TextFieldProps) {
   const readTitle = useMemo(() => (r: TaskRecord) => r.title, []);
   const field = useFieldEdit(ctx, claim, "title", record.id, readTitle, (draft) =>
     onCommit(titleEdit(record, draft)),
   );
   const edit = field.edit;
-  useRefusedDraft(rejection?.fields.title, rejection, field.setEdit);
+  const refusedText = rejection?.fields.title;
+  useRefusedDraft(refusedText, rejection, field.setEdit);
   const shown = shownValue(edit, record.title);
-  const refused = rejection?.fields.title !== undefined;
+  const refused = refusedText !== undefined;
+  const retry = (): void => {
+    const text = field.draft() ?? refusedText ?? record.title;
+    field.drop();
+    const next = titleEdit(record, text);
+    if (next === null) onDiscard();
+    else onRetry(next);
+  };
+  const discard = (): void => {
+    field.drop();
+    onDiscard();
+  };
   const describedBy = [refused ? "task-field-title-error" : null, edit.incoming !== null ? "task-field-title-incoming" : null]
     .filter((part) => part !== null)
     .join(" ");
@@ -674,12 +765,19 @@ function TitleField({ ctx, claim, record, disabled, onCommit, rejection }: TextF
         }}
       />
       <IncomingNotice id="task-field-title" edit={edit} onCancel={field.onCancel} onLeave={field.onCancelLeave} />
+      <Refusal
+        id="task-field-title"
+        message={refused ? (rejection?.message ?? null) : null}
+        onRetry={retry}
+        onDiscard={discard}
+        onLeave={field.onCancelLeave}
+      />
     </>
   );
 }
 
 /** Same as the title, committing on blur only. */
-function DescriptionField({ ctx, claim, record, disabled, onCommit, rejection }: TextFieldProps) {
+function DescriptionField({ ctx, claim, record, disabled, onCommit, rejection, onRetry, onDiscard }: TextFieldProps) {
   const readDescription = useMemo(() => (r: TaskRecord) => r.description ?? "", []);
   const field = useFieldEdit(ctx, claim, "description", record.id, readDescription, (draft) =>
     onCommit(descriptionEdit(record, draft)),
@@ -690,6 +788,17 @@ function DescriptionField({ ctx, claim, record, disabled, onCommit, rejection }:
   useRefusedDraft(refusedText, rejection, field.setEdit);
   const shown = shownValue(edit, record.description ?? "");
   const refused = refusedText !== undefined;
+  const retry = (): void => {
+    const text = field.draft() ?? refusedText ?? record.description ?? "";
+    field.drop();
+    const next = descriptionEdit(record, text);
+    if (next === null) onDiscard();
+    else onRetry(next);
+  };
+  const discard = (): void => {
+    field.drop();
+    onDiscard();
+  };
   const describedBy = [
     refused ? "task-field-description-error" : null,
     edit.incoming !== null ? "task-field-description-incoming" : null,
@@ -716,6 +825,13 @@ function DescriptionField({ ctx, claim, record, disabled, onCommit, rejection }:
         id="task-field-description"
         edit={edit}
         onCancel={field.onCancel}
+        onLeave={field.onCancelLeave}
+      />
+      <Refusal
+        id="task-field-description"
+        message={refused ? (rejection?.message ?? null) : null}
+        onRetry={retry}
+        onDiscard={discard}
         onLeave={field.onCancelLeave}
       />
     </>

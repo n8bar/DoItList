@@ -16,7 +16,7 @@ import type { RowPreferences } from "../state/preferences.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { addSlots, moveSlot, sameSlot } from "./add_form_model.ts";
 import type { EditField } from "../live/presence_model.ts";
-import type { AddAnchor, RemoteChangeSource, TreeContext, TreeIntent } from "./context.ts";
+import type { AddAnchor, EditRejection, RemoteChangeSource, TreeContext, TreeIntent } from "./context.ts";
 import type { KeyOutcome } from "./keyboard_model.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
@@ -69,6 +69,9 @@ export interface UseTreeOptions {
   onEditField?: (field: EditField | null) => void;
   /** Someone else's writes, for the pane's focused field (4.2). */
   remoteChanges?: RemoteChangeSource;
+  /** Retry / Discard for a refused pane edit (m04.03 4.6.2). */
+  onRetryEdit?: (rejection: EditRejection) => void;
+  onDiscardEdit?: (rejection: EditRejection) => void;
   /** The selected task id, from the `ui` store, and the writer for it. */
   selectedId: number | null;
   select: (id: number | null) => void;
@@ -119,6 +122,8 @@ export function useTree(options: UseTreeOptions): TreeState {
     onDragHint,
     onEditField,
     remoteChanges,
+    onRetryEdit,
+    onDiscardEdit,
   } = options;
   // Selection lives in the `ui` store, not in this hook: it is view state with a
   // session's lifetime, and it has to survive this component re-rendering or
@@ -374,6 +379,8 @@ export function useTree(options: UseTreeOptions): TreeState {
       ...(onDragHint === undefined ? {} : { onDragHint }),
       ...(onEditField === undefined ? {} : { onEditField }),
       ...(remoteChanges === undefined ? {} : { remoteChanges }),
+      ...(onRetryEdit === undefined ? {} : { onRetryEdit }),
+      ...(onDiscardEdit === undefined ? {} : { onDiscardEdit }),
     }),
     [
       tasks,
@@ -393,6 +400,8 @@ export function useTree(options: UseTreeOptions): TreeState {
       onDragHint,
       onEditField,
       remoteChanges,
+      onRetryEdit,
+      onDiscardEdit,
     ],
   );
 

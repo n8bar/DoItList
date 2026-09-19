@@ -15,6 +15,7 @@ import {
   createRecoveryStore,
   initialRecoveryState,
   pendingWriteFrom,
+  waitingCount,
   setConnectionStatus,
   setPendingWrites,
   setSnapshotMeta,
@@ -279,6 +280,14 @@ describe("writes this device has not sent yet", () => {
     assert.equal(write.initiativeId, 3);
     assert.equal(write.queuedAt, 1_700_000_000_000);
     assert.deepEqual(write.operation, { op: "update_task" });
+    assert.equal(write.status, "queued");
+  });
+
+  it("carries where each stands, and counts only the ones still waiting on the server (m04.03 4.6.2)", () => {
+    const at = (status: string) => pendingWriteFrom({ key: status, initiativeId: 1, createdAt: 1, payload: { status } });
+    assert.equal(at("sent").status, "sent");
+    assert.equal(at("rejected").status, "rejected");
+    assert.equal(waitingCount([at("queued"), at("sent"), at("rejected")]), 2);
   });
 
   it("puts them in the store, so the count the user is shown is the real one", () => {

@@ -1151,3 +1151,22 @@ describe("revalidating the index behind a list on the glass (item 4.6)", () => {
     assert.equal(domain.get().initiativeSummaries?.[0]?.name, "List");
   });
 });
+
+describe("who hears that access went (m04.03 4.7)", () => {
+  it("a listener on that Initiative hears it before the tree is forgotten, and only while subscribed", () => {
+    const domain = createDomainStore({ initiativeSummaries: [summary(12, "Old")] });
+    const unit = sync({ api: fakeApi({ "/initiatives": [] }).api, domain });
+    unit.install(treeWith(12, 1));
+    const seen: string[] = [];
+    const off = unit.onRevoked(12, () => seen.push(domain.get().trees[12] === undefined ? "gone" : "still here"));
+    unit.onRevoked(13, () => seen.push("wrong one"));
+
+    unit.onAccessRevoked(12);
+    assert.deepEqual(seen, ["still here"]);
+
+    off();
+    unit.install(treeWith(12, 2));
+    unit.onAccessRevoked(12);
+    assert.deepEqual(seen, ["still here"], "unsubscribed");
+  });
+});

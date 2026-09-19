@@ -12,6 +12,7 @@
 // arguments, and `canProgress` is asked per task rather than once per screen.
 
 import type { Role } from "../api/types.ts";
+import type { TreeWrite } from "./adapter.ts";
 
 export interface Permissions {
   /** Add, rename, move, delete — `Initiatives.can_edit?/1`. */
@@ -54,4 +55,27 @@ export function permissionsFor(role: Role | null | undefined, facts: ViewerPlusF
  */
 export function canProgress(permissions: Permissions, taskId: number): boolean {
   return permissions.canEdit || permissions.ledTaskIds.has(taskId);
+}
+
+/**
+ * May this member send that write (m04.03 4.7)? Completion and a bare
+ * Progress edit are `canProgress` on the task; everything else, undo and
+ * redo included (`null`), needs `canEdit`. Asked as a batch is built, so a
+ * write queued under a role the user no longer holds is refused here rather
+ * than replayed.
+ */
+export function permitsWrite(permissions: Permissions, write: TreeWrite | null): boolean {
+  if (write === null) return permissions.canEdit;
+  switch (write.kind) {
+    case "toggleComplete":
+    case "cascadeComplete":
+      return canProgress(permissions, write.id);
+    case "edit": {
+      const fields = Object.keys(write.fields);
+      const progressOnly = fields.length > 0 && fields.every((field) => field === "manual_progress");
+      return progressOnly ? canProgress(permissions, write.id) : permissions.canEdit;
+    }
+    default:
+      return permissions.canEdit;
+  }
 }

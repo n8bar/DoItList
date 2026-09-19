@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { ApiError } from "../api/client.ts";
-import { REJECTED_DEFAULT, historySentence, rejectionCode, rejectionDetail, rejectionSentence, warnRejection } from "./notice_model.ts";
+import { REJECTED_DEFAULT, clientRefusal, historySentence, refusedByClient, rejectionCode, rejectionDetail, rejectionSentence, warnRejection } from "./notice_model.ts";
 
 const AGENT_PROSE = "Task 13495 was changed by someone else (expected_version 3, now 4). Re-read and retry.";
 
@@ -82,5 +82,17 @@ describe("warnRejection", () => {
 
   it("logs the top-level words when no op is named", () => {
     assert.deepEqual(rejectionDetail(refused("forbidden", 403)), { code: "forbidden", status: 403, message: AGENT_PROSE });
+  });
+});
+
+describe("a refusal the client made itself (m04.03 4.5, 4.7)", () => {
+  it("is said in its own words, whatever its code", () => {
+    const refusal = clientRefusal("forbidden", "You no longer have permission to do this.");
+    assert.equal(refusedByClient(refusal), true);
+    assert.equal(refusal.status, 403);
+    assert.equal(rejectionSentence(refusal), "You no longer have permission to do this.");
+    assert.equal(clientRefusal("conflict", "x").status, 409);
+    assert.equal(clientRefusal("unprocessable_entity", "x").status, 422);
+    assert.equal(refusedByClient({ code: "forbidden", status: 403, message: "server prose" }), false);
   });
 });
