@@ -71,7 +71,7 @@ defmodule DoItWeb.Api.OperationsEndpoint do
               # A miss for THIS key — but the same payload may already have
               # committed under another key (m03.04 2.7.6): refuse the re-send
               # instead of duplicating the work.
-              case Idempotency.prior_commit(user, key, payload_hash) do
+              case Idempotency.prior_commit(user, key, payload_hash, operations) do
                 {earlier_key, committed_at} ->
                   duplicate_batch(conn, earlier_key, committed_at)
 

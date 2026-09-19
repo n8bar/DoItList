@@ -106,6 +106,48 @@ defmodule DoIt.Api.IdempotencyTest do
     assert Idempotency.fetch(u, "stale", h) == nil
   end
 
+  # m04.02 item 7.15: an undo/redo batch has no distinguishing content, so two
+  # presses under two keys are two commits, never a payload duplicate — while an
+  # exact key replay still returns the stored response.
+  describe "history batches and prior_commit/4" do
+    setup do
+      %{
+        history: [%{"op" => "add", "type" => "history", "data" => %{"initiative_id" => 7, "action" => "undo"}}],
+        content: [%{"op" => "add", "type" => "task", "data" => %{"initiative_id" => 7, "title" => "Alpha"}}]
+      }
+    end
+
+    test "two history batches under two keys both commit", %{history: ops} do
+      u = user()
+      h = hash(ops)
+      assert :ok = Idempotency.store(u, "undo-1", h, 200, %{"results" => []})
+      assert Idempotency.prior_commit(u, "undo-2", h, ops) == nil
+    end
+
+    test "a content batch re-sent under a new key is still a duplicate", %{content: ops} do
+      u = user()
+      h = hash(ops)
+      assert :ok = Idempotency.store(u, "add-1", h, 200, %{"results" => []})
+      assert {"add-1", %DateTime{}} = Idempotency.prior_commit(u, "add-2", h, ops)
+    end
+
+    test "a mixed batch with a history op is not exempt", %{history: history, content: content} do
+      u = user()
+      ops = content ++ history
+      h = hash(ops)
+      assert :ok = Idempotency.store(u, "mix-1", h, 200, %{"results" => []})
+      assert {"mix-1", %DateTime{}} = Idempotency.prior_commit(u, "mix-2", h, ops)
+    end
+
+    test "the same key replays a history batch", %{history: ops} do
+      u = user()
+      h = hash(ops)
+      body = %{"results" => [%{"index" => 0, "status" => "ok"}]}
+      assert :ok = Idempotency.store(u, "undo-1", h, 200, body)
+      assert {:replay, {200, ^body}} = Idempotency.fetch(u, "undo-1", h)
+    end
+  end
+
   test "storing the same key twice does not crash (concurrent-store race)" do
     u = user()
     h = hash([%{"op" => "add"}])

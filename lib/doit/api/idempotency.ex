@@ -108,6 +108,31 @@ defmodule DoIt.Api.Idempotency do
   """
   @spec prior_commit(User.t(), String.t(), binary()) :: {String.t(), DateTime.t()} | nil
   def prior_commit(%User{} = user, key, payload_hash) when is_binary(key) do
+    prior_commit_query(user, key, payload_hash)
+  end
+
+  @doc """
+  `prior_commit/3` with the batch in hand (m04.02 item 7.15): a batch of
+  `add history` ops alone is never a duplicate by payload. An undo or redo has
+  no distinguishing content — the second press of the day is byte-identical
+  to the first — so the payload rule that guards content ops would wall off
+  every Undo after the first. An exact key replay still returns the stored
+  response through `fetch/3`, which runs first.
+  """
+  @spec prior_commit(User.t(), String.t(), binary(), [map()]) ::
+          {String.t(), DateTime.t()} | nil
+  def prior_commit(%User{} = user, key, payload_hash, operations) when is_binary(key) do
+    if history_only?(operations), do: nil, else: prior_commit_query(user, key, payload_hash)
+  end
+
+  @doc "True for a non-empty batch made only of `add history` ops (an undo or redo)."
+  @spec history_only?(term()) :: boolean()
+  def history_only?([_ | _] = operations),
+    do: Enum.all?(operations, &match?(%{"op" => "add", "type" => "history"}, &1))
+
+  def history_only?(_operations), do: false
+
+  defp prior_commit_query(user, key, payload_hash) do
     cutoff = DateTime.add(DateTime.utc_now(), -@retention_hours, :hour)
 
     Repo.one(
