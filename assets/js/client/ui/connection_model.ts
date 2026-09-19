@@ -1,4 +1,4 @@
-// What the user is told about the connection (item 4.3, spec §7).
+// What the user is told about the connection (item 4.3, spec §7; m04.03 5.1).
 //
 // Six states, and the words for each, decided here — in a module a unit test
 // can walk end to end — rather than in a component that happens to be on
@@ -6,12 +6,22 @@
 // alone, so each one carries its own text label and its own icon; the tone is
 // the third cue, not the only one.
 //
+// `degradedState` is the ONE derivation (m04.03 5.1.2): the summary, the
+// offline banner and every control that greys itself out offline read the
+// same answer, so they can never disagree about whether we are offline.
+//
 // Pending work appears in the label as a readable count, not as a dot: "three
 // changes waiting" is a fact the user can act on, a coloured dot is a riddle.
 
 import type { ConnectionStatus, StorageHealth } from "../state/recovery.ts";
 import type { IconName } from "./icons.ts";
 
+/**
+ * The degraded-mode states (spec §7). `offline-idle` is offline with nothing
+ * waiting; `offline-pending` is offline with unsent or parked work on the
+ * device; `error` is the unrecoverable one — the client itself cannot go on
+ * and a reload is the way out.
+ */
 export type SummaryState =
   | "connecting"
   | "live"
@@ -19,6 +29,9 @@ export type SummaryState =
   | "offline-pending"
   | "offline-idle"
   | "error";
+
+/** The same six, under the arc's name for them (m04.03 5.1.2). */
+export type DegradedState = SummaryState;
 
 /** The six, in the order spec §7 lists them. */
 export const SUMMARY_STATES: readonly SummaryState[] = [
@@ -63,11 +76,27 @@ export interface ConnectionInput {
  * everything — telling somebody we are "live" while the tab is wedged would be
  * the worst of the six lies available.
  */
-export function summaryState(input: ConnectionInput): SummaryState {
+export function degradedState(input: ConnectionInput): DegradedState {
   if (input.fatal !== null) return "error";
   if (input.connection !== "offline") return input.connection;
   return input.pendingCount > 0 ? "offline-pending" : "offline-idle";
 }
+
+/** `degradedState`, under the summary's older name. */
+export const summaryState = degradedState;
+
+/**
+ * Has the client stopped trying on its own? True in both offline states —
+ * the ones where a server-gated control cannot be queued (m04.03 5.3) and
+ * where the banner offers Retry. Not while reconnecting: a control that
+ * greyed out on every blip would flicker through every retry.
+ */
+export function isOfflineState(state: DegradedState): boolean {
+  return state === "offline-idle" || state === "offline-pending";
+}
+
+/** The one-line banner over the tree in the offline states (m04.03 5.1.3). */
+export const OFFLINE_BANNER = "Offline — changes are kept on this device and sent when you’re back.";
 
 const changes = (count: number): string => `${count} ${count === 1 ? "change" : "changes"}`;
 
@@ -150,13 +179,20 @@ export function describeConnection(
 /**
  * The local-copy line under the summary: what a degraded or missing cache means
  * for the user, in the user's terms. `null` when there is nothing to say.
+ *
+ * A browser with no store and work waiting is the one case where a reload
+ * costs something (m04.03 5.1.2): the queue lives in memory alone, so the
+ * line says so plainly instead of the general "a reload starts from the
+ * server" — which would read as harmless.
  */
-export function storageLine(health: StorageHealth, note: string | null): string | null {
+export function storageLine(health: StorageHealth, note: string | null, pendingCount = 0): string | null {
   if (health === "opening" || health === "ready") return null;
 
   const headline =
     health === "unavailable"
-      ? "This browser isn’t saving a local copy, so a reload starts from the server."
+      ? pendingCount > 0
+        ? `This browser isn’t saving a local copy — don’t reload until your ${changes(pendingCount)} ${pendingCount === 1 ? "has" : "have"} been sent.`
+        : "This browser isn’t saving a local copy, so a reload starts from the server."
       : "Some of the local copy couldn’t be kept.";
 
   return note === null || note === "" ? headline : `${headline} (${note})`;

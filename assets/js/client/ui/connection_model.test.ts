@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { SUMMARY_STATES, describeConnection, storageLine, summaryState } from "./connection_model.ts";
+import {
+  OFFLINE_BANNER,
+  SUMMARY_STATES,
+  degradedState,
+  describeConnection,
+  isOfflineState,
+  storageLine,
+  summaryState,
+} from "./connection_model.ts";
 
 describe("which of the six states we are in (spec §7)", () => {
   it("names all six", () => {
@@ -46,6 +54,23 @@ describe("which of the six states we are in (spec §7)", () => {
     for (const connection of ["connecting", "live", "reconnecting", "offline"] as const) {
       assert.equal(summaryState({ connection, pendingCount: 0, fatal: "boom" }), "error");
     }
+  });
+
+  it("is one derivation for the summary and the local signifiers (m04.03 5.1.2)", () => {
+    assert.equal(degradedState, summaryState);
+  });
+
+  it("counts only the two offline states as offline (m04.03 5.3)", () => {
+    assert.equal(isOfflineState("offline-idle"), true);
+    assert.equal(isOfflineState("offline-pending"), true);
+    for (const state of ["connecting", "live", "reconnecting", "error"] as const) {
+      assert.equal(isOfflineState(state), false, `${state} greyed the controls out`);
+    }
+  });
+
+  it("names the offline banner in the user's terms", () => {
+    assert.match(OFFLINE_BANNER, /^Offline — /);
+    assert.match(OFFLINE_BANNER, /kept on this device/);
   });
 });
 
@@ -107,5 +132,12 @@ describe("the local-cache line underneath (item 3.4)", () => {
 
   it("appends the reason when there is one", () => {
     assert.match(String(storageLine("degraded", "out of space")), /out of space/);
+  });
+
+  it("warns against a reload when the memory-only queue holds work (m04.03 5.1.2)", () => {
+    assert.match(String(storageLine("unavailable", null, 1)), /don’t reload until your 1 change has been sent/);
+    assert.match(String(storageLine("unavailable", null, 3)), /3 changes have been sent/);
+    assert.doesNotMatch(String(storageLine("unavailable", null, 0)), /don’t reload/);
+    assert.doesNotMatch(String(storageLine("degraded", null, 3)), /don’t reload/, "a degraded store still keeps the queue");
   });
 });

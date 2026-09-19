@@ -17,12 +17,14 @@ import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Bootstrap, ClientState } from "./boot.ts";
-import { initialState, loginPath, stateForErrorCode } from "./boot.ts";
+import { identityMismatch, initialState, loginPath, stateForErrorCode } from "./boot.ts";
 import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
 import { getConnection, initConnection } from "./live/connection.ts";
 import { applyDiff, applyState } from "./live/presence_model.ts";
+import { browserNetwork } from "./live/network.ts";
 import { phoenixTransport } from "./live/phoenix_transport.ts";
+import { browserVisibility, createReachabilityProbe } from "./live/reachability.ts";
 import { createInitiativeSync } from "./live/refresh.ts";
 import { AppFrame } from "./frame/app_frame.tsx";
 import { matchRoute } from "./router/route.ts";
@@ -126,10 +128,34 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       },
     }),
   );
+  // The way back from offline that is not the user's click (m04.03 5.2.3):
+  // a small read now and then, and the connection's own Retry when it lands.
+  // The session read is the cheapest authenticated one there is, and a `401`
+  // from it is the same "your session ended" the rest of the client escalates.
+  const escalateRef = useRef<((error: ApiError) => boolean) | null>(null);
+  const [probe] = useState(() =>
+    createReachabilityProbe({
+      probe: () =>
+        api.get<SessionData>("/session").then((result) => {
+          if (!result.ok && result.error.code !== "network") escalateRef.current?.(result.error);
+          return result.ok;
+        }),
+      onReachable: () => getConnection().retry(),
+      timers: {
+        setTimeout: (callback, ms) => window.setTimeout(callback, ms),
+        clearTimeout: (handle) => window.clearTimeout(handle as number),
+      },
+      network: browserNetwork(),
+      visibility: browserVisibility(),
+    }),
+  );
   const [connection] = useState(() => {
     return initConnection({
       transport: (options) => phoenixTransport(options, () => api.csrfToken()),
-      onStatus: (status) => setConnectionStatus(stores.recovery, status),
+      onStatus: (status) => {
+        setConnectionStatus(stores.recovery, status);
+        probe.setStatus(status);
+      },
       onDelta: sync.onDelta,
       // Every join reply — the first, and each rejoin after a drop — says where
       // the server stands; a session behind it re-reads at once (m04.03 3.3).
@@ -172,6 +198,8 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     },
     [cache],
   );
+
+  escalateRef.current = escalate;
 
   const services = useMemo(
     () => ({ api, stores, connection, sync, cache, escalate }),
@@ -243,6 +271,10 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
         // say. Their cache is not ours to read: the old one goes before this
         // one is opened (spec §12).
         if (result.data.user.id !== cache.userId()) void cache.switchTo(result.data.user.id);
+        // The socket and the user channel were opened as the page's user; a
+        // different one now means nothing this tab does is safe (m04.03 5.1.2).
+        const mismatch = identityMismatch(bootstrap.user, result.data.user);
+        if (mismatch !== null) setFatalError(stores.recovery, mismatch);
         return;
       }
       const next = stateForErrorCode(result.error.code, result.error.message);

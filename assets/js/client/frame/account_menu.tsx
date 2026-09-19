@@ -11,7 +11,7 @@
 // work; Sign out is an action, and it is the frame's existing sign-out flow
 // (confirm-if-pending-writes, purge, submit) started through its handle.
 
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 
 import type { BootstrapUser } from "../boot.ts";
 import type { MenuItemModel } from "../ui/menu_model.ts";
@@ -20,6 +20,8 @@ import { Icon } from "../ui/icon.tsx";
 import { Avatar } from "./avatar.tsx";
 import type { SignOutHandle } from "./sign_out.tsx";
 import { SignOut } from "./sign_out.tsx";
+import { unavailableLabel } from "../tree/action_class.ts";
+import { useOffline } from "../ui/use_degraded.ts";
 
 // User Preferences still lives on the LiveView account page — the client's own
 // Account screen says so in as many words, and it moves here with the account
@@ -39,13 +41,25 @@ export interface AccountMenuProps {
 
 export function AccountMenu({ user, className }: AccountMenuProps) {
   const signOut = useRef<SignOutHandle | null>(null);
+  // Sign out ends a session the server holds (m04.03 5.3): offline it stays
+  // in the menu, greyed, saying why — never gone, never a silent no-op.
+  const offline = useOffline();
+  const items = useMemo(
+    () =>
+      offline
+        ? ITEMS.map((item) =>
+            item.id === "sign-out" ? { ...item, label: unavailableLabel(item.label), disabled: true } : item,
+          )
+        : ITEMS,
+    [offline],
+  );
 
   return (
     <>
       <Menu
         id="client-account-menu"
         label={user.name ?? user.username}
-        items={ITEMS}
+        items={items}
         onSelect={(itemId) => {
           if (itemId === "sign-out") signOut.current?.start();
         }}

@@ -101,6 +101,21 @@ export function initialState(result: BootstrapResult): ClientState {
   return user === null ? { kind: "signed-out" } : { kind: "ready", user };
 }
 
+/**
+ * The session read named a different account than the page was served to
+ * (m04.03 5.1.2): the socket, the user channel and the cache were all opened
+ * as the bootstrap's user, so nothing this tab does from here on is safe. One
+ * plain sentence for the summary's unrecoverable state, or `null` when they
+ * match (or the page had nobody to compare with).
+ */
+export function identityMismatch(
+  bootstrapUser: BootstrapUser | null,
+  sessionUser: { id: number },
+): string | null {
+  if (bootstrapUser === null || bootstrapUser.id === sessionUser.id) return null;
+  return "You’re signed in as a different account now. Reload to continue.";
+}
+
 /** Where an `/app/api` failure code sends the user. `null` = stay put, handle locally. */
 export function stateForErrorCode(code: string, message = ""): ClientState | null {
   switch (code) {

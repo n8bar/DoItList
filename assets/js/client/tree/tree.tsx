@@ -30,6 +30,7 @@
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 
+import { unavailableLabel } from "./action_class.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { sameSlot, slotAt } from "./add_form_model.ts";
 import { AddForm } from "./add_form.tsx";
@@ -62,6 +63,11 @@ export interface TreeProps {
 
 export interface HistoryControls {
   busy: "undo" | "redo" | null;
+  /**
+   * The client is offline (m04.03 5.3): the stack is the server's, so the
+   * buttons stay where they are, greyed, with the reason as their name.
+   */
+  offline?: boolean;
   onHistory: (action: "undo" | "redo") => void;
 }
 
@@ -78,16 +84,22 @@ function HistoryButton({
 }) {
   const label = action === "undo" ? "Undo" : "Redo";
   const busy = history.busy === action;
+  const offline = history.offline === true;
+  // Offline it is unavailable, not gone (5.1.3): `aria-disabled` rather than
+  // `disabled`, so it stays in the tab order and its reason can be read.
+  const name = busy ? `${label}…` : offline ? unavailableLabel(label) : label;
   return (
     <button
       type="button"
       id={`${action}-button`}
       disabled={history.busy !== null}
+      aria-disabled={history.busy !== null || offline}
       aria-busy={busy}
-      title={busy ? `${label}…` : label}
-      aria-label={busy ? `${label}…` : label}
+      title={name}
+      aria-label={name}
+      {...(offline ? { "data-unavailable": "offline" } : {})}
       onClick={() => history.onHistory(action)}
-      className={HISTORY_BUTTON}
+      className={[HISTORY_BUTTON, offline ? "opacity-40 cursor-not-allowed hover:bg-transparent hover:text-zinc-500 dark:hover:text-zinc-400" : ""].join(" ")}
     >
       <Icon
         name={busy ? "arrow-path" : action === "undo" ? "arrow-uturn-left" : "arrow-uturn-right"}

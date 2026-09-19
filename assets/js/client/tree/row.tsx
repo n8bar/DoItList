@@ -37,6 +37,9 @@ import { clickedSelection } from "./selection_model.ts";
 import { useLabel, useRow } from "./use_task_store.ts";
 import type { TaskReader } from "./task_store.ts";
 
+/** The pink row's words (m04.03 5.1.3): a change on this device the server has not confirmed. */
+const UNSAVED_TITLE = "Not saved yet — kept on this device until the server confirms it";
+
 const NO_BADGES: readonly Selection[] = [];
 
 export interface RowProps {
@@ -274,6 +277,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
         {...(done ? { "data-done": "true" } : {})}
         data-task-progress={progress}
         data-can-progress={String(canProgress)}
+        {...(view.saving ? { "data-unsaved": "", title: UNSAVED_TITLE } : {})}
         onClick={() => ctx.onSelect(clickedSelection(selected ? id : null, id))}
         className={[
           "group/row relative flex flex-wrap items-center gap-x-2 xl:gap-x-3 gap-y-1 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px] cursor-pointer",
@@ -284,6 +288,9 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           .filter((part) => part !== "")
           .join(" ")}
       >
+        {/* The pink is the cue for the eye; this is the same cue for a screen
+            reader (m04.03 5.1.3): the row's change has not reached the server. */}
+        {view.saving && <span className="sr-only">{UNSAVED_TITLE}.</span>}
         {ctx.permissions.canEdit ? (
           // The drag handle, same anatomy as the LiveView's. The gesture is
           // bound by `drag.tsx` on the tree, not here, so the row stays markup.

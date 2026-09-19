@@ -88,6 +88,9 @@ import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts
 import { createStore, derive } from "../state/store.ts";
 import type { UiState } from "../state/ui.ts";
 import { pushNotice, selectTask } from "../state/ui.ts";
+import { NOT_AVAILABLE_OFFLINE, availableOffline } from "../tree/action_class.ts";
+import { OfflineBanner } from "../ui/offline_banner.tsx";
+import { useOffline } from "../ui/use_degraded.ts";
 import { useStore, useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import { browserKeyValueStore } from "../storage/last_user.ts";
@@ -691,19 +694,32 @@ function TreeSection({
   // Undo / redo: one at a time, its button latched until the reply lands
   // (§6.7). The press is acknowledged in the same frame; the tree changes
   // when the server says what it reversed.
+  // Offline, the stack is the server's (m04.03 5.3): the buttons are greyed
+  // with the reason, and a Ctrl+Z that reaches here anyway is answered in
+  // words — never a silent no-op, and never a queued undo that reverses
+  // whatever is on top of the stack by the time the link is back.
+  const offline = useOffline();
   const onHistory = useCallback(
     (action: "undo" | "redo") => {
+      if (!availableOffline(action, offline)) {
+        pushNotice(stores.ui, {
+          kind: "info",
+          title: action === "undo" ? "Undo" : "Redo",
+          message: `${NOT_AVAILABLE_OFFLINE}.`,
+        });
+        return;
+      }
       if (inFlight.get().history !== null) return;
       inFlight.set((state) => ({ ...state, history: action }));
       void writes.adapter.submitHistory(id, action).finally(() => {
         inFlight.set((state) => ({ ...state, history: null }));
       });
     },
-    [writes, id, inFlight],
+    [writes, id, inFlight, offline, stores.ui],
   );
   const historyControls = useMemo(
-    () => ({ busy: history, onHistory }),
-    [history, onHistory],
+    () => ({ busy: history, offline, onHistory }),
+    [history, offline, onHistory],
   );
 
   // The confirms (items 5.1.4, 7.6) sit between an intent and the adapter:
@@ -855,6 +871,8 @@ function TreeSection({
 
   return (
     <div className="mt-4">
+      {/* Offline, said where the work is, with the same Retry as the summary (5.1.3, 5.2.2). */}
+      <OfflineBanner />
       <Tree
         ctx={tree.ctx}
         addSlot={tree.addSlot}

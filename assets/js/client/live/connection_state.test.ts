@@ -81,6 +81,17 @@ describe("the live connection's state machine (item 1.5)", () => {
     assert.equal(run(attempts(RECONNECT_BUDGET)).status, "reconnecting");
   });
 
+  it("reads reconnecting from the first drop to the end of the budget, never connecting again (m04.03 5.1.1)", () => {
+    const seen: string[] = [];
+    let state = run([{ kind: "open" }]);
+    for (const event of attempts(RECONNECT_BUDGET + 1)) {
+      state = nextLinkState(state, event);
+      seen.push(state.status);
+    }
+    assert.ok(!seen.includes("connecting"), `flickered back to connecting: ${seen.join(",")}`);
+    assert.deepEqual([...new Set(seen)], ["reconnecting", "offline"]);
+  });
+
   it("a successful open clears the budget", () => {
     const recovered = run([...attempts(RECONNECT_BUDGET), { kind: "open" }, ...attempts(1)]);
     assert.equal(recovered.status, "reconnecting");
@@ -107,6 +118,17 @@ describe("the live connection's state machine (item 1.5)", () => {
     it("starts fast and grows", () => {
       assert.ok(reconnectDelayMs(1, mid) < reconnectDelayMs(5, mid));
       assert.ok(reconnectDelayMs(5, mid) < reconnectDelayMs(RECONNECT_BUDGET, mid));
+    });
+
+    it("never shrinks on the way up, and stops at the cap (m04.03 5.2.1)", () => {
+      let previous = 0;
+      for (let tries = 1; tries <= RECONNECT_BUDGET + 3; tries += 1) {
+        const delay = reconnectDelayMs(tries, mid);
+        assert.ok(delay >= previous, `attempt ${tries} came sooner than attempt ${tries - 1}`);
+        previous = delay;
+      }
+      assert.equal(previous, MAX_RECONNECT_DELAY_MS);
+      assert.equal(RECONNECT_DELAYS_MS[RECONNECT_DELAYS_MS.length - 1], MAX_RECONNECT_DELAY_MS);
     });
 
     it("is the scheduled delay when the jitter lands in the middle", () => {

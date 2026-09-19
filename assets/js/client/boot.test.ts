@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 
-import { initialState, loginPath, parseBootstrap, stateForErrorCode } from "./boot.ts";
+import { identityMismatch, initialState, loginPath, parseBootstrap, stateForErrorCode } from "./boot.ts";
 
 const payload = (overrides: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -94,4 +94,11 @@ test("stateForErrorCode maps the session codes", () => {
 test("loginPath returns the user to where they were", () => {
   assert.equal(loginPath("/app/initiatives/3"), "/users/log_in?return_to=%2Fapp%2Finitiatives%2F3");
   assert.equal(loginPath(""), "/users/log_in?return_to=%2Fapp");
+});
+
+test("a session read that names another account is unrecoverable (m04.03 5.1.2)", () => {
+  const me = { id: 7, email: "me@example.com", username: "me", name: null };
+  assert.equal(identityMismatch(me, { id: 7 }), null);
+  assert.equal(identityMismatch(null, { id: 7 }), null);
+  assert.match(String(identityMismatch(me, { id: 8 })), /Reload/);
 });

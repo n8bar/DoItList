@@ -24,7 +24,7 @@ import type { RecoveryState } from "../state/recovery.ts";
 import { clearFatalError, waitingCount } from "../state/recovery.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import type { SummaryTone } from "./connection_model.ts";
-import { describeConnection, storageLine, summaryState } from "./connection_model.ts";
+import { degradedState, describeConnection, storageLine } from "./connection_model.ts";
 import { Icon } from "./icon.tsx";
 
 const selectSummary = (state: RecoveryState) => ({
@@ -59,14 +59,14 @@ export function ConnectionSummary() {
   const view = useStoreValue(stores.recovery, selectSummary);
 
   const shown = describeConnection(
-    summaryState({
+    degradedState({
       connection: view.connection,
       pendingCount: view.pendingCount,
       fatal: view.fatal,
     }),
     view.pendingCount,
   );
-  const storage = storageLine(view.storage, view.storageNote);
+  const storage = storageLine(view.storage, view.storageNote, view.pendingCount);
 
   return (
     <div
