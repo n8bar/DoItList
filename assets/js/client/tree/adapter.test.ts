@@ -12,6 +12,7 @@ import {
   historyBatch,
   intentToBatch,
   rejectionMessage,
+  targetExists,
 } from "./adapter.ts";
 import type { TaskResult } from "./delta.ts";
 import { applyDelta } from "./delta.ts";
@@ -792,25 +793,271 @@ describe("the journal (m04.03 2.1)", () => {
     assert.ok(outcome.ok);
   });
 
-  it("an intent that builds nothing at send time is forgotten without a request", async () => {
+  it("an intent that changes nothing by send time is forgotten without a request", async () => {
     const fake = fakeApi();
     const disk = fakeJournal();
-    let canonical = base();
+    const truth = rebasable();
     const instance = createAdapter({
       api: fake.api,
       context: () => ({ model: base(), memberIds: [7, 8] }),
-      sendContext: () => ({ model: canonical, memberIds: [7, 8] }),
+      sendContext: truth.context,
       keyGen: () => "key-1",
       journal: disk.journal,
     });
-    // The record is gone by the time this is sent.
-    const { 11: _gone, ...rest } = canonical.tasks;
-    canonical = { ...canonical, tasks: rest, childIds: { ...canonical.childIds, 10: [12, 13] } };
+    // Someone else made the same edit by the time this is sent.
+    truth.set((model) => ({ ...model, tasks: { ...model.tasks, 11: { ...model.tasks[11]!, title: "Cabinet doors" } } }));
 
-    const outcome = await instance.submit(5, toggle(11));
+    const outcome = await instance.submit(5, edit(11, "Cabinet doors"));
     assert.ok(outcome.ok);
     assert.equal(fake.calls.length, 0);
     assert.deepEqual(disk.log, ["put:key-1:queued", "remove:key-1"]);
+  });
+
+  it("an intent whose target is gone by send time is refused out loud, without a request (m04.03 3.2.1)", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const truth = rebasable();
+    const results: string[] = [];
+    const instance = createAdapter({
+      api: fake.api,
+      context: () => ({ model: base(), memberIds: [7, 8] }),
+      sendContext: truth.context,
+      keyGen: () => "key-1",
+      journal: disk.journal,
+      onResult: (s, r) => results.push(`${s.key}:${r.ok ? "ok" : r.error.code}`),
+    });
+    truth.set(without(11));
+
+    const outcome = await instance.submit(5, toggle(11));
+    assert.equal(outcome.ok, false);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(results, ["key-1:conflict"], "the screen reverts and says so");
+    assert.deepEqual(disk.log, ["put:key-1:queued", "remove:key-1"]);
+  });
+});
+
+// --- the rebase (m04.03 3.2) -------------------------------------------------
+
+/** Canonical a test can move under the adapter, as the world does. */
+function rebasable() {
+  let model = base();
+  return {
+    context: () => ({ model, memberIds: [7, 8] }),
+    set: (change: (model: ReturnType<typeof base>) => ReturnType<typeof base>) => {
+      model = change(model);
+    },
+    get: () => model,
+  };
+}
+
+/** The model with task `id` (a leaf of 10) gone. */
+const without = (id: number) => (model: ReturnType<typeof base>) => {
+  const { [id]: _gone, ...tasks } = model.tasks;
+  return { ...model, tasks, childIds: { ...model.childIds, 10: model.childIds[10]!.filter((child) => child !== id) } };
+};
+
+/** Task `id` at `version`, as someone else's write left it. */
+const bumped = (id: number, version: number) => (model: ReturnType<typeof base>) => ({
+  ...model,
+  tasks: { ...model.tasks, [id]: { ...model.tasks[id]!, version } },
+});
+
+const conflict = (): Result<BatchReply> => ({
+  ok: false,
+  error: { code: "conflict", status: 409, message: "stale" },
+});
+
+const edit = (id: number, title: string): TreeWrite => ({ kind: "edit", id, fields: { title } });
+
+/** A rebase harness: the world (`truth`) moves; the adapter sends against it. */
+function rebasing(fake: ReturnType<typeof fakeApi>, disk: ReturnType<typeof fakeJournal>) {
+  let n = 0;
+  const truth = rebasable();
+  const results: string[] = [];
+  const instance = createAdapter({
+    api: fake.api,
+    context: () => ({ model: base(), memberIds: [7, 8] }),
+    sendContext: truth.context,
+    keyGen: () => `key-${++n}`,
+    now: () => 1000 + n,
+    journal: disk.journal,
+    onResult: (s, r) => results.push(`${s.key}:${r.ok ? "ok" : r.error.code}`),
+  });
+  return { instance, truth, results };
+}
+
+describe("rebasing pending intent over canonical (m04.03 3.2)", () => {
+  const staleEdit = { operations: [{ op: "update" as const, type: "task" as const, id: 11, data: { title: "Cabinet doors", expected_version: 1 } }] };
+
+  it("targetExists: the row, and the parent an add or a move names", () => {
+    const model = base();
+    assert.equal(targetExists(toggle(11), model), true);
+    assert.equal(targetExists(toggle(99), model), false);
+    assert.equal(targetExists({ kind: "add", request: { parentId: 1, position: 0, title: "x" } }, model), true, "the root");
+    assert.equal(targetExists({ kind: "add", request: { parentId: 99, position: 0, title: "x" } }, model), false);
+    assert.equal(targetExists({ kind: "move", id: 20, parentId: 10, position: null, reorder: false }, model), true);
+    assert.equal(targetExists({ kind: "move", id: 20, parentId: 99, position: null, reorder: false }, model), false);
+  });
+
+  it("sent bytes that conflict are rebuilt from intent against truth now and sent once under a new key; the journal moves with them", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, truth, results } = rebasing(fake, disk);
+    truth.set(bumped(11, 4));
+
+    const pending = instance.resubmit(kept("old-1", 10, { kind: "write", write: edit(11, "Cabinet doors"), body: staleEdit, status: "sent" }));
+    await settle();
+    assert.equal(fake.calls[0]?.headers?.["idempotency-key"], "old-1", "the stored bytes first: the outcome may already be known");
+    assert.deepEqual(fake.calls[0]?.body, staleEdit);
+
+    fake.calls[0]?.resolve(conflict());
+    await settle();
+    await settle();
+    assert.equal(fake.calls.length, 2);
+    assert.equal(fake.calls[1]?.headers?.["idempotency-key"], "key-1", "a new request: the old key names refused bytes");
+    assert.deepEqual(fake.calls[1]?.body.operations[0]?.data, { title: "Cabinet doors", expected_version: 4 });
+    assert.deepEqual(disk.log, ["put:old-1:sent", "put:key-1:sent", "remove:old-1"], "the new key is on the device before the old one goes");
+    assert.equal(bodyOf(disk.rows.get("key-1"))?.operations[0]?.data["expected_version"], 4);
+
+    fake.calls[1]?.resolve(okReply(11));
+    const outcome = await pending;
+    assert.ok(outcome.ok);
+    await settle();
+    assert.deepEqual(results, ["old-1:ok"], "the screen knows it by the key it drew it under");
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("a second conflict is a rejection", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const pending = instance.resubmit(kept("old-1", 10, { kind: "write", write: edit(11, "Cabinet doors"), body: staleEdit, status: "sent" }));
+    await settle();
+    fake.calls[0]?.resolve(conflict());
+    await settle();
+    await settle();
+    fake.calls[1]?.resolve(conflict());
+    const outcome = await pending;
+    assert.equal(outcome.ok, false);
+    assert.equal(fake.calls.length, 2, "once, not a loop");
+    await settle();
+    assert.deepEqual(results, ["old-1:conflict"]);
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("bytes built just now that conflict are a rejection, as before (4.4 bounds that)", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = rebasing(fake, disk);
+
+    const pending = instance.submit(5, edit(11, "Cabinet doors"));
+    await settle();
+    fake.calls[0]?.resolve(conflict());
+    const outcome = await pending;
+    assert.equal(outcome.ok, false);
+    assert.equal(fake.calls.length, 1);
+    await settle();
+    assert.deepEqual(results, ["key-1:conflict"]);
+  });
+
+  it("a batch parked on an unknown outcome and resumed is resent bytes: its conflict buys the one rebuild", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, truth, results } = rebasing(fake, disk);
+
+    const pending = instance.submit(5, edit(11, "Cabinet doors"));
+    await settle();
+    fake.calls[0]?.resolve(networkError());
+    await settle();
+    fake.calls[1]?.resolve(networkError());
+    await settle();
+    // The link came back and the world moved meanwhile.
+    truth.set(bumped(11, 3));
+    instance.resume(5);
+    await settle();
+    assert.equal(fake.calls[2]?.headers?.["idempotency-key"], "key-1", "the same bytes under the same key first");
+    fake.calls[2]?.resolve(conflict());
+    await settle();
+    await settle();
+    assert.equal(fake.calls[3]?.headers?.["idempotency-key"], "key-2");
+    assert.deepEqual(fake.calls[3]?.body.operations[0]?.data, { title: "Cabinet doors", expected_version: 3 });
+    fake.calls[3]?.resolve(okReply(11));
+    assert.ok((await pending).ok);
+    await settle();
+    assert.deepEqual(results, ["key-1:ok"]);
+  });
+
+  it("a rebuild whose target is gone is the conflict, said out loud; one that now changes nothing is done", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, truth, results } = rebasing(fake, disk);
+
+    const gone = instance.resubmit(kept("old-1", 10, { kind: "write", write: edit(11, "Cabinet doors"), body: staleEdit, status: "sent" }));
+    await settle();
+    truth.set(without(11));
+    fake.calls[0]?.resolve(conflict());
+    assert.equal((await gone).ok, false);
+    await settle();
+    assert.equal(fake.calls.length, 1, "nothing to rebuild for");
+    assert.equal(disk.rows.has("old-1"), false);
+
+    truth.set(() => base());
+    const same = instance.resubmit(kept("old-2", 20, { kind: "write", write: edit(12, "Handles"), body: { operations: [{ op: "update", type: "task", id: 12, data: { title: "Handles", expected_version: 0 } }] }, status: "sent" }));
+    await settle();
+    fake.calls[1]?.resolve(conflict());
+    assert.ok((await same).ok, "the title already reads so");
+    await settle();
+    assert.deepEqual(results, ["old-1:conflict", "old-2:ok"]);
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("a queued record is built against truth as it stands when it goes — the rebase — under its own key", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, truth } = rebasing(fake, disk);
+    truth.set(bumped(11, 7));
+
+    void instance.resubmit(kept("old-1", 10, { kind: "write", write: edit(11, "Cabinet doors"), body: null, status: "queued" }));
+    await settle();
+    assert.equal(fake.calls[0]?.headers?.["idempotency-key"], "old-1");
+    assert.deepEqual(fake.calls[0]?.body.operations[0]?.data, { title: "Cabinet doors", expected_version: 7 });
+  });
+
+  it("a queued record whose target is gone is refused out loud and forgotten, never sent", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, truth, results } = rebasing(fake, disk);
+    truth.set(without(11));
+
+    const outcome = await instance.resubmit(kept("old-1", 10, { kind: "write", write: toggle(11), body: null, status: "queued" }));
+    assert.equal(outcome.ok, false);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(results, ["old-1:conflict"]);
+    assert.deepEqual(disk.log, ["remove:old-1"]);
+  });
+
+  it("once the queue is open, a later replay takes its turn in the one lane", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance } = rebasing(fake, disk);
+    instance.hold(5);
+    instance.open(5);
+
+    const mine = instance.submit(5, toggle(12));
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    // A resync's replay pass finds a record this tab does not hold.
+    const late = instance.resubmit(kept("old-9", 5, { kind: "write", write: toggle(13), body: null, status: "queued" }));
+    await settle();
+    assert.equal(fake.calls.length, 1, "it waits its turn: one in flight");
+
+    fake.calls[0]?.resolve(okReply(12));
+    await mine;
+    await settle();
+    assert.equal(fake.calls[1]?.headers?.["idempotency-key"], "old-9");
+    fake.calls[1]?.resolve(okReply(13));
+    assert.ok((await late).ok);
   });
 });
 

@@ -17,7 +17,10 @@
 //     canonical, so the tree ends the same both ways.
 //
 // A snapshot installs only forward: a read older than what the session
-// already knows is refused, never drawn over newer truth.
+// already knows is refused, never drawn over newer truth. Subscribing comes
+// before the read (spec §4, m04.03 3.1): envelopes that arrive while the read
+// is out are held here, and `install` applies the ones newer than the read
+// and drops the rest — the snapshot/broadcast race closes without an event log.
 //
 // The canonical model is never what is shown. `shown` folds the unanswered
 // predictions on top (`optimistic.ts`), so a delta landing under a pending
@@ -57,6 +60,12 @@ export interface SessionState {
    * missing, whether or not any are held.
    */
   readonly expected: number;
+  /**
+   * A snapshot from the server has installed. The device's copy alone does not
+   * count: pending intent is replayed only over truth the server handed over
+   * (m04.03 3.2).
+   */
+  readonly synced: boolean;
 }
 
 export const emptySession: SessionState = {
@@ -65,6 +74,7 @@ export const emptySession: SessionState = {
   buffered: new Map(),
   acked: new Set(),
   expected: 0,
+  synced: false,
 };
 
 /** A write its own broadcast settled before its reply arrived. */
@@ -171,8 +181,18 @@ export function install(
     canonical,
     buffered,
     expected: Math.max(state.expected, tree.seq),
+    synced: true,
   };
   return { ...drain(unchanged(next)), installed: true };
+}
+
+/**
+ * The server said, outside any envelope, that it has reached `seq` — a join
+ * reply (m04.03 3.3). Nothing is applied; if it is past canonical the gap is
+ * open and the caller reads.
+ */
+export function heard(state: SessionState, seq: number): SessionState {
+  return seq > state.expected ? { ...state, expected: seq } : state;
 }
 
 /**

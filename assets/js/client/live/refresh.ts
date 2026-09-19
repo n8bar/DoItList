@@ -15,6 +15,15 @@
 // newest wins, and a read still out when access is taken away is dropped on
 // arrival rather than written over the forget.
 //
+// The channel is joined BEFORE any read goes out (m04.03 3.1) — `read` takes
+// the subscription itself, so the order is not an accident of effect order —
+// and every join reply's `seq` comes here (3.3): one past canonical means the
+// socket was down while something changed, and the tree is re-read at once
+// rather than after the gap hold. `onSynced` tells the screen when the
+// session is level with the server again — after a server snapshot installs,
+// or after a join that says nothing was missed — which is when pending intent
+// is rebased and replayed (3.2).
+//
 // The Initiatives list has no topic of its own, so a delta on an Initiative
 // the tab is watching also refreshes that Initiative's row in the list (m04.02
 // item 4.6) — one summary read, patched in place, never the whole index — and
@@ -22,7 +31,7 @@
 // read. Returning to the index re-reads the list in the background
 // (`revalidateList`) and patches the rows that differ.
 
-import type { ApiClient } from "../api/client.ts";
+import type { ApiClient, Result } from "../api/client.ts";
 import type { InitiativeSummary, InitiativeTree, Member } from "../api/types.ts";
 import { mergeSummaries, patchSummary } from "../screens/initiatives_model.ts";
 import type { DomainStore } from "../state/domain.ts";
@@ -43,11 +52,13 @@ import {
   begin,
   emptySession,
   gapOpen,
+  heard,
   install,
   installCached,
   patchHeader,
   receive,
   reject,
+  seqOf,
   shown,
 } from "./session.ts";
 
@@ -183,6 +194,12 @@ export interface SyncDeps {
   timers?: Timers;
   /** How long a gap is given to fill before the tree is re-read. */
   gapHoldMs?: number;
+  /**
+   * The live channel's subscribe/unsubscribe, refcounted by the connection.
+   * `read` holds a subscription for the read's duration, so the join is
+   * always ahead of the snapshot. Without one, reads are unsubscribed reads.
+   */
+  channel?: { subscribe(id: number): void; unsubscribe(id: number): void };
 }
 
 export interface InitiativeSync {
@@ -190,6 +207,28 @@ export interface InitiativeSync {
   onDelta(envelope: DeltaEnvelope): void;
   /** For `Connection.onAccessRevoked`. */
   onAccessRevoked(initiativeId: number): void;
+  /**
+   * For `Connection.onJoined`: the join reply's `seq` for `initiativeId`,
+   * fired on the first join and on each rejoin after a drop (m04.03 3.3). A
+   * session behind it re-reads now — no hold, the server has said we missed
+   * something; one level with it is told so (`onSynced`); one with no server
+   * snapshot yet does nothing, the mount read is on its way.
+   */
+  onJoined(initiativeId: number, seq: number): void;
+  /**
+   * The screen is on `id`: its channel is held for as long as the returned
+   * release is not called. Refcounted by the connection, so a read's own hold
+   * and the screen's stack.
+   */
+  watch(id: number): () => void;
+  /**
+   * The screen's own read of `id`'s tree (mount, Try again). The channel is
+   * subscribed BEFORE the request goes out (m04.03 3.1), so anything that
+   * changes meanwhile is held and follows the snapshot; the hold is released
+   * when the read is back (the screen's own `watch` keeps the channel). The
+   * answer is the screen's to install (`install`) — it owns the read's status.
+   */
+  read(id: number): Promise<Result<InitiativeTree>>;
   /**
    * Re-reads the Initiatives index behind a list already on the glass and
    * patches the rows that differ (item 4.6). Nothing is cleared first, so the
@@ -237,6 +276,13 @@ export interface InitiativeSync {
    * screen clears the write's marks then, not when the reply comes.
    */
   onSettled(id: number, listener: (settled: Settled) => void): () => void;
+  /**
+   * Told when `id`'s session is level with the server: a server snapshot
+   * installed (mount, a gap's re-read, a resync after a drop), or a join said
+   * nothing was missed. The screen rebases and replays pending intent then
+   * (m04.03 3.2) — never over the device's copy alone.
+   */
+  onSynced(id: number, listener: () => void): () => void;
 }
 
 /**
@@ -255,8 +301,11 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
   const sessions = new Map<number, SessionState>();
   const holds = new Map<number, unknown>();
   const listeners = new Map<number, Set<(settled: Settled) => void>>();
+  const syncedListeners = new Map<number, Set<() => void>>();
   /** Initiatives with a re-read out: one at a time, a burst past the buffer asks once. */
   const reading = new Set<number>();
+  /** Screen reads out per Initiative: a re-read is not started under one. */
+  const screenReads = new Map<number, number>();
 
   const sessionOf = (id: number): SessionState => sessions.get(id) ?? emptySession;
 
@@ -323,7 +372,7 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
    * to be behind and nothing else will tell the user (item 1.6.2).
    */
   const resnapshot = async (id: number, retry: boolean): Promise<void> => {
-    if (reading.has(id)) return;
+    if (reading.has(id) || (screenReads.get(id) ?? 0) > 0) return;
     reading.add(id);
     try {
       await readTree(id, retry);
@@ -357,6 +406,11 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
     const outcome = install(sessionOf(id), tree);
     if (!outcome.installed) return;
     commit(id, outcome);
+    synced(id);
+  };
+
+  const synced = (id: number): void => {
+    for (const listener of syncedListeners.get(id) ?? []) listener();
   };
 
   /**
@@ -417,6 +471,40 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       commit(id, receive(sessionOf(id), envelope));
     },
 
+    onJoined(id, seq) {
+      const state = sessionOf(id);
+      if (state.canonical === null) return;
+      if (seq <= seqOf(state)) {
+        if (state.synced) synced(id);
+        return;
+      }
+      // Behind. Noting the sequence opens the gap, so if this read cannot be
+      // started (a screen read is out) or fails, the hold's own re-read
+      // follows; the read itself goes now.
+      commit(id, only(heard(state, seq)));
+      void resnapshot(id, true);
+    },
+
+    watch(id) {
+      deps.channel?.subscribe(id);
+      return () => deps.channel?.unsubscribe(id);
+    },
+
+    async read(id) {
+      // Joined first, for the read's duration: whatever changes while the
+      // request is out is held and follows the snapshot in order.
+      deps.channel?.subscribe(id);
+      screenReads.set(id, (screenReads.get(id) ?? 0) + 1);
+      // Claims the newest read: a re-read still out lands nowhere.
+      guard.beginTree(id);
+      try {
+        return await api.get<InitiativeTree>(`/initiatives/${id}`);
+      } finally {
+        screenReads.set(id, (screenReads.get(id) ?? 1) - 1);
+        deps.channel?.unsubscribe(id);
+      }
+    },
+
     install: installTree,
 
     installCached(model) {
@@ -461,6 +549,16 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       return () => {
         set.delete(listener);
         if (set.size === 0) listeners.delete(id);
+      };
+    },
+
+    onSynced(id, listener) {
+      const set = syncedListeners.get(id) ?? new Set();
+      set.add(listener);
+      syncedListeners.set(id, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) syncedListeners.delete(id);
       };
     },
 

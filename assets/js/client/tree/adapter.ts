@@ -29,6 +29,16 @@
 // the send parks until the screen says the connection is back (`resume`), and
 // then the same body goes out under the same key. A record another life of
 // this tab left behind comes back through `resubmit` (m04.03 2.3).
+//
+// Replay is a rebase (m04.03 3.2): a batch that has never been on the wire is
+// built from its intent against canonical as it stands now — after the server's
+// snapshot, not before it. Bytes that HAVE been on the wire with the outcome
+// unknown go again exactly as they were, under the same key, because the
+// server may already hold their result; if the answer is a version conflict,
+// the world moved while the link was down, and the intent is rebuilt once
+// against current truth and sent once more under a NEW key (the old one names
+// bytes the server refused). A second conflict is a rejection. An intent whose
+// target is gone is refused here, visibly, rather than sent as nothing.
 
 import type { ApiClient, ApiError } from "../api/client.ts";
 import type { Priority } from "../api/types.ts";
@@ -229,6 +239,25 @@ export function predictWrite(
 export function targetOf(write: TreeWrite, tempId: number): number {
   return write.kind === "add" ? tempId : write.id;
 }
+
+/**
+ * Whether the write still has somewhere to land: its row, and for an add or a
+ * move the parent it names. A write whose target is gone can never apply, which
+ * is different from one that now changes nothing (m04.03 3.2.1).
+ */
+export function targetExists(write: TreeWrite, model: TreeModel): boolean {
+  const holds = (id: number) => id === model.rootId || model.tasks[id] !== undefined;
+  if (write.kind === "add") return holds(write.request.parentId);
+  if (model.tasks[write.id] === undefined) return false;
+  return write.kind === "move" ? holds(write.parentId) : true;
+}
+
+/** The refusal for an intent whose target is gone: said by the client, in the server's terms. */
+export const TARGET_GONE: ApiError = {
+  code: "conflict",
+  status: 409,
+  message: "The task this change was for is no longer there; nothing was applied.",
+};
 
 function changed(result: OpResult): TreeModel | null {
   return result.affected.length === 0 ? null : result.model;
@@ -593,6 +622,14 @@ interface Job {
   readonly journaled: Promise<unknown>;
 }
 
+/** What an intent comes to against truth now. */
+type Built =
+  /** The row or the parent it names is gone: it can never apply. */
+  | { kind: "gone" }
+  /** It would change nothing now (already so): nothing to send. */
+  | { kind: "nothing" }
+  | { kind: "batch"; body: BatchBody };
+
 const intentOf = (write: TreeWrite | null, action: "undo" | "redo"): PendingIntent =>
   write === null ? { kind: "history", action } : { kind: "write", write };
 
@@ -635,7 +672,7 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
   // gate, while one is held, keeps the ordinary lane waiting until `open`
   // says the replays are all queued. No gate means nothing to wait for.
   const replays = new Map<number, Promise<unknown>>();
-  const gates = new Map<number, { promise: Promise<unknown>; open: (after: Promise<unknown>) => void }>();
+  const gates = new Map<number, { promise: Promise<unknown>; open: (after: Promise<unknown>) => void; opened: boolean }>();
   // One parked send per Initiative: the one whose outcome is unknown.
   const parked = new Map<number, () => void>();
   // Every batch this adapter has queued and not yet answered, by key. A replay
@@ -649,36 +686,54 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
     affectedIds,
   });
 
-  const recordOf = (job: Job, body: BatchBody | null, status: "queued" | "sent"): PendingOpRecord => ({
-    key: job.submission.key,
+  const recordOf = (job: Job, key: string, body: BatchBody | null, status: "queued" | "sent"): PendingOpRecord => ({
+    key,
     initiativeId: job.submission.initiativeId,
     createdAt: job.createdAt,
     payload: { ...job.intent, body, status },
   });
 
+  /** The intent against canonical as it stands now — the rebase. */
+  const build = (job: Job): Built => {
+    const { initiativeId } = job.submission;
+    const context = sendContext(initiativeId);
+    if (context === undefined) return { kind: "nothing" };
+    if (job.intent.kind === "write" && !targetExists(job.intent.write, context.model)) return { kind: "gone" };
+    const { operations } = buildIntent(job.intent, initiativeId, context);
+    return operations.length === 0 ? { kind: "nothing" } : { kind: "batch", body: { operations } };
+  };
+
   async function send(job: Job): Promise<SubmitResult> {
     const { submission } = job;
-    const { key, initiativeId, affectedIds } = submission;
+    const { initiativeId, affectedIds } = submission;
     await job.journaled;
 
+    // The key the bytes go out under. The submission's key, until a conflict
+    // on resent bytes makes the rebuilt batch a new request.
+    let key = submission.key;
     let body = job.body;
+    // Whether `body` has been on the wire before with its outcome unknown. A
+    // conflict on such bytes is the world having moved meanwhile, and buys
+    // one rebuild; a conflict on bytes built just now is a rejection.
+    let resent = body !== null;
+    let rebuilt = false;
+
     if (body === null) {
-      // Built now, from truth as the previous reply left it.
-      const context = sendContext(initiativeId);
-      const operations = context === undefined ? [] : buildIntent(job.intent, initiativeId, context).operations;
-      if (operations.length === 0) {
+      // Built now, from truth as the previous reply (or the snapshot) left it.
+      const built = build(job);
+      if (built.kind !== "batch") {
         await journal.remove(key);
-        return emptyOk(affectedIds);
+        return built.kind === "gone" ? { ok: false, error: TARGET_GONE, affectedIds } : emptyOk(affectedIds);
       }
-      body = { operations };
+      body = built.body;
     }
 
     // The exact body under the exact key, on the device before it goes out:
     // a tab that dies mid-request comes back and sends this again.
-    await journal.put(recordOf(job, body, "sent"));
+    await journal.put(recordOf(job, key, body, "sent"));
 
-    const headers = { "idempotency-key": key };
     for (;;) {
+      const headers = { "idempotency-key": key };
       let result = await options.api.post<BatchReply>("/operations", body, headers);
       // A reply that never arrived: the same key replays a commit the server
       // did make, and re-runs one it did not. Once — a link that is down
@@ -691,6 +746,27 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
         // behind this waits, and the same body goes again when told to.
         options.onUnknown?.(submission, result.error);
         await new Promise<void>((resolve) => parked.set(initiativeId, resolve));
+        resent = true;
+        continue;
+      }
+
+      if (!result.ok && result.error.code === "conflict" && resent && !rebuilt) {
+        // The bytes were stale, not the intent. Once more, from truth now.
+        rebuilt = true;
+        const built = build(job);
+        if (built.kind !== "batch") {
+          void journal.remove(key);
+          return built.kind === "gone" ? { ok: false, error: result.error, affectedIds } : emptyOk(affectedIds);
+        }
+        const stale = key;
+        key = keyGen();
+        body = built.body;
+        resent = false;
+        // The new key is on the device before the old one goes, so a tab that
+        // dies between the two never loses the intent — and never resends
+        // the refused bytes.
+        await journal.put(recordOf(job, key, body, "sent"));
+        await journal.remove(stale);
         continue;
       }
 
@@ -776,9 +852,16 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
         body: payload.status === "sent" ? payload.body : null,
         journaled: Promise.resolve(),
       };
-      const previous = replays.get(initiativeId) ?? Promise.resolve();
+      // While the gate is held, replays go ahead of the ordinary lane; once it
+      // is open there is ONE lane, and a later replay (a resync's, m04.03 3.3)
+      // takes its turn in it — never a second batch in flight.
+      const gate = gates.get(initiativeId);
+      const ahead = gate !== undefined && !gate.opened;
+      const previous = ahead
+        ? (replays.get(initiativeId) ?? Promise.resolve())
+        : (tails.get(initiativeId) ?? replays.get(initiativeId) ?? Promise.resolve());
       const running = run(job, previous);
-      replays.set(initiativeId, running.catch(() => undefined));
+      (ahead ? replays : tails).set(initiativeId, running.catch(() => undefined));
       return running;
     },
 
@@ -788,11 +871,14 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
       const promise = new Promise<unknown>((resolve) => {
         open = resolve;
       });
-      gates.set(initiativeId, { promise, open });
+      gates.set(initiativeId, { promise, open, opened: false });
     },
 
     open(initiativeId) {
-      gates.get(initiativeId)?.open(replays.get(initiativeId) ?? Promise.resolve());
+      const gate = gates.get(initiativeId);
+      if (gate === undefined || gate.opened) return;
+      gate.opened = true;
+      gate.open(replays.get(initiativeId) ?? Promise.resolve());
     },
 
     resume(initiativeId) {

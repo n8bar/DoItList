@@ -61,7 +61,12 @@ defmodule DoItWeb.InitiativeChannel do
          ) do
       {:ok, initiative} ->
         send(self(), :after_join)
-        {:ok, %{initiative_id: initiative.id}, assign(socket, :initiative_id, initiative.id)}
+        # The reply carries the Initiative's delivery sequence as it stands at
+        # this join (m04.03 3.3). Phoenix re-sends the join after every socket
+        # drop, so a client holding an older `seq` learns it is behind the
+        # moment it is back, without waiting for the next live event.
+        {:ok, %{initiative_id: initiative.id, seq: initiative.seq},
+         assign(socket, :initiative_id, initiative.id)}
 
       {:error, :forbidden} ->
         {:error, %{reason: "forbidden"}}

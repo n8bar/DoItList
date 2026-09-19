@@ -20,7 +20,7 @@ import type { Bootstrap, ClientState } from "./boot.ts";
 import { initialState, loginPath, stateForErrorCode } from "./boot.ts";
 import type { ApiError, SessionData } from "./api/client.ts";
 import { createApiClient } from "./api/client.ts";
-import { initConnection } from "./live/connection.ts";
+import { getConnection, initConnection } from "./live/connection.ts";
 import { applyDiff, applyState } from "./live/presence_model.ts";
 import { phoenixTransport } from "./live/phoenix_transport.ts";
 import { createInitiativeSync } from "./live/refresh.ts";
@@ -118,6 +118,12 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       ui: stores.ui,
       snapshots: cache,
       onForbidden: () => setState({ kind: "forbidden" }),
+      // The channel is the connection's, built just below; a screen reaches
+      // these long after both exist. The sync joins before it reads (m04.03 3.1).
+      channel: {
+        subscribe: (id) => getConnection().subscribeInitiative(id),
+        unsubscribe: (id) => getConnection().unsubscribeInitiative(id),
+      },
     }),
   );
   const [connection] = useState(() => {
@@ -125,6 +131,9 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       transport: (options) => phoenixTransport(options, () => api.csrfToken()),
       onStatus: (status) => setConnectionStatus(stores.recovery, status),
       onDelta: sync.onDelta,
+      // Every join reply — the first, and each rejoin after a drop — says where
+      // the server stands; a session behind it re-reads at once (m04.03 3.3).
+      onJoined: sync.onJoined,
       onAccessRevoked: sync.onAccessRevoked,
       // Who else is on the Initiative and what they have selected. Filed as
       // the server sends it; the tree reads its badges and dots from here.

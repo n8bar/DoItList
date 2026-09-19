@@ -13,6 +13,7 @@ import {
   begin,
   emptySession,
   gapOpen,
+  heard,
   install,
   installCached,
   patchHeader,
@@ -305,6 +306,64 @@ describe("own writes (1.4.1)", () => {
     assert.equal(shown(renamed)?.header.name, "Renamed");
     assert.equal(shown(renamed)?.tasks[11]?.title, "Mine");
     assert.equal(patchHeader(emptySession, (h) => h), emptySession);
+  });
+});
+
+describe("subscribed before the snapshot (m04.03 3.1)", () => {
+  it("an envelope held before the read applies after it when it is newer", () => {
+    const held = receive(emptySession, retitle(4, 11, "Four"));
+    const read = install(held.state, snapshot(3));
+    assert.equal(read.installed, true);
+    assert.equal(read.applied.length, 1);
+    assert.equal(seqOf(read.state), 4);
+    assert.equal(read.state.canonical?.tasks[11]?.title, "Four");
+    assert.equal(read.state.synced, true);
+  });
+
+  it("an envelope the snapshot already covers is dropped", () => {
+    const held = receive(emptySession, retitle(3, 11, "Old"));
+    const read = install(held.state, snapshot(3));
+    assert.equal(read.applied.length, 0);
+    assert.equal(read.state.buffered.size, 0);
+    assert.equal(read.state.canonical?.tasks[11]?.title, "Task 11", "the read is truth");
+  });
+
+  it("a snapshot newer than everything held makes all of it moot", () => {
+    let state = receive(emptySession, retitle(2, 11, "Two")).state;
+    state = receive(state, retitle(3, 11, "Three")).state;
+    const read = install(state, snapshot(9));
+    assert.equal(read.applied.length, 0);
+    assert.equal(seqOf(read.state), 9);
+    assert.equal(read.state.buffered.size, 0);
+  });
+
+  it("a gap among the held ones stays a gap for the caller to re-read", () => {
+    let state = receive(emptySession, retitle(4, 11, "Four")).state;
+    state = receive(state, retitle(6, 11, "Six")).state;
+    const read = install(state, snapshot(3));
+    assert.equal(seqOf(read.state), 4, "the consecutive one followed");
+    assert.equal(read.state.buffered.size, 1);
+    assert.equal(gapOpen(read.state), true);
+  });
+});
+
+describe("what a join reply says (m04.03 3.3)", () => {
+  it("a sequence past canonical opens the gap without applying anything", () => {
+    const state = heard(at(3), 5);
+    assert.equal(seqOf(state), 3);
+    assert.equal(gapOpen(state), true);
+  });
+
+  it("a sequence at or below canonical changes nothing", () => {
+    const state = at(3);
+    assert.equal(heard(state, 3), state);
+    assert.equal(heard(state, 1), state);
+  });
+
+  it("the device's copy is not a server snapshot", () => {
+    assert.equal(emptySession.synced, false);
+    assert.equal(installCached(emptySession, at(2).canonical as TreeModel).state.synced, false);
+    assert.equal(install(emptySession, snapshot(2)).state.synced, true);
   });
 });
 

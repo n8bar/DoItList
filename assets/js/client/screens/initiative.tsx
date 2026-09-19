@@ -24,11 +24,15 @@
 // is installed and painted before the server answers, and once the server's
 // snapshot is in, the operations an earlier life of the tab queued are drawn
 // again as unsaved and sent again under their own keys, oldest first, ahead
-// of anything new. A batch whose outcome the connection swallowed waits on
-// the device and goes again when the connection is back.
+// of anything new. That same pass runs again every time the session is level
+// with the server once more (m04.03 3.2, 3.3) — a resync after a drop, a
+// gap's re-read — so a batch whose outcome the connection swallowed goes again
+// only once truth is current, and what was queued behind it is built against
+// that truth.
 //
-// This is also where the connection seam is exercised — the screen subscribes
-// on mount and unsubscribes on unmount, while the connection object itself
+// This is also where the connection seam is exercised — the screen holds the
+// channel from mount to unmount through the sync (`watch`), and the sync joins
+// it before the mount read goes out (m04.03 3.1); the connection object itself
 // outlives both (guardrail §7.4).
 
 import type { RefObject } from "react";
@@ -91,7 +95,7 @@ import { adoptHeaderReply, headerCounts, headerEdit, revertHeader } from "./init
 import { useResource } from "./use_resource.ts";
 
 export function InitiativeScreen({ id }: { id: number }) {
-  const { api, stores, connection, sync, cache, escalate } = useServices();
+  const { stores, sync, cache, escalate } = useServices();
 
   const select = useCallback((state: DomainState) => state.trees[id], [id]);
   const model = useStoreValue(stores.domain, select);
@@ -110,20 +114,19 @@ export function InitiativeScreen({ id }: { id: number }) {
     };
   }, [cache, id, sync]);
 
-  useEffect(() => {
-    connection.subscribeInitiative(id);
-    return () => connection.unsubscribeInitiative(id);
-  }, [connection, id]);
+  // The channel, held for the screen's life. The read below takes its own
+  // hold too, so the join is ahead of the snapshot whatever order effects run.
+  useEffect(() => sync.watch(id), [sync, id]);
 
   const resource = useResource<InitiativeTree>({
     key: `initiative:${id}`,
     loaded: model !== undefined,
-    read: () => api.get<InitiativeTree>(`/initiatives/${id}`),
-    // The read goes to the Initiative's sync session, which the channel was
-    // joined for before the read went out: deltas that arrived meanwhile
-    // follow the snapshot in order, and one older than what the session
-    // already holds is refused (m04.03 1.4). A snapshot that cannot be a tree
-    // throws instead of being half-drawn.
+    // The sync joins the channel before this request goes out (m04.03 3.1).
+    read: () => sync.read(id),
+    // The read goes to the Initiative's sync session: deltas that arrived
+    // meanwhile follow the snapshot in order, and one older than what the
+    // session already holds is refused (m04.03 1.4). A snapshot that cannot
+    // be a tree throws instead of being half-drawn.
     onData: useCallback((data: InitiativeTree) => sync.install(data), [sync]),
     // Two reads in a row that could not be a tree. The screen stays on its own
     // error with Try again, and a notice says so, rather than the user staring
@@ -573,31 +576,31 @@ function TreeSection({
   // Once the server's own snapshot is in — never over the device's copy alone
   // — what this device queued for this Initiative is drawn again and sent
   // again, oldest first (m04.03 2.3). Only then does the ordinary queue open,
-  // so a write made meanwhile goes after them. Repeating this is harmless: a
-  // record already queued here is not queued twice.
+  // so a write made meanwhile goes after them. The same pass runs whenever
+  // the session is level with the server again (m04.03 3.2, 3.3): a batch
+  // parked on an unknown outcome goes again then — same body, same key — and
+  // never before truth is current, so what is built behind it is built
+  // against the tree as it now stands. Repeating this is harmless: a record
+  // already queued here is not queued twice, and an open queue stays open.
   useEffect(() => {
     if (!serverReady) return;
     let live = true;
-    void cache.pendingOps().then((records) => {
-      if (!live) return;
-      for (const record of replayPlan(records, id)) writes.replay(record);
-      writes.adapter.open(id);
-    });
+    const reconcile = (): void => {
+      void cache.pendingOps().then((records) => {
+        if (!live) return;
+        for (const record of replayPlan(records, id)) writes.replay(record);
+        writes.adapter.open(id);
+        writes.adapter.resume(id);
+      });
+    };
+    // The install that made the server ready has already happened; then each one after.
+    reconcile();
+    const stop = sync.onSynced(id, reconcile);
     return () => {
       live = false;
+      stop();
     };
-  }, [writes, cache, id, serverReady]);
-
-  // The connection came back: a batch parked on an unknown outcome goes again,
-  // same body, same key.
-  useEffect(() => {
-    let previous = stores.recovery.get().connection;
-    return stores.recovery.subscribe(() => {
-      const current = stores.recovery.get().connection;
-      if (current === "live" && previous !== "live") writes.adapter.resume(id);
-      previous = current;
-    });
-  }, [writes, id, stores.recovery]);
+  }, [writes, cache, id, serverReady, sync]);
 
   // Undo / redo: one at a time, its button latched until the reply lands
   // (§6.7). The press is acknowledged in the same frame; the tree changes

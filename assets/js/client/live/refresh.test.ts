@@ -122,6 +122,7 @@ function sync(parts: {
   onForbidden?: () => void;
   snapshots?: { cacheTree(model: TreeModel): void; forgetTree(id: number): Promise<void> };
   timers?: ReturnType<typeof fakeTimers>["timers"];
+  channel?: { subscribe(id: number): void; unsubscribe(id: number): void };
 }) {
   return createInitiativeSync({
     api: parts.api ?? fakeApi({}).api,
@@ -130,6 +131,7 @@ function sync(parts: {
     onForbidden: parts.onForbidden ?? (() => {}),
     ...(parts.snapshots === undefined ? {} : { snapshots: parts.snapshots }),
     ...(parts.timers === undefined ? {} : { timers: parts.timers }),
+    ...(parts.channel === undefined ? {} : { channel: parts.channel }),
   });
 }
 
@@ -416,6 +418,139 @@ describe("a gap re-reads the tree (1.4.4)", () => {
     fake.release(0);
     await settle();
     assert.equal(title(domain, 12), "Caught up");
+  });
+});
+
+describe("subscribed and buffering before the snapshot installs (m04.03 3.1)", () => {
+  /** A channel and an API that write to one log, so their order is a fact. */
+  function ordered() {
+    const log: string[] = [];
+    const fake = fakeApi({ "/initiatives/12": treeWith(12, 3, "Three") });
+    const api = {
+      ...fake.api,
+      get: <T,>(path: string) => {
+        log.push(`get:${path}`);
+        return fake.api.get<T>(path);
+      },
+    } as unknown as ApiClient;
+    const channel = {
+      subscribe: (id: number) => log.push(`subscribe:${id}`),
+      unsubscribe: (id: number) => log.push(`unsubscribe:${id}`),
+    };
+    return { log, api, channel };
+  }
+
+  it("the screen's read joins the channel before the request goes out, and lets go after", async () => {
+    const { log, api, channel } = ordered();
+    const unit = sync({ api, channel });
+
+    const result = await unit.read(12);
+    assert.ok(result.ok);
+    assert.deepEqual(log, ["subscribe:12", "get:/initiatives/12", "unsubscribe:12"]);
+  });
+
+  it("the screen's own hold stacks with the read's — refcounting is the connection's", async () => {
+    const { log, api, channel } = ordered();
+    const unit = sync({ api, channel });
+
+    const release = unit.watch(12);
+    await unit.read(12);
+    release();
+    assert.deepEqual(log, ["subscribe:12", "subscribe:12", "get:/initiatives/12", "unsubscribe:12", "unsubscribe:12"]);
+  });
+
+  it("a delta that arrived during the read, newer than the snapshot, applies after it", () => {
+    const domain = createDomainStore();
+    const unit = sync({ domain });
+
+    unit.onDelta(retitle(12, 2, "Two"));
+    assert.equal(domain.get().trees[12], undefined, "nothing to apply it to yet");
+
+    unit.install(treeWith(12, 1));
+    assert.equal(title(domain, 12), "Two");
+    assert.equal(domain.get().trees[12]?.seq, 2);
+  });
+
+  it("a delta the snapshot already covers is dropped", () => {
+    const domain = createDomainStore();
+    const unit = sync({ domain });
+
+    unit.onDelta(retitle(12, 2, "Stale"));
+    unit.install(treeWith(12, 2, "From the read"));
+    assert.equal(title(domain, 12), "From the read");
+    assert.equal(domain.get().trees[12]?.seq, 2);
+  });
+
+  it("a snapshot newer than everything held is truth; nothing held applies", () => {
+    const domain = createDomainStore();
+    const unit = sync({ domain });
+
+    unit.onDelta(retitle(12, 2, "Two"));
+    unit.onDelta(retitle(12, 3, "Three"));
+    unit.install(treeWith(12, 5, "Five"));
+    assert.equal(title(domain, 12), "Five");
+    assert.equal(domain.get().trees[12]?.seq, 5);
+  });
+
+  it("a gap among the held ones goes through the ordinary hold, then a re-read", async () => {
+    const domain = createDomainStore();
+    const fake = fakeApi({ "/initiatives/12": treeWith(12, 4, "Four") });
+    const clock = fakeTimers();
+    const unit = sync({ api: fake.api, domain, timers: clock.timers });
+
+    unit.onDelta(retitle(12, 2, "Two"));
+    unit.onDelta(retitle(12, 4, "Four, held"));
+    unit.install(treeWith(12, 1));
+    assert.equal(title(domain, 12), "Two", "the consecutive one followed the snapshot");
+    await settle();
+    assert.deepEqual(fake.calls, [], "the gap is given its moment");
+
+    clock.flush();
+    await settle();
+    assert.deepEqual(fake.calls, ["/initiatives/12"]);
+    assert.equal(domain.get().trees[12]?.seq, 4);
+  });
+
+  it("the same holds for a gap's re-read: deltas during it that are newer follow it", async () => {
+    const domain = createDomainStore();
+    const fake = fakeApi({ "/initiatives/12": treeWith(12, 3, "Three") });
+    const clock = fakeTimers();
+    const unit = sync({ api: fake.api, domain, timers: clock.timers });
+
+    unit.install(treeWith(12, 1));
+    fake.hold();
+    unit.onDelta(retitle(12, 3, "Three"));
+    clock.flush();
+    await settle();
+    assert.equal(fake.parked(), 1);
+
+    unit.onDelta(retitle(12, 4, "Four"));
+    fake.release(0);
+    await settle();
+    assert.equal(title(domain, 12), "Four");
+    assert.equal(domain.get().trees[12]?.seq, 4);
+  });
+
+  it("a re-read is not started under the screen's own read", async () => {
+    const domain = createDomainStore();
+    const fake = fakeApi({ "/initiatives/12": treeWith(12, 3, "Three") });
+    const clock = fakeTimers();
+    const unit = sync({ api: fake.api, domain, timers: clock.timers });
+
+    unit.installCached(fromSnapshot(treeWith(12, 1)));
+    fake.hold();
+    const read = unit.read(12);
+    await settle();
+    unit.onDelta(retitle(12, 3, "Three"));
+    clock.flush();
+    await settle();
+    assert.equal(fake.parked(), 1, "the screen's read is the one read out");
+
+    fake.release(0);
+    const result = await read;
+    assert.ok(result.ok);
+    unit.install(result.data);
+    assert.equal(domain.get().trees[12]?.seq, 3);
   });
 });
 

@@ -13,8 +13,11 @@ export interface FakeChannel extends LiveChannel {
   readonly pushes: Array<{ event: string; payload: unknown }>;
   /** Push a server event at whoever is listening. */
   emit(event: string, payload: unknown): void;
-  /** The socket came back and Phoenix re-sent the join: the callback fires again. */
-  rejoin(): void;
+  /**
+   * The socket came back and Phoenix re-sent the join: the callback fires
+   * again, with `reply` when given, else what `joinReply` says.
+   */
+  rejoin(reply?: unknown): void;
 }
 
 export interface FakeTransport extends LiveTransport {
@@ -26,6 +29,8 @@ export interface FakeTransport extends LiveTransport {
   tries: number;
   /** The delays the socket asked for, in order. */
   readonly delays: number[];
+  /** What the server answers a join with, by topic. Set before subscribing. */
+  joinReply: (topic: string) => unknown;
   open(): void;
   /**
    * One failed connect attempt, in Phoenix's real order: `onerror`, then the
@@ -79,7 +84,7 @@ export function fakeTransport(): { factory: (o: TransportOptions) => LiveTranspo
           join(callback) {
             channel.joins += 1;
             joined = callback;
-            callback({ ok: true, response: { initiative_id: topic } });
+            callback({ ok: true, response: transport.joinReply(topic) });
           },
           push(event, payload) {
             channel.pushes.push({ event, payload });
@@ -87,9 +92,9 @@ export function fakeTransport(): { factory: (o: TransportOptions) => LiveTranspo
           leave() {
             channel.leaves += 1;
           },
-          rejoin() {
+          rejoin(reply) {
             channel.joins += 1;
-            joined?.({ ok: true, response: { initiative_id: topic } });
+            joined?.({ ok: true, response: reply ?? transport.joinReply(topic) });
           },
           emit(event, payload) {
             for (const callback of listeners.get(event) ?? []) callback(payload);
@@ -100,6 +105,7 @@ export function fakeTransport(): { factory: (o: TransportOptions) => LiveTranspo
       },
       tries: 0,
       delays: [],
+      joinReply: (topic) => ({ initiative_id: topic }),
       open: () => {
         transport.tries = 0;
         handlers.open.forEach((callback) => callback());

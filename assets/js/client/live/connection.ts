@@ -14,7 +14,10 @@
 // A joined Initiative's channel carries one `delta` per committed change
 // (m04.03 1.3). It is checked (`envelope.ts`) and handed up whole; what to do
 // with it — apply, hold, drop, re-read — is the sync session's call
-// (`refresh.ts`), not the socket's.
+// (`refresh.ts`), not the socket's. The join reply carries the Initiative's
+// `seq` (m04.03 3.3) and is handed up the same way, on the first join and on
+// every rejoin Phoenix sends after a drop — for every joined channel, a held
+// one and one still in its leave grace alike.
 //
 // Presence (m04.02 item 3.4.2) rides the same channel: the server's
 // `presence_state` / `presence_diff` are handed up as they arrive, and the
@@ -60,6 +63,11 @@ export interface ConnectionDeps {
   onStatus(status: ConnectionStatus): void;
   /** Called for every well-formed `delta` push on a joined Initiative. */
   onDelta(envelope: DeltaEnvelope): void;
+  /**
+   * Called with the `seq` in every successful join reply — the first join and
+   * each rejoin after a drop. Not called when the reply carries none.
+   */
+  onJoined?(initiativeId: number, seq: number): void;
   /**
    * Called when the server says this user may no longer see an Initiative they
    * were watching. The channel is already gone by then — this is the client's
@@ -141,6 +149,13 @@ export function parseNotification(payload: unknown): NotificationPush | null {
   if (typeof kind !== "string" || typeof line !== "string" || typeof href !== "string") return null;
   if (typeof read !== "boolean" || typeof insertedAt !== "string") return null;
   return { id, kind, line, href, read, inserted_at: insertedAt };
+}
+
+/** The `seq` a join reply carries, or `null` when it carries none. */
+export function joinSeq(response: unknown): number | null {
+  if (!isRecord(response)) return null;
+  const seq = response["seq"];
+  return typeof seq === "number" && Number.isInteger(seq) && seq >= 0 ? seq : null;
 }
 
 let nextConnectionId = 0;
@@ -273,6 +288,9 @@ export function createConnection(deps: ConnectionDeps): Connection {
       // Arc 3 owns what a refused or timed-out join tells the user; today the
       // reads still work, so a failed join must not take the screen down.
       if (!result.ok) return;
+      // Where the server stands now: the sync decides whether we are behind.
+      const seq = joinSeq(result.response);
+      if (seq !== null) deps.onJoined?.(initiativeId, seq);
       // Every join — the first, and each one Phoenix re-sends after a drop —
       // tracks this window afresh with nothing selected. Say again what it has.
       const selected = selections.get(initiativeId) ?? null;

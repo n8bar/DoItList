@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { beforeEach, describe, it } from "node:test";
 
 import type { ConnectionDeps, PresenceEvent } from "./connection.ts";
-import { createConnection, getConnection, initConnection, resetConnection } from "./connection.ts";
+import { createConnection, getConnection, initConnection, joinSeq, resetConnection } from "./connection.ts";
 import type { ConnectionStatus } from "../state/recovery.ts";
 import { RECONNECT_BUDGET } from "./connection_state.ts";
 import type { DeltaEnvelope } from "./envelope.ts";
@@ -335,6 +335,26 @@ describe("selection presence (item 3.4.2)", () => {
       { event: "select", payload: { task_id: 44 } },
       { event: "select", payload: { task_id: 44 } },
     ]);
+  });
+
+  it("hands every join reply's seq up — the first join and each rejoin (m04.03 3.3)", () => {
+    const joined: Array<[number, number]> = [];
+    const { connection, socket } = live({ onJoined: (id, seq) => joined.push([id, seq]) });
+    socket.get().joinReply = (topic) => ({ initiative_id: Number(topic.split(":")[1]), seq: 7 });
+    connection.subscribeInitiative(12);
+    socket.get().channels[0]?.rejoin({ initiative_id: 12, seq: 9 });
+    socket.get().channels[0]?.rejoin({ initiative_id: 12 });
+    assert.deepEqual(joined, [[12, 7], [12, 9]], "a reply without one is not a sequence");
+  });
+
+  it("joinSeq reads a non-negative integer and nothing else", () => {
+    assert.equal(joinSeq({ initiative_id: 12, seq: 0 }), 0);
+    assert.equal(joinSeq({ initiative_id: 12, seq: 3 }), 3);
+    assert.equal(joinSeq({ initiative_id: 12 }), null);
+    assert.equal(joinSeq({ seq: "3" }), null);
+    assert.equal(joinSeq({ seq: -1 }), null);
+    assert.equal(joinSeq({ seq: 1.5 }), null);
+    assert.equal(joinSeq(null), null);
   });
 
   it("keeps each Initiative's selection apart", () => {

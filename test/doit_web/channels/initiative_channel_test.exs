@@ -98,6 +98,24 @@ defmodule DoItWeb.InitiativeChannelTest do
       assert id == initiative.id
     end
 
+    test "the reply carries the Initiative's delivery sequence as of the join (m04.03 3.3)", %{
+      owner: owner,
+      initiative: initiative,
+      task: task
+    } do
+      {:ok, _} = Tasks.update_task(task, owner, %{"title" => "Advanced"})
+      current = Initiatives.get_initiative!(initiative.id).seq
+      assert current > 0
+
+      {:ok, socket} = connect_as(owner)
+
+      assert {:ok, %{initiative_id: id, seq: seq}, _socket} =
+               subscribe_and_join(socket, InitiativeChannel, "initiative:#{initiative.id}")
+
+      assert id == initiative.id
+      assert seq == current
+    end
+
     test "a stranger is refused", %{stranger: stranger, initiative: initiative} do
       {:ok, socket} = connect_as(stranger)
 
