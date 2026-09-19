@@ -60,13 +60,15 @@ import { selectionOf } from "../tree/selection_model.ts";
 import type { RowPresence } from "../tree/row_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
 import { createPresenceStore } from "../tree/presence_store.ts";
+import type { RowMarks } from "../tree/task_store.ts";
+import { createTaskReader } from "../tree/task_store.ts";
 import { Tree } from "../tree/tree.tsx";
 import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
 import type { ConfirmState } from "../tree/use_confirm.ts";
 import { useConfirm } from "../tree/use_confirm.ts";
 import { useTree } from "../tree/use_tree.ts";
 import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
-import { createStore } from "../state/store.ts";
+import { createStore, derive } from "../state/store.ts";
 import type { UiState } from "../state/ui.ts";
 import { pushNotice, selectTask } from "../state/ui.ts";
 import { useStore, useStoreValue } from "../state/use_store.ts";
@@ -379,7 +381,27 @@ function TreeSection({
   const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
 
   const inFlight = useMemo(() => createStore<InFlightState>(NOTHING_IN_FLIGHT), []);
-  const { pending, rowKeys, rejection, history } = useStore(inFlight);
+  const { history } = useStore(inFlight);
+  // The model and the pending marks as each row reads them (7.18): views over
+  // the two stores, outside React, so a write reaches the rows it changed and
+  // re-renders nothing above them.
+  const marks = useMemo(
+    () =>
+      derive(
+        inFlight,
+        (state): RowMarks => ({
+          savingIds: savingIds(state.pending),
+          recomputingIds: recomputingIds(state.pending),
+          rowKeys: state.rowKeys,
+          rejection: state.rejection,
+        }),
+      ),
+    [inFlight],
+  );
+  const tasks = useMemo(
+    () => createTaskReader(derive(stores.domain, (state: DomainState) => state.trees[id]), marks),
+    [stores.domain, id, marks],
+  );
   // Canonical truth plus the predictions still unanswered. A ref, not state:
   // it is read and written only inside the adapter's hooks, never rendered.
   const flights = useRef<OptimisticState | null>(null);
@@ -537,8 +559,6 @@ function TreeSection({
     [history, onHistory],
   );
 
-  const saving = useMemo(() => savingIds(pending), [pending]);
-  const recomputing = useMemo(() => recomputingIds(pending), [pending]);
   // The confirms (items 5.1.4, 7.6) sit between an intent and the adapter:
   // asked from the model, client-side, before anything is sent (§6.5).
   const storage = useMemo(browserKeyValueStore, []);
@@ -597,6 +617,7 @@ function TreeSection({
 
   const tree = useTree({
     model,
+    tasks,
     initiativeId: id,
     members,
     presence,
@@ -609,10 +630,6 @@ function TreeSection({
     onIntent,
     onAdd,
     onHistory,
-    savingIds: saving,
-    recomputingIds: recomputing,
-    rowKeys,
-    rejection,
     onBlocked: useCallback(() => {
       pushNotice(stores.ui, {
         kind: "info",

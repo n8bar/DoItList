@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { RowPreferences } from "../state/preferences.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { addSlots, moveSlot, sameSlot } from "./add_form_model.ts";
-import type { AddAnchor, EditRejection, TreeContext, TreeIntent } from "./context.ts";
+import type { AddAnchor, TreeContext, TreeIntent } from "./context.ts";
 import type { KeyOutcome } from "./keyboard_model.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
@@ -31,6 +31,8 @@ import { announcementFor } from "./announce_model.ts";
 import type { AnnouncedState } from "./announce_model.ts";
 import { forgetMissing, noSelection, pendingBranches, prunedSelection, rememberSelection, stillClosed } from "./selection_model.ts";
 import type { Selected, SelectionState } from "./selection_model.ts";
+import type { Source, TaskReader } from "./task_store.ts";
+import { createStore } from "../state/store.ts";
 import { useTreeKeyboard } from "./use_tree_keyboard.ts";
 
 /** The tab's `localStorage`, or nothing at all where it is blocked. */
@@ -44,6 +46,8 @@ export function browserCollapseStore(): CollapseStore | null {
 
 export interface UseTreeOptions {
   model: TreeModel;
+  /** The same model as each row reads it (7.18), with the pending marks. */
+  tasks: TaskReader;
   initiativeId: number;
   members: ReadonlyMap<number, RowUser>;
   /** Who else is here and what they have selected, as a store each row reads. Nobody, by default. */
@@ -69,19 +73,14 @@ export interface UseTreeOptions {
   deepLinkTaskId?: number | null;
   /** Where collapse state is kept. Injected so a test can hand it a fake. */
   store?: CollapseStore | null;
-  /** The pending scope (item 5.2): pink rows, indeterminate rows. Nothing, by default. */
-  savingIds?: ReadonlySet<number>;
-  recomputingIds?: ReadonlySet<number>;
-  /** Server id → stand-in id, for an added row's stable key. */
-  rowKeys?: ReadonlyMap<number, number>;
-  /** A refused pane edit to keep in its field. */
-  rejection?: EditRejection | null;
 }
 
 export interface TreeState {
   ctx: TreeContext;
-  addSlot: AddSlot | null;
-  addTitle: string;
+  /** The one open add form's slot, as each branch subscribes to it (7.18). */
+  addSlot: Source<AddSlot | null>;
+  /** The typed title, as the form subscribes to it (7.18). */
+  addTitle: Source<string>;
   onAddTitleChange: (title: string) => void;
   onAddMove: (dir: -1 | 1) => void;
   onAddClose: () => void;
@@ -103,6 +102,7 @@ export interface TreeState {
 export function useTree(options: UseTreeOptions): TreeState {
   const {
     model,
+    tasks,
     initiativeId,
     members,
     permissions,
@@ -136,11 +136,18 @@ export function useTree(options: UseTreeOptions): TreeState {
   );
   const collapsedIds = useSyncExternalStore(collapseStore.subscribe, collapseStore.get, collapseStore.get);
   const collapseReader = useMemo(() => collapsedOf(collapseStore), [collapseStore]);
-  const [addSlot, setAddSlot] = useState<AddSlot | null>(null);
+  // The open form's slot is a store too (7.18): N re-renders the row that
+  // hosts the form, not every branch handed a new prop.
+  const addSlot = useMemo(() => createStore<AddSlot | null>(null), []);
   // The typed title lives here, not in the form: walking to another slot
   // re-parents the form element and React remounts it, and the whole point of
-  // the walk is that what you have typed comes with you.
-  const [addTitle, setAddTitle] = useState("");
+  // the walk is that what you have typed comes with you. A store, not state
+  // (7.18): the form subscribes, and a keystroke re-renders it alone.
+  const addTitle = useMemo(() => createStore(""), []);
+  // The model as of this render, for callbacks that must keep their identity
+  // across writes (7.18.2) yet act on what is current when they run.
+  const modelRef = useRef(model);
+  modelRef.current = model;
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   // A refetch can bring tasks this tree has never seen; they inherit whatever
@@ -188,7 +195,7 @@ export function useTree(options: UseTreeOptions): TreeState {
 
   const reveal = useCallback(
     (id: number) => {
-      const plan = revealPlan(model, id, (other) => collapseStore.get().has(other));
+      const plan = revealPlan(modelRef.current, id, (other) => collapseStore.get().has(other));
       // Pruning must not act until these have actually opened: until then the
       // task the link named is still buried, and a prune would clear it.
       // Merged, not replaced: the plan reads the store, which a reveal a
@@ -206,7 +213,7 @@ export function useTree(options: UseTreeOptions): TreeState {
       const target = plan.select;
       requestAnimationFrame(() => scrollRowIntoView(target));
     },
-    [collapseStore, model, setCollapsed, setSelectedId],
+    [collapseStore, setCollapsed, setSelectedId],
   );
 
   // One reveal per `?task=` value. Keyed on the id rather than on `reveal` —
@@ -273,10 +280,10 @@ export function useTree(options: UseTreeOptions): TreeState {
   const openAdd = useCallback(
     (anchor: AddAnchor) => {
       if (!permissions.canEdit) return;
-      setAddTitle("");
-      setAddSlot(anchor);
+      addTitle.set("");
+      addSlot.set(anchor);
     },
-    [permissions.canEdit],
+    [addSlot, addTitle, permissions.canEdit],
   );
 
   const onOutcome = useCallback(
@@ -335,10 +342,6 @@ export function useTree(options: UseTreeOptions): TreeState {
 
   const canProgressId = useCallback((id: number) => canProgress(permissions, id), [permissions]);
   const presence = options.presence ?? nobodyPresent;
-  const savingIds = options.savingIds ?? EMPTY_IDS;
-  const recomputingIds = options.recomputingIds ?? EMPTY_IDS;
-  const rowKeys = options.rowKeys ?? EMPTY_KEYS;
-  const rejection = options.rejection ?? null;
 
   // One identity per set of inputs: `tree.tsx` memoizes each branch on it, so
   // a re-render of the screen that changes none of these — a confirm opening,
@@ -347,18 +350,13 @@ export function useTree(options: UseTreeOptions): TreeState {
   // here would defeat that on every render.
   const ctx: TreeContext = useMemo(
     () => ({
-      model,
+      tasks,
       initiativeId,
-      progressCalc: model.progressCalc,
       permissions,
       rows,
       members,
       presence,
       selection: selectedReader,
-      savingIds,
-      recomputingIds,
-      rowKeys,
-      rejection,
       canProgress: canProgressId,
       collapse: collapseReader,
       onToggleCollapse,
@@ -369,17 +367,13 @@ export function useTree(options: UseTreeOptions): TreeState {
       ...(onDragHint === undefined ? {} : { onDragHint }),
     }),
     [
-      model,
+      tasks,
       initiativeId,
       permissions,
       rows,
       members,
       presence,
       selectedReader,
-      savingIds,
-      recomputingIds,
-      rowKeys,
-      rejection,
       canProgressId,
       collapseReader,
       onToggleCollapse,
@@ -395,27 +389,27 @@ export function useTree(options: UseTreeOptions): TreeState {
     ctx,
     addSlot,
     addTitle,
-    onAddTitleChange: setAddTitle,
+    onAddTitleChange: useCallback((title: string) => addTitle.set(title), [addTitle]),
     onAddMove: useCallback(
       (dir: -1 | 1) => {
-        setAddSlot((current) => {
+        addSlot.set((current) => {
           if (current === null) return current;
           // Walked from the store when asked, not memoized on the closed set:
           // a callback that changed on every toggle changed the `form` prop of
           // every branch, and every row rendered for one chevron (7.9.1).
-          const slots = addSlots(model, (id) => collapseStore.get().has(id));
+          const slots = addSlots(modelRef.current, (id) => collapseStore.get().has(id));
           // At either end of the walk the form stays put, as the LiveView's
           // `move()` does when it runs out of slots.
           const next = moveSlot(slots, current, dir);
           return next === null ? current : next;
         });
       },
-      [collapseStore, model],
+      [addSlot, collapseStore],
     ),
     onAddClose: useCallback(() => {
-      setAddSlot(null);
-      setAddTitle("");
-    }, []),
+      addSlot.set(null);
+      addTitle.set("");
+    }, [addSlot, addTitle]),
     onAdd,
     shortcutsOpen,
     announcement,
@@ -425,8 +419,6 @@ export function useTree(options: UseTreeOptions): TreeState {
   };
 }
 
-const EMPTY_IDS: ReadonlySet<number> = new Set<number>();
-const EMPTY_KEYS: ReadonlyMap<number, number> = new Map<number, number>();
 const EMPTY_EXPANDING: readonly number[] = [];
 
 /** Brings a row the keyboard just selected into view, gently. */

@@ -28,6 +28,16 @@ export function sameSlot(a: AddSlot | null, b: AddSlot | null): boolean {
   return slotKey(a) === slotKey(b);
 }
 
+/**
+ * What `slot` means to row `id` — the form is under it as a child, below it
+ * as a sibling, or not its business. Each branch subscribes for this (7.18),
+ * so opening the form re-renders the row that hosts it and no other.
+ */
+export function slotAt(slot: AddSlot | null, id: number): "child" | "sibling" | null {
+  if (slot === null || slot.kind === "root" || slot.taskId !== id) return null;
+  return slot.kind;
+}
+
 /** Every place the form can land, in the order ↑/↓ walk them. */
 export function addSlots(model: TreeModel, collapsed: (id: number) => boolean): readonly AddSlot[] {
   const slots: AddSlot[] = [{ kind: "root" }];

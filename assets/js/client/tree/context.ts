@@ -5,14 +5,15 @@
 // data plus callbacks — no React, no DOM — so `row_model.ts` and
 // `tree_model.ts` can be tested against the same shape the screen builds.
 
-import type { ProgressCalc, SortMode } from "../api/types.ts";
+import type { SortMode } from "../api/types.ts";
 import type { RowPreferences } from "../state/preferences.ts";
-import type { TaskRecord, TreeModel } from "./model.ts";
+import type { TaskRecord } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
 import type { RowUser } from "./row_model.ts";
 import type { PresenceReader } from "./presence_store.ts";
 import type { Collapsed } from "./collapse_model.ts";
 import type { Selected } from "./selection_model.ts";
+import type { TaskReader } from "./task_store.ts";
 
 /** A write the user asked for. Arc 3's adapter is what eventually answers one. */
 export type TreeIntent =
@@ -59,9 +60,15 @@ export type AddAnchor =
   | { kind: "sibling"; taskId: number };
 
 export interface TreeContext {
-  readonly model: TreeModel;
+  /**
+   * The model, read by each row and each children list for itself (item
+   * 7.18) — like `selection`, `collapse` and `presence`, a reader rather than
+   * a value, so a write re-renders the rows it changed and not the tree. The
+   * pending marks (pink rows, indeterminate bars, stand-in keys) and the
+   * refused pane edit come through it too.
+   */
+  readonly tasks: TaskReader;
   readonly initiativeId: number;
-  readonly progressCalc: ProgressCalc;
   readonly permissions: Permissions;
   /** The account's row-display choices. */
   readonly rows: RowPreferences;
@@ -80,18 +87,6 @@ export interface TreeContext {
    * and re-render every row for a change that touches two.
    */
   readonly selection: Selected;
-  /** Rows with a write in flight — painted pink (item 5.2.1). */
-  readonly savingIds: ReadonlySet<number>;
-  /** Rows whose roll-up is being recomputed — indeterminate bars. */
-  readonly recomputingIds: ReadonlySet<number>;
-  /**
-   * Server id → the stand-in id its row was first drawn under, so an added
-   * row keeps its React key when the server names it (item 5.2.2).
-   */
-  readonly rowKeys?: ReadonlyMap<number, number>;
-  /** The most recent refused pane edit, if any (item 5.2.3). */
-  readonly rejection?: EditRejection | null;
-
   canProgress(id: number): boolean;
   /**
    * The closed branches, read by each branch for itself (item 7.9.1) — like

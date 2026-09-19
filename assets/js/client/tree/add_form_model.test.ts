@@ -2,18 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import type { AddSlot } from "./add_form_model.ts";
+import { createStore } from "../state/store.ts";
 import { buildTree } from "./gen.ts";
 import { fromSnapshot } from "./model.ts";
-import {
-  ADD_MOVE_HINT,
-  addSlots,
-  moveSlot,
-  placeholderFor,
-  placeholderText,
-  placementFor,
-  slotKey,
-  submissionFor,
-} from "./add_form_model.ts";
+import { ADD_MOVE_HINT, addSlots, moveSlot, placeholderFor, placeholderText, placementFor, sameSlot, slotAt, slotKey, submissionFor } from "./add_form_model.ts";
 
 //  10 ─ 11
 //     ─ 12 ─ 13
@@ -144,5 +137,50 @@ describe("submitting", () => {
 
   it("refuses a submission whose anchor has gone", () => {
     assert.equal(submissionFor(model, { kind: "child", taskId: 404 }, "Sand it"), null);
+  });
+});
+
+describe("the slot as each branch reads it (item 7.18)", () => {
+  /** `useSyncExternalStore` without React: a render is counted when the snapshot's identity changes. */
+  const probe = (store: { subscribe(l: () => void): () => void }, read: () => unknown) => {
+    let last = read();
+    let renders = 0;
+    store.subscribe(() => {
+      const next = read();
+      if (!Object.is(next, last)) {
+        renders += 1;
+        last = next;
+      }
+    });
+    return { get renders() { return renders; }, get value() { return last; } };
+  };
+
+  it("opening, walking and closing the form re-render only the rows it touches", () => {
+    const slot = createStore<AddSlot | null>(null);
+    const ids = [10, 11, 12, 13];
+    const rows = new Map(ids.map((id) => [id, probe(slot, () => slotAt(slot.get(), id))]));
+    const root = probe(slot, () => sameSlot(slot.get(), { kind: "root" }));
+    const rendered = () => ids.filter((id) => (rows.get(id)?.renders ?? 0) > 0);
+
+    slot.set({ kind: "child", taskId: 11 });
+    assert.deepEqual(rendered(), [11]);
+    assert.equal(rows.get(11)?.value, "child");
+    assert.equal(root.renders, 0);
+
+    slot.set({ kind: "sibling", taskId: 12 });
+    assert.deepEqual(rendered(), [11, 12]);
+    assert.equal(rows.get(11)?.value, null);
+    assert.equal(rows.get(12)?.value, "sibling");
+    assert.equal(rows.get(11)?.renders, 2);
+
+    slot.set({ kind: "root" });
+    assert.equal(root.renders, 1);
+    assert.equal(root.value, true);
+    assert.equal(rows.get(12)?.value, null);
+    assert.equal(rows.get(13)?.renders, 0);
+
+    slot.set(null);
+    assert.equal(root.renders, 2);
+    assert.equal(rows.get(10)?.renders, 0);
   });
 });

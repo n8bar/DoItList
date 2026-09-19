@@ -30,22 +30,23 @@
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 
-import { childIdsOf } from "./model.ts";
-import { resolveSort } from "./sort.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
-import { sameSlot } from "./add_form_model.ts";
+import { sameSlot, slotAt } from "./add_form_model.ts";
 import { AddForm } from "./add_form.tsx";
 import type { TreeContext } from "./context.ts";
 import { RootZone, TailZone, useTreeDrag } from "./drag.tsx";
 import { Icon } from "../ui/icon.tsx";
 import { Row } from "./row.tsx";
 import { treeMinWidthStyle } from "./tree_model.ts";
+import type { Source } from "./task_store.ts";
+import { useChildren } from "./use_task_store.ts";
 
 export interface TreeProps {
   ctx: TreeContext;
   /** The one open add form, or null. One at a time, like the LiveView. */
-  addSlot: AddSlot | null;
-  addTitle: string;
+  addSlot: Source<AddSlot | null>;
+  /** The typed title, read by the form alone (7.18). */
+  addTitle: Source<string>;
   onAddTitleChange: (title: string) => void;
   onAddMove: (dir: -1 | 1) => void;
   onAddClose: () => void;
@@ -130,9 +131,19 @@ function useTreeWidth(ref: React.RefObject<HTMLUListElement | null>): void {
     if (ul.style.minWidth !== next) ul.style.minWidth = next;
   }, [ref]);
 
-  // After layout, every render: rows appear, collapse, and re-indent without
-  // any dependency this component could list.
+  // After layout, every render of the tree — and, since rows render for
+  // themselves now (7.18), after any change to the rows under it: a reparent
+  // deepens a row without this component rendering at all, and the observer
+  // runs before the browser paints the mutation.
   useLayoutEffect(() => recompute());
+
+  useEffect(() => {
+    const ul = ref.current;
+    if (ul === null) return;
+    const observer = new MutationObserver(() => recompute());
+    observer.observe(ul, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "data-depth"] });
+    return () => observer.disconnect();
+  }, [ref, recompute]);
 
   useEffect(() => {
     const onResize = () => recompute(true);
@@ -153,9 +164,9 @@ function Children({
   ctx: TreeContext;
   parentId: number;
   depth: number;
-  slot: AddSlot | null;
+  slot: Source<AddSlot | null>;
   form: (anchor: AddSlot) => ReactNode;
-  dragging: boolean;
+  dragging: Source<boolean>;
 }) {
   // This list's own subscription (7.9.1): the toggle that closes it re-renders
   // it and its chevron's row, not the tree.
@@ -164,8 +175,12 @@ function Children({
     () => ctx.collapse.get(parentId),
     () => false,
   );
-  const childIds = childIdsOf(ctx.model, parentId);
-  if (childIds.length === 0) return null;
+  // A drag on mounts this list's tail zone; the rows under it stay put (7.18).
+  const dragOn = useSyncExternalStore(dragging.subscribe, dragging.get, dragging.get);
+  // And its own view of the order (7.18): the same list back until a child
+  // comes, goes or moves, so a write inside one branch leaves the others be.
+  const list = useChildren(ctx.tasks, parentId);
+  if (list.ids.length === 0) return null;
 
   return (
     <ul
@@ -173,7 +188,7 @@ function Children({
       role="group"
       data-task-id={parentId}
       data-initiative-id={ctx.initiativeId}
-      data-sort-mode={resolveSort(ctx.model, parentId)[0]}
+      data-sort-mode={list.sortMode}
       className={[
         "pl-1.5 sm:pl-6 space-y-1",
         // The 6px sliver that says "there is work under me" — the same class
@@ -183,9 +198,9 @@ function Children({
         .filter((part) => part !== "")
         .join(" ")}
     >
-      {childIds.map((id) => (
+      {list.ids.map((id) => (
         <Branch
-          key={ctx.rowKeys?.get(id) ?? id}
+          key={ctx.tasks.keyOf(id)}
           ctx={ctx}
           id={id}
           depth={depth}
@@ -196,18 +211,18 @@ function Children({
       ))}
       {/* "Last child of this branch" — only reachable while the branch is open,
           so a closed one gets no strip at all. */}
-      {dragging && !collapsed && <TailZone branchId={parentId} />}
+      {dragOn && !collapsed && <TailZone branchId={parentId} />}
     </ul>
   );
 }
 
 /**
  * One task: its row, its add slot, its children. Memoized on its props, and
- * every prop is stable between renders that do not concern it (`ctx` is one
- * identity per set of inputs, `form` is a callback, `slot` is state), so a
- * screen re-render that changes nothing in the tree — a confirm opening —
- * skips every branch. A change in the model gives `ctx` a new identity and
- * every branch renders, as before; the memo only removes the wasted case.
+ * every prop is stable for the tree's life (`ctx` holds readers and stable
+ * callbacks, `form` is a stable callback, `slot` and `dragging` are stores),
+ * so a screen re-render — a confirm opening, a write landing, the form
+ * opening, a drag starting — skips every branch; the rows and lists a change
+ * concerns re-render through their own subscriptions (7.18).
  */
 const Branch = memo(function Branch({
   ctx,
@@ -220,22 +235,23 @@ const Branch = memo(function Branch({
   ctx: TreeContext;
   id: number;
   depth: number;
-  slot: AddSlot | null;
+  slot: Source<AddSlot | null>;
   form: (anchor: AddSlot) => ReactNode;
-  dragging: boolean;
+  dragging: Source<boolean>;
 }) {
-  const childSlot: AddSlot = { kind: "child", taskId: id };
-  const siblingSlot: AddSlot = { kind: "sibling", taskId: id };
+  // This branch's own answer to "is the form mine?" (7.18): opening it
+  // re-renders the host row and the row it left, nothing else.
+  const mine = useSyncExternalStore(slot.subscribe, () => slotAt(slot.get(), id), () => null);
 
   return (
     <>
       <Row ctx={ctx} id={id} depth={depth}>
-        {sameSlot(slot, childSlot) && <div className="px-3 pb-3">{form(childSlot)}</div>}
+        {mine === "child" && <div className="px-3 pb-3">{form({ kind: "child", taskId: id })}</div>}
         <Children ctx={ctx} parentId={id} depth={depth + 1} slot={slot} form={form} dragging={dragging} />
       </Row>
       {/* "Add sibling" opens BELOW the row it was opened from, as its own list
           item, so the new task appears where it will actually land. */}
-      {sameSlot(slot, siblingSlot) && <li>{form(siblingSlot)}</li>}
+      {mine === "sibling" && <li>{form({ kind: "sibling", taskId: id })}</li>}
     </>
   );
 });
@@ -255,15 +271,18 @@ export function Tree({
   const list = useRef<HTMLUListElement | null>(null);
 
   useTreeWidth(list);
-  const dragging = useTreeDrag(ctx, list);
+  const dragStore = useTreeDrag(ctx, list);
+  const dragging = useSyncExternalStore(dragStore.subscribe, dragStore.get, dragStore.get);
   // Nothing is announced during a drag: the region keeps the last line it had.
   const spoken = useRef("");
   if (!dragging) spoken.current = announcement;
 
+  // Stable across writes and keystrokes (7.18.2): every input is a reader or
+  // a stable callback, so a branch never re-renders for the form's sake.
   const form = useCallback(
     (anchor: AddSlot) => (
       <AddForm
-        model={ctx.model}
+        tasks={ctx.tasks}
         slot={anchor}
         title={addTitle}
         onTitleChange={onAddTitleChange}
@@ -272,11 +291,15 @@ export function Tree({
         onAdd={onAdd}
       />
     ),
-    [addTitle, ctx.model, onAdd, onAddClose, onAddMove, onAddTitleChange],
+    [addTitle, ctx.tasks, onAdd, onAddClose, onAddMove, onAddTitleChange],
   );
 
-  const rootIds = childIdsOf(ctx.model, ctx.model.rootId);
+  // The top level's own subscription: a write below it leaves this alone.
+  const rootIds = useChildren(ctx.tasks, ctx.tasks.rootId()).ids;
+  const calc = useSyncExternalStore(ctx.tasks.subscribe, ctx.tasks.calc, ctx.tasks.calc);
   const rootSlot: AddSlot = { kind: "root" };
+  // The root slot is this component's own (7.18); each branch reads its own.
+  const rootOpen = useSyncExternalStore(addSlot.subscribe, () => sameSlot(addSlot.get(), rootSlot), () => false);
 
   return (
     <div className="relative">
@@ -316,7 +339,7 @@ export function Tree({
           two scrollbars. Deep indentation still scrolls sideways here, which is
           what ProductSpec §6.2 asks for. */}
       <div ref={box} id="tree-scroll" className="min-w-0 overflow-x-auto">
-        {sameSlot(addSlot, rootSlot) && <div className="mb-3">{form(rootSlot)}</div>}
+        {rootOpen && <div className="mb-3">{form(rootSlot)}</div>}
 
         {rootIds.length === 0 && (
           <div className="text-zinc-500 dark:text-zinc-400 text-sm">
@@ -331,7 +354,7 @@ export function Tree({
           id="task-tree"
           role="tree"
           aria-label="Tasks"
-          data-progress-calc={ctx.progressCalc}
+          data-progress-calc={calc}
           className="space-y-2"
         >
           {dragging && <RootZone zone="top" />}
@@ -339,13 +362,13 @@ export function Tree({
               its stand-in key once the server names it, so nothing remounts. */}
           {rootIds.map((id) => (
             <Branch
-              key={ctx.rowKeys?.get(id) ?? id}
+              key={ctx.tasks.keyOf(id)}
               ctx={ctx}
               id={id}
               depth={0}
               slot={addSlot}
               form={form}
-              dragging={dragging}
+              dragging={dragStore}
             />
           ))}
           {dragging && <RootZone zone="bottom" />}

@@ -23,10 +23,12 @@
 // through state would re-render every row for a ring around one of them. The
 // rows keep their keys; React never sees the placeholder.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { RefObject } from "react";
 
 import type { TreeContext } from "./context.ts";
+import type { Source } from "./task_store.ts";
+import { createStore } from "../state/store.ts";
 import { childIdsOf } from "./model.ts";
 import { bandFor, resolveDrop } from "./drag_model.ts";
 import type { DropHit, DropTarget } from "./drag_model.ts";
@@ -60,10 +62,13 @@ export function TailZone({ branchId }: { branchId: number }) {
 
 /**
  * Binds the gesture to every `[data-drag-handle]` under `list`, for as long
- * as the viewer may edit. Returns whether a drag is on, for the overlays.
+ * as the viewer may edit. Returns whether a drag is on, as a store the
+ * overlays subscribe to (7.18): a drag starting mounts the drop zones and
+ * re-renders no row.
  */
-export function useTreeDrag(ctx: TreeContext, list: RefObject<HTMLUListElement | null>): boolean {
-  const [dragging, setDragging] = useState(false);
+export function useTreeDrag(ctx: TreeContext, list: RefObject<HTMLUListElement | null>): Source<boolean> {
+  const dragging = useMemo(() => createStore(false), []);
+  const setDragging = useCallback((on: boolean) => dragging.set(on), [dragging]);
   // Bound once; the session always reads the ctx of the latest render.
   const latest = useRef(ctx);
   latest.current = ctx;
@@ -242,7 +247,7 @@ class DragSession {
   /** Resolves what a drop at (x, y) would do, and paints it. */
   private track(x: number, y: number): void {
     this.last = { x, y };
-    const target = resolveDrop(this.ctx().model, { sourceId: this.sourceId, hit: this.hitAt(x, y) });
+    const target = resolveDrop(this.ctx().tasks.model(), { sourceId: this.sourceId, hit: this.hitAt(x, y) });
     this.target = target;
     this.paint(target);
   }
@@ -270,7 +275,7 @@ class DragSession {
     // The row strip only, not the subtree under it.
     const rect = (li.firstElementChild ?? li).getBoundingClientRect();
     const ctx = this.ctx();
-    const expanded = childIdsOf(ctx.model, anchorId).length > 0 && !ctx.collapse.get(anchorId);
+    const expanded = childIdsOf(ctx.tasks.model(), anchorId).length > 0 && !ctx.collapse.get(anchorId);
     return { kind: "row", anchorId, band: bandFor(rect.top, rect.height, y, expanded) };
   }
 

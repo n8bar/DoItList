@@ -9,7 +9,7 @@
 // they leave it (blur, or Enter on the title) or change it (selects, slider).
 // Between edits the field shows the record, so a change that lands from the
 // channel is what the user sees, not a stale copy. An edit the server refused
-// (item 5.2.3) comes back as `ctx.rejection`: a text field takes the refused
+// (item 5.2.3) comes back through `ctx.tasks.rejection()`: a text field takes the refused
 // text back as its draft, with the server's sentence beside it, so it can be
 // fixed rather than retyped; a select or the slider shows the kept value and
 // the sentence.
@@ -46,7 +46,8 @@ import {
   updatedTitleText,
 } from "./details_model.ts";
 import type { EditableFields } from "./details_model.ts";
-import type { TaskRecord } from "./model.ts";
+import type { TaskRecord, TreeModel } from "./model.ts";
+import { useModel } from "./use_task_store.ts";
 import type { RowUser } from "./row_model.ts";
 import { avatarStyle, initials } from "./row_model.ts";
 
@@ -65,14 +66,18 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
   // Who is on the channel, for the co-assignee and last-editor dots (7.17):
   // the pane's own subscription, the same set back until someone comes or goes.
   const online = useSyncExternalStore(ctx.presence.subscribe, ctx.presence.onlineIds, ctx.presence.onlineIds);
-  const record = ctx.model.tasks[id];
+  // The pane paints the whole record, so it reads the whole model (7.18): one
+  // component re-rendering per write, where every row used to.
+  const model = useModel(ctx.tasks);
+  const refusal = useSyncExternalStore(ctx.tasks.subscribe, ctx.tasks.rejection, ctx.tasks.rejection);
+  const record = model.tasks[id];
   if (record === undefined) return null;
 
-  const fields = fieldsFor(ctx.model, record, ctx.permissions);
+  const fields = fieldsFor(model, record, ctx.permissions);
   const canEdit = fields.edit;
-  const progress = progressView(ctx.model, record);
+  const progress = progressView(model, record);
   const rows = coRows(record, ctx.members);
-  const rejection = ctx.rejection?.id === id ? ctx.rejection : null;
+  const rejection = refusal?.id === id ? refusal : null;
   const refused = (field: keyof EditableFields): string | null =>
     rejection !== null && rejection.fields[field] !== undefined ? rejection.message : null;
   const commit = (edit: EditableFields | null): void => {
@@ -176,7 +181,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
         </div>
       </div>
 
-      <SortMenu ctx={ctx} id={id} canEdit={canEdit} leaf={progress.leaf} />
+      <SortMenu ctx={ctx} model={model} id={id} canEdit={canEdit} leaf={progress.leaf} />
 
       <div className="grid grid-cols-2 gap-3">
         <div>
@@ -542,16 +547,18 @@ function ProgressField({
  */
 function SortMenu({
   ctx,
+  model,
   id,
   canEdit,
   leaf,
 }: {
   ctx: TreeContext;
+  model: TreeModel;
   id: number;
   canEdit: boolean;
   leaf: boolean;
 }) {
-  const record = ctx.model.tasks[id];
+  const record = model.tasks[id];
   if (record === undefined) return null;
   const mode = record.sort_mode;
   const reverseOff = reverseDisabled(mode);
@@ -580,7 +587,7 @@ function SortMenu({
           value={mode ?? ""}
           onChange={(e) => commit(sortModeFrom(e.target.value), record.sort_reverse)}
         >
-          <option value="">{inheritLabel(ctx.model, id)}</option>
+          <option value="">{inheritLabel(model, id)}</option>
           {SORT_MODE_OPTIONS.map((m) => (
             <option key={m} value={m}>
               {sortModeLabel(m)}

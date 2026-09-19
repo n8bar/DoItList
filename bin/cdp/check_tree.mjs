@@ -576,6 +576,13 @@ export async function checkSort(ctx) {
   if (after.mode !== "alphabetical" || after.field !== "alphabetical") throw new Error(`settled with list mode "${after.mode}" and field "${after.field}"`);
   const sortNote = `alphabetical: reordered ${ack.ackMs}ms after the change, ${ack.replyMs - ack.ackMs}ms before the reply, ${settled.note}`;
 
+  // Back to manual: every later check that places a row under "Bravo" (N,
+  // Alt + arrows) expects the slot it asked for, which a sorted branch
+  // overrides on both sides.
+  await pageOperation(session, `cdp-tree-${ctx.stamp}-resort-manual`, { op: "update", type: "task", id: bravo, data: { sort_mode: "manual" } });
+  await waitFor(session, `return document.getElementById("children-${bravo}")?.dataset.sortMode === "manual";`, { timeoutMs: 15_000, everyMs: 100, what: `"Bravo" back on manual` });
+  await settle(session);
+
   // Cascade on "Delta", once it has more descendant branches than the threshold.
   await seedCascadeBranches(ctx);
   await selectRow(session, delta);
@@ -2784,7 +2791,10 @@ async function seedMixRows(ctx) {
   await waitForRows(session, [yankee, zulu, zephyr], "the mix rows");
 }
 
-/** The tree as the server holds it, one line per task: id, parent, title, done, progress. */
+/** The tree as the server holds it: one line per task (id, parent, done,
+ *  progress) plus `titles` by id. Titles stay out of the lines: the page
+ *  renders `%<id>` references as labels, so a referring row's text on screen
+ *  never equals the server's raw title. */
 function serverTreeJs(initiativeId) {
   return `
     return (async () => {
@@ -2792,14 +2802,16 @@ function serverTreeJs(initiativeId) {
       if (!response.ok) return { ok: false, why: "the tree read answered " + response.status };
       const data = (await response.json()).data;
       const lines = [];
+      const titles = {};
       const walk = (nodes, parent) => {
         for (const n of nodes ?? []) {
-          lines.push(n.id + ":" + parent + ":" + n.title + ":" + n.done + ":" + Math.round(n.progress));
+          titles[n.id] = n.title;
+          lines.push(n.id + ":" + parent + ":" + n.done + ":" + Math.round(n.progress));
           walk(n.children, n.id);
         }
       };
       walk(data.tasks, null);
-      return { ok: true, lines };
+      return { ok: true, lines, titles };
     })();
   `;
 }
@@ -2810,7 +2822,7 @@ const DOM_TREE_JS = `
     const row = li.querySelector(":scope > [data-task-row]");
     const ul = li.parentElement;
     const parent = ul.id === "task-tree" ? null : Number(ul.dataset.taskId);
-    return li.dataset.taskId + ":" + parent + ":" + __tree.title(li.dataset.taskId) + ":" + (row?.dataset.done === "true") + ":" + Math.round(Number(row?.dataset.taskProgress));
+    return li.dataset.taskId + ":" + parent + ":" + (row?.dataset.done === "true") + ":" + Math.round(Number(row?.dataset.taskProgress));
   });
 `;
 
@@ -2958,14 +2970,13 @@ export async function checkRefusedOpReverts(ctx) {
 
     // The stack's top is the API's retitle, not the refused delete.
     const held = await evaluate(session, serverTreeJs(ctx.initiativeId));
-    const line = (lines) => lines.find((l) => l.startsWith(`${xray}:`)) ?? null;
-    if (line(held.lines) === null || !line(held.lines).includes(REFUSE_TITLES.edited)) throw new Error(`before Undo the server holds "X-ray" as ${line(held.lines)}`);
+    if (held.titles[xray] !== REFUSE_TITLES.edited) throw new Error(`before Undo the server holds "X-ray" as ${JSON.stringify(held.titles[xray] ?? null)}`);
     await clickElement(session, "#undo-button");
     await settle(session);
     const undone = await evaluate(session, serverTreeJs(ctx.initiativeId));
-    const now = line(undone.lines);
-    if (now === null) throw new Error(`Undo took "X-ray" away on the server — the refused delete was in the stack`);
-    if (!now.includes(`:${REFUSE_TITLES.xray}:`)) throw new Error(`Undo did not reverse the API's retitle; the server holds ${now}`);
+    const now = undone.titles[xray];
+    if (now === undefined) throw new Error(`Undo took "X-ray" away on the server — the refused delete was in the stack`);
+    if (now !== REFUSE_TITLES.xray) throw new Error(`Undo did not reverse the API's retitle; the server holds ${JSON.stringify(now)}`);
     const pageTitle = await evaluate(session, `return __tree.title(${xray});`);
     return `stale delete refused (conflict): row gone ${ack.ackMs}ms after Delete, back on the refusal as "${after.title}", nothing pending, notice "${after.notice}"; Undo reversed the API's retitle (server "${REFUSE_TITLES.xray}", page "${pageTitle}"), not the refused delete`;
   } finally {
@@ -3113,8 +3124,11 @@ async function assertTailZonesLast(session, ctx, when) {
     });
   `,
   );
+  // Back onto the row's own centre, measured now: the zones that mount on a
+  // drag start shift the rows, so the press point may no longer be on it.
+  const painted = await dragOver(session, pointer, await bandPoint(session, ctx.ids.yarrow, "center"));
   await mouseUp(session, pointer);
-  await assertNothingSent(session, before, `the release on the spot ${when}`);
+  await assertNothingSent(session, before, `the release on the spot ${when} (painted ${JSON.stringify(painted)})`);
   await assertNothingPainted(session, when);
   if (lists.length === 0) throw new Error(`no branch list is on screen ${when}`);
   const wrong = lists.filter((l) => (l.collapsed ? l.tails !== 0 : !(l.lastIsTail && l.tails === 1)));
@@ -3413,8 +3427,8 @@ async function completeLeaf(session, id) {
 /** Gives a wrongly sent operation the time it would need, then checks nothing went. */
 async function assertNothingSent(session, before, what) {
   await new Promise((done) => setTimeout(done, LINK_LATENCY_MS));
-  const after = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
-  if (after.sent !== before.sent) throw new Error(`${what} sent an operation`);
+  const after = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent, last: __ops.log.filter((f) => f.body !== null).at(-1)?.body ?? null };`);
+  if (after.sent !== before.sent) throw new Error(`${what} sent an operation: ${after.last}`);
   if (after.tree !== before.tree) throw new Error(`${what} changed the tree`);
 }
 
@@ -3675,7 +3689,7 @@ const PAGE_HELPERS = `
       ops.inflight += 1;
       ops.lastActivity = performance.now();
       if (isOp) ops.sent += 1;
-      const entry = { method, url, start: Math.round(performance.now()), end: null };
+      const entry = { method, url, start: Math.round(performance.now()), end: null, body: isOp && typeof init?.body === "string" ? init.body.slice(0, 400) : null };
       ops.log.push(entry);
       const settle = () => {
         ops.inflight -= 1;

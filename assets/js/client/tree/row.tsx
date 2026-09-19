@@ -13,11 +13,9 @@
 // nothing a user does to a row waits on the network.
 
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Icon } from "../ui/icon.tsx";
-import { childIdsOf } from "./model.ts";
-import { doneUnitCount, unitCount } from "./progress.ts";
 import { afterPaint } from "./after_paint.ts";
 import { BotanicalIcon, Chevron } from "./botanical.tsx";
 import { UnitBadge } from "./unit_badge.tsx";
@@ -30,14 +28,13 @@ import {
   avatarStyle,
   badgeTitle,
   botanicalColor,
-  botanicalKind,
+  botanicalKindOf,
   initials,
-  progressValue,
-  refParts,
 } from "./row_model.ts";
 import type { Selection } from "../live/presence_model.ts";
 import type { TreeContext } from "./context.ts";
 import { clickedSelection } from "./selection_model.ts";
+import { useRow } from "./use_task_store.ts";
 
 const NO_BADGES: readonly Selection[] = [];
 
@@ -154,6 +151,10 @@ function Avatar({ user, className }: { user: RowUser; className: string }) {
 
 export function Row({ ctx, id, depth, children }: RowProps) {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
+  // This row's own view of the model (7.18): the same object back until
+  // something this row paints has changed, so a write elsewhere in the tree
+  // costs this row nothing.
+  const view = useRow(ctx.tasks, id);
   // This row's own subscription: a selection change re-renders the two rows
   // it concerns, not every row under a context that changed identity.
   const selected = useSyncExternalStore(
@@ -173,7 +174,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
   // co-assignee discs do not carry. The store hands back the same badges
   // until they change, so another member moving elsewhere costs this row
   // nothing, and this window's own selection echoing back costs no row at all.
-  const assigneeId = ctx.model.tasks[id]?.assignee_id ?? null;
+  const assigneeId = view?.record.assignee_id ?? null;
   const badges = useSyncExternalStore(
     ctx.presence.subscribe,
     () => ctx.presence.badges(id),
@@ -187,13 +188,25 @@ export function Row({ ctx, id, depth, children }: RowProps) {
 
   // The roving tabindex (7.12.1): the selected row is the one Tab reaches;
   // with nothing selected, the first row is. Every other row is -1. Only the
-  // rows whose answer changes re-render.
+  // rows whose answer changes re-render. Both stores are watched: which row
+  // is first is the model's answer, and a reorder must move the tab stop.
+  const subscribeTabStop = useCallback(
+    (listener: () => void) => {
+      const offSelection = ctx.selection.subscribe(listener);
+      const offTasks = ctx.tasks.subscribe(listener);
+      return () => {
+        offSelection();
+        offTasks();
+      };
+    },
+    [ctx.selection, ctx.tasks],
+  );
   const tabIndex = useSyncExternalStore(
-    ctx.selection.subscribe,
+    subscribeTabStop,
     () => {
       const current = ctx.selection.get();
       if (current === id) return 0;
-      return current === null && depth === 0 && childIdsOf(ctx.model, ctx.model.rootId)[0] === id ? 0 : -1;
+      return current === null && depth === 0 && ctx.tasks.children(ctx.tasks.rootId()).ids[0] === id ? 0 : -1;
     },
     () => -1,
   );
@@ -210,14 +223,10 @@ export function Row({ ctx, id, depth, children }: RowProps) {
     li.current?.focus({ preventScroll: true });
   }, [selected]);
 
-  const record = ctx.model.tasks[id];
-  if (record === undefined) return null;
-
-  const childIds = childIdsOf(ctx.model, id);
-  const branch = childIds.length > 0;
-  const kind = botanicalKind(ctx.model, id, depth);
+  if (view === null) return null;
+  const { record, branch, progress } = view;
+  const kind = botanicalKindOf(branch, depth);
   const done = record.status === "done";
-  const progress = progressValue(ctx.model, id);
   const canProgress = ctx.canProgress(id);
   const assignee = assigneeView(record, ctx.members);
   const display = ctx.rows;
@@ -248,8 +257,8 @@ export function Row({ ctx, id, depth, children }: RowProps) {
         onClick={() => ctx.onSelect(clickedSelection(selected ? id : null, id))}
         className={[
           "group/row relative flex flex-wrap items-center gap-x-2 xl:gap-x-3 gap-y-1 px-3 xl:px-5 2xl:px-6 pt-2 pb-6 min-w-[240px] cursor-pointer",
-          ctx.savingIds.has(id) ? "is-saving" : "",
-          ctx.recomputingIds.has(id) ? "is-recomputing" : "",
+          view.saving ? "is-saving" : "",
+          view.recomputing ? "is-recomputing" : "",
           "hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
         ]
           .filter((part) => part !== "")
@@ -282,12 +291,12 @@ export function Row({ ctx, id, depth, children }: RowProps) {
             index label (7.8.6): with the chevron on the border line, nothing
             but the title is left on the title line's edge. A tiny "s" after
             the icon says plural when the count is not 1 (7.8.7). */}
-        {branch && display.count && (
+        {view.units !== null && display.count && (
           <UnitBadge
-            calc={ctx.progressCalc}
-            total={unitCount(ctx.model, id)}
+            calc={view.calc}
+            total={view.units.total}
             // A top-level branch stacks its completed count above the total.
-            {...(depth === 0 ? { done: doneUnitCount(ctx.model, id) } : {})}
+            {...(depth === 0 ? { done: view.units.done } : {})}
             className="flex-none group-data-done/row:text-emerald-500"
           />
         )}
@@ -540,7 +549,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
               "group-data-done/row:line-through group-data-done/row:text-zinc-400 dark:group-data-done/row:text-zinc-500",
             ].join(" ")}
           >
-            <Prose parts={refParts(record.title, ctx.model)} onReveal={ctx.onReveal} />
+            <Prose parts={view.title} onReveal={ctx.onReveal} />
           </span>
         </div>
 
@@ -550,9 +559,7 @@ export function Row({ ctx, id, depth, children }: RowProps) {
           hidden={record.description === null || record.description === ""}
           className="w-full min-w-0 text-sm text-zinc-400 dark:text-zinc-500 truncate xl:whitespace-normal xl:line-clamp-2"
         >
-          {record.description === null || record.description === "" ? null : (
-            <Prose parts={refParts(record.description, ctx.model)} onReveal={ctx.onReveal} />
-          )}
+          {view.description === null ? null : <Prose parts={view.description} onReveal={ctx.onReveal} />}
         </span>
 
         {display.progress && (

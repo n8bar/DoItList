@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { createStore } from "./store.ts";
+import { createStore, derive } from "./store.ts";
 import {
   createDomainStore,
   forgetInitiative,
@@ -294,5 +294,27 @@ describe("writes this device has not sent yet", () => {
     setPendingWrites(store, []);
 
     assert.equal(store.get(), before);
+  });
+});
+
+describe("derive (item 7.18)", () => {
+  it("hands back the same value until the source changes, and forwards subscriptions", () => {
+    const source = createStore({ n: 1, other: "a" });
+    let computed = 0;
+    const view = derive(source, (state) => {
+      computed += 1;
+      return { doubled: state.n * 2 };
+    });
+    const first = view.get();
+    assert.deepEqual(first, { doubled: 2 });
+    assert.equal(view.get(), first);
+    assert.equal(computed, 1);
+
+    let notified = 0;
+    view.subscribe(() => (notified += 1));
+    source.set({ n: 2, other: "a" });
+    assert.equal(notified, 1);
+    assert.deepEqual(view.get(), { doubled: 4 });
+    assert.equal(computed, 2);
   });
 });

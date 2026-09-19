@@ -16,8 +16,13 @@ import { childIdsOf } from "./model.ts";
 export type BotanicalKind = "grove" | "tree" | "branch" | "leaf";
 
 export function botanicalKind(model: TreeModel, id: number, depth: number): BotanicalKind {
+  return botanicalKindOf(childIdsOf(model, id).length > 0, depth);
+}
+
+/** The same decision from a row's own view (7.18): a top-level row is a tree. */
+export function botanicalKindOf(branch: boolean, depth: number): BotanicalKind {
   if (depth === 0) return "tree";
-  return childIdsOf(model, id).length > 0 ? "branch" : "leaf";
+  return branch ? "branch" : "leaf";
 }
 
 /** `botanical_color/2` — branches amber, everything else emerald. */

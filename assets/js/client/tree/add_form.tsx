@@ -10,21 +10,23 @@
 // Submitting hands `onAdd` the title and where it goes. This arc stops there:
 // the operation adapter is the next task.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
-import type { TreeModel } from "./model.ts";
+import type { Source, TaskReader } from "./task_store.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { placeholderText, slotKey, submissionFor } from "./add_form_model.ts";
 
 export interface AddFormProps {
-  model: TreeModel;
+  /** Read at submit, not captured: the placement is decided against the model then. */
+  tasks: TaskReader;
   slot: AddSlot;
   /**
    * The typed title. Owned above the form, because walking to another slot
    * re-parents this element and React remounts it — an uncontrolled box would
-   * hand the user back an empty field halfway through a sentence.
+   * hand the user back an empty field halfway through a sentence. A reader,
+   * not a value (7.18): a keystroke re-renders this form and nothing else.
    */
-  title: string;
+  title: Source<string>;
   onTitleChange: (title: string) => void;
   /** ↑ / ↓ moved the insertion point. `null` means there is nowhere to go. */
   onMove: (dir: -1 | 1) => void;
@@ -32,8 +34,9 @@ export interface AddFormProps {
   onAdd: (request: AddRequest) => void;
 }
 
-export function AddForm({ model, slot, title, onTitleChange, onMove, onClose, onAdd }: AddFormProps) {
+export function AddForm({ tasks, slot, title: titleSource, onTitleChange, onMove, onClose, onAdd }: AddFormProps) {
   const input = useRef<HTMLInputElement | null>(null);
+  const title = useSyncExternalStore(titleSource.subscribe, titleSource.get, titleSource.get);
   const key = slotKey(slot);
 
   // The cursor lands in the box the moment the form appears, and again when it
@@ -49,7 +52,7 @@ export function AddForm({ model, slot, title, onTitleChange, onMove, onClose, on
       data-add-slot={key}
       onSubmit={(event) => {
         event.preventDefault();
-        const request = submissionFor(model, slot, title);
+        const request = submissionFor(tasks.model(), slot, title);
         if (request === null) return;
         onAdd(request);
         onTitleChange("");

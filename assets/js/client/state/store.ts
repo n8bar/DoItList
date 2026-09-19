@@ -50,3 +50,26 @@ export function createStore<T>(initial: T): Store<T> {
     },
   };
 }
+
+/**
+ * A read-only view of `source` through `select`, computed once per source
+ * value: the result is cached against the source object's identity, so a
+ * selector that builds a new object each call still hands back the same one
+ * until the source changes. React-free; `use_store.ts` has the hook twin.
+ */
+export function derive<T, S>(
+  source: Pick<Store<T>, "get" | "subscribe">,
+  select: (state: T) => S,
+): Pick<Store<S>, "get" | "subscribe"> {
+  let last: { state: T; value: S } | null = null;
+  return {
+    get() {
+      const state = source.get();
+      if (last !== null && Object.is(last.state, state)) return last.value;
+      const value = select(state);
+      last = { state, value };
+      return value;
+    },
+    subscribe: (listener) => source.subscribe(listener),
+  };
+}
