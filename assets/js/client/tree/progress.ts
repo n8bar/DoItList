@@ -133,6 +133,28 @@ export function predictFrom(
 }
 
 /**
+ * Recomputes `progress` for the branches in `ids` (7.13.1) — the ones a
+ * canonical change under them can move — deepest first, each once. `except`
+ * names records whose number the same delta carried: the server's word on
+ * them is truth and stays.
+ */
+export function recomputeBranches(
+  model: TreeModel,
+  ids: readonly number[],
+  except: ReadonlySet<number> = new Set(),
+): { model: TreeModel; affected: number[] } {
+  const depth = new Map<number, number>();
+  for (const id of ids) {
+    if (except.has(id) || model.tasks[id] === undefined || depth.has(id)) continue;
+    depth.set(id, ancestors(model, id).length);
+  }
+  if (depth.size === 0) return { model, affected: [] };
+  // A deeper branch is a shallower one's input, so it is recomputed first.
+  const order = [...depth.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+  return recompute(model, order);
+}
+
+/**
  * The Initiative header's own bar: the system root's roll-up, by the same math
  * end to end (ProductSpec §8). Server truth still replaces it on the next
  * delta; this keeps the top of the screen honest in the meantime.

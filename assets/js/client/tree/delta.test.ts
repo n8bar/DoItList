@@ -250,3 +250,57 @@ describe("the header", () => {
     assert.equal(model.header.role, "owner", "the fields it did not carry stayed");
   });
 });
+
+describe("roll-ups after a delta (m04.02 item 7.13.1)", () => {
+  // Deep › Mid › (Leaf A, Leaf B); Other › Leaf C. Every leaf open.
+  const deep = () =>
+    fromSnapshot(
+      buildTree([
+        { id: 31, title: "Deep", children: [{ id: 32, title: "Mid", children: [{ id: 33, title: "Leaf A" }, { id: 34, title: "Leaf B" }] }] },
+        { id: 35, title: "Other", children: [{ id: 36, title: "Leaf C" }] },
+      ]),
+    );
+
+  it("a leaf completion moves its parent and grandparent to the right number", () => {
+    const { model, affected } = applyDelta(
+      deep(),
+      deltaFromOpResult(result({ id: 33, parent_id: 32, status: "done", done: true, progress: 100 })),
+    );
+    assert.equal(model.tasks[33]?.progress, 100);
+    assert.equal(model.tasks[32]?.progress, 50);
+    assert.equal(model.tasks[31]?.progress, 50);
+    assert.equal(model.tasks[35]?.progress, 0);
+    assert.ok(affected.includes(32) && affected.includes(31));
+    // Leaf average over the whole Initiative: A done, B and C open.
+    assert.equal(ok(model).header.progress, 33);
+  });
+
+  it("a removal moves the parent it left", () => {
+    const done = applyDelta(deep(), deltaFromOpResult(result({ id: 33, parent_id: 32, status: "done", done: true, progress: 100 }))).model;
+    const { model } = applyDelta(done, deltaFromHistoryResult({ action: "redo", kind: "deleted", upserts: [], removed: [34], refetch: false }));
+    assert.equal(model.tasks[34], undefined);
+    assert.equal(model.tasks[32]?.progress, 100);
+    assert.equal(ok(model).tasks[31]?.progress, 100);
+  });
+
+  it("a task moved between parents moves both chains", () => {
+    const done = applyDelta(deep(), deltaFromOpResult(result({ id: 33, parent_id: 32, status: "done", done: true, progress: 100 }))).model;
+    const { model } = applyDelta(done, deltaFromOpResult(result({ id: 33, parent_id: 35, status: "done", done: true, progress: 100 })));
+    assert.equal(model.tasks[32]?.progress, 0);
+    assert.equal(model.tasks[31]?.progress, 0);
+    assert.equal(ok(model).tasks[35]?.progress, 50);
+  });
+
+  it("keeps the server's number on a branch the same delta carries", () => {
+    const { model } = applyDelta(deep(), {
+      upserts: [
+        { id: 33, status: "done", progress: 100 },
+        { id: 32, progress: 42 },
+      ],
+      removed: [],
+    });
+    assert.equal(model.tasks[32]?.progress, 42);
+    // "Deep" is not carried, so it is recomputed — over its leaves, not its child's number.
+    assert.equal(ok(model).tasks[31]?.progress, 50);
+  });
+});

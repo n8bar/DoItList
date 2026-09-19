@@ -3074,11 +3074,13 @@ async function clearNotices(session) {
 }
 
 /**
- * 8.9 (1): the prediction is display-only. With the channel held so the page
- * cannot learn of it, "Victor" is completed through the API; completing
- * "Whiskey" on the page then predicts "Uniform" at 50% — and the reply, which
- * knows both leaves are done, replaces it with 100%. The bar reads 50 then
- * 100, never back.
+ * 8.9 (1): the prediction is display-only, and canonical success lands on the
+ * right roll-up (7.13.1). With the channel held, completing "Whiskey" predicts
+ * "Uniform" at 50% and the reply, which carries only "Whiskey", re-rolls it to
+ * 50 — held, never a dip to the stale 0. The channel released and joined,
+ * "Victor" is completed through the API: the change arrives over the channel
+ * and the refetch brings the server's 100. The bar reads 0 → 50 → 100 and
+ * never steps back.
  */
 export async function checkPredictionGivesWay(ctx) {
   const { session } = ctx;
@@ -3090,11 +3092,6 @@ export async function checkPredictionGivesWay(ctx) {
     const start = await evaluate(session, `return __tree.progress(${uniform});`);
     if (start !== "0") throw new Error(`"Uniform" starts at ${start}%, not 0`);
 
-    await pageOperation(session, `cdp-tree-${ctx.stamp}-victor-done`, { op: "update", type: "task", id: victor, data: { done: true } });
-    await new Promise((done) => setTimeout(done, QUIET_MS));
-    const unaware = await evaluate(session, `return { uniform: __tree.progress(${uniform}), victorDone: __tree.rowEl(${victor})?.dataset.done === "true" };`);
-    if (unaware.uniform !== "0" || unaware.victorDone) throw new Error(`the page learned of the API change despite the held channel: ${JSON.stringify(unaware)}`);
-
     await evaluate(session, `
       window.__prog = [__tree.progress(${uniform})];
       window.__progObs?.disconnect();
@@ -3105,6 +3102,8 @@ export async function checkPredictionGivesWay(ctx) {
       __progObs.observe(document.getElementById("task-tree"), { attributes: true, subtree: true, attributeFilter: ["data-task-progress"] });
       return true;
     `);
+
+    // (1) Held: the page's own completion, predicted then answered.
     await armStopwatch(session, "click", `
       const child = __tree.rowEl(${whiskey});
       if (child === null || child.dataset.done !== "true") return false;
@@ -3113,15 +3112,28 @@ export async function checkPredictionGivesWay(ctx) {
     await clickElement(session, `#task-${whiskey} [data-complete-toggle]`);
     const ack = await readStopwatch(session, `"Whiskey" to show done`);
     assertAcknowledged(ack, "the done leaf");
-    if (ack.detail.parentProgress !== "50") throw new Error(`the page predicted "Uniform" at ${ack.detail.parentProgress}% over one leaf it knows done, not 50%`);
+    if (ack.detail.parentProgress !== "50") throw new Error(`the page predicted "Uniform" at ${ack.detail.parentProgress}% over one done leaf of two, not 50%`);
     if (!ack.detail.recomputing) throw new Error(`"Uniform" was not marked recomputing`);
-
     const settled = await settle(session);
-    const end = await evaluate(session, `__progObs.disconnect(); return { seq: __prog, progress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing"), victorDone: __tree.rowEl(${victor})?.dataset.done === "true" };`);
-    if (end.progress !== "100") throw new Error(`"Uniform" settled at ${end.progress}%; the server's number is 100 (both leaves done) — the prediction was not replaced. Bar read: ${end.seq.join(" → ")}`);
-    if (end.recomputing) throw new Error(`"Uniform" is still marked recomputing after the reply`);
+    const landed = await evaluate(session, `return { seq: [...__prog], progress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing") };`);
+    if (landed.recomputing) throw new Error(`"Uniform" is still marked recomputing after the reply`);
+    if (landed.seq.join(",") !== "0,50") throw new Error(`through the reply the bar read ${landed.seq.join(" → ")}, not 0 → 50 (a dip is canonical success landing on a stale roll-up)`);
+
+    // (2) The channel back and joined.
+    await evaluate(session, `__gate.release(); return true;`);
+    await waitForJoin(ctx);
+
+    // (3) A change made elsewhere, now that the channel can carry it.
+    await pageOperation(session, `cdp-tree-${ctx.stamp}-victor-done`, { op: "update", type: "task", id: victor, data: { done: true } });
+
+    // (4) The server's number lands through the channel, with no step back.
+    await waitFor(session, `return __tree.progress(${uniform}) === "100";`, { timeoutMs: 10_000, what: `"Uniform" at the server's 100% once the channel delivers "Victor"` });
+    await settle(session);
+    const end = await evaluate(session, `__progObs.disconnect(); return { seq: __prog, victorDone: __tree.rowEl(${victor})?.dataset.done === "true", recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing") };`);
     if (end.seq.join(",") !== "0,50,100") throw new Error(`the bar read ${end.seq.join(" → ")}, not 0 → 50 → 100`);
-    return `"Victor" done through the API unseen; "Whiskey" done ${ack.ackMs}ms after the click predicted 50%, the reply replaced it with 100% (bar read ${end.seq.join(" → ")}); "Victor" ${end.victorDone ? "shows done from the reply" : "still shows open (the reply carried no sibling)"}; ${settled.note}`;
+    if (!end.victorDone) throw new Error(`"Victor" still shows open after the channel delivered it`);
+    if (end.recomputing) throw new Error(`"Uniform" is marked recomputing after the catch-up`);
+    return `held: "Whiskey" done ${ack.ackMs}ms after the click predicted 50%, the reply held it at 50 (no dip); released and joined: "Victor" done through the API brought 100 over the channel (bar read ${end.seq.join(" → ")}); ${settled.note}`;
   } finally {
     await evaluate(session, `window.__progObs?.disconnect(); __gate?.release(); return true;`).catch(() => {});
     await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});

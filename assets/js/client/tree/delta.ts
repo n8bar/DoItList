@@ -14,7 +14,7 @@ import type { InitiativeTree, Priority, TaskEditor, TaskStatus } from "../api/ty
 import type { InitiativeHeader, TaskRecord, TreeModel } from "./model.ts";
 import { ancestors, headerFrom } from "./model.ts";
 import { relabel } from "./labels.ts";
-import { predictHeader } from "./progress.ts";
+import { predictHeader, recomputeBranches } from "./progress.ts";
 import { putRecord, resortParents, setChildOrder } from "./ops.ts";
 import { InvalidTreeError, validateSnapshot } from "./validate.ts";
 
@@ -157,11 +157,21 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
   // branch and its new mode, not its children's new order, so the order is
   // derived here — as `setSort` predicts it — rather than left to the refetch.
   const resorted = new Set<number>();
+  // 7.13.1: the branches whose roll-up this delta can move — every changed
+  // task's ancestors, and a removed or moved task's former parent with its
+  // ancestors — recomputed once the records are in, so a reply lands on the
+  // right number without waiting for the refetch. Records the delta itself
+  // carries keep the server's number.
+  const branches: number[] = [];
+  const carried = new Set(delta.upserts.map((upsert) => upsert.id));
+  const chainFrom = (parentId: number): number[] =>
+    parentId === next.rootId ? [] : [parentId, ...ancestors(next, parentId)];
 
   for (const id of delta.removed) {
     const record = next.tasks[id];
     if (record === undefined) continue;
     touchedParents.add(record.parent_id);
+    branches.push(...chainFrom(record.parent_id));
     const doomed = collectSubtree(next, id);
     const tasks = { ...next.tasks };
     const childIds = { ...next.childIds };
@@ -209,11 +219,13 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
           (next.childIds[oldParentId] ?? []).filter((siblingId) => siblingId !== merged.id),
         );
         touchedParents.add(oldParentId);
+        branches.push(...chainFrom(oldParentId));
       }
       next = place(next, parentId, merged.id, wanted);
       touchedParents.add(parentId);
     }
 
+    branches.push(...ancestors(next, merged.id));
     affected.push(merged.id);
     for (const ancestorId of ancestors(next, merged.id)) affected.push(ancestorId);
   }
@@ -222,6 +234,10 @@ export function applyDelta(model: TreeModel, delta: TreeDelta): {
     next = relabel(next, parentId);
     for (const childId of next.childIds[parentId] ?? []) affected.push(childId);
   }
+
+  const rolled = recomputeBranches(next, branches, carried);
+  next = rolled.model;
+  affected.push(...rolled.affected);
 
   if (resorted.size > 0) {
     next = resortParents(next, resorted);
