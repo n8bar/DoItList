@@ -254,3 +254,89 @@ describe("resync on rejoin (m04.03 3.3)", () => {
     assert.deepEqual(h.synced, []);
   });
 });
+
+describe("repeated resync (m04.03 6.4)", () => {
+  // Initiative `id` at `seq`, with two top-level tasks; only the first one's title varies.
+  const twoTasks = (id: number, seq: number, title = "Original") =>
+    buildTree([{ id: id * 10 + 1, title }, { id: id * 10 + 2, title: "Untouched" }], {
+      id,
+      name: "Kitchen",
+      rootTaskId: id * 10,
+      seq,
+    });
+
+  it("installs through the delta path: an unchanged row keeps its identity, and the same read again changes nothing", async () => {
+    const h = harness();
+    h.socket.get().joinReply = joinAt({ 12: 1 });
+    h.sync.install(twoTasks(12, 1));
+    h.sync.watch(12);
+    const before = h.domain.get().trees[12]!;
+
+    h.fake.answer(12, twoTasks(12, 3, "Three"));
+    h.channel(12).rejoin({ initiative_id: 12, seq: 3 });
+    await settle();
+    const after = h.domain.get().trees[12]!;
+    assert.equal(after.seq, 3);
+    assert.equal(after.tasks[121]?.title, "Three");
+    assert.equal(after.tasks[122], before.tasks[122], "the row the read left alone is the same object");
+    assert.equal(after.childIds[120], before.childIds[120], "and so is the order");
+
+    // The same resync again — a second rejoin at the same sequence, and the
+    // same read once more — moves nothing, not even identity.
+    h.channel(12).rejoin({ initiative_id: 12, seq: 3 });
+    await settle();
+    assert.equal(h.domain.get().trees[12], after, "level: no read, no new tree");
+    assert.equal(h.fake.calls.length, 1);
+
+    h.sync.install(twoTasks(12, 3, "Three"));
+    const again = h.domain.get().trees[12]!;
+    assert.equal(again.tasks, after.tasks, "an equal read keeps every record");
+    assert.equal(again.seq, 3);
+  });
+
+  it("is Initiative-isolated: one Initiative's resync leaves the other's tree exactly as it was", async () => {
+    const h = harness();
+    h.socket.get().joinReply = joinAt({ 12: 1, 13: 1 });
+    h.sync.install(twoTasks(12, 1));
+    h.sync.install(twoTasks(13, 1));
+    h.sync.watch(12);
+    h.sync.watch(13);
+    const other = h.domain.get().trees[13];
+
+    h.fake.answer(12, twoTasks(12, 4, "Four"));
+    h.channel(12).rejoin({ initiative_id: 12, seq: 4 });
+    await settle();
+    assert.equal(h.seqOf(12), 4);
+    assert.equal(h.domain.get().trees[13], other, "not re-read, not rebuilt");
+    assert.deepEqual(h.fake.calls, ["/initiatives/12"]);
+  });
+
+  it("stays gap-free under a burst of rejoins: one read at a time, and the last truth wins", async () => {
+    const h = harness();
+    h.socket.get().joinReply = joinAt({ 12: 1 });
+    h.sync.install(twoTasks(12, 1));
+    h.sync.watch(12);
+
+    h.fake.hold();
+    h.fake.answer(12, twoTasks(12, 2, "Two"));
+    h.channel(12).rejoin({ initiative_id: 12, seq: 2 });
+    h.channel(12).rejoin({ initiative_id: 12, seq: 3 });
+    h.channel(12).rejoin({ initiative_id: 12, seq: 4 });
+    await settle();
+    assert.equal(h.fake.parked(), 1, "three rejoins, one read");
+
+    h.fake.release(0);
+    await settle();
+    assert.equal(h.seqOf(12), 2, "the read that was out landed");
+    // The read fell short of what the last join said: the hold re-reads, once.
+    h.fake.answer(12, twoTasks(12, 4, "Four"));
+    h.clock.flush();
+    await settle();
+    assert.equal(h.fake.parked(), 2);
+    h.fake.release(1);
+    await settle();
+    assert.equal(h.seqOf(12), 4);
+    assert.equal(h.title(12), "Four");
+    assert.equal(h.fake.calls.length, 2, "bounded: no read per rejoin");
+  });
+});
