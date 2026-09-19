@@ -2972,6 +2972,297 @@ export async function checkViewStateThroughRerender(ctx) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// 8.9: the optimistic adapter's promises the earlier checks leave untested —
+// the prediction gives way to the server's number, a refused op reverts and
+// stays out of undo, and undo/redo over a mix of ops track the server.
+// ---------------------------------------------------------------------------
+
+const ROLLUP_TITLES = { uniform: "Uniform", victor: "Victor", whiskey: "Whiskey" };
+const REFUSE_TITLES = { xray: "X-ray", edited: "X-ray, edited elsewhere" };
+const MIX_TITLES = { yankee: "Yankee", zulu: "Zulu", zephyr: "Zephyr", renamed: "Zephyr, renamed", zeta: "Zeta" };
+
+/** "Uniform" with the leaves "Victor" and "Whiskey". */
+async function seedRollupRows(ctx) {
+  if (ctx.ids.uniform !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-rollup`, [
+    { op: "add", type: "task", lid: "uniform", data: { initiative_id: initiativeId, title: ROLLUP_TITLES.uniform } },
+    { op: "add", type: "task", data: { parent_lid: "uniform", title: ROLLUP_TITLES.victor } },
+    { op: "add", type: "task", data: { parent_lid: "uniform", title: ROLLUP_TITLES.whiskey } },
+  ]);
+  const [uniform, victor, whiskey] = results.map((r) => r?.data?.id);
+  if (![uniform, victor, whiskey].every((id) => typeof id === "number")) throw new Error(`the roll-up seed did not name three tasks: ${JSON.stringify(results)}`);
+  Object.assign(ctx.ids, { uniform, victor, whiskey });
+  await waitForRows(session, [uniform, victor, whiskey], "the roll-up rows");
+}
+
+/** The leaf "X-ray" at the root. */
+async function seedRefuseRows(ctx) {
+  if (ctx.ids.xray !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const result = await pageOperation(session, `cdp-tree-${ctx.stamp}-seed-refuse`, { op: "add", type: "task", data: { initiative_id: initiativeId, title: REFUSE_TITLES.xray } });
+  const xray = result?.data?.id;
+  if (typeof xray !== "number") throw new Error(`the refuse seed did not name a task: ${JSON.stringify(result)}`);
+  ctx.ids.xray = xray;
+  await waitForRows(session, [xray], `"X-ray"`);
+}
+
+/** "Yankee" with the leaves "Zulu" then "Zephyr". */
+async function seedMixRows(ctx) {
+  if (ctx.ids.yankee !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-mix`, [
+    { op: "add", type: "task", lid: "yankee", data: { initiative_id: initiativeId, title: MIX_TITLES.yankee } },
+    { op: "add", type: "task", data: { parent_lid: "yankee", title: MIX_TITLES.zulu } },
+    { op: "add", type: "task", data: { parent_lid: "yankee", title: MIX_TITLES.zephyr } },
+  ]);
+  const [yankee, zulu, zephyr] = results.map((r) => r?.data?.id);
+  if (![yankee, zulu, zephyr].every((id) => typeof id === "number")) throw new Error(`the mix seed did not name three tasks: ${JSON.stringify(results)}`);
+  Object.assign(ctx.ids, { yankee, zulu, zephyr });
+  await waitForRows(session, [yankee, zulu, zephyr], "the mix rows");
+}
+
+/** The tree as the server holds it, one line per task: id, parent, title, done, progress. */
+function serverTreeJs(initiativeId) {
+  return `
+    return (async () => {
+      const response = await fetch("/app/api/initiatives/${initiativeId}", { headers: { accept: "application/json" }, credentials: "same-origin" });
+      if (!response.ok) return { ok: false, why: "the tree read answered " + response.status };
+      const data = (await response.json()).data;
+      const lines = [];
+      const walk = (nodes, parent) => {
+        for (const n of nodes ?? []) {
+          lines.push(n.id + ":" + parent + ":" + n.title + ":" + n.done + ":" + Math.round(n.progress));
+          walk(n.children, n.id);
+        }
+      };
+      walk(data.tasks, null);
+      return { ok: true, lines };
+    })();
+  `;
+}
+
+/** The same lines off the page, in document order. */
+const DOM_TREE_JS = `
+  return [...document.querySelectorAll("#task-tree li[data-task-id]")].map((li) => {
+    const row = li.querySelector(":scope > [data-task-row]");
+    const ul = li.parentElement;
+    const parent = ul.id === "task-tree" ? null : Number(ul.dataset.taskId);
+    return li.dataset.taskId + ":" + parent + ":" + __tree.title(li.dataset.taskId) + ":" + (row?.dataset.done === "true") + ":" + Math.round(Number(row?.dataset.taskProgress));
+  });
+`;
+
+/** Throws unless the page's tree equals a fresh read of the server's. */
+async function assertTreeMatchesServer(ctx, when) {
+  const { session } = ctx;
+  const server = await evaluate(session, serverTreeJs(ctx.initiativeId));
+  if (!server.ok) throw new Error(`${when}: ${server.why}`);
+  const page = await evaluate(session, DOM_TREE_JS);
+  const onlyServer = server.lines.filter((line) => !page.includes(line));
+  const onlyPage = page.filter((line) => !server.lines.includes(line));
+  if (onlyServer.length > 0 || onlyPage.length > 0 || server.lines.join("|") !== page.join("|")) {
+    throw new Error(`${when}: the page differs from the server — server only: [${onlyServer.join(", ")}]; page only: [${onlyPage.join(", ")}]${onlyServer.length + onlyPage.length === 0 ? "; same rows, different order" : ""}`);
+  }
+  return page.length;
+}
+
+/** Dismisses every notice on screen and waits for the stack to clear. */
+async function clearNotices(session) {
+  await evaluate(session, `for (const b of document.querySelectorAll('#client-notices [id$="-dismiss"]')) b.click(); return true;`);
+  await waitFor(session, `return document.querySelectorAll("#client-notices [role]").length === 0;`, { timeoutMs: 2_000, what: "the notices to clear" });
+}
+
+/**
+ * 8.9 (1): the prediction is display-only. With the channel held so the page
+ * cannot learn of it, "Victor" is completed through the API; completing
+ * "Whiskey" on the page then predicts "Uniform" at 50% — and the reply, which
+ * knows both leaves are done, replaces it with 100%. The bar reads 50 then
+ * 100, never back.
+ */
+export async function checkPredictionGivesWay(ctx) {
+  const { session } = ctx;
+  await seedRollupRows(ctx);
+  const { uniform, victor, whiskey } = ctx.ids;
+  const { identifier } = await session.send("Page.addScriptToEvaluateOnNewDocument", { source: wsGate(true) });
+  try {
+    await reopenTree(ctx);
+    const start = await evaluate(session, `return __tree.progress(${uniform});`);
+    if (start !== "0") throw new Error(`"Uniform" starts at ${start}%, not 0`);
+
+    await pageOperation(session, `cdp-tree-${ctx.stamp}-victor-done`, { op: "update", type: "task", id: victor, data: { done: true } });
+    await new Promise((done) => setTimeout(done, QUIET_MS));
+    const unaware = await evaluate(session, `return { uniform: __tree.progress(${uniform}), victorDone: __tree.rowEl(${victor})?.dataset.done === "true" };`);
+    if (unaware.uniform !== "0" || unaware.victorDone) throw new Error(`the page learned of the API change despite the held channel: ${JSON.stringify(unaware)}`);
+
+    await evaluate(session, `
+      window.__prog = [__tree.progress(${uniform})];
+      window.__progObs?.disconnect();
+      window.__progObs = new MutationObserver(() => {
+        const v = __tree.progress(${uniform});
+        if (v !== __prog[__prog.length - 1]) __prog.push(v);
+      });
+      __progObs.observe(document.getElementById("task-tree"), { attributes: true, subtree: true, attributeFilter: ["data-task-progress"] });
+      return true;
+    `);
+    await armStopwatch(session, "click", `
+      const child = __tree.rowEl(${whiskey});
+      if (child === null || child.dataset.done !== "true") return false;
+      return { parentProgress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing") };
+    `);
+    await clickElement(session, `#task-${whiskey} [data-complete-toggle]`);
+    const ack = await readStopwatch(session, `"Whiskey" to show done`);
+    assertAcknowledged(ack, "the done leaf");
+    if (ack.detail.parentProgress !== "50") throw new Error(`the page predicted "Uniform" at ${ack.detail.parentProgress}% over one leaf it knows done, not 50%`);
+    if (!ack.detail.recomputing) throw new Error(`"Uniform" was not marked recomputing`);
+
+    const settled = await settle(session);
+    const end = await evaluate(session, `__progObs.disconnect(); return { seq: __prog, progress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing"), victorDone: __tree.rowEl(${victor})?.dataset.done === "true" };`);
+    if (end.progress !== "100") throw new Error(`"Uniform" settled at ${end.progress}%; the server's number is 100 (both leaves done) — the prediction was not replaced. Bar read: ${end.seq.join(" → ")}`);
+    if (end.recomputing) throw new Error(`"Uniform" is still marked recomputing after the reply`);
+    if (end.seq.join(",") !== "0,50,100") throw new Error(`the bar read ${end.seq.join(" → ")}, not 0 → 50 → 100`);
+    return `"Victor" done through the API unseen; "Whiskey" done ${ack.ackMs}ms after the click predicted 50%, the reply replaced it with 100% (bar read ${end.seq.join(" → ")}); "Victor" ${end.victorDone ? "shows done from the reply" : "still shows open (the reply carried no sibling)"}; ${settled.note}`;
+  } finally {
+    await evaluate(session, `window.__progObs?.disconnect(); __gate?.release(); return true;`).catch(() => {});
+    await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+  }
+}
+
+/**
+ * 8.9 (2): failure. With the channel held, "X-ray" is retitled through the
+ * API, so the page's record is stale; deleting it from the pane sends the
+ * stale expected_version and the server refuses (conflict). The row went on
+ * the click and comes back on the refusal, nothing stays pending, an error
+ * notice says so, and Undo reverses the API's retitle — the refused delete
+ * never entered the stack.
+ */
+export async function checkRefusedOpReverts(ctx) {
+  const { session } = ctx;
+  await seedRefuseRows(ctx);
+  const { xray } = ctx.ids;
+  const { identifier } = await session.send("Page.addScriptToEvaluateOnNewDocument", { source: wsGate(true) });
+  try {
+    await reopenTree(ctx);
+    await clearNotices(session);
+    await pageOperation(session, `cdp-tree-${ctx.stamp}-xray-edit`, { op: "update", type: "task", id: xray, data: { title: REFUSE_TITLES.edited } });
+    await new Promise((done) => setTimeout(done, QUIET_MS));
+    const stale = await evaluate(session, `return __tree.title(${xray});`);
+    if (stale !== REFUSE_TITLES.xray) throw new Error(`the page learned of the API retitle despite the held channel ("${stale}")`);
+
+    await selectRow(session, xray);
+    await clickElement(session, "#delete-task-btn");
+    await waitFor(session, `return document.getElementById("delete-confirm")?.open === true;`, { timeoutMs: 2_000, what: "the delete confirm" });
+    const before = await evaluate(session, `return __ops.sent;`);
+    await armStopwatch(session, "click", `return __tree.rowEl(${xray}) === null;`, { transient: true });
+    await clickElement(session, "#delete-confirm-confirm");
+    const ack = await readStopwatch(session, "the row to go");
+    assertAcknowledged(ack, "the deleted row");
+
+    const reply = await waitFor(session, `
+      if (__ops.sent !== ${before + 1} || __ops.replied !== ${before + 1}) return null;
+      return __ops.log.filter((f) => /\\/operations$/.test(f.url)).slice(-1)[0]?.reply ?? null;
+    `, { timeoutMs: 10_000, what: "the delete's reply" });
+    if (reply === null || !/conflict/.test(reply)) throw new Error(`the server did not refuse the stale delete with a conflict: ${reply}`);
+    await waitFor(session, `return __tree.rowEl(${xray}) !== null;`, { timeoutMs: 5_000, what: "the row to come back" });
+    const after = await evaluate(session, `
+      const li = document.getElementById("task-${xray}");
+      const notice = document.querySelector('#client-notices [role="alert"][data-kind="error"]');
+      return {
+        title: __tree.title(${xray}),
+        saving: li?.querySelector(".is-saving") !== null || li?.querySelector(":scope > [data-task-row]")?.classList.contains("is-saving"),
+        pending: __tree.pending(),
+        notice: notice === null ? null : notice.textContent.trim().replace(/\\s+/g, " ").slice(0, 160),
+      };
+    `);
+    const gaps = [];
+    if (after.title !== REFUSE_TITLES.xray) gaps.push(`the row came back as "${after.title}"`);
+    if (after.saving) gaps.push("the row is still marked saving");
+    if (after.pending.saving + after.pending.recomputing + after.pending.standIns > 0) gaps.push(`something stays pending: ${JSON.stringify(after.pending)}`);
+    if (after.notice === null) gaps.push("no error notice was shown");
+    else if (!after.notice.includes("That change was not saved")) gaps.push(`the notice reads "${after.notice}"`);
+    if (gaps.length > 0) throw new Error(`after the refusal — ${gaps.join("; ")}`);
+
+    // The stack's top is the API's retitle, not the refused delete.
+    const held = await evaluate(session, serverTreeJs(ctx.initiativeId));
+    const line = (lines) => lines.find((l) => l.startsWith(`${xray}:`)) ?? null;
+    if (line(held.lines) === null || !line(held.lines).includes(REFUSE_TITLES.edited)) throw new Error(`before Undo the server holds "X-ray" as ${line(held.lines)}`);
+    await clickElement(session, "#undo-button");
+    await settle(session);
+    const undone = await evaluate(session, serverTreeJs(ctx.initiativeId));
+    const now = line(undone.lines);
+    if (now === null) throw new Error(`Undo took "X-ray" away on the server — the refused delete was in the stack`);
+    if (!now.includes(`:${REFUSE_TITLES.xray}:`)) throw new Error(`Undo did not reverse the API's retitle; the server holds ${now}`);
+    const pageTitle = await evaluate(session, `return __tree.title(${xray});`);
+    return `stale delete refused (conflict): row gone ${ack.ackMs}ms after Delete, back on the refusal as "${after.title}", nothing pending, notice "${after.notice}"; Undo reversed the API's retitle (server "${REFUSE_TITLES.xray}", page "${pageTitle}"), not the refused delete`;
+  } finally {
+    await evaluate(session, `__gate?.release(); return true;`).catch(() => {});
+    await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
+  }
+}
+
+/**
+ * 8.9 (4): a rename, a completion, a keyboard move and an add under
+ * "Yankee", then Undo four times and Redo four times; after every step the
+ * page's tree equals a fresh read of the server's.
+ */
+export async function checkHistoryMatchesServer(ctx) {
+  const { session } = ctx;
+  await seedMixRows(ctx);
+  const { yankee, zulu, zephyr } = ctx.ids;
+  await reopenTree(ctx);
+  await settle(session);
+  const notes = [];
+
+  // A rename through the pane.
+  await selectRow(session, zephyr);
+  await clickElement(session, "#task-field-title");
+  await evaluate(session, `document.getElementById("task-field-title").select(); return true;`);
+  await session.send("Input.insertText", { text: MIX_TITLES.renamed });
+  await pressKey(session, "Enter");
+  await waitFor(session, `return __tree.title(${zephyr}) === ${JSON.stringify(MIX_TITLES.renamed)};`, { timeoutMs: 2_000, what: "the rename on the row" });
+  await settle(session);
+  // A completion.
+  await clickElement(session, `#task-${zulu} [data-complete-toggle]`);
+  await waitFor(session, `return __tree.rowEl(${zulu})?.dataset.done === "true";`, { timeoutMs: 2_000, what: `"Zulu" to show done` });
+  await settle(session);
+  // A keyboard move: "Zephyr" above "Zulu" (a second click on a selected
+  // title would clear the selection, so select only if it moved).
+  if ((await evaluate(session, `return __tree.selected();`)) !== zephyr) await selectRow(session, zephyr);
+  await tapKey(session, "ArrowUp", MOD.alt);
+  await waitFor(session, `return JSON.stringify(__tree.order(${yankee})) === ${JSON.stringify(JSON.stringify([zephyr, zulu]))};`, { timeoutMs: 2_000, what: `"Zephyr" above "Zulu"` });
+  await settle(session);
+  // An add under "Yankee".
+  await clickElement(session, `#task-${yankee} [data-add-child="${yankee}"]`);
+  await waitFor(session, `return document.activeElement?.matches('#add-task-form input[name="title"]');`, { timeoutMs: 5_000, what: "the subtask form to take focus" });
+  await session.send("Input.insertText", { text: MIX_TITLES.zeta });
+  await clickElement(session, '#add-task-form button[type="submit"]');
+  await waitFor(session, `return __tree.row(${JSON.stringify(MIX_TITLES.zeta)}) !== null;`, { timeoutMs: 2_000, what: `"Zeta" on the page` });
+  await settle(session);
+  await pressKey(session, "Escape");
+  const rows = await assertTreeMatchesServer(ctx, "after the four ops");
+  notes.push(`four ops (rename, complete, Alt+↑, add) matched the server over ${rows} rows`);
+
+  const step = async (button, label, index) => {
+    await waitFor(session, `const b = document.getElementById("${button}"); return b !== null && !b.disabled && b.getAttribute("aria-busy") !== "true";`, { timeoutMs: 5_000, what: `${label} to be ready` });
+    await clickElement(session, `#${button}`);
+    await settle(session);
+    await assertTreeMatchesServer(ctx, `after ${label} ${index}`);
+  };
+  for (let i = 1; i <= 4; i += 1) await step("undo-button", "Undo", i);
+  const undone = await evaluate(session, `return { zeta: __tree.row(${JSON.stringify(MIX_TITLES.zeta)}) !== null, order: __tree.order(${yankee}), zuluDone: __tree.rowEl(${zulu})?.dataset.done === "true", title: __tree.title(${zephyr}) };`);
+  if (undone.zeta || undone.zuluDone || undone.title !== MIX_TITLES.zephyr || JSON.stringify(undone.order) !== JSON.stringify([zulu, zephyr])) {
+    throw new Error(`four Undos did not put the branch back: ${JSON.stringify(undone)}`);
+  }
+  notes.push("Undo ×4 matched the server at every step and put the branch back");
+  for (let i = 1; i <= 4; i += 1) await step("redo-button", "Redo", i);
+  const redone = await evaluate(session, `return { zeta: __tree.row(${JSON.stringify(MIX_TITLES.zeta)}) !== null, order: __tree.order(${yankee}), zuluDone: __tree.rowEl(${zulu})?.dataset.done === "true", title: __tree.title(${zephyr}) };`);
+  if (!redone.zeta || !redone.zuluDone || redone.title !== MIX_TITLES.renamed || JSON.stringify(redone.order) !== JSON.stringify([zephyr, zulu])) {
+    throw new Error(`four Redos did not bring the four ops back: ${JSON.stringify(redone)}`);
+  }
+  notes.push("Redo ×4 matched the server at every step and brought all four back");
+  return notes.join("; ");
+}
+
 const CHECKS = [
   ["add a task", checkAddTask],
   ["add a child", checkAddChild],
@@ -3014,6 +3305,9 @@ const CHECKS = [
   ["view-only before the channel connects", checkViewOnlyBeforeConnect],
   ["view-only in ordinary operation", checkViewOnlyOrdinary],
   ["view state through a rerender", checkViewStateThroughRerender],
+  ["prediction gives way to the server's number", checkPredictionGivesWay],
+  ["a refused op reverts and stays out of undo", checkRefusedOpReverts],
+  ["undo and redo across a mix match the server", checkHistoryMatchesServer],
 ];
 
 // ---------------------------------------------------------------------------
