@@ -8,8 +8,11 @@
 //   CDP_URL       DevTools endpoint          (default http://localhost:9222)
 //   APP_URL       app origin                 (default http://localhost:4000)
 //   CDP_OPTIONAL  =1 → exit 0 when no endpoint answers (default: exit 2)
-//   CDP_REUSE_TAB =1 → fall back to an existing page target if /json/new fails
 //   CDP_FROM      =<text> → start at the first check whose name contains it
+//
+// It drives ONE tab: an existing one on APP_URL when there is one, else a
+// fresh one — and never closes it (the operator's rule, shared with
+// check_tree.mjs).
 //
 // It runs from the HOST: the container cannot reach the operator's bridge.
 // Node 22+ (or Node 20 with --experimental-websocket) — it needs global WebSocket.
@@ -28,7 +31,6 @@ import { fileURLToPath } from "node:url";
 import {
   browserVersion,
   clickElement,
-  closeTarget,
   connect,
   evaluate,
   listTargets,
@@ -49,6 +51,7 @@ import {
   movedBefore,
   pageOperation,
   pageOperations,
+  pickTarget,
   readStopwatch,
 } from "./check_tree.mjs";
 // The bell's write, from the module the browser itself bundles — so this check
@@ -106,7 +109,7 @@ export async function checkClientReady(ctx) {
   if (chrome.missing.length > 0) throw new Error(`chrome missing: #${chrome.missing.join(", #")}`);
   if (chrome.narrowNavVisible) throw new Error("the hamburger is showing at 1280px");
   if (chrome.path !== "/app/initiatives") throw new Error(`path is ${chrome.path}`);
-  if (chrome.heading !== "Initiatives") throw new Error(`heading is ${chrome.heading}`);
+  if (chrome.heading !== "My Initiatives") throw new Error(`heading is ${chrome.heading}`);
 
   // The baseline for the layout-shift check: measured the instant the client
   // said it was ready, BEFORE the Initiatives read has come back.
@@ -128,9 +131,9 @@ export async function checkNoLayoutShift(ctx) {
     const section = document.querySelector("#client-main section");
     if (section === null) return null;
     if (section.querySelector('[role="status"]') !== null) return null;
-    if (section.querySelector("#initiatives-list li") !== null) return "rows";
+    if (section.querySelector("#initiatives > [data-initiative-id]") !== null) return "rows";
     if (section.querySelector("#screen-error") !== null) return "error";
-    if (section.querySelector("p") !== null) return "empty";
+    if (section.querySelector("#initiatives-empty") !== null) return "empty";
     return null;
   `,
     { timeoutMs: READY_TIMEOUT_MS, what: "the Initiatives list to settle" },
@@ -143,7 +146,7 @@ export async function checkNoLayoutShift(ctx) {
   }
   const rows = await evaluate(
     session,
-    `return document.querySelectorAll("#initiatives-list li").length;`,
+    `return document.querySelectorAll("#initiatives > [data-initiative-id]").length;`,
   );
   return `${settled} (${rows} rows), header, nav and main column did not move`;
 }
@@ -197,13 +200,16 @@ export async function checkSkeletonMatchesRow(ctx) {
     const real = await waitFor(
       session,
       `
-      const list = document.getElementById("initiatives-list");
-      const first = document.querySelector("#initiatives-list li");
+      const list = document.getElementById("initiatives");
+      const first = document.querySelector("#initiatives > [data-initiative-id]");
       if (list === null || first === null) return null;
       if (document.getElementById("initiatives-skeleton") !== null) return null;
+      // The block that takes the skeleton's place starts with the Sort control
+      // (shown only once there are rows), then the list.
+      const block = document.getElementById("initiative-sort") ?? list;
       return {
         row: Math.round(first.getBoundingClientRect().height),
-        top: Math.round(list.getBoundingClientRect().top),
+        top: Math.round(block.getBoundingClientRect().top),
         rows: list.children.length,
       };
     `,
@@ -265,7 +271,7 @@ export async function checkNoShiftAcrossRoutes(ctx) {
     `
     const heading = document.getElementById("route-heading");
     if (location.pathname !== "/app/initiatives") return null;
-    return heading !== null && heading.textContent.trim() === "Initiatives";
+    return heading !== null && heading.textContent.trim() === "My Initiatives";
   `,
     { timeoutMs: 5_000, what: "the Initiatives route" },
   );
@@ -1032,6 +1038,7 @@ export async function checkKeyboardTraversal(ctx) {
     "client-theme-toggle-system",
     "client-theme-toggle-light",
     "client-theme-toggle-dark",
+    "client-touch-switch",
     "client-bell-button",
     "client-account-menu-button",
   ];
@@ -1171,7 +1178,7 @@ export async function checkReducedMotion(ctx) {
     await session.send("Emulation.setEmulatedMedia", { features: [] }).catch(() => {});
     await waitFor(
       session,
-      `return document.querySelector("#initiatives-list li") !== null ? true : null;`,
+      `return document.querySelector("#initiatives > [data-initiative-id]") !== null ? true : null;`,
       { timeoutMs: READY_TIMEOUT_MS, what: "the rows to land" },
     ).catch(() => {});
   }
@@ -1217,7 +1224,7 @@ export async function checkDeepLinkAndHistory(ctx) {
     `
     const scroller = document.getElementById("client-scroll");
     if (scroller === null) return null;
-    if (document.querySelector("#initiatives-list li") === null) return null;
+    if (document.querySelector("#initiatives > [data-initiative-id]") === null) return null;
     const room = scroller.scrollHeight - scroller.clientHeight;
     if (room <= 0) return { top: 0, room: 0 };
     const top = Math.min(240, room);
@@ -1243,9 +1250,9 @@ export async function checkDeepLinkAndHistory(ctx) {
     `
     const heading = document.getElementById("route-heading");
     if (location.pathname !== "/app/initiatives") return null;
-    if (heading === null || heading.textContent.trim() !== "Initiatives") return null;
+    if (heading === null || heading.textContent.trim() !== "My Initiatives") return null;
     const scroller = document.getElementById("client-scroll");
-    if (document.querySelector("#initiatives-list li") === null) return null;
+    if (document.querySelector("#initiatives > [data-initiative-id]") === null) return null;
     return { top: Math.round(scroller.scrollTop) };
   `,
     { timeoutMs: 10_000, what: "back to the Initiatives list" },
@@ -1316,7 +1323,7 @@ export async function checkAckUnderLatency(ctx) {
         if (a.t0 !== null) {
           const heading = document.getElementById("route-heading");
           const showing = location.pathname === "/app/initiatives" &&
-            heading !== null && heading.textContent.trim() === "Initiatives";
+            heading !== null && heading.textContent.trim() === "My Initiatives";
           if (showing && a.route === null) a.route = performance.now();
           const skeleton = document.getElementById("initiatives-skeleton");
           if (a.busy === null && skeleton !== null && skeleton.getAttribute("aria-busy") === "true") {
@@ -2230,47 +2237,29 @@ async function screenshot(session, name) {
 }
 
 // ---------------------------------------------------------------------------
-// Target acquisition. We open our OWN tab and close it; the operator's tabs are
-// never touched unless CDP_REUSE_TAB says so explicitly.
+// Target acquisition: the one tab, reused and left open — the same rule as
+// check_tree.mjs (`pickTarget`). Nothing here ever closes a tab.
 // ---------------------------------------------------------------------------
 
 /**
- * Get a target AND a live session on it, as one step that cannot leak.
- *
- * Opening a tab and attaching to it are two operations against a REAL browser:
- * if the attach fails (handshake refused, timeout), the tab we just opened is
- * still sitting in the operator's window. So the failure path closes it. The
- * browser calls are injected so the leak rule is unit-testable — see
- * `check_client.test.mjs`.
+ * Get a target AND a live session on it. The browser calls are injected so the
+ * shape is unit-testable — see `check_client.test.mjs`.
  */
-export async function acquireSession({ acquire, attach, release }) {
+export async function acquireSession({ acquire, attach }) {
   const target = await acquire();
-  try {
-    return { target, session: await attach(target.webSocketDebuggerUrl) };
-  } catch (error) {
-    if (target.ours) await release(target.id).catch(() => {});
-    throw error;
-  }
+  return { target, session: await attach(target.webSocketDebuggerUrl) };
 }
 
 async function acquireTarget() {
-  try {
-    const target = await openTarget(CDP_URL, "about:blank");
-    if (target?.webSocketDebuggerUrl) return { ...target, ours: true };
-    throw new Error("no webSocketDebuggerUrl in the /json/new reply");
-  } catch (error) {
-    if (process.env.CDP_REUSE_TAB !== "1") {
-      throw new Error(
-        `could not open a tab (${error.message}). Set CDP_REUSE_TAB=1 to drive an existing tab instead — that navigates a tab the operator is using.`,
-      );
-    }
-    const page = (await listTargets(CDP_URL)).find(
-      (t) => t.type === "page" && t.webSocketDebuggerUrl,
-    );
-    if (page === undefined) throw new Error("no page target to reuse");
-    process.stdout.write(`note  reusing the operator's tab: ${page.url}\n`);
-    return { ...page, ours: false };
+  const existing = pickTarget(await listTargets(CDP_URL), APP_URL);
+  if (existing !== null) {
+    process.stdout.write(`tab   reusing ${existing.url}\n`);
+    return existing;
   }
+  const opened = await openTarget(CDP_URL, "about:blank");
+  if (!opened?.webSocketDebuggerUrl) throw new Error("no webSocketDebuggerUrl in the /json/new reply");
+  process.stdout.write("tab   opened a new one (none was on the app); it stays open\n");
+  return opened;
 }
 
 // ---------------------------------------------------------------------------
@@ -2288,10 +2277,9 @@ async function main() {
   process.stdout.write(`cdp   ${CDP_URL} → ${version.Browser}\n`);
   process.stdout.write(`app   ${APP_URL}\n`);
 
-  const { target, session } = await acquireSession({
+  const { session } = await acquireSession({
     acquire: acquireTarget,
     attach: (wsUrl) => connect(wsUrl),
-    release: (id) => closeTarget(CDP_URL, id),
   });
   const ctx = { session, appUrl: APP_URL };
   const results = [];
@@ -2330,7 +2318,6 @@ async function main() {
     }
   } finally {
     session.close();
-    if (target.ours) await closeTarget(CDP_URL, target.id).catch(() => {});
   }
 
   process.stdout.write("\n");
