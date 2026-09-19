@@ -17,7 +17,7 @@
 // Comments, Activity and chat are Arc 7 — see the note at the end.
 
 import type { ChangeEvent, KeyboardEvent, ReactNode, ToggleEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { Icon } from "../ui/icon.tsx";
 import type { EditRejection, TreeContext } from "./context.ts";
@@ -62,6 +62,9 @@ export interface TaskDetailsProps {
 }
 
 export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
+  // Who is on the channel, for the co-assignee and last-editor dots (7.17):
+  // the pane's own subscription, the same set back until someone comes or goes.
+  const online = useSyncExternalStore(ctx.presence.subscribe, ctx.presence.onlineIds, ctx.presence.onlineIds);
   const record = ctx.model.tasks[id];
   if (record === undefined) return null;
 
@@ -235,7 +238,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
                 data-user-id={row.id}
                 className="flex items-center gap-2 text-sm"
               >
-                <CoAvatar user={row.user} online={ctx.presence.online.has(row.id)} />
+                <CoAvatar user={row.user} online={online.has(row.id)} />
                 {/* Struck through when they have left (`member_user?/2`). The
                     client holds only current members, so a leaver has no name
                     here; say so rather than guess one. */}
@@ -333,7 +336,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
                 <span className="font-medium text-zinc-700 dark:text-zinc-200 inline-flex items-center gap-1 align-bottom">
                   <CoAvatar
                     user={record.updated_by}
-                    online={ctx.presence.online.has(record.updated_by.id)}
+                    online={online.has(record.updated_by.id)}
                     size="w-4 h-4 text-[8px]"
                   />
                   {record.updated_by.name}

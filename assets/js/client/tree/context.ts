@@ -9,7 +9,8 @@ import type { ProgressCalc, SortMode } from "../api/types.ts";
 import type { RowPreferences } from "../state/preferences.ts";
 import type { TaskRecord, TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
-import type { RowPresence, RowUser } from "./row_model.ts";
+import type { RowUser } from "./row_model.ts";
+import type { PresenceReader } from "./presence_store.ts";
 import type { Collapsed } from "./collapse_model.ts";
 import type { Selected } from "./selection_model.ts";
 
@@ -66,8 +67,13 @@ export interface TreeContext {
   readonly rows: RowPreferences;
   /** Members by user id, for the avatars. */
   readonly members: ReadonlyMap<number, RowUser>;
-  /** Other members' selections and who is online, for the badges and dots. */
-  readonly presence: RowPresence;
+  /**
+   * Other members' selections and who is online, read by each row for its
+   * own badges and dot (item 7.17). Not a value: a value here gave the context
+   * a new identity on every presence echo — this window's own selection
+   * included — and re-rendered every row for a change no row could see.
+   */
+  readonly presence: PresenceReader;
   /**
    * The selected task, read by each row for itself (item 2.2.3). Not a value:
    * a value here would give the context a new identity on every selection

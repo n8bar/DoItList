@@ -5,10 +5,14 @@
 // so it gets the platform's focus trap, Escape and top layer for free, and so
 // there is one wording of the shortcuts rather than two.
 
+import { memo } from "react";
+
 import { SHORTCUTS } from "./keyboard_model.ts";
 import { Dialog } from "../ui/dialog.tsx";
 
-export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
+// Memoized (7.17): the screen re-renders on every selection; a closed
+// overlay has nothing to redraw for it.
+export const ShortcutsOverlay = memo(function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <Dialog id="shortcuts-overlay" open={open} title="Keyboard shortcuts" onCancel={onClose}>
       <dl className="space-y-2">
@@ -25,4 +29,4 @@ export function ShortcutsOverlay({ open, onClose }: { open: boolean; onClose: ()
       </dl>
     </Dialog>
   );
-}
+});

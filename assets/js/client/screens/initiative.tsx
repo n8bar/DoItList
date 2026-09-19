@@ -22,7 +22,7 @@
 // outlives both (guardrail §7.4).
 
 import type { RefObject } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { InitiativeTree, Member } from "../api/types.ts";
 import { Pane } from "../frame/pane.tsx";
@@ -59,8 +59,10 @@ import { firstUrlWrite, searchWithTask, taskParam } from "../tree/reveal_model.t
 import { selectionOf } from "../tree/selection_model.ts";
 import type { RowPresence } from "../tree/row_model.ts";
 import { memberIndex } from "../tree/row_model.ts";
+import { createPresenceStore } from "../tree/presence_store.ts";
 import { Tree } from "../tree/tree.tsx";
 import { ShortcutsOverlay } from "../tree/shortcuts.tsx";
+import type { ConfirmState } from "../tree/use_confirm.ts";
 import { useConfirm } from "../tree/use_confirm.ts";
 import { useTree } from "../tree/use_tree.ts";
 import { UNUSABLE_TREE_MESSAGE, UNUSABLE_TREE_NOTICE } from "../tree/validate.ts";
@@ -234,6 +236,73 @@ const NOTHING_IN_FLIGHT: InFlightState = {
 };
 
 /** The tree, and everything that is true only once there is a tree. */
+/**
+ * One dialog per confirm class, under the id the LiveView's modal had. Only
+ * the yes control submits; Escape, the backdrop and Cancel drop the write. The
+ * delete confirm has no "don't show this again", like the workspace's.
+ *
+ * Memoized (7.17): the screen re-renders for every selection, and six closed
+ * dialogs re-rendering with it were a measurable slice of the click.
+ */
+const ConfirmDialogs = memo(function ConfirmDialogs({
+  open,
+  dontAsk,
+  setDontAsk,
+  proceed,
+  cancel,
+}: Pick<ConfirmState, "open" | "dontAsk" | "setDontAsk" | "proceed" | "cancel">) {
+  return (
+    <>
+      {CONFIRM_CLASSES.map((confirmClass) => {
+        const shown = open !== null && open.confirm.class === confirmClass;
+        const current = shown ? open?.confirm : undefined;
+        const dialogId = dialogIdFor(confirmClass);
+        return (
+          <ConfirmDialog
+            key={confirmClass}
+            id={dialogId}
+            open={shown}
+            title={current?.title ?? ""}
+            confirmLabel={current?.confirmLabel ?? "Proceed"}
+            danger={current?.danger ?? false}
+            onConfirm={proceed}
+            onCancel={cancel}
+          >
+            <p>{current?.body ?? ""}</p>
+            {current !== undefined && current.titles.length > 0 && (
+              <ul className="mt-3 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
+                {current.titles.map((title, index) => (
+                  <li key={`${index}-${title}`} className="truncate">
+                    {title}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {skippable(confirmClass) && (
+              <label className="mt-4 flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:min-h-9">
+                <input
+                  type="checkbox"
+                  id={`${dialogId}-dont-show`}
+                  checked={shown && dontAsk}
+                  className="size-5 flex-none rounded border-zinc-300 text-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:border-zinc-600 dark:focus-visible:ring-emerald-400"
+                  onChange={(event) => setDontAsk(event.target.checked)}
+                />
+                {current?.checkboxLabel ?? ""}
+              </label>
+            )}
+          </ConfirmDialog>
+        );
+      })}
+    </>
+  );
+});
+
+/** One Initiative's presence as the rows read it: everyone else's selections, and who is online. */
+function presenceView(state: DomainState, id: number): RowPresence {
+  const current = presenceOf(state, id);
+  return { selections: selectionsOf(current, state.user?.id ?? null), online: onlineIds(current) };
+}
+
 function TreeSection({
   id,
   model,
@@ -280,22 +349,31 @@ function TreeSection({
 
   const members = useMemo(() => memberIndex(memberList), [memberList]);
 
-  // Who else is here and what they have selected (item 3.4.2). Read from the
-  // store the channel writes; the row badges and the online dots are painted
-  // from this and nothing else, so presence changes re-render only the rows
-  // whose badges changed.
-  const me = useStoreValue(
-    stores.domain,
-    useCallback((state: DomainState) => state.user?.id ?? null, []),
+  // Who else is here and what they have selected (item 3.4.2), as a store each
+  // row reads for itself (7.17). Fed straight from the store the channel
+  // writes, outside React: a presence echo — this window's own selection
+  // coming back, most often — reaches only the rows whose badges or dot it
+  // changed, and re-renders nothing above them. Seeded synchronously, so the
+  // first paint already wears the badges of whoever was here.
+  const presence = useMemo(
+    () => createPresenceStore(presenceView(stores.domain.get(), id)),
+    [stores.domain, id],
   );
-  const presenceState = useStoreValue(
-    stores.domain,
-    useCallback((state: DomainState) => presenceOf(state, id), [id]),
-  );
-  const presence = useMemo<RowPresence>(
-    () => ({ selections: selectionsOf(presenceState, me), online: onlineIds(presenceState) }),
-    [presenceState, me],
-  );
+  useEffect(() => {
+    let filed = presenceOf(stores.domain.get(), id);
+    let filedMe = stores.domain.get().user?.id ?? null;
+    const file = () => {
+      const state = stores.domain.get();
+      const current = presenceOf(state, id);
+      const me = state.user?.id ?? null;
+      if (current === filed && me === filedMe) return;
+      filed = current;
+      filedMe = me;
+      presence.set(presenceView(state, id));
+    };
+    file();
+    return stores.domain.subscribe(file);
+  }, [stores.domain, id, presence]);
   // `viewer_plus` is not in the tree read, so the client assumes it is off and
   // a viewer sees no Progress control it cannot use (item 1.2.3).
   const permissions = useMemo(() => permissionsFor(model.header.role), [model.header.role]);
@@ -615,50 +693,13 @@ function TreeSection({
         announcement={tree.announcement}
       />
       <ShortcutsOverlay open={tree.shortcutsOpen} onClose={tree.closeShortcuts} />
-      {/* One dialog per confirm class, under the id the LiveView's modal had.
-          Only the yes control submits; Escape, the backdrop and Cancel drop
-          the write. The delete confirm has no "don't show this again", like
-          the workspace's. */}
-      {CONFIRM_CLASSES.map((confirmClass) => {
-        const shown = confirm.open !== null && confirm.open.confirm.class === confirmClass;
-        const current = shown ? confirm.open?.confirm : undefined;
-        const dialogId = dialogIdFor(confirmClass);
-        return (
-          <ConfirmDialog
-            key={confirmClass}
-            id={dialogId}
-            open={shown}
-            title={current?.title ?? ""}
-            confirmLabel={current?.confirmLabel ?? "Proceed"}
-            danger={current?.danger ?? false}
-            onConfirm={confirm.proceed}
-            onCancel={confirm.cancel}
-          >
-            <p>{current?.body ?? ""}</p>
-            {current !== undefined && current.titles.length > 0 && (
-              <ul className="mt-3 max-h-40 overflow-y-auto rounded border border-zinc-200 bg-zinc-50 p-2 text-sm text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200">
-                {current.titles.map((title, index) => (
-                  <li key={`${index}-${title}`} className="truncate">
-                    {title}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {skippable(confirmClass) && (
-              <label className="mt-4 flex min-h-11 cursor-pointer select-none items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300 sm:min-h-9">
-                <input
-                  type="checkbox"
-                  id={`${dialogId}-dont-show`}
-                  checked={shown && confirm.dontAsk}
-                  className="size-5 flex-none rounded border-zinc-300 text-emerald-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:border-zinc-600 dark:focus-visible:ring-emerald-400"
-                  onChange={(event) => confirm.setDontAsk(event.target.checked)}
-                />
-                {current?.checkboxLabel ?? ""}
-              </label>
-            )}
-          </ConfirmDialog>
-        );
-      })}
+      <ConfirmDialogs
+        open={confirm.open}
+        dontAsk={confirm.dontAsk}
+        setDontAsk={confirm.setDontAsk}
+        proceed={confirm.proceed}
+        cancel={confirm.cancel}
+      />
       {/* The Details pane (item 3.4.3): opens with the selection, from the
           model alone — nothing here waits on the network (§6). A selected id
           the model no longer holds (deleted under us) opens nothing. */}

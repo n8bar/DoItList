@@ -19,8 +19,9 @@ import type { AddAnchor, EditRejection, TreeContext, TreeIntent } from "./contex
 import type { KeyOutcome } from "./keyboard_model.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
-import type { RowPresence, RowUser } from "./row_model.ts";
-import { noPresence } from "./row_model.ts";
+import type { RowUser } from "./row_model.ts";
+import type { PresenceReader } from "./presence_store.ts";
+import { nobodyPresent } from "./presence_store.ts";
 import { canProgress } from "./permissions.ts";
 import type { CollapseStore } from "./tree_model.ts";
 import { collapsedOf, createCollapseStore, setCollapsedIn } from "./collapse_model.ts";
@@ -45,8 +46,8 @@ export interface UseTreeOptions {
   model: TreeModel;
   initiativeId: number;
   members: ReadonlyMap<number, RowUser>;
-  /** Who else is here and what they have selected. Nobody, by default. */
-  presence?: RowPresence;
+  /** Who else is here and what they have selected, as a store each row reads. Nobody, by default. */
+  presence?: PresenceReader;
   permissions: Permissions;
   rows: RowPreferences;
   /** A write the user asked for. Read-only until the operation adapter lands. */
@@ -333,7 +334,7 @@ export function useTree(options: UseTreeOptions): TreeState {
   });
 
   const canProgressId = useCallback((id: number) => canProgress(permissions, id), [permissions]);
-  const presence = options.presence ?? noPresence;
+  const presence = options.presence ?? nobodyPresent;
   const savingIds = options.savingIds ?? EMPTY_IDS;
   const recomputingIds = options.recomputingIds ?? EMPTY_IDS;
   const rowKeys = options.rowKeys ?? EMPTY_KEYS;

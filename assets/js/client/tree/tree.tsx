@@ -99,19 +99,32 @@ function HistoryButton({
 
 /** Keeps the tree at least as wide as its deepest visible row. */
 function useTreeWidth(ref: React.RefObject<HTMLUListElement | null>): void {
-  const recompute = useCallback(() => {
+  // The depths of the rows on screen, as last measured. Measuring forces a
+  // layout of the whole page, and this hook runs on every render of the tree —
+  // a selection included (7.17): when the rows and their depths are the ones
+  // already measured, the answer is the one already set, and nothing is laid
+  // out for it. A resize measures again regardless: the indents changed size.
+  const measured = useRef<string | null>(null);
+  const recompute = useCallback((force = false) => {
     const ul = ref.current;
     if (ul === null) return;
 
-    const left = ul.getBoundingClientRect().left;
-    const indents: number[] = [];
+    const rows: Element[] = [];
+    const depths: string[] = [];
     for (const row of ul.querySelectorAll("[data-task-row]")) {
       // A row inside a collapsed branch is clipped to a sliver; it must not
       // decide how wide the tree is.
       if (row.closest("ul.collapsed-peek") !== null) continue;
-      // Relative to the list, so the answer does not change as it scrolls.
-      indents.push(row.getBoundingClientRect().left - left);
+      rows.push(row);
+      depths.push(row.getAttribute("data-depth") ?? "");
     }
+    const shape = depths.join(",");
+    if (!force && shape === measured.current) return;
+    measured.current = shape;
+
+    const left = ul.getBoundingClientRect().left;
+    // Relative to the list, so the answer does not change as it scrolls.
+    const indents = rows.map((row) => row.getBoundingClientRect().left - left);
 
     const next = treeMinWidthStyle(indents);
     if (ul.style.minWidth !== next) ul.style.minWidth = next;
@@ -119,11 +132,12 @@ function useTreeWidth(ref: React.RefObject<HTMLUListElement | null>): void {
 
   // After layout, every render: rows appear, collapse, and re-indent without
   // any dependency this component could list.
-  useLayoutEffect(recompute);
+  useLayoutEffect(() => recompute());
 
   useEffect(() => {
-    window.addEventListener("resize", recompute);
-    return () => window.removeEventListener("resize", recompute);
+    const onResize = () => recompute(true);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
   }, [recompute]);
 }
 

@@ -31,14 +31,15 @@ import {
   badgeTitle,
   botanicalColor,
   botanicalKind,
-  chipOnline,
   initials,
   progressValue,
   refParts,
-  rowBadges,
 } from "./row_model.ts";
+import type { Selection } from "../live/presence_model.ts";
 import type { TreeContext } from "./context.ts";
 import { clickedSelection } from "./selection_model.ts";
+
+const NO_BADGES: readonly Selection[] = [];
 
 export interface RowProps {
   ctx: TreeContext;
@@ -167,6 +168,22 @@ export function Row({ ctx, id, depth, children }: RowProps) {
     () => !ctx.collapse.get(id),
     () => true,
   );
+  // And presence (7.17): this row's badges, and the dot on its assignee's
+  // disc — the CSS keys off `[data-pill-avatar].chip-online`, which the
+  // co-assignee discs do not carry. The store hands back the same badges
+  // until they change, so another member moving elsewhere costs this row
+  // nothing, and this window's own selection echoing back costs no row at all.
+  const assigneeId = ctx.model.tasks[id]?.assignee_id ?? null;
+  const badges = useSyncExternalStore(
+    ctx.presence.subscribe,
+    () => ctx.presence.badges(id),
+    () => NO_BADGES,
+  );
+  const online = useSyncExternalStore(
+    ctx.presence.subscribe,
+    () => ctx.presence.online(assigneeId),
+    () => false,
+  );
 
   // The roving tabindex (7.12.1): the selected row is the one Tab reaches;
   // with nothing selected, the first row is. Every other row is -1. Only the
@@ -204,11 +221,6 @@ export function Row({ ctx, id, depth, children }: RowProps) {
   const canProgress = ctx.canProgress(id);
   const assignee = assigneeView(record, ctx.members);
   const display = ctx.rows;
-  const badges = rowBadges(ctx.presence, id);
-  // The dot rides the primary assignee's disc only, as `applyPresenceBadges`
-  // paints it: the CSS keys off `[data-pill-avatar].chip-online`, which the
-  // co-assignee discs do not carry.
-  const online = chipOnline(ctx.presence, record.assignee_id);
 
   return (
     <li

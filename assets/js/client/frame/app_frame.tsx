@@ -25,7 +25,7 @@
 //                 "Offline — 3 changes waiting" without moving anything (4.6).
 
 import type { ReactNode, RefObject } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { Link } from "../router/link.tsx";
 import type { DomainState } from "../state/domain.ts";
@@ -33,7 +33,9 @@ import { useStoreValue } from "../state/use_store.ts";
 import { AccountMenu } from "./account_menu.tsx";
 import { Bell } from "./bell.tsx";
 import { HOME_PATH } from "../router/route.ts";
+import type { Route } from "../router/route.ts";
 import { useRoute } from "../router/router.tsx";
+import type { BootstrapUser } from "../boot.ts";
 import type { Stores } from "../state/stores.ts";
 import { NavMenu } from "./menu.tsx";
 import { NAV_ITEMS, isCurrentNav } from "./nav_model.ts";
@@ -51,6 +53,94 @@ import { TouchSwitch } from "./touch_switch.tsx";
  * stay aligned at every width.
  */
 const CONTAINER = "mx-auto w-full max-w-6xl xl:max-w-7xl 2xl:max-w-[90rem] 3xl:max-w-[140rem]";
+
+/**
+ * The header band: wordmark, the summary's slot, nav and controls. Its own
+ * memoized component (7.17): the frame re-renders whenever a tenant takes or
+ * leaves the pane — every selection — and the header has nothing to redraw
+ * for that.
+ */
+const Header = memo(function Header({
+  stores,
+  route,
+  user,
+  summary,
+}: {
+  stores: Stores;
+  route: Route;
+  user: BootstrapUser | null;
+  summary: ReactNode;
+}) {
+  return (
+    <header
+      id="client-header"
+      className="flex-none border-b border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-[oklch(14%_0.04_172)]"
+    >
+      <div className={`${CONTAINER} flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}>
+        <Link
+          id="client-wordmark"
+          to={HOME_PATH}
+          className="flex min-h-11 flex-none items-center gap-2 rounded-lg px-1 font-semibold text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:text-zinc-100 dark:focus-visible:ring-emerald-400 sm:min-h-9"
+        >
+          <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" />
+          Do It List
+        </Link>
+
+        {/* The summary's own slot. Below `md:` this wrapper is not a box
+            at all (`display: contents`) — `justify-between` keeps the
+            controls on the right edge and the badge floats bottom-left —
+            and from `md:` up it is a flex item between the wordmark and
+            the controls, so the three share the band by measurement rather
+            than by luck. The quiet "Live" fits that slot from `md:`; the
+            loud states (Retry, Reload) only move in from `lg:`, where the
+            slot is wide enough that nothing can cover Retry and Retry
+            cannot cover the nav (see `ConnectionSummary`).
+
+            The slot has a FIXED height and the badge floats inside it: the
+            summary has six states and a second line it can grow, and none
+            of them may make the header taller (item 4.6). */}
+        <div className="contents md:relative md:block md:h-9 md:min-w-0 md:flex-1 md:px-3">
+          {summary}
+        </div>
+
+        {/* Nav and controls are ONE right-hand group, as the LiveView
+            header has them. */}
+        <div className="flex flex-none items-center gap-2">
+          <nav id="client-nav" aria-label="Primary" className="hidden items-center gap-2 sm:flex">
+            {NAV_ITEMS.map((item) => (
+              <NavButton
+                key={item.key}
+                id={`client-nav-${item.key}`}
+                to={item.to}
+                label={item.label}
+                current={isCurrentNav(route, item.key)}
+              />
+            ))}
+          </nav>
+
+          <span
+            aria-hidden="true"
+            className="hidden h-5 w-px flex-none bg-zinc-300 dark:bg-zinc-700 sm:block"
+          />
+
+          {/* Wrapped, not classed: the group's own `inline-flex` outranks a
+              `hidden` on the same element, so the breakpoint lives on a
+              wrapper that is no box at all above it. */}
+          <div className="hidden sm:contents">
+            <ThemeToggle stores={stores} />
+            <TouchSwitch stores={stores} />
+          </div>
+          {/* The bell is a top-level item at EVERY breakpoint — never
+              folded into the hamburger — exactly as the LiveView header
+              has it, so notifications are one tap away on a phone too. */}
+          <Bell />
+          {user === null ? null : <AccountMenu user={user} className="hidden sm:block" />}
+          <NavMenu stores={stores} route={route} user={user} />
+        </div>
+      </div>
+    </header>
+  );
+});
 
 export interface AppFrameProps {
   stores: Stores;
@@ -116,73 +206,7 @@ export function AppFrame({ stores, scrollRef, summary, children }: AppFrameProps
           Skip to content
         </a>
 
-        <header
-          id="client-header"
-          className="flex-none border-b border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-[oklch(14%_0.04_172)]"
-        >
-          <div className={`${CONTAINER} flex items-center justify-between gap-3 px-4 py-3 sm:px-6`}>
-            <Link
-              id="client-wordmark"
-              to={HOME_PATH}
-              className="flex min-h-11 flex-none items-center gap-2 rounded-lg px-1 font-semibold text-zinc-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-600 dark:text-zinc-100 dark:focus-visible:ring-emerald-400 sm:min-h-9"
-            >
-              <span aria-hidden="true" className="inline-block h-2.5 w-2.5 rounded-sm bg-emerald-500" />
-              Do It List
-            </Link>
-
-            {/* The summary's own slot. Below `md:` this wrapper is not a box
-                at all (`display: contents`) — `justify-between` keeps the
-                controls on the right edge and the badge floats bottom-left —
-                and from `md:` up it is a flex item between the wordmark and
-                the controls, so the three share the band by measurement rather
-                than by luck. The quiet "Live" fits that slot from `md:`; the
-                loud states (Retry, Reload) only move in from `lg:`, where the
-                slot is wide enough that nothing can cover Retry and Retry
-                cannot cover the nav (see `ConnectionSummary`).
-
-                The slot has a FIXED height and the badge floats inside it: the
-                summary has six states and a second line it can grow, and none
-                of them may make the header taller (item 4.6). */}
-            <div className="contents md:relative md:block md:h-9 md:min-w-0 md:flex-1 md:px-3">
-              {summary}
-            </div>
-
-            {/* Nav and controls are ONE right-hand group, as the LiveView
-                header has them. */}
-            <div className="flex flex-none items-center gap-2">
-              <nav id="client-nav" aria-label="Primary" className="hidden items-center gap-2 sm:flex">
-                {NAV_ITEMS.map((item) => (
-                  <NavButton
-                    key={item.key}
-                    id={`client-nav-${item.key}`}
-                    to={item.to}
-                    label={item.label}
-                    current={isCurrentNav(route, item.key)}
-                  />
-                ))}
-              </nav>
-
-              <span
-                aria-hidden="true"
-                className="hidden h-5 w-px flex-none bg-zinc-300 dark:bg-zinc-700 sm:block"
-              />
-
-              {/* Wrapped, not classed: the group's own `inline-flex` outranks a
-                  `hidden` on the same element, so the breakpoint lives on a
-                  wrapper that is no box at all above it. */}
-              <div className="hidden sm:contents">
-                <ThemeToggle stores={stores} />
-                <TouchSwitch stores={stores} />
-              </div>
-              {/* The bell is a top-level item at EVERY breakpoint — never
-                  folded into the hamburger — exactly as the LiveView header
-                  has it, so notifications are one tap away on a phone too. */}
-              <Bell />
-              {user === null ? null : <AccountMenu user={user} className="hidden sm:block" />}
-              <NavMenu stores={stores} route={route} user={user} />
-            </div>
-          </div>
-        </header>
+        <Header stores={stores} route={route} user={user} summary={summary} />
 
         {/* The one scrolling region. `scrollbar-gutter: stable` keeps the content
             from sliding sideways when a long route brings a scrollbar with it. */}

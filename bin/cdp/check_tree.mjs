@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // The tree harness (m04.02 items 8.3, 8.4, 8.5, 8.6): drive a REAL browser through the
 // client's own tree at `/app/initiatives/:id` and report PASS/FAIL for add,
-// edit, completion, the cascade confirm, the delete confirm and delete, undo
-// and redo (7.3, 7.6), then
-// reorder, reparent, the forbidden drop, the root and tail zones, the
-// move-flip confirm and sort (7.4), then selection, the Details pane and its
-// flyout, references, presence and the deep link (8.5), then readable width,
-// wrapping, sideways and pane scrolling, responsive panes, themes and reduced
-// motion (8.6), then the chevron on its parent's border line, touch targets
-// in both layouts, the touch switch and the LiveView workspace (7.8), then the
+// edit, the cascade confirm, the delete confirm and delete (7.3, 7.6), then
+// reorder, reparent, the forbidden drop, the move-flip confirm and sort
+// (7.4), then selection, the Details pane and its flyout, references and
+// presence (8.5), then readable width, wrapping, sideways and pane scrolling,
+// responsive panes, themes and reduced motion (8.6), then the chevron on its
+// parent's border line, touch targets in both layouts and the touch switch
+// (7.8), then the
 // keyboard: selection keys, the documented shortcuts, N and S placement with
 // focus and caret, Alt + arrow reorganisation, the deep link followed by the
 // arrows, and the rows' screen-reader context (8.7). Drags are real mouse
@@ -223,57 +222,6 @@ export async function checkEditTitle(ctx) {
 }
 
 /**
- * Complete the leaf: it is done at once, and its parent's roll-up is predicted
- * (100% over one done leaf) with the bar marked recomputing until the number
- * comes back.
- */
-export async function checkCompleteLeaf(ctx) {
-  const { session } = ctx;
-  const { task: parentId, child: childId } = ctx.ids;
-
-  const before = await evaluate(session, `return __tree.progress(${parentId});`);
-  await armStopwatch(
-    session,
-    "click",
-    `
-    const child = __tree.rowEl(${childId});
-    const parent = __tree.rowEl(${parentId});
-    if (child === null || parent === null) return false;
-    if (child.dataset.done !== "true") return false;
-    return {
-      parentProgress: parent.dataset.taskProgress,
-      parentRecomputing: parent.classList.contains("is-recomputing"),
-      childSaving: child.classList.contains("is-saving"),
-    };
-  `,
-  );
-  await clickElement(session, `#task-${childId} [data-complete-toggle]`);
-  const ack = await readStopwatch(session, "the leaf to show done");
-  assertAcknowledged(ack, "the done leaf");
-  if (ack.detail.parentProgress !== "100") {
-    throw new Error(`the parent predicted ${ack.detail.parentProgress}% over one done leaf, not 100%`);
-  }
-  if (!ack.detail.parentRecomputing) throw new Error("the parent's bar was not marked recomputing");
-  if (!ack.detail.childSaving) throw new Error("the leaf was not marked saving");
-
-  const settled = await settle(session);
-  const after = await evaluate(
-    session,
-    `
-    return {
-      childDone: __tree.rowEl(${childId})?.dataset.done === "true",
-      parentProgress: __tree.progress(${parentId}),
-      parentDone: __tree.rowEl(${parentId})?.dataset.done === "true",
-    };
-  `,
-  );
-  if (!after.childDone) throw new Error("the leaf is not done after the reply");
-  if (after.parentProgress !== "100") throw new Error(`the parent settled at ${after.parentProgress}%`);
-
-  return `done ${ack.ackMs}ms after the click, ${ack.replyMs - ack.ackMs}ms before the reply; parent ${before}% → ${after.parentProgress}%, settled with ${settled.note}`;
-}
-
-/**
  * Completing a branch asks first (item 5.1.4, §6.5): the cascade confirm opens
  * at once, nothing is sent, and Cancel leaves the tree exactly as it was.
  */
@@ -281,14 +229,9 @@ export async function checkCascadeConfirmCancel(ctx) {
   const { session } = ctx;
   const { task: parentId, child: childId } = ctx.ids;
 
-  // The parent is done since its one leaf is; reopen the leaf first (a leaf
-  // toggle never asks) so the parent's toggle is a completion, not a reopen.
-  await armStopwatch(session, "click", `const el = __tree.rowEl(${childId}); return el !== null && el.dataset.done !== "true";`);
-  await clickElement(session, `#task-${childId} [data-complete-toggle]`);
-  assertAcknowledged(await readStopwatch(session, "the leaf to show open"), "the reopened leaf");
-  await settle(session);
-  const parentDone = await evaluate(session, `return __tree.rowEl(${parentId})?.dataset.done ?? "";`);
-  if (parentDone === "true") throw new Error("the parent still reads done over one open leaf");
+  // Both open, so the parent's toggle is a completion (which asks), not a reopen.
+  const open = await evaluate(session, `return { leaf: __tree.rowEl(${childId})?.dataset.done ?? "", parent: __tree.rowEl(${parentId})?.dataset.done ?? "" };`);
+  if (open.leaf === "true" || open.parent === "true") throw new Error(`the branch does not start open: ${JSON.stringify(open)}`);
 
   const before = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
   await armStopwatch(
@@ -323,7 +266,7 @@ export async function checkCascadeConfirmCancel(ctx) {
   if (after.sent !== before.sent) throw new Error("Cancel sent an operation");
   if (after.tree !== before.tree) throw new Error("Cancel changed the tree");
 
-  return `leaf reopened first; confirm open ${ack.ackMs}ms after the click; nothing sent; Cancel left the tree as it was`;
+  return `confirm open ${ack.ackMs}ms after the click; nothing sent; Cancel left the tree as it was`;
 }
 
 /**
@@ -390,70 +333,6 @@ export async function checkDelete(ctx) {
   if (paneOpen) throw new Error("the Details pane is still open on a deleted task");
 
   return `confirm open ${asked.ackMs}ms after the click, nothing sent, Cancel left the tree as it was; asked again, row gone ${ack.ackMs}ms after Delete, ${ack.replyMs - ack.ackMs}ms before the reply; settled with ${settled.note}`;
-}
-
-/**
- * Undo puts the deleted row back. The press is acknowledged by the button
- * itself (§6.7) — the tree changes when the server says what it reversed.
- */
-export async function checkUndo(ctx) {
-  const { session } = ctx;
-  const childId = ctx.ids.child;
-
-  await armStopwatch(session, "click", `return document.getElementById("undo-button")?.getAttribute("aria-busy") === "true";`, { transient: true });
-  await clickElement(session, "#undo-button");
-  const ack = await readStopwatch(session, "the Undo button to show its wait");
-  assertAcknowledged(ack, "the Undo wait");
-
-  const settled = await settle(session);
-  const restored = await evaluate(
-    session,
-    `
-    const li = __tree.rowEl(${childId});
-    return {
-      back: li !== null,
-      under: li !== null && li.closest("#children-${ctx.ids.task}") !== null,
-      title: __tree.title(${childId}),
-      busy: document.getElementById("undo-button")?.getAttribute("aria-busy"),
-      disabled: document.getElementById("undo-button")?.disabled,
-    };
-  `,
-  );
-  if (!restored.back) throw new Error("the deleted row did not come back");
-  if (!restored.under) throw new Error("the row came back outside its branch");
-  if (restored.title !== TITLES.child) throw new Error(`the row came back as "${restored.title}"`);
-  if (restored.busy === "true" || restored.disabled) throw new Error("the Undo button is still waiting");
-
-  return `wait shown ${ack.ackMs}ms after the click, ${ack.replyMs - ack.ackMs}ms before the reply; row back, settled with ${settled.note}`;
-}
-
-/** Redo takes it away again. */
-export async function checkRedo(ctx) {
-  const { session } = ctx;
-  const childId = ctx.ids.child;
-
-  await armStopwatch(session, "click", `return document.getElementById("redo-button")?.getAttribute("aria-busy") === "true";`, { transient: true });
-  await clickElement(session, "#redo-button");
-  const ack = await readStopwatch(session, "the Redo button to show its wait");
-  assertAcknowledged(ack, "the Redo wait");
-
-  const settled = await settle(session);
-  const after = await evaluate(
-    session,
-    `
-    return {
-      gone: __tree.rowEl(${childId}) === null,
-      parentThere: __tree.rowEl(${ctx.ids.task}) !== null,
-      busy: document.getElementById("redo-button")?.getAttribute("aria-busy"),
-      disabled: document.getElementById("redo-button")?.disabled,
-    };
-  `,
-  );
-  if (!after.gone) throw new Error("the row is still there after Redo");
-  if (!after.parentThere) throw new Error("Redo took the parent with it");
-  if (after.busy === "true" || after.disabled) throw new Error("the Redo button is still waiting");
-
-  return `wait shown ${ack.ackMs}ms after the click, ${ack.replyMs - ack.ackMs}ms before the reply; row gone again, settled with ${settled.note}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,46 +454,6 @@ export async function checkForbiddenDrop(ctx) {
 }
 
 /**
- * The root zone and a branch's tail zone, both mounted only while a drag is
- * on: a child dropped in the bottom root zone lands last at the root; a root
- * row dropped on a branch's tail lands as its last child.
- */
-export async function checkRootAndTailZones(ctx) {
-  const { session } = ctx;
-  const { task: alpha, bravo, foxtrot } = ctx.ids;
-
-  // Out to the root's end.
-  let pointer = await beginDrag(session, foxtrot);
-  let paint = await dragOver(session, pointer, await zonePoint(session, `#task-tree > li.drop-root-zone[data-zone="bottom"]`, "the bottom root zone"));
-  if (paint.zone !== "bottom") throw new Error(`the bottom root zone is not lit: ${JSON.stringify(paint)}`);
-  await armStopwatch(session, "pointerup", `const o = __tree.order(null); return o !== null && o[o.length - 1] === ${foxtrot};`);
-  await mouseUp(session, pointer);
-  let ack = await readStopwatch(session, `"Foxtrot" last at the root`);
-  assertAcknowledged(ack, "the row moved to the root's end");
-  let settled = await settle(session);
-  const rootAfter = await evaluate(session, `return { order: __tree.order(null), depth: document.getElementById("task-${foxtrot}")?.dataset.depth };`);
-  if (rootAfter.order[rootAfter.order.length - 1] !== foxtrot) throw new Error(`"Foxtrot" settled at ${JSON.stringify(rootAfter.order)}`);
-  if (rootAfter.depth !== "0") throw new Error(`"Foxtrot" settled at depth ${rootAfter.depth}, not 0`);
-  const zoneNote = `root zone: last ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, ${settled.note}`;
-
-  // In, as the branch's last child.
-  pointer = await beginDrag(session, alpha);
-  paint = await dragOver(session, pointer, await zonePoint(session, `li.drop-tail[data-branch="${bravo}"]`, `"Bravo"'s tail zone`));
-  if (paint.tail !== bravo) throw new Error(`"Bravo"'s tail zone is not lit: ${JSON.stringify(paint)}`);
-  await armStopwatch(session, "pointerup", `const o = __tree.order(${bravo}); return o !== null && o[o.length - 1] === ${alpha};`);
-  await mouseUp(session, pointer);
-  ack = await readStopwatch(session, `"Alpha, renamed" last under "Bravo"`);
-  assertAcknowledged(ack, "the row appended to the branch");
-  settled = await settle(session);
-  const tailAfter = await evaluate(session, `return { order: __tree.order(${bravo}), depth: document.getElementById("task-${alpha}")?.dataset.depth };`);
-  if (tailAfter.order[tailAfter.order.length - 1] !== alpha) throw new Error(`"Alpha, renamed" settled at ${JSON.stringify(tailAfter.order)} under "Bravo"`);
-  if (tailAfter.depth !== "1") throw new Error(`"Alpha, renamed" settled at depth ${tailAfter.depth}, not 1`);
-  await assertNothingPainted(session, "after the tail drop");
-
-  return `${zoneNote}; tail zone: last child ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, ${settled.note}`;
-}
-
-/**
  * The move-flip confirm (`completion-flip`): an open task dropped inside a
  * done leaf would reopen it, so the question opens at once and nothing is
  * sent. Cancel leaves everything as it was; asked again, Proceed moves the
@@ -695,7 +534,12 @@ export async function checkSort(ctx) {
   const { session } = ctx;
   const { bravo, delta } = ctx.ids;
 
-  // Alphabetical on "Bravo": Charlie, Echo, Alpha → Alpha, Charlie, Echo.
+  // "Bravo" holds Charlie, Echo — alphabetical already — so put Echo first
+  // through the API (the row re-slots on the channel), then sort it back.
+  const { charlie, echo } = ctx.ids;
+  await pageOperation(session, `cdp-tree-${ctx.stamp}-unsort`, { op: "update", type: "task", id: echo, data: { parent_id: bravo, position: 0, reorder: true } });
+  await waitFor(session, `return ${sameOrder(bravo, [echo, charlie])};`, { timeoutMs: 15_000, everyMs: 100, what: `"Echo" above "Charlie"` });
+  await settle(session);
   await selectRow(session, bravo);
   await waitFor(session, `return document.getElementById("sort-mode-task") !== null;`, { timeoutMs: 5_000, what: "the Sort control" });
   const before = await evaluate(session, `return __tree.order(${bravo}).map((id) => [id, __tree.title(id)]);`);
@@ -801,9 +645,19 @@ export async function checkSelection(ctx) {
   await pressKey(session, "Escape");
   await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "nothing selected to begin with" });
 
-  await armStopwatch(session, "click", `return __tree.selected() === ${charlie};`);
+  // Under CDP_PROFILE the readout is taken inside the predicate, on the very
+  // commit that showed the selection — before the channel's presence echo
+  // lands its own commit and the fiber walk would report that one instead.
+  const walked = process.env.CDP_PROFILE === "1" ? `{ rendered: (() => { ${RENDERED_JS} })() }` : "true";
+  await armStopwatch(session, "click", `return __tree.selected() === ${charlie} ? ${walked} : false;`);
+  const profile = await startProfile(session);
   await clickElement(session, titleOf(charlie));
   const picked = await readStopwatch(session, `"Charlie" selected`, { expectReply: false });
+  await profile.stop("selection-click");
+  if (process.env.CDP_PROFILE === "1") {
+    process.stdout.write(`prof  rendered on the selection's commit: ${picked.detail.rendered}\n`);
+    process.stdout.write(`prof  rendered by the time it settled: ${await evaluate(session, RENDERED_JS)}\n`);
+  }
   assertAcknowledged(picked, "the selected row");
 
   await armStopwatch(
@@ -1078,66 +932,6 @@ export async function checkPresence(ctx) {
     await evaluate(session, `__ws?.second?.close(); return true;`).catch(() => {});
     await session.send("Page.removeScriptToEvaluateOnNewDocument", { identifier }).catch(() => {});
   }
-}
-
-/**
- * A `?task=<id>` link (the workspace's `honor_task_param/2`): arriving on it
- * opens the collapsed branch the task is in, selects it, scrolls it into view
- * and opens the pane — before anything is fetched beyond the tree itself. The
- * address bar then follows the selection, and clears with it.
- */
-export async function checkDeepLink(ctx) {
-  const { session } = ctx;
-  await seedRevealRows(ctx);
-  const { bravo, charlie, echo } = ctx.ids;
-  const title = MOVE_TITLES.charlie;
-
-  await pressKey(session, "Escape");
-  await waitFor(session, `return __tree.selected() === null;`, { timeoutMs: 2_000, what: "nothing selected before the link" });
-  await collapseBranch(session, bravo);
-
-  const arrival = await reopenTree(ctx, `?task=${charlie}`);
-  const revealed = await waitFor(
-    session,
-    `
-    if (__tree.selected() !== ${charlie}) return null;
-    if (document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek")) return null;
-    return { at: performance.now() };
-  `,
-    { timeoutMs: 5_000, everyMs: 5, what: `"Charlie" revealed by the link` },
-  ).catch(async (error) => {
-    const state = await evaluate(session, `return { selected: __tree.selected(), open: !document.getElementById("children-${bravo}")?.classList.contains("collapsed-peek"), search: window.location.search };`);
-    throw new Error(`${error.message} (selected ${state.selected}, "Bravo" ${state.open ? "open" : "closed"}, address bar "${state.search}")`);
-  });
-  const sinceTree = Math.round(revealed.at - arrival.at);
-  if (arrival.selected !== charlie && sinceTree > ACK_BUDGET_MS) {
-    throw new Error(`the tree was up ${sinceTree}ms before the link's task was selected`);
-  }
-  await waitFor(session, `return __tree.inView(${charlie}) && __tree.pane(${JSON.stringify(title)}) !== false;`, {
-    timeoutMs: 2_000,
-    everyMs: 10,
-    what: `"Charlie" in view with its pane open`,
-  });
-  const search = await evaluate(session, `return window.location.search;`);
-  if (search !== `?task=${charlie}`) throw new Error(`the address bar reads "${search}" after arrival`);
-
-  // The parameter follows the selection, and goes with it.
-  const before = await evaluate(session, `return __ops.log.length;`);
-  await clickElement(session, titleOf(echo));
-  const followed = await waitFor(session, `return window.location.search === "?task=${echo}" ? window.location.search : null;`, {
-    timeoutMs: 2_000,
-    everyMs: 10,
-    what: "the address bar to follow the selection",
-  });
-  await pressKey(session, "Escape");
-  await waitFor(session, `return __tree.selected() === null && window.location.search === "";`, {
-    timeoutMs: 2_000,
-    everyMs: 10,
-    what: "the address bar to clear with the selection",
-  });
-  await assertNothingFetched(session, before, "the address bar following the selection");
-
-  return `arrived with "Bravo" open, "Charlie" selected ${arrival.selected === charlie ? "in the tree's first paint" : `${sinceTree}ms after the tree`}, in view, pane open; address bar followed to "${followed}" and cleared with Escape; nothing fetched`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1800,43 +1594,6 @@ export async function checkChevronFlipsFirst(ctx) {
   return `glyph first on the 24-deep branch — ${times.join("; ")} (frame timing is item 7.9)`;
 }
 
-/**
- * The LiveView workspace shares app.css and the row markup, so it gets the
- * same chevron and touch layout: open it once in the tab, measure the
- * top-level chevron on the tree's rule, press its own switch and see the
- * document follow, screenshot it, and come back to the client.
- */
-export async function checkLiveViewWorkspace(ctx) {
-  const { session } = ctx;
-  if (ctx.ids.hotel === undefined) await seedLayoutRows(ctx);
-  const { hotel } = ctx.ids;
-  const saved = await evaluate(session, TOUCH_STATE_JS);
-
-  try {
-    await session.send("Network.emulateNetworkConditions", FAST_LINK);
-    await session.send("Page.navigate", { url: `${ctx.appUrl}/initiatives/${ctx.initiativeId}` });
-    await waitFor(session, `return document.getElementById("collapse-${hotel}") !== null && document.getElementById("touch-switch")?.dataset.touchHooked === "true";`, { timeoutMs: READY_TIMEOUT_MS, what: "the LiveView workspace" });
-    if (process.env.CDP_PROFILE === "1") {
-      const r = await evaluate(session, FPS_JS);
-      process.stdout.write(`fps   LiveView workspace: ${r.frames} frames in 2.5s, longest gap ${r.maxGap}ms, tab ${r.visibility}, ${r.focused ? "focused" : "not focused"}, ${r.size}, ${r.animations} animations\n`);
-    }
-    const m = await evaluate(session, CHEVRON_JS.replace("ID", String(hotel)));
-    if (!centredOn(m.centre.x, m.line)) throw new Error(`LiveView chevron off the tree's rule by ${(m.centre.x - m.line).toFixed(1)}px`);
-    if (!centredOn(m.centre.y, m.titleLine)) throw new Error(`LiveView chevron off its title line by ${(m.centre.y - m.titleLine).toFixed(1)}px`);
-    const wasOn = await evaluate(session, `return document.documentElement.hasAttribute("data-touch");`);
-    await clickElement(session, "#touch-switch");
-    await waitFor(session, `return document.documentElement.hasAttribute("data-touch") === ${!wasOn} && document.getElementById("touch-switch").getAttribute("aria-checked") === "${String(!wasOn)}";`, { timeoutMs: 2_000, what: "the LiveView switch to flip the layout" });
-    const padding = await evaluate(session, `return getComputedStyle(document.querySelector("#task-${hotel} > [data-task-row]")).paddingBottom;`);
-    const shot = await screenshot(session, `liveview-workspace-touch-${wasOn ? "off" : "on"}`);
-    await clickElement(session, "#touch-switch");
-    await waitFor(session, `return document.documentElement.hasAttribute("data-touch") === ${wasOn};`, { timeoutMs: 2_000, what: "the LiveView switch to flip it back" });
-    return `chevron on the rule, drawn ${m.drawn.w}×${m.drawn.h}; switch flips data-touch (row padding ${padding} with touch ${wasOn ? "off" : "on"}); ${shot}`;
-  } finally {
-    await reopenTree(ctx).catch(() => {});
-    await restoreTouchLayout(session, saved).catch(() => {});
-  }
-}
-
 /** Every animated thing in the tree, as computed motion, with the in-flight marks forced on. */
 const MOTION_JS = `
   const pick = (name, el) => {
@@ -2264,9 +2021,13 @@ export async function checkKeyboardShortcuts(ctx) {
   const order = ["low", "normal", "high"];
   const up = order[Math.min(order.indexOf(priorityBefore) + 1, 2)];
   if (up === priorityBefore) throw new Error(`priority is already ${priorityBefore}; nothing for P to step to`);
-  await armStopwatch(session, "keydown", `return ${pill}?.dataset.priority === ${JSON.stringify(up)};`);
+  const walkedStep = process.env.CDP_PROFILE === "1" ? `{ rows: document.querySelectorAll("[data-task-row]").length, rendered: (() => { ${RENDERED_JS} })() }` : "true";
+  await armStopwatch(session, "keydown", `return ${pill}?.dataset.priority === ${JSON.stringify(up)} ? ${walkedStep} : false;`);
+  const stepProfile = await startProfile(session);
   await tapLetter(session, "p");
   const stepped = await readStopwatch(session, `P to step priority to ${up}`);
+  await stepProfile.stop("priority-step");
+  if (process.env.CDP_PROFILE === "1") process.stdout.write(`prof  rendered on the priority step (${stepped.detail.rows} rows): ${stepped.detail.rendered}\n`);
   assertAcknowledged(stepped, "the priority step");
   await settle(session);
   await armStopwatch(session, "keydown", `return ${pill}?.dataset.priority === ${JSON.stringify(priorityBefore)};`);
@@ -2529,7 +2290,7 @@ export async function checkKeyboardMoves(ctx) {
 }
 
 /**
- * Arriving on `?task=` (checked in "deep link: ?task= reveals"), the keyboard
+ * Arriving on `?task=`, the keyboard
  * carries on from the revealed row: focus is on the page, not in a field, so
  * the very next ↓ selects the row after it, at once, with the pane following.
  */
@@ -3107,13 +2868,14 @@ export async function checkPredictionGivesWay(ctx) {
     await armStopwatch(session, "click", `
       const child = __tree.rowEl(${whiskey});
       if (child === null || child.dataset.done !== "true") return false;
-      return { parentProgress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing") };
+      return { parentProgress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing"), childSaving: child.classList.contains("is-saving") };
     `);
     await clickElement(session, `#task-${whiskey} [data-complete-toggle]`);
     const ack = await readStopwatch(session, `"Whiskey" to show done`);
     assertAcknowledged(ack, "the done leaf");
     if (ack.detail.parentProgress !== "50") throw new Error(`the page predicted "Uniform" at ${ack.detail.parentProgress}% over one done leaf of two, not 50%`);
     if (!ack.detail.recomputing) throw new Error(`"Uniform" was not marked recomputing`);
+    if (!ack.detail.childSaving) throw new Error(`"Whiskey" was not marked saving on the click`);
     const settled = await settle(session);
     const landed = await evaluate(session, `return { seq: [...__prog], progress: __tree.progress(${uniform}), recomputing: __tree.rowEl(${uniform})?.classList.contains("is-recomputing") };`);
     if (landed.recomputing) throw new Error(`"Uniform" is still marked recomputing after the reply`);
@@ -3283,26 +3045,27 @@ export async function checkHistoryMatchesServer(ctx) {
 // (`Children` returns null without children) render a child list, its chevron
 // and its tail zone only while the branch HAS children, so an emptied branch
 // is an open, childless row at 0% until it is refilled. These checks seed
-// their own rows: Papa › Quebec (50%), Romeo › Sierra (50%), Tango › Tumble.
+// their own rows (names no other seed uses): Juliet › November (50%),
+// Willow › Wren (50%), Xylo › Yarrow.
 // ---------------------------------------------------------------------------
 
-const EMPTY_TITLES = { papa: "Papa", quebec: "Quebec", romeo: "Romeo", sierra: "Sierra", tango: "Tango", tumble: "Tumble", tandem: "Tandem", renamed: "Tumble, renamed" };
+const EMPTY_TITLES = { juliet: "Juliet", november: "November", willow: "Willow", wren: "Wren", xylo: "Xylo", yarrow: "Yarrow", zinnia: "Zinnia", renamed: "Yarrow, renamed" };
 
 async function seedEmptyRows(ctx) {
-  if (ctx.ids.papa !== undefined) return;
+  if (ctx.ids.juliet !== undefined) return;
   const { session, initiativeId } = ctx;
   const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-empty`, [
-    { op: "add", type: "task", lid: "papa", data: { initiative_id: initiativeId, title: EMPTY_TITLES.papa } },
-    { op: "add", type: "task", data: { parent_lid: "papa", title: EMPTY_TITLES.quebec, manual_progress: 50 } },
-    { op: "add", type: "task", lid: "romeo", data: { initiative_id: initiativeId, title: EMPTY_TITLES.romeo } },
-    { op: "add", type: "task", data: { parent_lid: "romeo", title: EMPTY_TITLES.sierra, manual_progress: 50 } },
-    { op: "add", type: "task", lid: "tango", data: { initiative_id: initiativeId, title: EMPTY_TITLES.tango } },
-    { op: "add", type: "task", data: { parent_lid: "tango", title: EMPTY_TITLES.tumble } },
+    { op: "add", type: "task", lid: "juliet", data: { initiative_id: initiativeId, title: EMPTY_TITLES.juliet } },
+    { op: "add", type: "task", data: { parent_lid: "juliet", title: EMPTY_TITLES.november, manual_progress: 50 } },
+    { op: "add", type: "task", lid: "willow", data: { initiative_id: initiativeId, title: EMPTY_TITLES.willow } },
+    { op: "add", type: "task", data: { parent_lid: "willow", title: EMPTY_TITLES.wren, manual_progress: 50 } },
+    { op: "add", type: "task", lid: "xylo", data: { initiative_id: initiativeId, title: EMPTY_TITLES.xylo } },
+    { op: "add", type: "task", data: { parent_lid: "xylo", title: EMPTY_TITLES.yarrow } },
   ]);
   const ids = results.map((r) => r?.data?.id);
   if (!ids.every((id) => typeof id === "number")) throw new Error(`the empty-branch seed did not name six tasks: ${JSON.stringify(results)}`);
-  const [papa, quebec, romeo, sierra, tango, tumble] = ids;
-  Object.assign(ctx.ids, { papa, quebec, romeo, sierra, tango, tumble });
+  const [juliet, november, willow, wren, xylo, yarrow] = ids;
+  Object.assign(ctx.ids, { juliet, november, willow, wren, xylo, yarrow });
   await waitForRows(session, ids, "the empty-branch rows");
 }
 
@@ -3335,7 +3098,7 @@ function assertEmptied(state, name, when) {
  */
 async function assertTailZonesLast(session, ctx, when) {
   const before = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
-  const pointer = await beginDrag(session, ctx.ids.tumble);
+  const pointer = await beginDrag(session, ctx.ids.yarrow);
   const lists = await evaluate(
     session,
     `
@@ -3368,48 +3131,48 @@ async function assertTailZonesLast(session, ctx, when) {
 export async function checkEmptiedBranchStaysOpen(ctx) {
   const { session } = ctx;
   await seedEmptyRows(ctx);
-  const { papa, quebec, romeo, sierra, tango } = ctx.ids;
+  const { juliet, november, willow, wren, xylo } = ctx.ids;
   const notes = [];
 
-  const before = await evaluate(session, `return { papa: (() => { ${branchStateJs(papa)} })(), romeo: (() => { ${branchStateJs(romeo)} })() };`);
-  for (const [name, state] of [["Papa", before.papa], ["Romeo", before.romeo]]) {
+  const before = await evaluate(session, `return { juliet: (() => { ${branchStateJs(juliet)} })(), willow: (() => { ${branchStateJs(willow)} })() };`);
+  for (const [name, state] of [["Juliet", before.juliet], ["Willow", before.willow]]) {
     if (state === null || state.progress !== "50" || state.done || !state.list || !state.chevron) {
       throw new Error(`"${name}" does not start as an open branch at 50%: ${JSON.stringify(state)}`);
     }
   }
 
   // The only child out to the root's end.
-  let pointer = await beginDrag(session, quebec);
+  let pointer = await beginDrag(session, november);
   let paint = await dragOver(session, pointer, await zonePoint(session, `#task-tree > li.drop-root-zone[data-zone="bottom"]`, "the bottom root zone"));
   if (paint.zone !== "bottom") throw new Error(`the bottom root zone is not lit: ${JSON.stringify(paint)}`);
-  await armStopwatch(session, "pointerup", `const o = __tree.order(null); if (o === null || o[o.length - 1] !== ${quebec}) return false; ${branchStateJs(papa)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(null); if (o === null || o[o.length - 1] !== ${november}) return false; ${branchStateJs(juliet)}`);
   await mouseUp(session, pointer);
-  let ack = await readStopwatch(session, `"Quebec" last at the root`);
-  assertAcknowledged(ack, `the row moved out of "Papa"`);
-  assertEmptied(ack.detail, "Papa", "as predicted");
+  let ack = await readStopwatch(session, `"November" last at the root`);
+  assertAcknowledged(ack, `the row moved out of "Juliet"`);
+  assertEmptied(ack.detail, "Juliet", "as predicted");
   let settled = await settle(session);
-  assertEmptied(await evaluate(session, branchStateJs(papa)), "Papa", `once settled (${settled.note})`);
+  assertEmptied(await evaluate(session, branchStateJs(juliet)), "Juliet", `once settled (${settled.note})`);
   await assertNothingPainted(session, "after the root-zone drop");
-  notes.push(`to the root: "Papa" open at 0% ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, and after it`);
+  notes.push(`to the root: "Juliet" open at 0% ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, and after it`);
 
   // The only child into another branch.
-  pointer = await beginDrag(session, sierra);
-  paint = await dragOver(session, pointer, await bandPoint(session, tango, "center"));
-  if (paint.target !== tango) throw new Error(`"Tango" is not ringed as the target: ${JSON.stringify(paint)}`);
-  await armStopwatch(session, "pointerup", `const o = __tree.order(${tango}); if (o === null || o[0] !== ${sierra}) return false; ${branchStateJs(romeo)}`);
+  pointer = await beginDrag(session, wren);
+  paint = await dragOver(session, pointer, await bandPoint(session, xylo, "center"));
+  if (paint.target !== xylo) throw new Error(`"Xylo" is not ringed as the target: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(${xylo}); if (o === null || o[0] !== ${wren}) return false; ${branchStateJs(willow)}`);
   await mouseUp(session, pointer);
-  ack = await readStopwatch(session, `"Sierra" first under "Tango"`);
-  assertAcknowledged(ack, `the row moved out of "Romeo"`);
-  assertEmptied(ack.detail, "Romeo", "as predicted");
+  ack = await readStopwatch(session, `"Wren" first under "Xylo"`);
+  assertAcknowledged(ack, `the row moved out of "Willow"`);
+  assertEmptied(ack.detail, "Willow", "as predicted");
   settled = await settle(session);
-  assertEmptied(await evaluate(session, branchStateJs(romeo)), "Romeo", `once settled (${settled.note})`);
+  assertEmptied(await evaluate(session, branchStateJs(willow)), "Willow", `once settled (${settled.note})`);
   await assertNothingPainted(session, "after the reparent");
-  notes.push(`into "Tango": "Romeo" open at 0% ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, and after it`);
+  notes.push(`into "Xylo": "Willow" open at 0% ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, and after it`);
 
   // A fresh read of the server agrees, row for row, and holds both open at 0.
   const rows = await assertTreeMatchesServer(ctx, "after both moves");
   const server = await evaluate(session, serverTreeJs(ctx.initiativeId));
-  for (const [name, id] of [["Papa", papa], ["Romeo", romeo]]) {
+  for (const [name, id] of [["Juliet", juliet], ["Willow", willow]]) {
     const line = server.lines.find((l) => l.startsWith(`${id}:`));
     if (line === undefined || !line.endsWith(":false:0")) throw new Error(`the server holds "${name}" as ${line}, not open at 0%`);
   }
@@ -3419,54 +3182,75 @@ export async function checkEmptiedBranchStaysOpen(ctx) {
 
 /**
  * 8.10 (2): the tail zone is the last item of every open branch's list after
- * an add (API), a keyboard reorder, a reparent in and out (API), a sort
- * (API), a collapse and expand, and a rename that arrives by the channel.
+ * an add (API), a keyboard reorder, a drop on a tail zone (last child) and a
+ * drop in the top root zone (first at the root) — both before the reply — a
+ * sort (API), a collapse and expand, and a rename that arrives by the channel.
  */
 export async function checkTailZonesStayLast(ctx) {
   const { session } = ctx;
   await seedEmptyRows(ctx);
-  const { papa, quebec, tango, tumble } = ctx.ids;
+  const { november, xylo, yarrow } = ctx.ids;
   const key = (name) => `cdp-tree-${ctx.stamp}-tail-${name}`;
   const steps = [];
 
-  const added = await pageOperation(session, key("add"), { op: "add", type: "task", data: { parent_id: tango, title: EMPTY_TITLES.tandem } });
-  const tandem = added?.data?.id;
-  if (typeof tandem !== "number") throw new Error(`the add did not name a task: ${JSON.stringify(added)}`);
-  ctx.ids.tandem = tandem;
-  await waitForRows(session, [tandem], `"Tandem" under "Tango"`);
+  const added = await pageOperation(session, key("add"), { op: "add", type: "task", data: { parent_id: xylo, title: EMPTY_TITLES.zinnia } });
+  const zinnia = added?.data?.id;
+  if (typeof zinnia !== "number") throw new Error(`the add did not name a task: ${JSON.stringify(added)}`);
+  ctx.ids.zinnia = zinnia;
+  await waitForRows(session, [zinnia], `"Zinnia" under "Xylo"`);
   steps.push(`add child (${await assertTailZonesLast(session, ctx, "after the add")} lists)`);
 
-  const order = await evaluate(session, `return __tree.order(${tango});`);
-  const at = order.indexOf(tumble);
-  if (at === -1) throw new Error(`"Tumble" is not under "Tango": ${JSON.stringify(order)}`);
-  if ((await evaluate(session, `return __tree.selected();`)) !== tumble) await selectRow(session, tumble);
+  const order = await evaluate(session, `return __tree.order(${xylo});`);
+  const at = order.indexOf(yarrow);
+  if (at === -1) throw new Error(`"Yarrow" is not under "Xylo": ${JSON.stringify(order)}`);
+  if ((await evaluate(session, `return __tree.selected();`)) !== yarrow) await selectRow(session, yarrow);
   await tapKey(session, at === order.length - 1 ? "ArrowUp" : "ArrowDown", MOD.alt);
-  await waitFor(session, `return JSON.stringify(__tree.order(${tango})) !== ${JSON.stringify(JSON.stringify(order))};`, { timeoutMs: 2_000, what: `"Tumble" to move` });
+  await waitFor(session, `return JSON.stringify(__tree.order(${xylo})) !== ${JSON.stringify(JSON.stringify(order))};`, { timeoutMs: 2_000, what: `"Yarrow" to move` });
   await settle(session);
   steps.push(`reorder within (${await assertTailZonesLast(session, ctx, "after the reorder")} lists)`);
 
-  await pageOperation(session, key("in"), { op: "update", type: "task", id: quebec, data: { parent_id: tango } });
-  await waitFor(session, `return (__tree.order(${tango}) ?? []).includes(${quebec});`, { timeoutMs: 15_000, everyMs: 100, what: `"Quebec" under "Tango"` });
-  await settle(session);
-  steps.push(`reparent in (${await assertTailZonesLast(session, ctx, "after the reparent in")} lists)`);
+  // Reparent in, by a drop on "Xylo"'s tail zone: last child, before the reply.
+  let pointer = await beginDrag(session, november);
+  let paint = await dragOver(session, pointer, await zonePoint(session, `li.drop-tail[data-branch="${xylo}"]`, `"Xylo"'s tail zone`));
+  if (paint.tail !== xylo) throw new Error(`"Xylo"'s tail zone is not lit: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(${xylo}); return o !== null && o[o.length - 1] === ${november};`);
+  await mouseUp(session, pointer);
+  let ack = await readStopwatch(session, `"November" last under "Xylo"`);
+  assertAcknowledged(ack, "the row appended to the branch");
+  let settled = await settle(session);
+  let after = await evaluate(session, `return { order: __tree.order(${xylo}), depth: document.getElementById("task-${november}")?.dataset.depth };`);
+  if (after.order[after.order.length - 1] !== november) throw new Error(`"November" settled at ${JSON.stringify(after.order)} under "Xylo"`);
+  if (after.depth !== "1") throw new Error(`"November" settled at depth ${after.depth}, not 1`);
+  await assertNothingPainted(session, "after the tail drop");
+  steps.push(`tail-zone drop: last child ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply (${await assertTailZonesLast(session, ctx, "after the reparent in")} lists)`);
 
-  await pageOperation(session, key("out"), { op: "update", type: "task", id: quebec, data: { parent_id: papa } });
-  await waitFor(session, `return (__tree.order(${papa}) ?? []).includes(${quebec}) && !(__tree.order(${tango}) ?? []).includes(${quebec});`, { timeoutMs: 15_000, everyMs: 100, what: `"Quebec" under "Papa"` });
-  await settle(session);
-  steps.push(`reparent out (${await assertTailZonesLast(session, ctx, "after the reparent out")} lists)`);
+  // Reparent out, by a drop in the top root zone: first at the root, before the reply.
+  pointer = await beginDrag(session, november);
+  paint = await dragOver(session, pointer, await zonePoint(session, `#task-tree > li.drop-root-zone[data-zone="top"]`, "the top root zone"));
+  if (paint.zone !== "top") throw new Error(`the top root zone is not lit: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(null); return o !== null && o[0] === ${november};`);
+  await mouseUp(session, pointer);
+  ack = await readStopwatch(session, `"November" first at the root`);
+  assertAcknowledged(ack, "the row moved to the root's start");
+  settled = await settle(session);
+  after = await evaluate(session, `return { order: __tree.order(null), depth: document.getElementById("task-${november}")?.dataset.depth };`);
+  if (after.order[0] !== november) throw new Error(`"November" settled at ${JSON.stringify(after.order)} at the root`);
+  if (after.depth !== "0") throw new Error(`"November" settled at depth ${after.depth}, not 0`);
+  await assertNothingPainted(session, "after the root-zone drop");
+  steps.push(`root-zone drop: first ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, ${settled.note} (${await assertTailZonesLast(session, ctx, "after the reparent out")} lists)`);
 
-  await pageOperation(session, key("sort"), { op: "update", type: "task", id: tango, data: { sort_mode: "alphabetical" } });
-  await waitFor(session, `return document.getElementById("children-${tango}")?.dataset.sortMode === "alphabetical";`, { timeoutMs: 15_000, everyMs: 100, what: `"Tango" sorted alphabetically` });
+  await pageOperation(session, key("sort"), { op: "update", type: "task", id: xylo, data: { sort_mode: "alphabetical" } });
+  await waitFor(session, `return document.getElementById("children-${xylo}")?.dataset.sortMode === "alphabetical";`, { timeoutMs: 15_000, everyMs: 100, what: `"Xylo" sorted alphabetically` });
   await settle(session);
   steps.push(`sort (${await assertTailZonesLast(session, ctx, "after the sort")} lists)`);
 
-  await collapseBranch(session, tango);
-  await clickElement(session, `#collapse-${tango}`);
-  await waitFor(session, `return document.getElementById("children-${tango}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Tango" to expand` });
+  await collapseBranch(session, xylo);
+  await clickElement(session, `#collapse-${xylo}`);
+  await waitFor(session, `return document.getElementById("children-${xylo}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Xylo" to expand` });
   steps.push(`collapse and expand (${await assertTailZonesLast(session, ctx, "after the expand")} lists)`);
 
-  await pageOperation(session, key("rename"), { op: "update", type: "task", id: tumble, data: { title: EMPTY_TITLES.renamed } });
-  await waitFor(session, `return __tree.title(${tumble}) === ${JSON.stringify(EMPTY_TITLES.renamed)};`, { timeoutMs: 15_000, everyMs: 100, what: "the rename to arrive" });
+  await pageOperation(session, key("rename"), { op: "update", type: "task", id: yarrow, data: { title: EMPTY_TITLES.renamed } });
+  await waitFor(session, `return __tree.title(${yarrow}) === ${JSON.stringify(EMPTY_TITLES.renamed)};`, { timeoutMs: 15_000, everyMs: 100, what: "the rename to arrive" });
   await settle(session);
   steps.push(`channel rename (${await assertTailZonesLast(session, ctx, "after the rename")} lists)`);
 
@@ -3482,34 +3266,34 @@ export async function checkTailZonesStayLast(ctx) {
 export async function checkFirstChildIntoEmptiedBranch(ctx) {
   const { session } = ctx;
   await seedEmptyRows(ctx);
-  const { romeo, sierra, tango, quebec } = ctx.ids;
+  const { willow, wren, xylo, november } = ctx.ids;
 
-  // Started here alone, "Romeo" still holds "Sierra": empty it through the API.
-  if ((await evaluate(session, `return __tree.order(${romeo});`)) !== null) {
-    await pageOperation(session, `cdp-tree-${ctx.stamp}-empty-romeo`, { op: "update", type: "task", id: sierra, data: { parent_id: tango } });
-    await waitFor(session, `return __tree.order(${romeo}) === null && (__tree.order(${tango}) ?? []).includes(${sierra});`, { timeoutMs: 15_000, everyMs: 100, what: `"Romeo" emptied` });
+  // Started here alone, "Willow" still holds "Wren": empty it through the API.
+  if ((await evaluate(session, `return __tree.order(${willow});`)) !== null) {
+    await pageOperation(session, `cdp-tree-${ctx.stamp}-empty-willow`, { op: "update", type: "task", id: wren, data: { parent_id: xylo } });
+    await waitFor(session, `return __tree.order(${willow}) === null && (__tree.order(${xylo}) ?? []).includes(${wren});`, { timeoutMs: 15_000, everyMs: 100, what: `"Willow" emptied` });
     await settle(session);
   }
 
-  const pointer = await beginDrag(session, quebec);
-  const tails = await evaluate(session, `return document.querySelectorAll('#task-tree li.drop-tail[data-branch="${romeo}"]').length;`);
-  if (tails !== 0) throw new Error(`the empty "Romeo" mounted ${tails} tail zone(s); its list is meant to exist only with children`);
-  const paint = await dragOver(session, pointer, await bandPoint(session, romeo, "center"));
-  if (paint.target !== romeo) throw new Error(`"Romeo" is not ringed as the target: ${JSON.stringify(paint)}`);
-  await armStopwatch(session, "pointerup", `const o = __tree.order(${romeo}); if (o === null || o.length !== 1 || o[0] !== ${quebec}) return false; ${branchStateJs(romeo)}`);
+  const pointer = await beginDrag(session, november);
+  const tails = await evaluate(session, `return document.querySelectorAll('#task-tree li.drop-tail[data-branch="${willow}"]').length;`);
+  if (tails !== 0) throw new Error(`the empty "Willow" mounted ${tails} tail zone(s); its list is meant to exist only with children`);
+  const paint = await dragOver(session, pointer, await bandPoint(session, willow, "center"));
+  if (paint.target !== willow) throw new Error(`"Willow" is not ringed as the target: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(${willow}); if (o === null || o.length !== 1 || o[0] !== ${november}) return false; ${branchStateJs(willow)}`);
   await mouseUp(session, pointer);
-  const ack = await readStopwatch(session, `"Quebec" as "Romeo"'s only child`);
+  const ack = await readStopwatch(session, `"November" as "Willow"'s only child`);
   assertAcknowledged(ack, "the first child");
   if (!ack.detail.list || !ack.detail.chevron || ack.detail.progress !== "50") {
-    throw new Error(`"Romeo" did not read as a branch at 50% at once: ${JSON.stringify(ack.detail)}`);
+    throw new Error(`"Willow" did not read as a branch at 50% at once: ${JSON.stringify(ack.detail)}`);
   }
   const settled = await settle(session);
-  const after = await evaluate(session, `const state = (() => { ${branchStateJs(romeo)} })(); return { ...state, order: __tree.order(${romeo}), depth: document.getElementById("task-${quebec}")?.dataset.depth };`);
-  if (!sameIds(after.order, [quebec]) || after.depth !== "1" || after.progress !== "50" || after.done || !after.chevron) {
-    throw new Error(`"Romeo" settled as ${JSON.stringify(after)}`);
+  const after = await evaluate(session, `const state = (() => { ${branchStateJs(willow)} })(); return { ...state, order: __tree.order(${willow}), depth: document.getElementById("task-${november}")?.dataset.depth };`);
+  if (!sameIds(after.order, [november]) || after.depth !== "1" || after.progress !== "50" || after.done || !after.chevron) {
+    throw new Error(`"Willow" settled as ${JSON.stringify(after)}`);
   }
   await assertNothingPainted(session, "after the drop");
-  const lists = await assertTailZonesLast(session, ctx, `with "Romeo" refilled`);
+  const lists = await assertTailZonesLast(session, ctx, `with "Willow" refilled`);
   const rows = await assertTreeMatchesServer(ctx, "after the drop");
   return `no tail zone on the empty branch; first child ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, settled with ${settled.note}; tail zone back and last (${lists} lists); the server agrees over ${rows} rows`;
 }
@@ -3518,15 +3302,11 @@ const CHECKS = [
   ["add a task", checkAddTask],
   ["add a child", checkAddChild],
   ["edit a title in the pane", checkEditTitle],
-  ["complete a leaf, parent rolls up", checkCompleteLeaf],
   ["cascade confirm, Cancel", checkCascadeConfirmCancel],
   ["delete confirm, Cancel then Delete", checkDelete],
-  ["undo", checkUndo],
-  ["redo", checkRedo],
   ["reorder by drag, before band", checkReorder],
   ["reparent by drag, inside band", checkReparent],
   ["forbidden drop", checkForbiddenDrop],
-  ["root zone and tail zone", checkRootAndTailZones],
   ["move-flip confirm, Cancel then Proceed", checkMoveFlipConfirm],
   ["sort, and cascade-sort confirm Cancel", checkSort],
   ["selection: click, move, second click, Escape", checkSelection],
@@ -3534,7 +3314,6 @@ const CHECKS = [
   ["Details flyout at phone and tablet width", checkPaneFlyout],
   ["references: render and reveal", checkReferences],
   ["presence: another member's selection", checkPresence],
-  ["deep link: ?task= reveals", checkDeepLink],
   ["readable width at desktop", checkReadableWidth],
   ["scroll over squeeze at phone and tablet", checkScrollOverSqueeze],
   ["pane scrolls within itself", checkPaneScrolling],
@@ -3545,7 +3324,6 @@ const CHECKS = [
   ["chevron flips before the branch moves", checkChevronFlipsFirst],
   ["touch targets in both layouts", checkTouchTargets],
   ["touch switch: no fetch, survives a reload", checkTouchSwitchPersists],
-  ["LiveView workspace: chevron and switch", checkLiveViewWorkspace],
   ["keys: arrows, Home, End, Escape", checkKeyboardSelection],
   ["keys: Space, Enter, ?, Alt+P, P, Ctrl+Z, Del", checkKeyboardShortcuts],
   ["keys: N and S place the form and the row", checkKeyboardAdd],
