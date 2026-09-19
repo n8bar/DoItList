@@ -33,7 +33,7 @@ All seven arc documents are approved.
 |---|---|---|
 | [1 — Client runtime](m04.01-client-runtime.md) | Browser foundation | Complete 2026-09-16 |
 | [2 — Client-owned tree](m04.02-client-owned-tree.md) | Tree migration | Complete 2026-09-19 |
-| [3 — Live sync & recovery](m04.03-live-sync+recovery.md) | Collaboration and disruption | Arc 2 |
+| [3 — Live sync & recovery](m04.03-live-sync+recovery.md) | Collaboration and disruption | Complete 2026-09-19 |
 | [4 — Concurrent-user efficiency](m04.04-concurrent-user-efficiency.md) | Server capacity | Arc 3 |
 | [5 — Large-Initiative performance](m04.05-large-initiative-performance.md) | Browser capacity | Arc 2 |
 | [6 — Tree Tools & view controls](m04.06-tree-tools+view-controls.md) | Included tree/view features | Arcs 2 and 5 |

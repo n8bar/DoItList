@@ -380,6 +380,24 @@ describe("the device's copy (m04.03 2.2)", () => {
     assert.equal(seqOf(read.state), 5);
   });
 
+  it("a write drawn over the copy stays on top when the server's read lands (m04.03 6.9)", () => {
+    const cached = { ...install(emptySession, snapshot(3)).state.canonical!, seq: 3 };
+    const drawn = begin(installCached(emptySession, cached).state, editFlight("k", 11, "Edited offline"));
+    assert.equal(shown(drawn)?.tasks[11]?.title, "Edited offline");
+
+    // The server does not have the edit yet: the row keeps showing it, unsaved, over the new truth.
+    const read = install(drawn, snapshot(5));
+    assert.equal(read.installed, true);
+    assert.equal(read.state.canonical?.tasks[11]?.title, "Task 11");
+    assert.equal(shown(read.state)?.tasks[11]?.title, "Edited offline");
+    assert.deepEqual(read.state.flights.map((flight) => flight.key), ["k"]);
+
+    // The reply settles it: canonical carries the title and nothing is pending.
+    const settled = acknowledge(read.state, "k", { upserts: [record(11, 1, 1, { title: "Edited offline", version: 2 })], removed: [] }, 6);
+    assert.equal(settled.state.flights.length, 0);
+    assert.equal(shown(settled.state)?.tasks[11]?.title, "Edited offline");
+  });
+
   it("is refused once the server has said anything, and an older read is refused over it", () => {
     const cached = install(emptySession, snapshot(3)).state.canonical!;
     assert.equal(installCached(at(4), cached).installed, false);

@@ -576,8 +576,13 @@ function TreeSection({
     // queued again (2.3.1); the replay effect below opens the queue.
     adapter.hold(id);
 
-    /** A record an earlier life of this tab kept: drawn as unsaved, then sent again. */
-    const replay = (record: PendingOp): void => {
+    /**
+     * A record an earlier life of this tab kept, drawn as unsaved over
+     * whatever tree is on screen — the device's own copy included, so a
+     * reload never shows the old value for as long as the server takes
+     * (m04.03 6.9). Drawing only: nothing is sent from here.
+     */
+    const draw = (record: PendingOp): void => {
       const { key, initiativeId, payload } = record;
       const write = payload.kind === "write" ? payload.write : null;
       const current = stores.domain.get().trees[initiativeId];
@@ -586,6 +591,11 @@ function TreeSection({
           ? []
           : intentToBatch(write, contextFor(initiativeId, current)).affectedIds;
       beginFlight({ key, initiativeId, affectedIds, write });
+    };
+
+    /** The same record drawn (a flight already held is not drawn twice) and sent again. */
+    const replay = (record: PendingOp): void => {
+      draw(record);
       void adapter.resubmit(record);
     };
 
@@ -621,7 +631,7 @@ function TreeSection({
       inFlight.set((state) => ({ ...state, rejections: withoutRejection(state.rejections, rejection.id) }));
     };
 
-    return { adapter, replay, restore, retryEdit, discardEdit };
+    return { adapter, draw, replay, restore, retryEdit, discardEdit };
   }, [api, cache, id, inFlight, stores.domain, stores.ui, sync]);
 
   // Access taken away (4.7): the lane is dropped before the tree is forgotten,
@@ -661,8 +671,25 @@ function TreeSection({
     [writes, id],
   );
 
-  // Once the server's own snapshot is in — never over the device's copy alone
-  // — what this device queued for this Initiative is drawn again and sent
+  // While the tree on screen is the device's own copy, what this device
+  // queued for this Initiative is drawn over it at once — unsaved, as it was
+  // when the tab went — so the user's edit is never missing while the server
+  // is slow or away (m04.03 6.9). Nothing is sent from here: the queue stays
+  // held until the server's snapshot is in.
+  useEffect(() => {
+    if (serverReady) return;
+    let live = true;
+    void cache.pendingOps().then((records) => {
+      if (!live) return;
+      for (const record of replayPlan(records, id)) writes.draw(record);
+    });
+    return () => {
+      live = false;
+    };
+  }, [writes, cache, id, serverReady]);
+
+  // Once the server's own snapshot is in — never sent over the device's copy
+  // alone — what this device queued for this Initiative is drawn again and sent
   // again, oldest first (m04.03 2.3). Only then does the ordinary queue open,
   // so a write made meanwhile goes after them. The same pass runs whenever
   // the session is level with the server again (m04.03 3.2, 3.3): a batch
