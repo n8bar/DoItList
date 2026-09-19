@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import type { ApiClient, Result } from "../api/client.ts";
-import type { BatchReply, Operation, TreeWrite } from "./adapter.ts";
+import type { BatchReply, Operation, OperationJournal, Submission, TreeWrite } from "./adapter.ts";
+import type { PendingOpRecord } from "../storage/db.ts";
+import type { PendingOp, PendingPayload } from "../storage/pending_ops.ts";
 import {
   changedFields,
   createAdapter,
@@ -557,19 +559,28 @@ describe("createAdapter", () => {
     assert.ok(outcome.ok);
   });
 
-  it("a second network failure is the answer", async () => {
+  it("a second network failure is not an answer: the batch parks until resumed (m04.03 2.1)", async () => {
     const fake = fakeApi();
-    const { instance } = adapter(fake);
+    const { instance, results } = adapter(fake);
 
     const pending = instance.submit(5, { kind: "toggleComplete", id: 11, done: true });
     await settle();
     fake.calls[0]?.resolve(networkError());
     await settle();
     fake.calls[1]?.resolve(networkError());
+    await settle();
+    assert.equal(fake.calls.length, 2, "no third try on its own");
+    assert.deepEqual(results, [], "the outcome is unknown, so none is reported");
+
+    instance.resume(5);
+    await settle();
+    assert.equal(fake.calls.length, 3);
+    assert.equal(fake.calls[2]?.headers?.["idempotency-key"], "key-1");
+    assert.deepEqual(fake.calls[2]?.body, fake.calls[0]?.body);
+    fake.calls[2]?.resolve(okReply(11));
     const outcome = await pending;
-    assert.equal(outcome.ok, false);
-    assert.ok(!outcome.ok && outcome.error.code === "network");
-    assert.equal(fake.calls.length, 2);
+    assert.ok(outcome.ok);
+    assert.deepEqual(results, ["key-1:ok"]);
   });
 
   it("a rejection other than network is not retried", async () => {
@@ -634,5 +645,259 @@ describe("createAdapter", () => {
     assert.ok(outcome.ok);
     assert.equal(outcome.delta.upserts[0]?.id, 13);
     assert.equal(outcome.delta.upserts[0]?.position, 2);
+  });
+});
+
+// --- the journal and the replay (m04.03 2.1, 2.3) ---------------------------
+
+const statusOf = (record: PendingOpRecord | undefined) => (record?.payload as PendingPayload | undefined)?.status;
+const bodyOf = (record: PendingOpRecord | undefined) => (record?.payload as PendingPayload | undefined)?.body;
+
+/** A journal in a Map, with every call logged in order. */
+function fakeJournal() {
+  const rows = new Map<string, PendingOpRecord>();
+  const log: string[] = [];
+  let refusing = false;
+  const journal: OperationJournal = {
+    async put(record) {
+      log.push(`put:${record.key}:${statusOf(record)}`);
+      if (refusing) throw new Error("the quota was exceeded");
+      rows.set(record.key, record);
+    },
+    async remove(key) {
+      log.push(`remove:${key}`);
+      rows.delete(key);
+    },
+  };
+  return {
+    rows,
+    log,
+    journal,
+    refuse: () => {
+      refusing = true;
+    },
+  };
+}
+
+function journaled(fake: ReturnType<typeof fakeApi>, journal: OperationJournal) {
+  let n = 0;
+  const submissions: Submission[] = [];
+  const results: string[] = [];
+  const unknown: string[] = [];
+  const model = base();
+  const instance = createAdapter({
+    api: fake.api,
+    context: () => ({ model, memberIds: [7, 8] }),
+    keyGen: () => `key-${++n}`,
+    now: () => 1000 + n,
+    journal,
+    onSubmit: (s) => submissions.push(s),
+    onResult: (s, r) => results.push(`${s.key}:${r.ok ? "ok" : r.error.code}`),
+    onUnknown: (s) => unknown.push(s.key),
+  });
+  return { instance, submissions, results, unknown };
+}
+
+const toggle = (id: number): TreeWrite => ({ kind: "toggleComplete", id, done: true });
+
+/** A record an earlier life of the tab left: `sent` with its body, or `queued`. */
+const kept = (key: string, createdAt: number, payload: PendingPayload): PendingOp => ({
+  key,
+  initiativeId: 5,
+  createdAt,
+  payload,
+});
+
+describe("the journal (m04.03 2.1)", () => {
+  it("journals the intent as the batch is queued, the exact body before it goes, and forgets it once answered", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance } = journaled(fake, disk.journal);
+
+    const pending = instance.submit(5, toggle(11));
+    // In the same step as the prediction went on screen: nothing sent yet.
+    assert.deepEqual(disk.log, ["put:key-1:queued"]);
+    assert.equal(fake.calls.length, 0);
+
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual(disk.log, ["put:key-1:queued", "put:key-1:sent"], "the body is on the device before the POST");
+    const row = disk.rows.get("key-1");
+    assert.equal(row?.initiativeId, 5);
+    assert.equal(row?.createdAt, 1001);
+    assert.deepEqual(bodyOf(row), fake.calls[0]?.body, "byte for byte what went out");
+
+    fake.calls[0]?.resolve(okReply(11));
+    await pending;
+    await settle();
+    assert.deepEqual(disk.log.at(-1), "remove:key-1");
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("forgets the record on a rejection too: those never retry on their own", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results } = journaled(fake, disk.journal);
+
+    const pending = instance.submit(5, toggle(11));
+    await settle();
+    fake.calls[0]?.resolve({ ok: false, error: { code: "conflict", status: 409, message: "stale" } });
+    await pending;
+    await settle();
+
+    assert.equal(disk.rows.size, 0);
+    assert.deepEqual(results, ["key-1:conflict"]);
+  });
+
+  it("keeps the record as sent through an unknown outcome, and the queue behind it waits", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, results, unknown } = journaled(fake, disk.journal);
+
+    void instance.submit(5, toggle(11));
+    void instance.submit(5, toggle(12));
+    await settle();
+    fake.calls[0]?.resolve(networkError());
+    await settle();
+    fake.calls[1]?.resolve(networkError());
+    await settle();
+
+    assert.equal(statusOf(disk.rows.get("key-1")), "sent", "the work is still on the device");
+    assert.equal(statusOf(disk.rows.get("key-2")), "queued");
+    assert.deepEqual(results, [], "no outcome was reported");
+    assert.deepEqual(unknown, ["key-1"]);
+    assert.equal(fake.calls.length, 2, "the second batch does not overtake the first");
+
+    instance.resume(5);
+    await settle();
+    fake.calls[2]?.resolve(okReply(11));
+    await settle();
+    await settle();
+    assert.equal(fake.calls.length, 4, "then the second goes");
+    assert.equal(fake.calls[3]?.headers?.["idempotency-key"], "key-2");
+    assert.equal(disk.rows.has("key-1"), false);
+  });
+
+  it("a refused journal write does not hold the send", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    disk.refuse();
+    const { instance } = journaled(fake, disk.journal);
+
+    const pending = instance.submit(5, toggle(11));
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    fake.calls[0]?.resolve(okReply(11));
+    const outcome = await pending;
+    assert.ok(outcome.ok);
+  });
+
+  it("an intent that builds nothing at send time is forgotten without a request", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    let canonical = base();
+    const instance = createAdapter({
+      api: fake.api,
+      context: () => ({ model: base(), memberIds: [7, 8] }),
+      sendContext: () => ({ model: canonical, memberIds: [7, 8] }),
+      keyGen: () => "key-1",
+      journal: disk.journal,
+    });
+    // The record is gone by the time this is sent.
+    const { 11: _gone, ...rest } = canonical.tasks;
+    canonical = { ...canonical, tasks: rest, childIds: { ...canonical.childIds, 10: [12, 13] } };
+
+    const outcome = await instance.submit(5, toggle(11));
+    assert.ok(outcome.ok);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(disk.log, ["put:key-1:queued", "remove:key-1"]);
+  });
+});
+
+describe("replaying what the device kept (m04.03 2.3)", () => {
+  const sentBody = { operations: [{ op: "update" as const, type: "task" as const, id: 11, data: { done: true, stale: "yes" } }] };
+
+  it("a sent record goes again as it was, under its own key; a queued one is built from truth", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance, submissions } = journaled(fake, disk.journal);
+
+    const first = instance.resubmit(kept("old-1", 10, { kind: "write", write: toggle(11), body: sentBody, status: "sent" }));
+    const second = instance.resubmit(kept("old-2", 20, { kind: "write", write: toggle(12), body: null, status: "queued" }));
+    await settle();
+
+    assert.equal(fake.calls.length, 1, "one batch in flight, in creation order");
+    assert.equal(fake.calls[0]?.headers?.["idempotency-key"], "old-1");
+    assert.deepEqual(fake.calls[0]?.body, sentBody, "resent byte for byte, not rebuilt");
+    assert.deepEqual(submissions, [], "the caller already drew these");
+
+    fake.calls[0]?.resolve(okReply(11));
+    await first;
+    await settle();
+    assert.equal(fake.calls[1]?.headers?.["idempotency-key"], "old-2");
+    assert.deepEqual(fake.calls[1]?.body, { operations: [{ op: "update", type: "task", id: 12, data: { done: true } }] });
+    assert.equal(statusOf(disk.rows.get("old-2")), "sent");
+
+    fake.calls[1]?.resolve(okReply(12));
+    await second;
+    await settle();
+    assert.equal(disk.rows.size, 0);
+  });
+
+  it("a held queue lets the replays go first, then opens", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance } = journaled(fake, disk.journal);
+    instance.hold(5);
+
+    const fresh = instance.submit(5, toggle(13));
+    await settle();
+    assert.equal(fake.calls.length, 0, "a new write waits for the replay");
+
+    const old = instance.resubmit(kept("old-1", 10, { kind: "write", write: toggle(11), body: sentBody, status: "sent" }));
+    instance.open(5);
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls[0]?.headers?.["idempotency-key"], "old-1");
+
+    fake.calls[0]?.resolve(okReply(11));
+    await old;
+    await settle();
+    assert.equal(fake.calls[1]?.headers?.["idempotency-key"], "key-1");
+    fake.calls[1]?.resolve(okReply(13));
+    assert.ok((await fresh).ok);
+  });
+
+  it("with nothing held, a write goes at once (every other caller)", async () => {
+    const fake = fakeApi();
+    const { instance } = journaled(fake, fakeJournal().journal);
+    void instance.submit(5, toggle(11));
+    await settle();
+    assert.equal(fake.calls.length, 1);
+  });
+
+  it("a replay of a batch this adapter already holds is that batch, not a second copy", async () => {
+    const fake = fakeApi();
+    const disk = fakeJournal();
+    const { instance } = journaled(fake, disk.journal);
+
+    const mine = instance.submit(5, toggle(11));
+    await settle();
+    const again = instance.resubmit(kept("key-1", 1001, { kind: "write", write: toggle(11), body: null, status: "queued" }));
+    assert.equal(again, mine);
+    await settle();
+    assert.equal(fake.calls.length, 1);
+    fake.calls[0]?.resolve(okReply(11));
+    await mine;
+  });
+
+  it("an undo comes back through the same door", async () => {
+    const fake = fakeApi();
+    const { instance } = journaled(fake, fakeJournal().journal);
+    void instance.resubmit(kept("old-1", 10, { kind: "history", action: "redo", body: null, status: "queued" }));
+    await settle();
+    assert.deepEqual(fake.calls[0]?.body.operations, [
+      { op: "add", type: "history", data: { initiative_id: 5, action: "redo" } },
+    ]);
   });
 });

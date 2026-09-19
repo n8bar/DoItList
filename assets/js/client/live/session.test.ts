@@ -14,6 +14,7 @@ import {
   emptySession,
   gapOpen,
   install,
+  installCached,
   patchHeader,
   receive,
   reject,
@@ -304,5 +305,41 @@ describe("own writes (1.4.1)", () => {
     assert.equal(shown(renamed)?.header.name, "Renamed");
     assert.equal(shown(renamed)?.tasks[11]?.title, "Mine");
     assert.equal(patchHeader(emptySession, (h) => h), emptySession);
+  });
+});
+
+describe("the device's copy (m04.03 2.2)", () => {
+  it("fills an empty session, and the server's read installs forward over it", () => {
+    const cached = { ...install(emptySession, snapshot(3)).state.canonical!, seq: 3 };
+    const primed = installCached(emptySession, cached);
+    assert.equal(primed.installed, true);
+    assert.equal(seqOf(primed.state), 3);
+    assert.deepEqual(shown(primed.state), cached);
+
+    const read = install(primed.state, snapshot(5));
+    assert.equal(read.installed, true);
+    assert.equal(seqOf(read.state), 5);
+  });
+
+  it("is refused once the server has said anything, and an older read is refused over it", () => {
+    const cached = install(emptySession, snapshot(3)).state.canonical!;
+    assert.equal(installCached(at(4), cached).installed, false);
+    assert.equal(installCached(at(2), cached).installed, false, "the session's own truth is never overwritten");
+
+    const primed = installCached(emptySession, { ...cached, seq: 6 }).state;
+    assert.equal(install(primed, snapshot(5)).installed, false, "a read older than the copy is refused");
+    assert.equal(seqOf(primed), 6);
+  });
+
+  it("drains envelopes held while the copy was being read, and drops those it already covers", () => {
+    let state = receive(emptySession, retitle(4, 11, "Four")).state;
+    state = receive(state, retitle(2, 11, "Two")).state;
+    const cached = install(emptySession, snapshot(3)).state.canonical!;
+
+    const primed = installCached(state, cached);
+    assert.equal(primed.installed, true);
+    assert.equal(seqOf(primed.state), 4);
+    assert.equal(primed.state.canonical?.tasks[11]?.title, "Four");
+    assert.equal(primed.state.buffered.size, 0);
   });
 });

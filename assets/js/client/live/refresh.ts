@@ -44,6 +44,7 @@ import {
   emptySession,
   gapOpen,
   install,
+  installCached,
   patchHeader,
   receive,
   reject,
@@ -52,6 +53,9 @@ import {
 
 /** How long a burst of changes on one Initiative is held before one summary read. */
 export const SUMMARY_DEBOUNCE_MS = 300;
+
+/** How long canonical is given to settle before the device's copy is rewritten (m04.03 2.2). */
+export const SNAPSHOT_DEBOUNCE_MS = 1000;
 
 export interface Coalescer<K> {
   /** Ask for `key`'s work; a repeat inside the window restarts it, the work runs once. */
@@ -166,10 +170,11 @@ export interface SyncDeps {
   /** Hands the app the "you don't have access" screen. */
   onForbidden(): void;
   /**
-   * The local recovery cache. A tree is written to it on the SAME path that
-   * writes it to the store — a snapshot that bypassed the guard could cache a
-   * tree the user is no longer allowed to see — and losing access deletes what
-   * is already there, on the same path that forgets the in-memory copy.
+   * The local recovery cache. Canonical is written to it — never what is
+   * shown — a moment after it last changed, on the SAME path that writes it
+   * to the store: a snapshot that bypassed the guard could cache a tree the
+   * user is no longer allowed to see. Losing access deletes what is already
+   * there, on the same path that forgets the in-memory copy.
    */
   snapshots?: Pick<TreeCache, "cacheTree" | "forgetTree">;
   /** Injected in tests; one is made per client otherwise. */
@@ -198,8 +203,17 @@ export interface InitiativeSync {
    * when the read cannot be a tree — the screen reads once more, then says so.
    */
   install(tree: InitiativeTree): void;
+  /**
+   * The tree this device last saved, painted before the server answers
+   * (m04.03 2.2). Taken only into an empty session — anything the server has
+   * said since is newer — and never written back to the cache it came from.
+   * Returns whether it was taken.
+   */
+  installCached(model: TreeModel): boolean;
   /** Server truth for `id` — no predictions — or `undefined` before a snapshot. */
   canonical(id: number): TreeModel | undefined;
+  /** The keys of the writes still in flight for `id`, in submission order. */
+  flights(id: number): readonly string[];
   /** A write queued: its prediction is shown at once. Returns what is now shown. */
   begin(id: number, flight: Flight): TreeModel | undefined;
   /**
@@ -251,11 +265,14 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
    * hold on an open gap, the marks a broadcast settled, and the reads an
    * applied envelope asks for.
    */
-  const commit = (id: number, outcome: Outcome): void => {
+  const commit = (id: number, outcome: Outcome, persist = true): void => {
     const { state } = outcome;
+    const before = sessions.get(id)?.canonical ?? null;
     sessions.set(id, state);
     const model = shown(state);
     if (model !== null) putTree(domain, model);
+    // Truth changed: the device's copy follows, once things settle down.
+    if (persist && state.canonical !== null && state.canonical !== before) snapshotWrites.request(id);
 
     if (gapOpen(state)) hold(id);
     else release(id);
@@ -340,10 +357,6 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
     const outcome = install(sessionOf(id), tree);
     if (!outcome.installed) return;
     commit(id, outcome);
-    // Same path as the store write, so a tree the guard rejected is never
-    // the one that gets cached.
-    const canonical = outcome.state.canonical;
-    if (canonical !== null) deps.snapshots?.cacheTree(canonical);
   };
 
   /**
@@ -391,6 +404,13 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
     void refreshSummary(initiativeId);
   });
 
+  // And one write of the device's copy — of canonical as it stands when the
+  // burst is over, never of a prediction (m04.03 2.2).
+  const snapshotWrites = coalesce<number>(timers, SNAPSHOT_DEBOUNCE_MS, (initiativeId) => {
+    const canonical = sessionOf(initiativeId).canonical;
+    if (canonical !== null) deps.snapshots?.cacheTree(canonical);
+  });
+
   return {
     onDelta(envelope) {
       const id = envelope.initiativeId;
@@ -399,7 +419,18 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
 
     install: installTree,
 
+    installCached(model) {
+      const id = model.initiativeId;
+      const outcome = installCached(sessionOf(id), model);
+      if (!outcome.installed) return false;
+      // What came off the disk does not go back onto it.
+      commit(id, outcome, false);
+      return true;
+    },
+
     canonical: (id) => sessionOf(id).canonical ?? undefined,
+
+    flights: (id) => sessionOf(id).flights.map((flight) => flight.key),
 
     begin(id, flight) {
       const state = sessionOf(id);
@@ -455,6 +486,8 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       // A read still out is the guard's to drop; a new one may start at once.
       reading.delete(initiativeId);
       rowReads.cancel(initiativeId);
+      // A copy waiting to be written would put back what is about to be deleted.
+      snapshotWrites.cancel(initiativeId);
       guard.revoke(initiativeId);
       forgetInitiative(domain, initiativeId);
       // The copy on disk is part of "forget it", not an afterthought: cached

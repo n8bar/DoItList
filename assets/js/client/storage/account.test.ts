@@ -13,7 +13,7 @@ import { accountDbName, createMemoryStorage } from "./db.ts";
 import { FakeIdb } from "./fake_idb.ts";
 import type { KeyValueStore } from "./last_user.ts";
 import { LAST_USER_KEY, readLastUser } from "./last_user.ts";
-import { LAST_SNAPSHOT_KEY, createTreeCache, parseInitiativeSnapshot, treeSummary } from "./snapshots.ts";
+import { LAST_SNAPSHOT_KEY, createTreeCache, parseTreeModel, treePayload } from "./snapshots.ts";
 import { fromSnapshot } from "../tree/model.ts";
 
 const USER = 41;
@@ -125,7 +125,7 @@ describe("opening an account's cache (item 3.4)", () => {
 
     const second = await openAccountCache({ userId: USER, idb, keyValue });
 
-    assert.deepEqual(second.lastSnapshot, { initiativeId: 12, version: 7, savedAt: 9000 });
+    assert.deepEqual(second.lastSnapshot, { initiativeId: 12, version: 7, seq: 7, savedAt: 9000 });
   });
 
   it("still hands back a working cache with no IndexedDB and no localStorage", async () => {
@@ -234,19 +234,13 @@ describe("withTimeout", () => {
   });
 });
 
-describe("the Initiative snapshot (item 3.4)", () => {
-  it("keeps the header and drops the tree", () => {
-    const summary = treeSummary(fromSnapshot(withOneTask()));
-    assert.deepEqual(summary, {
-      id: 12,
-      name: "Kitchen",
-      subtitle: "the long one",
-      role: "owner",
-      progress: 42,
-      unit_count: 9,
-      version: 7,
-    });
-    assert.equal("tasks" in summary, false);
+describe("the Initiative snapshot (item 3.4; m04.03 2.2)", () => {
+  it("keeps the whole canonical tree, and reads it back as the same model", () => {
+    const model = fromSnapshot(withOneTask());
+    const payload = treePayload(model);
+    assert.deepEqual(parseTreeModel(structuredClone(payload)), model);
+    assert.equal(payload.tasks[5]?.title, "Paint");
+    assert.equal(payload.seq, 7);
   });
 
   it("round-trips through the cache", async () => {
@@ -256,10 +250,10 @@ describe("the Initiative snapshot (item 3.4)", () => {
     cache.cacheTree(tree());
     await settled();
 
-    assert.deepEqual(await cache.readTree(12), treeSummary(tree()));
+    assert.deepEqual(await cache.readTree(12), tree());
     assert.deepEqual(
       (await storage.getMeta(LAST_SNAPSHOT_KEY)) as unknown,
-      { ok: true, value: { initiativeId: 12, version: 7, savedAt: 5 } },
+      { ok: true, value: { initiativeId: 12, version: 7, seq: 7, savedAt: 5 } },
     );
   });
 
@@ -268,10 +262,25 @@ describe("the Initiative snapshot (item 3.4)", () => {
     assert.equal(await cache.readTree(999), null);
   });
 
-  it("refuses a payload it cannot read rather than inventing a header", () => {
-    assert.equal(parseInitiativeSnapshot({ id: 1, name: "x" }), null);
-    assert.equal(parseInitiativeSnapshot(null), null);
-    assert.equal(parseInitiativeSnapshot("nope"), null);
+  it("refuses a payload it cannot read rather than inventing a tree", () => {
+    assert.equal(parseTreeModel({ id: 1, name: "x" }), null);
+    assert.equal(parseTreeModel(null), null);
+    assert.equal(parseTreeModel("nope"), null);
+    const model = fromSnapshot(withOneTask());
+    // The header-only shape v2 kept.
+    assert.equal(parseTreeModel({ id: 12, name: "Kitchen", role: "owner", progress: 42, unit_count: 9, version: 7 }), null);
+    // Structure that would not pass as a tree: a task listed under nobody.
+    assert.equal(parseTreeModel({ ...treePayload(model), childIds: {} }), null);
+    assert.equal(parseTreeModel({ ...treePayload(model), progressCalc: "magic" }), null);
+  });
+
+  it("deletes a cached record that does not read back as a tree, and answers null", async () => {
+    const storage = createMemoryStorage(USER, "ready", () => 5);
+    const cache = createTreeCache({ storage });
+    await storage.putSnapshot({ initiativeId: 12, seq: 3, payload: { id: 12, name: "old shape" } });
+
+    assert.equal(await cache.readTree(12), null);
+    assert.deepEqual(await storage.getSnapshot(12), { ok: true, value: null });
   });
 
   it("tells its listener what the newest snapshot is", async () => {
@@ -284,6 +293,6 @@ describe("the Initiative snapshot (item 3.4)", () => {
     cache.cacheTree(tree());
     await settled();
 
-    assert.deepEqual(seen, [{ initiativeId: 12, version: 7, savedAt: 11 }]);
+    assert.deepEqual(seen, [{ initiativeId: 12, version: 7, seq: 7, savedAt: 11 }]);
   });
 });

@@ -25,7 +25,7 @@ import type { RecoveryState } from "../state/recovery.ts";
 import { useStoreValue } from "../state/use_store.ts";
 import { ConfirmDialog } from "../ui/dialog.tsx";
 import { controlClass } from "./button_styles.ts";
-import { runSignOut } from "./sign_out_flow.ts";
+import { confirmSignOut, runSignOut, unsavedSentence } from "./sign_out_flow.ts";
 
 const selectPending = (state: RecoveryState) => state.pendingWrites.length;
 
@@ -84,7 +84,7 @@ export function SignOut({
   // to decide that, and the question is asked here and now.
   const start = () => {
     if (signingOut) return;
-    if (pending > 0) {
+    if (confirmSignOut(pending)) {
       setConfirming(true);
       return;
     }
@@ -135,9 +135,7 @@ export function SignOut({
         onConfirm={go}
         onCancel={() => setConfirming(false)}
       >
-        {pending === 1
-          ? "One change hasn’t reached the server yet. Signing out now discards it."
-          : `${pending} changes haven’t reached the server yet. Signing out now discards them.`}
+        {unsavedSentence(pending)}
       </ConfirmDialog>
     </>
   );

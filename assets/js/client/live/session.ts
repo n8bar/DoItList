@@ -175,6 +175,31 @@ export function install(
   return { ...drain(unchanged(next)), installed: true };
 }
 
+/**
+ * The tree this device last saved (m04.03 2.2), to paint before the server
+ * answers. It fills an empty session only: once anything from the server is
+ * in — a snapshot, or a snapshot plus deltas — a copy from the disk is older
+ * by definition and is refused. Held envelopes newer than it follow it, the
+ * same as after a read.
+ */
+export function installCached(
+  state: SessionState,
+  model: TreeModel,
+): Outcome & { readonly installed: boolean } {
+  if (state.canonical !== null) return { ...unchanged(state), installed: false };
+
+  const buffered = new Map<number, DeltaEnvelope>();
+  for (const [seq, envelope] of state.buffered) if (seq > model.seq) buffered.set(seq, envelope);
+
+  const next: SessionState = {
+    ...state,
+    canonical: model,
+    buffered,
+    expected: Math.max(state.expected, model.seq),
+  };
+  return { ...drain(unchanged(next)), installed: true };
+}
+
 /** A write queued: its prediction goes on top until something settles it. */
 export function begin(state: SessionState, flight: Flight): SessionState {
   return { ...state, flights: [...state.flights, flight] };

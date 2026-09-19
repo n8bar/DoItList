@@ -16,7 +16,7 @@ import { envelope, record } from "./fake_envelope.ts";
 import { fakeTimers } from "./fake_transport.ts";
 import type { Settled } from "./session.ts";
 import { BUFFER_LIMIT } from "./session.ts";
-import { SUMMARY_DEBOUNCE_MS, coalesce, createInitiativeSync } from "./refresh.ts";
+import { SNAPSHOT_DEBOUNCE_MS, SUMMARY_DEBOUNCE_MS, coalesce, createInitiativeSync } from "./refresh.ts";
 
 const tree = (id: number, name: string, seq = 1): InitiativeTree => ({
   id,
@@ -136,11 +136,16 @@ function sync(parts: {
 /** Records what the local cache was asked to do. */
 const fakeSnapshots = () => {
   const cached: number[] = [];
+  const models: TreeModel[] = [];
   const forgotten: number[] = [];
   return {
     cached,
+    models,
     forgotten,
-    cacheTree: (value: TreeModel) => void cached.push(value.initiativeId),
+    cacheTree: (value: TreeModel) => {
+      cached.push(value.initiativeId);
+      models.push(value);
+    },
     forgetTree: (id: number) => {
       forgotten.push(id);
       return Promise.resolve();
@@ -751,32 +756,77 @@ describe("what losing access makes the client do (item 1.5)", () => {
   });
 });
 
-describe("the local cache follows the same rules (items 3.4–3.6)", () => {
-  it("caches every snapshot it installs, and nothing a delta produced", async () => {
+describe("the local cache follows the same rules (items 3.4–3.6; m04.03 2.2)", () => {
+  it("writes canonical a moment after it last changed — after a snapshot, after a delta, once per burst", async () => {
     const domain = createDomainStore();
     const snapshots = fakeSnapshots();
-    const backend = fakeApi({ "/initiatives/12": treeWith(12, 3, "New") });
     const clock = fakeTimers();
-    const unit = sync({ api: backend.api, domain, snapshots, timers: clock.timers });
+    const unit = sync({ domain, snapshots, timers: clock.timers });
 
     unit.install(treeWith(12, 1));
-    assert.deepEqual(snapshots.cached, [12]);
-    unit.onDelta(retitle(12, 2, "Two"));
-    assert.deepEqual(snapshots.cached, [12], "a delta is not a snapshot");
-
-    unit.onDelta(retitle(12, 4, "Four"));
+    assert.deepEqual(snapshots.cached, [], "not on the critical path of the paint");
+    assert.ok(SNAPSHOT_DEBOUNCE_MS >= 500 && SNAPSHOT_DEBOUNCE_MS <= 2000, "about a second");
     clock.flush();
-    await settle();
-    assert.deepEqual(snapshots.cached, [12, 12], "the re-read is");
+    assert.deepEqual(snapshots.cached, [12]);
+
+    unit.onDelta(retitle(12, 2, "Two"));
+    unit.onDelta(retitle(12, 3, "Three"));
+    assert.deepEqual(snapshots.cached, [12]);
+    clock.flush();
+    assert.deepEqual(snapshots.cached, [12, 12], "a burst of deltas is one write");
+    assert.equal(snapshots.models.at(-1)?.seq, 3);
+    assert.equal(snapshots.models.at(-1)?.tasks[121]?.title, "Three");
   });
 
-  it("deletes the snapshot when access is taken away", () => {
+  it("writes canonical, never what is shown", () => {
+    const domain = createDomainStore();
+    const snapshots = fakeSnapshots();
+    const clock = fakeTimers();
+    const unit = sync({ domain, snapshots, timers: clock.timers });
+
+    unit.install(treeWith(12, 1, "Original"));
+    unit.begin(12, {
+      key: "k",
+      predict: (base) => updateFields(base, 121, { title: "Guess" }).model,
+      tempId: null,
+    });
+    assert.equal(domain.get().trees[12]?.tasks[121]?.title, "Guess");
+    clock.flush();
+    assert.equal(snapshots.models.at(-1)?.tasks[121]?.title, "Original");
+  });
+
+  it("takes the device's copy into an empty session, and not back onto the disk", () => {
+    const domain = createDomainStore();
+    const snapshots = fakeSnapshots();
+    const clock = fakeTimers();
+    const unit = sync({ domain, snapshots, timers: clock.timers });
+    const cached = fromSnapshot(treeWith(12, 3, "Saved"));
+
+    assert.equal(unit.installCached(cached), true);
+    assert.equal(domain.get().trees[12]?.tasks[121]?.title, "Saved", "painted at once");
+    clock.flush();
+    assert.deepEqual(snapshots.cached, [], "what came off the disk does not go back onto it");
+
+    unit.install(treeWith(12, 5, "Fresh"));
+    assert.equal(domain.get().trees[12]?.seq, 5);
+    assert.equal(domain.get().trees[12]?.tasks[121]?.title, "Fresh", "the server's read installs forward");
+    unit.install(treeWith(12, 4, "Stale"));
+    assert.equal(domain.get().trees[12]?.tasks[121]?.title, "Fresh", "an older read is refused");
+    assert.equal(unit.installCached(cached), false, "and so is the copy, once the server has spoken");
+  });
+
+  it("deletes the snapshot when access is taken away, and drops a write waiting to happen", () => {
     const domain = createDomainStore({ trees: { 12: model(12, "Old") } });
     const snapshots = fakeSnapshots();
+    const clock = fakeTimers();
+    const unit = sync({ domain, snapshots, timers: clock.timers });
 
-    sync({ domain, snapshots }).onAccessRevoked(12);
+    unit.install(treeWith(12, 1));
+    unit.onAccessRevoked(12);
+    clock.flush();
 
     assert.deepEqual(snapshots.forgotten, [12], "the copy on disk goes too (spec §12)");
+    assert.deepEqual(snapshots.cached, [], "nothing is written back after the forget");
   });
 
   it("does not cache a tree that arrived after access was taken away", async () => {
@@ -787,6 +837,7 @@ describe("the local cache follows the same rules (items 3.4–3.6)", () => {
     const unit = sync({ api: backend.api, domain, snapshots, timers: clock.timers });
 
     unit.install(treeWith(12, 1));
+    clock.flush();
     backend.hold();
     unit.onDelta(retitle(12, 3, "Three"));
     clock.flush();
@@ -794,6 +845,7 @@ describe("the local cache follows the same rules (items 3.4–3.6)", () => {
     unit.onAccessRevoked(12);
     backend.release(0);
     await settle();
+    clock.flush();
 
     assert.deepEqual(snapshots.cached, [12], "the guard rejected the re-read, so it was never cached");
     assert.deepEqual(snapshots.forgotten, [12]);

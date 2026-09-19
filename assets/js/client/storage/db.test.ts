@@ -70,6 +70,20 @@ describe("opening the account database (item 3.4)", () => {
     }
   });
 
+  it("migrates a v2 database: header-only snapshots go, pending operations stay", async () => {
+    const idb = new FakeIdb();
+    idb.seedDatabase(NAME, 2, {
+      [SNAPSHOTS]: ["initiativeId", [{ initiativeId: 5, seq: 1, savedAt: 1, bytes: 9, payload: { id: 5, name: "header" } }]],
+      [PENDING_OPS]: ["key", [{ key: "op-1", initiativeId: 5, createdAt: 10, payload: { kind: "write" } }]],
+      [META]: ["key", []],
+    });
+
+    const storage = await openWith(idb);
+
+    assert.deepEqual(unwrap(await storage.listSnapshots()), []);
+    assert.equal(unwrap(await storage.listPendingOps()).length, 1);
+  });
+
   it("migrates a database left at an older schema: snapshots go, pending operations stay", async () => {
     const idb = new FakeIdb();
     idb.seedDatabase(NAME, 1, {
@@ -303,6 +317,56 @@ describe("bounds enforcement in the store (item 3.5)", () => {
 
     assert.deepEqual(unwrap(await storage.listSnapshots()), []);
     assert.equal(unwrap(await storage.listPendingOps()).length, 1);
+  });
+});
+
+describe("queued operations (m04.03 2.1, 2.4)", () => {
+  const op = (key: string, initiativeId: number) => ({ key, initiativeId, createdAt: 1, payload: { kind: "write" } });
+
+  it("round-trips, rewrites under the same key, and deletes by key or by Initiative", async () => {
+    const storage = await openWith(new FakeIdb());
+    unwrap(await storage.putPendingOp(op("a", 1)));
+    unwrap(await storage.putPendingOp(op("b", 1)));
+    unwrap(await storage.putPendingOp(op("c", 2)));
+    unwrap(await storage.putPendingOp({ ...op("a", 1), payload: { kind: "write", status: "sent" } }));
+
+    const listed = unwrap(await storage.listPendingOps());
+    assert.deepEqual(listed.map((record) => record.key).sort(), ["a", "b", "c"]);
+    assert.deepEqual(listed.find((record) => record.key === "a")?.payload, { kind: "write", status: "sent" });
+
+    unwrap(await storage.deletePendingOp("b"));
+    unwrap(await storage.deletePendingOps(2));
+    assert.deepEqual(unwrap(await storage.listPendingOps()).map((record) => record.key), ["a"]);
+  });
+
+  it("a refused write is a value, and the status says so", async () => {
+    const idb = new FakeIdb();
+    const sink = statusSink();
+    const storage = await openWith(idb, { onStatus: sink.onStatus });
+    idb.failWrites(1, "UnknownError", "the disk said no");
+
+    const result = await storage.putPendingOp(op("a", 1));
+    assert.equal(result.ok, false);
+    assert.equal(storage.status(), "degraded");
+  });
+
+  it("drops a row it cannot read from the listing, and deletes it", async () => {
+    const idb = new FakeIdb();
+    const storage = await openWith(idb);
+    unwrap(await storage.putPendingOp(op("good", 1)));
+    idb.seedRow(NAME, PENDING_OPS, "bad", { key: "bad", createdAt: "yesterday" });
+
+    assert.deepEqual(unwrap(await storage.listPendingOps()).map((record) => record.key), ["good"]);
+    assert.equal(idb.rows(NAME, PENDING_OPS).length, 1);
+    assert.equal(storage.status(), "degraded");
+  });
+
+  it("the in-memory fallback keeps them for the session", async () => {
+    const storage = createMemoryStorage(USER);
+    unwrap(await storage.putPendingOp(op("a", 1)));
+    unwrap(await storage.putPendingOp(op("b", 2)));
+    unwrap(await storage.deletePendingOps(1));
+    assert.deepEqual(unwrap(await storage.listPendingOps()).map((record) => record.key), ["b"]);
   });
 });
 

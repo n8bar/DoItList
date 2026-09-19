@@ -12,6 +12,21 @@
 
 import { signOutPurge } from "../storage/account.ts";
 
+/**
+ * Whether Sign out must ask first (m04.03 2.4.1): only when the device holds
+ * work the server has not acknowledged. Zero pending, no question.
+ */
+export function confirmSignOut(pendingCount: number): boolean {
+  return pendingCount > 0;
+}
+
+/** What the question says about the work that would go. */
+export function unsavedSentence(pendingCount: number): string {
+  return pendingCount === 1
+    ? "One change hasn’t reached the server yet. Signing out now discards it."
+    : `${pendingCount} changes haven’t reached the server yet. Signing out now discards them.`;
+}
+
 export interface SignOutFlow {
   readonly cache: { purge(): Promise<boolean> };
   /** Sends `DELETE /users/log_out`. Must run while the form is still mounted. */

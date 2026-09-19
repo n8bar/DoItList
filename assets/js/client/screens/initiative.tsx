@@ -20,6 +20,13 @@
 // sync session (`live/refresh.ts`), outside React: this screen only keeps the
 // marks (pink rows, stand-in keys, a refused edit) that go with them.
 //
+// What this device kept is put back (m04.03 2.2, 2.3): the tree it last saved
+// is installed and painted before the server answers, and once the server's
+// snapshot is in, the operations an earlier life of the tab queued are drawn
+// again as unsaved and sent again under their own keys, oldest first, ahead
+// of anything new. A batch whose outcome the connection swallowed waits on
+// the device and goes again when the connection is back.
+//
 // This is also where the connection seam is exercised — the screen subscribes
 // on mount and unsubscribes on unmount, while the connection object itself
 // outlives both (guardrail §7.4).
@@ -38,7 +45,7 @@ import { members as membersOf, presence as presenceOf, putMembers } from "../sta
 import type { PreferencesState } from "../state/preferences.ts";
 import type { InitiativeHeader as HeaderRecord, TreeModel } from "../tree/model.ts";
 import type { Submission, SubmitResult, TreeWrite } from "../tree/adapter.ts";
-import { createAdapter, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
+import { createAdapter, intentToBatch, predictWrite, rejectionMessage, targetOf } from "../tree/adapter.ts";
 import { REJECTED_TITLE, historySentence, rejectionSentence, warnRejection } from "../tree/notice_model.ts";
 import type { AddRequest } from "../tree/add_form_model.ts";
 import { CONFIRM_CLASSES, dialogIdFor, skippable } from "../tree/confirm_model.ts";
@@ -74,7 +81,8 @@ import { pushNotice, selectTask } from "../state/ui.ts";
 import { useStore, useStoreValue } from "../state/use_store.ts";
 import { useServices } from "../services.tsx";
 import { browserKeyValueStore } from "../storage/last_user.ts";
-import type { InitiativeSnapshot } from "../storage/snapshots.ts";
+import type { PendingOp } from "../storage/pending_ops.ts";
+import { replayPlan } from "../storage/pending_ops.ts";
 import { ConfirmDialog } from "../ui/dialog.tsx";
 import { InlineError } from "../ui/feedback.tsx";
 import { InitiativeHeader } from "./initiative_header.tsx";
@@ -88,20 +96,19 @@ export function InitiativeScreen({ id }: { id: number }) {
   const select = useCallback((state: DomainState) => state.trees[id], [id]);
   const model = useStoreValue(stores.domain, select);
 
-  // The last copy this device saved, shown while the live read is in flight so
-  // a reload on a slow link has a header instead of a spinner. It is dropped
-  // the moment the server answers, and it is never shown as if it were current.
-  const [cached, setCached] = useState<InitiativeSnapshot | null>(null);
-
+  // The tree this device last saved, installed and painted while the live
+  // read is in flight, so a reload on a slow link has the tree instead of a
+  // skeleton. The server's read installs forward over it the moment it lands;
+  // a session that already holds anything from the server refuses it.
   useEffect(() => {
     let live = true;
-    void cache.readTree(id).then((snapshot) => {
-      if (live) setCached(snapshot);
+    void cache.readTree(id).then((tree) => {
+      if (live && tree !== null) sync.installCached(tree);
     });
     return () => {
       live = false;
     };
-  }, [cache, id]);
+  }, [cache, id, sync]);
 
   useEffect(() => {
     connection.subscribeInitiative(id);
@@ -132,9 +139,12 @@ export function InitiativeScreen({ id }: { id: number }) {
     escalate,
   });
 
-  // The server's copy always wins; the cache only fills the gap before it lands.
-  const shown: HeaderRecord | InitiativeSnapshot | null = model?.header ?? cached;
-  const fromCache = model === undefined && cached !== null;
+  // The server's copy always wins; the cache only fills the gap before it
+  // lands. A tree on screen while the read is still out can only be the
+  // device's copy.
+  const shown: HeaderRecord | null = model?.header ?? null;
+  const serverReady = resource.status === "ready";
+  const fromCache = model !== undefined && resource.status === "loading";
 
   // What the header can do once there is a tree — New List and the
   // click-to-edit writes — is the tree section's, which owns the writes'
@@ -178,7 +188,7 @@ export function InitiativeScreen({ id }: { id: number }) {
         // and everything under it do not jump when the read lands (§1.1).
         <Skeleton region="initiative-tree" id="initiative-tree-skeleton" />
       ) : (
-        <TreeSection id={id} model={model} actions={headerActions} />
+        <TreeSection id={id} model={model} actions={headerActions} serverReady={serverReady} />
       )}
 
       <p className="mt-6 text-sm text-zinc-500 dark:text-zinc-400">
@@ -294,12 +304,15 @@ function TreeSection({
   id,
   model,
   actions,
+  serverReady,
 }: {
   id: number;
   model: TreeModel;
   actions: RefObject<HeaderActions | null>;
+  /** The server's own snapshot has installed — not only the device's copy. */
+  serverReady: boolean;
 }) {
-  const { api, stores, connection, sync, escalate } = useServices();
+  const { api, stores, connection, sync, cache, escalate } = useServices();
   const rows = useStoreValue(
     stores.preferences,
     useCallback((state: PreferencesState) => state.rows, []),
@@ -410,24 +423,27 @@ function TreeSection({
   // store at submit time, so a batch is always built from what is current —
   // including the predictions already on screen, which is what the user is
   // acting on.
-  const adapter = useMemo(() => {
+  const writes = useMemo(() => {
     const contextFor = (initiativeId: number, model: TreeModel) => ({
       model,
       memberIds: membersOf(stores.domain.get(), initiativeId).map((member) => member.user_id),
     });
 
     // Item 5.2.1: the guess goes on screen and its rows go pending, in the same
-    // synchronous step as the batch is queued — before anything is sent.
-    const onSubmit = (submission: Submission): void => {
+    // synchronous step as the batch is queued — before anything is sent. The
+    // same step draws a record the device kept (m04.03 2.3), whose flight the
+    // session may already hold from an earlier screen: then only the marks go.
+    const beginFlight = (submission: Submission): void => {
       const { initiativeId, write, key } = submission;
       const current = stores.domain.get().trees[initiativeId];
       if (current === undefined) return;
+      const held = sync.flights(initiativeId).includes(key);
 
       // An undo or redo predicts nothing — what it reverses is the server's to
       // say — but it holds its place in line, so its reply lands on the
       // canonical it was sent from and never on a stale one.
       if (write === null) {
-        sync.begin(initiativeId, { key, predict: (model) => model, tempId: null });
+        if (!held) sync.begin(initiativeId, { key, predict: (model) => model, tempId: null });
         return;
       }
 
@@ -437,7 +453,7 @@ function TreeSection({
         predictWrite(write, contextFor(initiativeId, base), tempId ?? -1) ?? base;
 
       // The session puts the fold on screen; the marks follow in the same step.
-      const shown = sync.begin(initiativeId, { key, predict, tempId });
+      const shown = held ? current : sync.begin(initiativeId, { key, predict, tempId });
       if (shown === undefined) return;
 
       const scope = scopeFor(current, shown, [targetOf(write, tempId ?? -1)], submission.affectedIds);
@@ -449,6 +465,7 @@ function TreeSection({
           write.kind === "edit" && state.rejection?.id === write.id ? null : state.rejection,
       }));
     };
+    const onSubmit = beginFlight;
 
     const onResult = (submission: Submission, result: SubmitResult): void => {
       const { initiativeId, key, write } = submission;
@@ -498,7 +515,7 @@ function TreeSection({
       }
     };
 
-    return createAdapter({
+    const adapter = createAdapter({
       api,
       context: (initiativeId) => {
         const current = stores.domain.get().trees[initiativeId];
@@ -510,18 +527,77 @@ function TreeSection({
         const canonical = sync.canonical(initiativeId);
         return canonical === undefined ? undefined : contextFor(initiativeId, canonical);
       },
+      // Every batch is on the device before it is sent, and off it once the
+      // server has answered (m04.03 2.1). A refused write changes nothing here.
+      journal: {
+        put: (record) => cache.putPendingOp(record),
+        remove: (key) => cache.deletePendingOp(key),
+      },
       onSubmit,
       onResult,
+      // The outcome is unknown: the prediction stays, the record stays, and
+      // the batch goes again when the connection is back. Nothing on screen
+      // changes — the row is already marked as saving.
+      onUnknown: (submission, error) =>
+        warnRejection(`${submission.write?.kind ?? "undo/redo"} (kept on this device)`, error),
     });
-  }, [api, inFlight, stores.domain, stores.ui, sync]);
+
+    // Nothing new goes out before what the device already holds has been
+    // queued again (2.3.1); the replay effect below opens the queue.
+    adapter.hold(id);
+
+    /** A record an earlier life of this tab kept: drawn as unsaved, then sent again. */
+    const replay = (record: PendingOp): void => {
+      const { key, initiativeId, payload } = record;
+      const write = payload.kind === "write" ? payload.write : null;
+      const current = stores.domain.get().trees[initiativeId];
+      const affectedIds =
+        write === null || current === undefined
+          ? []
+          : intentToBatch(write, contextFor(initiativeId, current)).affectedIds;
+      beginFlight({ key, initiativeId, affectedIds, write });
+      void adapter.resubmit(record);
+    };
+
+    return { adapter, replay };
+  }, [api, cache, id, inFlight, stores.domain, stores.ui, sync]);
 
   const submit = useCallback(
     (write: TreeWrite) => {
       // Everything that happens on the way out and back is the adapter's hooks.
-      void adapter.submit(id, write);
+      void writes.adapter.submit(id, write);
     },
-    [adapter, id],
+    [writes, id],
   );
+
+  // Once the server's own snapshot is in — never over the device's copy alone
+  // — what this device queued for this Initiative is drawn again and sent
+  // again, oldest first (m04.03 2.3). Only then does the ordinary queue open,
+  // so a write made meanwhile goes after them. Repeating this is harmless: a
+  // record already queued here is not queued twice.
+  useEffect(() => {
+    if (!serverReady) return;
+    let live = true;
+    void cache.pendingOps().then((records) => {
+      if (!live) return;
+      for (const record of replayPlan(records, id)) writes.replay(record);
+      writes.adapter.open(id);
+    });
+    return () => {
+      live = false;
+    };
+  }, [writes, cache, id, serverReady]);
+
+  // The connection came back: a batch parked on an unknown outcome goes again,
+  // same body, same key.
+  useEffect(() => {
+    let previous = stores.recovery.get().connection;
+    return stores.recovery.subscribe(() => {
+      const current = stores.recovery.get().connection;
+      if (current === "live" && previous !== "live") writes.adapter.resume(id);
+      previous = current;
+    });
+  }, [writes, id, stores.recovery]);
 
   // Undo / redo: one at a time, its button latched until the reply lands
   // (§6.7). The press is acknowledged in the same frame; the tree changes
@@ -530,11 +606,11 @@ function TreeSection({
     (action: "undo" | "redo") => {
       if (inFlight.get().history !== null) return;
       inFlight.set((state) => ({ ...state, history: action }));
-      void adapter.submitHistory(id, action).finally(() => {
+      void writes.adapter.submitHistory(id, action).finally(() => {
         inFlight.set((state) => ({ ...state, history: null }));
       });
     },
-    [adapter, id, inFlight],
+    [writes, id, inFlight],
   );
   const historyControls = useMemo(
     () => ({ busy: history, onHistory }),

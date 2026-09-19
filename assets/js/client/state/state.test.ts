@@ -222,14 +222,16 @@ describe("recovery store", () => {
 
   it("records the newest snapshot, and that there is none", () => {
     const store = createRecoveryStore();
-    setSnapshotMeta(store, { initiativeId: 12, version: 7, savedAt: 900 });
+    setSnapshotMeta(store, { initiativeId: 12, version: 7, seq: 40, savedAt: 900 });
     assert.equal(store.get().snapshotInitiativeId, 12);
     assert.equal(store.get().snapshotVersion, 7);
+    assert.equal(store.get().snapshotSeq, 40);
     assert.equal(store.get().snapshotAt, 900);
 
     setSnapshotMeta(store, null);
     assert.equal(store.get().snapshotInitiativeId, null);
     assert.equal(store.get().snapshotVersion, null);
+    assert.equal(store.get().snapshotSeq, null);
     assert.equal(store.get().snapshotAt, null);
   });
 });
@@ -274,6 +276,7 @@ describe("writes this device has not sent yet", () => {
     });
 
     assert.equal(write.id, "op-7");
+    assert.equal(write.initiativeId, 3);
     assert.equal(write.queuedAt, 1_700_000_000_000);
     assert.deepEqual(write.operation, { op: "update_task" });
   });

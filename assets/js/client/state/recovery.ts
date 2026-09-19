@@ -21,12 +21,14 @@ import { createStore } from "./store.ts";
 export type ConnectionStatus = "connecting" | "live" | "reconnecting" | "offline";
 
 /**
- * A write the user has made that the server has not yet acknowledged. Arc 3
- * owns the queue; this is the record it will queue.
+ * A write the user has made that the server has not yet acknowledged — one
+ * per record the device holds (`storage/pending_ops.ts`), mirrored here so the
+ * summary's count and the sign-out warning read what is actually queued.
  */
 export interface PendingWrite {
   readonly id: string;
-  /** The `POST /app/api/operations` op, opaque here. */
+  readonly initiativeId: number;
+  /** The queued intent, opaque here. */
   readonly operation: unknown;
   /** Milliseconds since the epoch, when the user made the change. */
   readonly queuedAt: number;
@@ -52,6 +54,8 @@ export interface RecoveryState {
   readonly snapshotInitiativeId: number | null;
   /** That snapshot's Initiative `version`, or `null`. */
   readonly snapshotVersion: number | null;
+  /** The delivery sequence that snapshot is current to, or `null`. */
+  readonly snapshotSeq: number | null;
   /** When the snapshot was written (ms since the epoch), or `null`. */
   readonly snapshotAt: number | null;
   /** The last moment the server confirmed we were current (ms since the epoch). */
@@ -72,6 +76,7 @@ export const initialRecoveryState: RecoveryState = {
   pendingWrites: [],
   snapshotInitiativeId: null,
   snapshotVersion: null,
+  snapshotSeq: null,
   snapshotAt: null,
   lastSyncedAt: null,
   fatalError: null,
@@ -118,7 +123,12 @@ export function clearFatalError(store: RecoveryStore): void {
 
 /** Reads a queued op off the device as the pending write it stands for. */
 export function pendingWriteFrom(record: PendingOpRecord): PendingWrite {
-  return { id: record.key, operation: record.payload, queuedAt: record.createdAt };
+  return {
+    id: record.key,
+    initiativeId: record.initiativeId,
+    operation: record.payload,
+    queuedAt: record.createdAt,
+  };
 }
 
 /**
@@ -140,6 +150,7 @@ export function setSnapshotMeta(store: RecoveryStore, meta: SnapshotMeta | null)
     ...state,
     snapshotInitiativeId: meta?.initiativeId ?? null,
     snapshotVersion: meta?.version ?? null,
+    snapshotSeq: meta?.seq ?? null,
     snapshotAt: meta?.savedAt ?? null,
   }));
 }

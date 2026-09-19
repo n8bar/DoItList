@@ -20,9 +20,20 @@
 // the display-only guess `optimistic.ts` folds over canonical) and, for a
 // keyboard move, the slot the server op needs. Nothing here paints, reverts,
 // or reconciles.
+//
+// Every batch is journaled on the device before it can be lost (m04.03 2.1):
+// the intent as it is queued, then the exact body under the exact key before
+// the POST goes out, and the record is deleted only once the server's answer
+// is known. A transport failure is not an answer: the batch stays journaled
+// as `sent`, its prediction stays on screen, and the queue behind it waits —
+// the send parks until the screen says the connection is back (`resume`), and
+// then the same body goes out under the same key. A record another life of
+// this tab left behind comes back through `resubmit` (m04.03 2.3).
 
 import type { ApiClient, ApiError } from "../api/client.ts";
 import type { Priority } from "../api/types.ts";
+import type { PendingOpRecord } from "../storage/db.ts";
+import type { BatchBody, PendingIntent, PendingOp } from "../storage/pending_ops.ts";
 import type { AddRequest } from "./add_form_model.ts";
 import type { TreeIntent } from "./context.ts";
 import type { HistoryResult, TaskResult, TaskUpsert, TreeDelta } from "./delta.ts";
@@ -512,6 +523,14 @@ export interface Submission {
   write: TreeWrite | null;
 }
 
+/** Where queued operations are kept while their outcome is unknown (m04.03 2.1). */
+export interface OperationJournal {
+  /** Writes or rewrites the record under its key. A refusal is not the adapter's problem. */
+  put(record: PendingOpRecord): Promise<unknown>;
+  /** The outcome is known. */
+  remove(key: string): Promise<unknown>;
+}
+
 export interface AdapterOptions {
   api: Pick<ApiClient, "post">;
   /**
@@ -526,22 +545,102 @@ export interface AdapterOptions {
   sendContext?: (initiativeId: number) => BatchContext | undefined;
   /** Injected in tests; defaults to `crypto.randomUUID()`. */
   keyGen?: () => string;
+  /** The device's journal. Without one, nothing survives the tab. */
+  journal?: OperationJournal;
+  /** Injected in tests; defaults to `Date.now()`. */
+  now?: () => number;
   /** Fires synchronously as a batch is queued, before anything is sent. */
   onSubmit?: (submission: Submission) => void;
-  /** Fires with the outcome of each queued batch, in order per Initiative. */
+  /** Fires with the outcome of each batch, in order per Initiative. */
   onResult?: (submission: Submission, result: SubmitResult) => void;
+  /**
+   * Fires when a batch could not reach the server and its outcome is unknown.
+   * The batch is parked, not failed: nothing on screen is to change.
+   */
+  onUnknown?: (submission: Submission, error: ApiError) => void;
 }
 
 export interface OperationAdapter {
   submit(initiativeId: number, write: TreeWrite): Promise<SubmitResult>;
   submitHistory(initiativeId: number, action: "undo" | "redo"): Promise<SubmitResult>;
+  /**
+   * A record the device kept (m04.03 2.3): sent again under its own key. One
+   * that went out once resends its stored body as it was; one that never went
+   * builds its body from its intent, against truth as it stands. Replays ride
+   * ahead of anything queued before `open`, so what an earlier life of the
+   * tab asked for goes first. `onSubmit` does not fire — the caller has
+   * already put the record's prediction on screen.
+   */
+  resubmit(record: PendingOp): Promise<SubmitResult>;
+  /**
+   * Holds the ordinary queue for `initiativeId` until `open`: called before
+   * anything can be queued, so the boot replay goes first (m04.03 2.3.1).
+   */
+  hold(initiativeId: number): void;
+  /** The boot replay for `initiativeId` is queued: everything else may go. */
+  open(initiativeId: number): void;
+  /** The connection is back: a batch parked on an unknown outcome goes again. */
+  resume(initiativeId: number): void;
+}
+
+interface Job {
+  readonly submission: Submission;
+  readonly createdAt: number;
+  readonly intent: PendingIntent;
+  /** A body already sent once, resent as it was; `null` builds one at send time. */
+  readonly body: BatchBody | null;
+  /** The queued record's write, awaited before the send. Never rejects. */
+  readonly journaled: Promise<unknown>;
+}
+
+const intentOf = (write: TreeWrite | null, action: "undo" | "redo"): PendingIntent =>
+  write === null ? { kind: "history", action } : { kind: "write", write };
+
+/** The batch an intent makes now, against `context`. */
+function buildIntent(intent: PendingIntent, initiativeId: number, context: BatchContext): Batch {
+  return intent.kind === "history"
+    ? historyBatch(initiativeId, intent.action)
+    : intentToBatch(intent.write, context);
 }
 
 export function createAdapter(options: AdapterOptions): OperationAdapter {
   const keyGen = options.keyGen ?? (() => crypto.randomUUID());
+  const now = options.now ?? (() => Date.now());
+  const sendContext = options.sendContext ?? options.context;
+  // A journal that cannot fail the send: a refused write is the storage
+  // line's business, and the batch goes anyway (the memory store stands in).
+  // The call itself is made in the caller's step (a queued record is handed to
+  // the device in the same tick as the prediction goes on screen); only the
+  // outcome is awaited.
+  const attempt = (work: (() => Promise<unknown>) | undefined): Promise<unknown> => {
+    if (work === undefined) return Promise.resolve();
+    try {
+      return work().catch(() => undefined);
+    } catch {
+      return Promise.resolve();
+    }
+  };
+  const device = options.journal;
+  const journal = {
+    put: (record: PendingOpRecord): Promise<unknown> =>
+      attempt(device === undefined ? undefined : () => device.put(record)),
+    remove: (key: string): Promise<unknown> =>
+      attempt(device === undefined ? undefined : () => device.remove(key)),
+  };
+
   // The tail of each Initiative's queue. A batch is chained onto it at submit
   // time, so creation order is send order and only one is ever in flight.
   const tails = new Map<number, Promise<unknown>>();
+  // The replay lane: what an earlier life of the tab queued goes first. A
+  // gate, while one is held, keeps the ordinary lane waiting until `open`
+  // says the replays are all queued. No gate means nothing to wait for.
+  const replays = new Map<number, Promise<unknown>>();
+  const gates = new Map<number, { promise: Promise<unknown>; open: (after: Promise<unknown>) => void }>();
+  // One parked send per Initiative: the one whose outcome is unknown.
+  const parked = new Map<number, () => void>();
+  // Every batch this adapter has queued and not yet answered, by key. A replay
+  // of one of them is that batch, not a second copy of it.
+  const active = new Map<string, Promise<SubmitResult>>();
 
   const emptyOk = (affectedIds: number[]): SubmitResult => ({
     ok: true,
@@ -550,43 +649,84 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
     affectedIds,
   });
 
-  async function send(
-    submission: Submission,
-    build: (context: BatchContext) => Batch,
-  ): Promise<SubmitResult> {
-    // Built now, from truth as the previous reply left it.
-    const context = (options.sendContext ?? options.context)(submission.initiativeId);
-    const operations = context === undefined ? [] : build(context).operations;
-    if (operations.length === 0) return emptyOk(submission.affectedIds);
+  const recordOf = (job: Job, body: BatchBody | null, status: "queued" | "sent"): PendingOpRecord => ({
+    key: job.submission.key,
+    initiativeId: job.submission.initiativeId,
+    createdAt: job.createdAt,
+    payload: { ...job.intent, body, status },
+  });
 
-    const body = { operations };
-    const headers = { "idempotency-key": submission.key };
-    let result = await options.api.post<BatchReply>("/operations", body, headers);
-    // A reply that never arrived: the same key replays a commit the server did
-    // make, and re-runs one it did not. Once — a link that is down stays down.
-    if (!result.ok && result.error.code === "network") {
-      result = await options.api.post<BatchReply>("/operations", body, headers);
+  async function send(job: Job): Promise<SubmitResult> {
+    const { submission } = job;
+    const { key, initiativeId, affectedIds } = submission;
+    await job.journaled;
+
+    let body = job.body;
+    if (body === null) {
+      // Built now, from truth as the previous reply left it.
+      const context = sendContext(initiativeId);
+      const operations = context === undefined ? [] : buildIntent(job.intent, initiativeId, context).operations;
+      if (operations.length === 0) {
+        await journal.remove(key);
+        return emptyOk(affectedIds);
+      }
+      body = { operations };
     }
-    if (!result.ok) return { ok: false, error: result.error, affectedIds: submission.affectedIds };
-    const { refetch, ...delta } = deltaFromReply(operations, result.data);
-    const seq = result.data.seq?.[String(submission.initiativeId)];
-    return {
-      ok: true,
-      delta,
-      refetch,
-      affectedIds: submission.affectedIds,
-      ...(typeof seq === "number" ? { seq } : {}),
-    };
+
+    // The exact body under the exact key, on the device before it goes out:
+    // a tab that dies mid-request comes back and sends this again.
+    await journal.put(recordOf(job, body, "sent"));
+
+    const headers = { "idempotency-key": key };
+    for (;;) {
+      let result = await options.api.post<BatchReply>("/operations", body, headers);
+      // A reply that never arrived: the same key replays a commit the server
+      // did make, and re-runs one it did not. Once — a link that is down
+      // stays down.
+      if (!result.ok && result.error.code === "network") {
+        result = await options.api.post<BatchReply>("/operations", body, headers);
+      }
+      if (!result.ok && result.error.code === "network") {
+        // Unknown outcome. The record stays, the prediction stays, the queue
+        // behind this waits, and the same body goes again when told to.
+        options.onUnknown?.(submission, result.error);
+        await new Promise<void>((resolve) => parked.set(initiativeId, resolve));
+        continue;
+      }
+
+      void journal.remove(key);
+      if (!result.ok) return { ok: false, error: result.error, affectedIds };
+      const { refetch, ...delta } = deltaFromReply(body.operations, result.data);
+      const seq = result.data.seq?.[String(initiativeId)];
+      return {
+        ok: true,
+        delta,
+        refetch,
+        affectedIds,
+        ...(typeof seq === "number" ? { seq } : {}),
+      };
+    }
   }
 
-  function queue(
-    initiativeId: number,
-    build: (context: BatchContext) => Batch,
-    write: TreeWrite | null,
-  ): Promise<SubmitResult> {
+  /** Chains `job` after `previous`, hands its outcome over, and answers with it. */
+  function run(job: Job, previous: Promise<unknown>): Promise<SubmitResult> {
+    const { key } = job.submission;
+    const running = previous
+      .then(() => send(job))
+      .then((result) => {
+        active.delete(key);
+        options.onResult?.(job.submission, result);
+        return result;
+      });
+    active.set(key, running);
+    return running;
+  }
+
+  function queue(initiativeId: number, write: TreeWrite | null, action: "undo" | "redo"): Promise<SubmitResult> {
+    const intent = intentOf(write, action);
     // Against what is shown, for whether anything would go and what it touches.
     const context = options.context(initiativeId);
-    const preview = context === undefined ? EMPTY : build(context);
+    const preview = context === undefined ? EMPTY : buildIntent(intent, initiativeId, context);
     if (preview.operations.length === 0) return Promise.resolve(emptyOk([]));
 
     const submission: Submission = {
@@ -597,27 +737,69 @@ export function createAdapter(options: AdapterOptions): OperationAdapter {
     };
     options.onSubmit?.(submission);
 
-    const previous = tails.get(initiativeId) ?? Promise.resolve();
-    const run = previous
-      .then(() => send(submission, build))
-      .then((result) => {
-        options.onResult?.(submission, result);
-        return result;
-      });
+    // On the device in the same step as it is on screen — before anything
+    // is sent, and before memory can forget it.
+    const createdAt = now();
+    const journaled = journal.put({
+      key: submission.key,
+      initiativeId,
+      createdAt,
+      payload: { ...intent, body: null, status: "queued" },
+    });
+    const job: Job = { submission, createdAt, intent, body: null, journaled };
+
+    const previous = tails.get(initiativeId) ?? gates.get(initiativeId)?.promise ?? Promise.resolve();
+    const running = run(job, previous);
     // The next batch is built only after this one's result has been handed
     // over, so it sees the canonical model that result produced. The queue
     // moves on whatever a batch came to; the caller sees the failure.
-    tails.set(initiativeId, run.catch(() => undefined));
-
-    return run;
+    tails.set(initiativeId, running.catch(() => undefined));
+    return running;
   }
 
   return {
-    submit(initiativeId, write) {
-      return queue(initiativeId, (context) => intentToBatch(write, context), write);
+    submit: (initiativeId, write) => queue(initiativeId, write, "undo"),
+    submitHistory: (initiativeId, action) => queue(initiativeId, null, action),
+
+    resubmit(record) {
+      const { key, initiativeId, createdAt, payload } = record;
+      const already = active.get(key);
+      if (already !== undefined) return already;
+      const write = payload.kind === "write" ? payload.write : null;
+      const context = options.context(initiativeId);
+      const preview = context === undefined ? EMPTY : buildIntent(payload, initiativeId, context);
+      const submission: Submission = { key, initiativeId, affectedIds: preview.affectedIds, write };
+      const job: Job = {
+        submission,
+        createdAt,
+        intent: payload.kind === "write" ? { kind: "write", write: payload.write } : { kind: "history", action: payload.action },
+        body: payload.status === "sent" ? payload.body : null,
+        journaled: Promise.resolve(),
+      };
+      const previous = replays.get(initiativeId) ?? Promise.resolve();
+      const running = run(job, previous);
+      replays.set(initiativeId, running.catch(() => undefined));
+      return running;
     },
-    submitHistory(initiativeId, action) {
-      return queue(initiativeId, () => historyBatch(initiativeId, action), null);
+
+    hold(initiativeId) {
+      if (gates.has(initiativeId)) return;
+      let open: (after: Promise<unknown>) => void = () => {};
+      const promise = new Promise<unknown>((resolve) => {
+        open = resolve;
+      });
+      gates.set(initiativeId, { promise, open });
+    },
+
+    open(initiativeId) {
+      gates.get(initiativeId)?.open(replays.get(initiativeId) ?? Promise.resolve());
+    },
+
+    resume(initiativeId) {
+      const go = parked.get(initiativeId);
+      if (go === undefined) return;
+      parked.delete(initiativeId);
+      go();
     },
   };
 }

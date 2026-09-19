@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { runSignOut } from "./sign_out_flow.ts";
+import { confirmSignOut, runSignOut, unsavedSentence } from "./sign_out_flow.ts";
 
 /** Records the order things happened in. */
 function recorder() {
@@ -73,5 +73,18 @@ describe("signing out", () => {
     const { order, note } = recorder();
     await runSignOut({ cache: { purge: async () => true }, submit: note("submit") });
     assert.deepEqual(order, ["submit"]);
+  });
+});
+
+describe("the warning before sign-out (m04.03 2.4.1)", () => {
+  it("asks only when the device holds unsaved work", () => {
+    assert.equal(confirmSignOut(0), false);
+    assert.equal(confirmSignOut(1), true);
+    assert.equal(confirmSignOut(3), true);
+  });
+
+  it("says how much would go", () => {
+    assert.match(unsavedSentence(1), /^One change/);
+    assert.match(unsavedSentence(4), /^4 changes/);
   });
 });

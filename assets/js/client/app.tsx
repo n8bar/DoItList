@@ -96,6 +96,11 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
       onStatus: (status, reason) =>
         setStorageHealth(stores.recovery, status, reason?.message ?? null),
       onMeta: (meta) => setSnapshotMeta(stores.recovery, meta),
+      // What this device has queued and not yet settled, as it changes — and
+      // once on open, because unsent work outlives the tab and the count in
+      // the summary (and the warning before Sign out throws it away) has to
+      // be read back off the device, not assumed to be zero (spec §7).
+      onPending: (records) => setPendingWrites(stores.recovery, records.map(pendingWriteFrom)),
     }),
   );
   // The tab's one live connection. A route change must never recreate it — and
@@ -215,13 +220,6 @@ export function App({ bootstrap }: { bootstrap: Bootstrap }) {
     connection.connect();
     if (bootstrap.user !== null) connection.watchUser(bootstrap.user.id);
 
-    // What this device queued and never sent. It outlives the tab, so the
-    // count in the summary — and the warning before Sign out throws it away —
-    // has to be read back off the device, not assumed to be zero (spec §7).
-    void cache.pendingOps().then((ops) => {
-      if (!alive.current) return;
-      setPendingWrites(stores.recovery, ops.map(pendingWriteFrom));
-    });
     void api.get<SessionData>("/session").then((result) => {
       if (!alive.current) return;
       if (result.ok) {

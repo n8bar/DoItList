@@ -17,7 +17,7 @@ import type { IdbDatabaseLike, IdbFactoryLike, IdbTransactionLike } from "./idb.
 import { committed, request } from "./idb.ts";
 
 /** Bump when a store or a record shape changes. It is in the database name. */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const DB_PREFIX = "doit:v";
 export const SNAPSHOTS = "snapshots";
@@ -40,13 +40,15 @@ export function parseDbName(name: string): { schema: number; userId: number } | 
 
 export interface SnapshotRecord {
   readonly initiativeId: number;
-  /** The Initiative `version` this snapshot is of. */
+  /** The Initiative's delivery sequence this snapshot is current to. */
   readonly seq: number;
   readonly savedAt: number;
   readonly bytes: number;
+  /** The whole canonical tree (`snapshots.ts` says what shape). */
   readonly payload: unknown;
 }
 
+/** One queued operation. The key is its idempotency key; `pending_ops.ts` says what the payload is. */
 export interface PendingOpRecord {
   readonly key: string;
   readonly initiativeId: number;
@@ -103,8 +105,14 @@ export interface AccountStorage {
   deleteSnapshot(initiativeId: number): Promise<StorageResult<void>>;
   getMeta(key: string): Promise<StorageResult<unknown>>;
   putMeta(key: string, value: unknown): Promise<StorageResult<void>>;
-  /** Arc 3 drains these; nothing evicts them. */
+  /** Every queued operation, in no particular order. Nothing evicts them. */
   listPendingOps(): Promise<StorageResult<PendingOpRecord[]>>;
+  /** Writes (or rewrites) one queued operation under its key. */
+  putPendingOp(record: PendingOpRecord): Promise<StorageResult<void>>;
+  /** The outcome is known: the record goes. */
+  deletePendingOp(key: string): Promise<StorageResult<void>>;
+  /** Access to an Initiative is gone: everything queued for it goes. */
+  deletePendingOps(initiativeId: number): Promise<StorageResult<void>>;
   /** Applies the age/count/byte bounds. Resolves with what it dropped. */
   enforceBounds(keep?: number | null): Promise<StorageResult<number[]>>;
   close(): void;
@@ -142,6 +150,14 @@ export function upgradeSchema(
         // written), so it is cleared: the client re-reads from the server.
         // Unacknowledged operations are kept — they are the user's work.
         ensure(META, "key");
+        if (tx !== null && db.objectStoreNames.contains(SNAPSHOTS)) {
+          tx.objectStore(SNAPSHOTS).clear();
+        }
+        break;
+      case 3:
+        // v3 caches the whole canonical tree where v2 cached the header only
+        // (m04.03 2.2). A v2 payload is not a tree, so it is cleared and
+        // re-read from the server. Queued operations are kept, as ever.
         if (tx !== null && db.objectStoreNames.contains(SNAPSHOTS)) {
           tx.objectStore(SNAPSHOTS).clear();
         }
@@ -445,9 +461,21 @@ function createIdbStorage(db: IdbDatabaseLike, options: OpenOptions): AccountSto
       try {
         const rows = await read(PENDING_OPS);
         const live: PendingOpRecord[] = [];
+        let corrupt = 0;
         for (const row of rows) {
           const parsed = parsePendingOp(row);
-          if (parsed !== null) live.push(parsed);
+          if (parsed !== null) {
+            live.push(parsed);
+            continue;
+          }
+          // Same rule as a corrupt snapshot: a row that cannot be read is
+          // deleted, not re-read forever — and there is nothing to replay.
+          corrupt += 1;
+          const key = isRecord(row) ? row["key"] : undefined;
+          if (typeof key === "string") await write(PENDING_OPS, (store) => store.delete(key), undefined);
+        }
+        if (corrupt > 0) {
+          worsen({ kind: "corrupt", message: "Some queued changes were unreadable and were discarded." });
         }
         return ok(live);
       } catch (error) {
@@ -455,6 +483,21 @@ function createIdbStorage(db: IdbDatabaseLike, options: OpenOptions): AccountSto
         worsen({ kind: "failed", message });
         return degraded<PendingOpRecord[]>("failed", message);
       }
+    },
+
+    putPendingOp: (record) => write(PENDING_OPS, (store) => store.put(record), undefined),
+
+    deletePendingOp: (key) => write(PENDING_OPS, (store) => store.delete(key), undefined),
+
+    async deletePendingOps(initiativeId) {
+      const listed = await storage.listPendingOps();
+      if (!listed.ok) return listed;
+      for (const record of listed.value) {
+        if (record.initiativeId !== initiativeId) continue;
+        const deleted = await storage.deletePendingOp(record.key);
+        if (!deleted.ok) return deleted;
+      }
+      return ok(undefined);
     },
 
     async enforceBounds(keep = null) {
@@ -532,6 +575,21 @@ export function createMemoryStorage(
     },
 
     listPendingOps: () => Promise.resolve(ok([...pending.values()])),
+
+    putPendingOp(record) {
+      pending.set(record.key, record);
+      return Promise.resolve(ok(undefined));
+    },
+
+    deletePendingOp(key) {
+      pending.delete(key);
+      return Promise.resolve(ok(undefined));
+    },
+
+    deletePendingOps(initiativeId) {
+      for (const [key, record] of pending) if (record.initiativeId === initiativeId) pending.delete(key);
+      return Promise.resolve(ok(undefined));
+    },
 
     enforceBounds(keep = null) {
       const plan = evictionPlan([...snapshots.values()], clock(), limits, keep);
