@@ -112,7 +112,9 @@ An Initiative list item carries `description` and `created_at`. `progress` is th
 
 ### Live channel
 
-The browser joins `initiative:<id>` on `/socket`; membership is checked on join and on every change, and a member who loses access gets `access_revoked` once. The join reply carries `initiative_id` and the current `seq`; a tree held at an older one is behind: re-read it. Every committed change is one `delta`: `seq`, `origin_key` (the batch's `Idempotency-Key`), `actor`, `upserts` (task nodes without `children`), `removed` (task ids), `initiative` (header fields, when moved), `members_changed`. Apply only the next `seq`; ignore an older or repeated one; re-read on a gap. Your own `origin_key` is already applied. Untouched rows' positions and labels derive locally.
+The browser joins `initiative:<id>` on `/socket`; membership is rechecked on every change; losing access sends `access_revoked` once. The join reply carries `initiative_id` and the current `seq`; older means behind: re-read. Each commit is one `delta`: `seq`, `origin_key` (the batch's `Idempotency-Key`), `actor`, `upserts` (task nodes without `children`), `removed` (task ids), `initiative` (header fields, when moved), `members_changed`. Apply only the next `seq`; ignore older/repeated; re-read on a gap. Your own `origin_key` is already applied.
+
+Presence: `presence_state` on join, `presence_diff` after. Push `select` with `task_id` (integer/null) and optional `field` (pane field name/null); metas carry `user_id`, `task_id`, `field`, `name`. Advisory only.
 
 ## Scripted client
 

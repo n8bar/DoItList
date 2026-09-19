@@ -303,8 +303,27 @@ describe("selection presence (item 3.4.2)", () => {
     connection.select(12, null);
 
     assert.deepEqual(socket.get().channels[0]?.pushes, [
-      { event: "select", payload: { task_id: 44 } },
-      { event: "select", payload: { task_id: null } },
+      { event: "select", payload: { task_id: 44, field: null } },
+      { event: "select", payload: { task_id: null, field: null } },
+    ]);
+  });
+
+  it("announces the pane field it is in, once per value, and drops it with the selection (m04.03 4.1.1)", () => {
+    const { connection, socket } = live();
+    connection.subscribeInitiative(12);
+    connection.select(12, 44);
+    connection.select(12, 44, "title");
+    connection.select(12, 44, "title");
+    connection.select(12, 44, null);
+    connection.select(12, 44, "description");
+    connection.select(12, null, "description");
+
+    assert.deepEqual(socket.get().channels[0]?.pushes, [
+      { event: "select", payload: { task_id: 44, field: null } },
+      { event: "select", payload: { task_id: 44, field: "title" } },
+      { event: "select", payload: { task_id: 44, field: null } },
+      { event: "select", payload: { task_id: 44, field: "description" } },
+      { event: "select", payload: { task_id: null, field: null } },
     ]);
   });
 
@@ -316,7 +335,9 @@ describe("selection presence (item 3.4.2)", () => {
     assert.equal(socket.get().channels.length, 0);
 
     connection.subscribeInitiative(12);
-    assert.deepEqual(socket.get().channels[0]?.pushes, [{ event: "select", payload: { task_id: 44 } }]);
+    assert.deepEqual(socket.get().channels[0]?.pushes, [
+      { event: "select", payload: { task_id: 44, field: null } },
+    ]);
   });
 
   it("says nothing on join when nothing is selected", () => {
@@ -328,12 +349,12 @@ describe("selection presence (item 3.4.2)", () => {
   it("re-announces the selection when Phoenix re-joins after a drop", () => {
     const { connection, socket } = live();
     connection.subscribeInitiative(12);
-    connection.select(12, 44);
+    connection.select(12, 44, "title");
     socket.get().channels[0]?.rejoin();
 
     assert.deepEqual(socket.get().channels[0]?.pushes, [
-      { event: "select", payload: { task_id: 44 } },
-      { event: "select", payload: { task_id: 44 } },
+      { event: "select", payload: { task_id: 44, field: "title" } },
+      { event: "select", payload: { task_id: 44, field: "title" } },
     ]);
   });
 
@@ -364,8 +385,8 @@ describe("selection presence (item 3.4.2)", () => {
     connection.select(12, 1);
     connection.select(13, 2);
 
-    assert.deepEqual(socket.get().channels[0]?.pushes, [{ event: "select", payload: { task_id: 1 } }]);
-    assert.deepEqual(socket.get().channels[1]?.pushes, [{ event: "select", payload: { task_id: 2 } }]);
+    assert.deepEqual(socket.get().channels[0]?.pushes, [{ event: "select", payload: { task_id: 1, field: null } }]);
+    assert.deepEqual(socket.get().channels[1]?.pushes, [{ event: "select", payload: { task_id: 2, field: null } }]);
   });
 });
 

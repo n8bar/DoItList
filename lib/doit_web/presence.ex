@@ -30,13 +30,15 @@ defmodule DoItWeb.Presence do
 
   @doc """
   The meta one member publishes on `initiative_topic/1`: who they are, what
-  they have selected, and the avatar ingredients, so a subscriber paints
-  without a user lookup.
+  they have selected, which Details-pane field they are in (`nil` for none —
+  m04.03 4.1.1, advisory only), and the avatar ingredients, so a subscriber
+  paints without a user lookup.
   """
-  def selection_meta(user, task_id) do
+  def selection_meta(user, task_id, field \\ nil) do
     %{
       user_id: user.id,
       task_id: task_id,
+      field: field,
       name: user.name,
       initials: DoItWeb.CoreComponents.initials(user),
       bg: DoItWeb.CoreComponents.avatar_bg(user),

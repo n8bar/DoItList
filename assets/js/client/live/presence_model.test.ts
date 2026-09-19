@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   applyDiff,
   applyState,
+  editorsOf,
   emptyPresence,
   onlineIds,
   parseMeta,
@@ -11,10 +12,16 @@ import {
 } from "./presence_model.ts";
 import type { PresenceMeta, PresenceState } from "./presence_model.ts";
 
-/** A meta the way `DoItWeb.Presence.selection_meta/2` builds one, plus a ref. */
-const meta = (user_id: number, task_id: number | null, ref: string): PresenceMeta => ({
+/** A meta the way `DoItWeb.Presence.selection_meta/3` builds one, plus a ref. */
+const meta = (
+  user_id: number,
+  task_id: number | null,
+  ref: string,
+  field: string | null = null,
+): PresenceMeta => ({
   user_id,
   task_id,
+  field,
   name: `User ${user_id}`,
   initials: `U${user_id}`,
   bg: `bg-${user_id}`,
@@ -134,6 +141,7 @@ describe("the selectors (push_presence/1)", () => {
     assert.deepEqual(mine[0], {
       user_id: 1,
       task_id: 10,
+      field: null,
       name: "User 1",
       initials: "U1",
       bg: "bg-1",
@@ -153,6 +161,31 @@ describe("the selectors (push_presence/1)", () => {
 
   it("skips windows with nothing selected", () => {
     assert.deepEqual(selectionsOf(state([3, [meta(3, null, "d")]]), 1), []);
+  });
+
+  it("one badge per user and task carries the field any of their windows names (4.1.1)", () => {
+    const two = state([1, [meta(1, 10, "a"), meta(1, 10, "a2", "title")]]);
+    assert.deepEqual(
+      selectionsOf(two, 2).map((s) => [s.user_id, s.task_id, s.field]),
+      [[1, 10, "title"]],
+    );
+    const first = state([1, [meta(1, 10, "a", "description"), meta(1, 10, "a2", "title")]]);
+    assert.deepEqual(selectionsOf(first, 2).map((s) => s.field), ["description"]);
+  });
+
+  it("names who else is in a field on a task, once each (4.1.2)", () => {
+    const here = selectionsOf(
+      state(
+        [1, [meta(1, 10, "a", "title"), meta(1, 10, "a2", "title")]],
+        [2, [meta(2, 10, "b", "description"), meta(2, 11, "c", "title")]],
+        [3, [meta(3, 10, "d", "title")]],
+      ),
+      9,
+    );
+    assert.deepEqual(editorsOf(here, 10, "title").map((s) => s.user_id), [1, 3]);
+    assert.deepEqual(editorsOf(here, 10, "description").map((s) => s.user_id), [2]);
+    assert.deepEqual(editorsOf(here, 11, "description"), []);
+    assert.deepEqual(editorsOf(here, 12, "title"), []);
   });
 
   it("counts everyone here, self included, whatever they have selected", () => {

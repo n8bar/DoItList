@@ -298,3 +298,14 @@ export function sortEdit(
   if (next.mode === record.sort_mode && next.reverse === record.sort_reverse) return null;
   return next;
 }
+
+/**
+ * The line under a field someone else is in (m04.03 4.1.2): "Ann is editing
+ * this too." / "Ann and Bob are editing this too." Empty when nobody is.
+ */
+export function editingNotice(names: readonly string[]): string {
+  if (names.length === 0) return "";
+  if (names.length === 1) return `${names[0]} is editing this too.`;
+  const head = names.slice(0, -1).join(", ");
+  return `${head} and ${names[names.length - 1]} are editing this too.`;
+}

@@ -44,7 +44,7 @@ import type { UiStore } from "../state/ui.ts";
 import { pushNotice } from "../state/ui.ts";
 import type { TreeCache } from "../storage/snapshots.ts";
 import type { Timers } from "./connection.ts";
-import type { DeltaEnvelope } from "./envelope.ts";
+import type { DeltaActor, DeltaEnvelope } from "./envelope.ts";
 import type { Outcome, SessionState, Settled } from "./session.ts";
 import {
   GAP_HOLD_MS,
@@ -283,6 +283,22 @@ export interface InitiativeSync {
    * (m04.03 3.2) — never over the device's copy alone.
    */
   onSynced(id: number, listener: () => void): () => void;
+  /**
+   * Told once per applied envelope that was not this client's own write
+   * settling (m04.03 4.2): the ids whose records it changed and who did it.
+   * The records are already in the store when this fires; the Details pane
+   * compares the field it has focused against what it started from, and
+   * nothing else is looked at.
+   */
+  onRemoteChange(id: number, listener: (change: RemoteChange) => void): () => void;
+}
+
+/** One applied envelope from someone else, as the pane needs it. */
+export interface RemoteChange {
+  readonly initiativeId: number;
+  /** Records the envelope upserted, in envelope order. */
+  readonly ids: readonly number[];
+  readonly actor: DeltaActor | null;
 }
 
 /**
@@ -302,6 +318,7 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
   const holds = new Map<number, unknown>();
   const listeners = new Map<number, Set<(settled: Settled) => void>>();
   const syncedListeners = new Map<number, Set<() => void>>();
+  const remoteListeners = new Map<number, Set<(change: RemoteChange) => void>>();
   /** Initiatives with a re-read out: one at a time, a burst past the buffer asks once. */
   const reading = new Set<number>();
   /** Screen reads out per Initiative: a re-read is not started under one. */
@@ -328,6 +345,22 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
 
     for (const settled of outcome.settled) {
       for (const listener of listeners.get(id) ?? []) listener(settled);
+    }
+
+    // Everyone else's envelopes, for the pane. An envelope that settled one of
+    // this client's own flights is that write coming back, not a remote change;
+    // one for a write whose reply already landed carries the value the field
+    // already shows, and the pane's baseline rule makes nothing of it.
+    const own = new Set(outcome.settled.map((settled) => settled.flight.key));
+    for (const envelope of outcome.applied) {
+      if (envelope.originKey !== null && own.has(envelope.originKey)) continue;
+      if (envelope.upserts.length === 0) continue;
+      const change: RemoteChange = {
+        initiativeId: id,
+        ids: envelope.upserts.map((record) => record.id),
+        actor: envelope.actor,
+      };
+      for (const listener of remoteListeners.get(id) ?? []) listener(change);
     }
 
     if (outcome.applied.length > 0) {
@@ -559,6 +592,16 @@ export function createInitiativeSync(deps: SyncDeps): InitiativeSync {
       return () => {
         set.delete(listener);
         if (set.size === 0) syncedListeners.delete(id);
+      };
+    },
+
+    onRemoteChange(id, listener) {
+      const set = remoteListeners.get(id) ?? new Set();
+      set.add(listener);
+      remoteListeners.set(id, set);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) remoteListeners.delete(id);
       };
     },
 

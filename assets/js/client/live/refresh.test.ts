@@ -16,6 +16,7 @@ import { envelope, record } from "./fake_envelope.ts";
 import { fakeTimers } from "./fake_transport.ts";
 import type { Settled } from "./session.ts";
 import { BUFFER_LIMIT } from "./session.ts";
+import type { RemoteChange } from "./refresh.ts";
 import { SNAPSHOT_DEBOUNCE_MS, SUMMARY_DEBOUNCE_MS, coalesce, createInitiativeSync } from "./refresh.ts";
 
 const tree = (id: number, name: string, seq = 1): InitiativeTree => ({
@@ -696,6 +697,67 @@ describe("the screen's own writes go through the session (1.4.1)", () => {
   it("a write on an Initiative with no snapshot shows nothing", () => {
     const unit = sync({});
     assert.equal(unit.begin(12, editFlight("k")), undefined);
+  });
+});
+
+describe("someone else's writes reach the pane (m04.03 4.2)", () => {
+  const ann = { id: 7, name: "Ann", username: "ann" };
+  const flight = (key: string): Flight => ({
+    key,
+    predict: (base) => {
+      const result = addTask(base, { tempId: -1, parentId: 120, position: 1, title: "New" });
+      return "model" in result ? result.model : base;
+    },
+    tempId: -1,
+  });
+  const added = (seq: number, key: string | null) =>
+    delta(12, seq, { originKey: key, actor: ann, upserts: [record(122, 120, 1, { title: "New" })] });
+
+  it("fires once per applied envelope with the ids it changed and who did it, until unsubscribed", () => {
+    const domain = createDomainStore();
+    const unit = sync({ domain });
+    unit.install(treeWith(12, 1));
+    const seen: RemoteChange[] = [];
+    const stop = unit.onRemoteChange(12, (change) => seen.push(change));
+
+    unit.onDelta(delta(12, 2, { actor: ann, upserts: [record(121, 120, 0, { title: "Renamed", version: 2 })] }));
+    assert.deepEqual(seen, [{ initiativeId: 12, ids: [121], actor: ann }]);
+
+    // Removals alone change no record the pane could be in.
+    unit.onDelta(delta(12, 3, { actor: ann, upserts: [], removed: [121] }));
+    assert.equal(seen.length, 1);
+
+    stop();
+    unit.onDelta(delta(12, 4, { actor: null, upserts: [record(123, 120, 0, { title: "Later" })] }));
+    assert.equal(seen.length, 1, "unsubscribed");
+  });
+
+  it("this client's own broadcast settling its flight is not a remote change", () => {
+    const domain = createDomainStore();
+    const unit = sync({ domain });
+    unit.install(treeWith(12, 1));
+    const seen: RemoteChange[] = [];
+    unit.onRemoteChange(12, (change) => seen.push(change));
+
+    unit.begin(12, flight("k"));
+    unit.onDelta(added(2, "k"));
+    assert.equal(seen.length, 0);
+
+    // Someone else's, keyed to nothing of ours, is.
+    unit.onDelta(added(3, "theirs"));
+    assert.deepEqual(seen.map((c) => c.ids), [[122]]);
+  });
+
+  it("the records are already in the store when the listener runs", () => {
+    const domain = createDomainStore();
+    const unit = sync({ domain });
+    unit.install(treeWith(12, 1));
+    let titleSeen: string | undefined;
+    unit.onRemoteChange(12, () => {
+      titleSeen = domain.get().trees[12]?.tasks[121]?.title;
+    });
+    unit.onDelta(retitle(12, 2, "Renamed"));
+    assert.equal(titleSeen, "Renamed");
   });
 });
 

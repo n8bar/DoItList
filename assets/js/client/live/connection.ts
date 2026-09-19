@@ -21,10 +21,11 @@
 //
 // Presence (m04.02 item 3.4.2) rides the same channel: the server's
 // `presence_state` / `presence_diff` are handed up as they arrive, and the
-// user's own selection is announced with `select`. The last selection announced
-// per Initiative is remembered here and re-sent on every join — a screen that
-// mounts before its channel is up, and a socket that comes back after a drop,
-// both end with the server knowing what this window has selected.
+// user's own selection — and the pane field it is in (m04.03 4.1.1) — is
+// announced with `select`. The last selection announced per Initiative is
+// remembered here and re-sent on every join — a screen that mounts before its
+// channel is up, and a socket that comes back after a drop, both end with the
+// server knowing what this window has selected.
 
 import type { ConnectionStatus } from "../state/recovery.ts";
 import type { LinkState } from "./connection_state.ts";
@@ -108,11 +109,12 @@ export interface Connection {
   unsubscribeInitiative(id: number): void;
   /**
    * Announces what this window has selected in an Initiative (`null` for
-   * nothing). Sent at once when the channel is joined, and remembered either
-   * way, so a join that lands later — or again, after a reconnect — carries it.
-   * Never waited on: the selection has already painted (§6.5).
+   * nothing) and which Details-pane field it is in (`null` for none). Sent at
+   * once when the channel is joined, and remembered either way, so a join
+   * that lands later — or again, after a reconnect — carries it. Never waited
+   * on: the selection has already painted (§6.5).
    */
-  select(initiativeId: number, taskId: number | null): void;
+  select(initiativeId: number, taskId: number | null, field?: string | null): void;
   /** Currently held Initiative ids, in subscribe order. */
   subscriptions(): readonly number[];
   /** Initiative ids whose channel is still joined (held or still in grace). */
@@ -172,7 +174,7 @@ export function createConnection(deps: ConnectionDeps): Connection {
   const subscriptions = new Map<number, Subscription>();
   // What this window last said it had selected, per Initiative. Kept apart
   // from `subscriptions`: a screen can announce before its channel exists.
-  const selections = new Map<number, number | null>();
+  const selections = new Map<number, { task_id: number | null; field: string | null }>();
   // The user's own channel. Not in `subscriptions`: it is not refcounted, not
   // released on a route change, and it carries a different event.
   let userChannel: { id: number; channel: LiveChannel } | null = null;
@@ -293,8 +295,8 @@ export function createConnection(deps: ConnectionDeps): Connection {
       if (seq !== null) deps.onJoined?.(initiativeId, seq);
       // Every join — the first, and each one Phoenix re-sends after a drop —
       // tracks this window afresh with nothing selected. Say again what it has.
-      const selected = selections.get(initiativeId) ?? null;
-      if (selected !== null) channel.push("select", { task_id: selected });
+      const selected = selections.get(initiativeId);
+      if (selected !== undefined && selected.task_id !== null) channel.push("select", selected);
     });
     return { channel, refs: 0, leaveHandle: null };
   };
@@ -358,10 +360,13 @@ export function createConnection(deps: ConnectionDeps): Connection {
       }, grace);
     },
 
-    select(initiativeId, taskId) {
-      if (selections.get(initiativeId) === taskId) return;
-      selections.set(initiativeId, taskId);
-      subscriptions.get(initiativeId)?.channel.push("select", { task_id: taskId });
+    select(initiativeId, taskId, field = null) {
+      // A field only means something on a selected row.
+      const next = { task_id: taskId, field: taskId === null ? null : field };
+      const held = selections.get(initiativeId);
+      if (held !== undefined && held.task_id === next.task_id && held.field === next.field) return;
+      selections.set(initiativeId, next);
+      subscriptions.get(initiativeId)?.channel.push("select", next);
     },
 
     subscriptions: () =>

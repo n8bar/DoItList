@@ -14,13 +14,39 @@
 // fixed rather than retyped; a select or the slider shows the kept value and
 // the sentence.
 //
+// Two people in one field (m04.03 4.1–4.3): the field the user is in is
+// announced through presence (`field_claim.ts`) and, when someone else's
+// presence names the same task and field, one line under it says so — nothing
+// is disabled. A remote write that lands while a text field is focused goes
+// through `field_edit_model.ts`: an untouched field takes it in place; a dirty
+// one keeps the draft, shows the incoming value with an overwrite warning, and
+// grows a Cancel that adopts it. The select-like fields (priority, assignee,
+// progress, sort) hold no draft between focus and change, so a remote write
+// simply re-renders them from the record and there is nothing to warn about.
+//
 // Comments, Activity and chat are Arc 7 — see the note at the end.
 
-import type { ChangeEvent, KeyboardEvent, ReactNode, ToggleEvent } from "react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { ChangeEvent, FocusEvent, KeyboardEvent, ReactNode, ToggleEvent } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import type { EditField, Selection } from "../live/presence_model.ts";
+import { editorsOf } from "../live/presence_model.ts";
 import { Icon } from "../ui/icon.tsx";
 import type { EditRejection, TreeContext } from "./context.ts";
+import type { FieldClaim } from "./field_claim.ts";
+import { createFieldClaim } from "./field_claim.ts";
+import type { FieldEdit } from "./field_edit_model.ts";
+import {
+  actorName,
+  blur as blurEdit,
+  cancel as cancelEdit,
+  focus as focusEdit,
+  idle,
+  incomingNotice,
+  input as inputEdit,
+  remote as remoteEdit,
+  shownValue,
+} from "./field_edit_model.ts";
 import {
   PRIORITIES,
   SORT_MODE_OPTIONS,
@@ -30,6 +56,7 @@ import {
   coAssigneeOptions,
   coRows,
   descriptionEdit,
+  editingNotice,
   fieldsFor,
   inheritLabel,
   moveCoAssignee,
@@ -70,8 +97,28 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
   // component re-rendering per write, where every row used to.
   const model = useModel(ctx.tasks);
   const refusal = useSyncExternalStore(ctx.tasks.subscribe, ctx.tasks.rejection, ctx.tasks.rejection);
+  // Who else has this task selected, and the field they are in (4.1.2): the
+  // same array back until it changes, so a presence echo costs nothing here.
+  const badges = useSyncExternalStore(
+    ctx.presence.subscribe,
+    () => ctx.presence.badges(id),
+    () => ctx.presence.badges(id),
+  );
+  // This window's own field claim (4.1.1): one per pane, announced through the
+  // context's callback as it stands now, and dropped with the pane.
+  const announce = useRef(ctx.onEditField);
+  announce.current = ctx.onEditField;
+  const claim = useMemo(() => createFieldClaim((field) => announce.current?.(field)), []);
+  useEffect(() => () => claim.dispose(), [claim]);
   const record = model.tasks[id];
   if (record === undefined) return null;
+  const editors = (field: EditField): ReactNode => (
+    <EditorsLine
+      id={`task-field-${field}`}
+      editors={editorsOf(badges, id, field)}
+      members={ctx.members}
+    />
+  );
 
   const fields = fieldsFor(model, record, ctx.permissions);
   const canEdit = fields.edit;
@@ -116,12 +163,15 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
           </div>
           <TitleField
             key={id}
+            ctx={ctx}
+            claim={claim}
             record={record}
             disabled={!canEdit}
             onCommit={commit}
             rejection={rejection}
           />
           <FieldError id="task-field-title" message={refused("title")} />
+          {editors("title")}
         </div>
 
         <div>
@@ -133,12 +183,15 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
           </div>
           <DescriptionField
             key={id}
+            ctx={ctx}
+            claim={claim}
             record={record}
             disabled={!canEdit}
             onCommit={commit}
             rejection={rejection}
           />
           <FieldError id="task-field-description" message={refused("description")} />
+          {editors("description")}
         </div>
 
         {/* One progress block for leaf and branch alike — the branch-only copy
@@ -159,6 +212,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
           </div>
           <ProgressField
             key={id}
+            claim={claim}
             record={record}
             value={progress.value}
             disabled={!fields.progress}
@@ -166,6 +220,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             onCommit={commit}
           />
           <FieldError id="task-field-progress" message={refused("manual_progress")} />
+          {editors("progress")}
           <p
             data-branch-note
             className={`text-xs text-zinc-400 dark:text-zinc-500 italic${progress.leaf ? " invisible" : ""}`}
@@ -181,19 +236,26 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
         </div>
       </div>
 
-      <SortMenu ctx={ctx} model={model} id={id} canEdit={canEdit} leaf={progress.leaf} />
+      <SortMenu ctx={ctx} model={model} id={id} canEdit={canEdit} leaf={progress.leaf} claim={claim}>
+        {editors("sort")}
+      </SortMenu>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label htmlFor="task-field-priority" className={LABEL}>
             <span className={canEdit ? "underline" : undefined}>P</span>riority
           </label>
+          {/* No draft between focus and change: `value` is the record, so a
+              remote write re-renders the control in place (4.2.1) and 4.2.2
+              has nothing to show. Same for assignee, progress and sort. */}
           <select
             id="task-field-priority"
             name="task[priority]"
             className="w-full select select-bordered select-sm"
             disabled={!canEdit}
             value={record.priority}
+            onFocus={() => claim.focus("priority")}
+            onBlur={() => claim.blur()}
             onChange={(e) => commit(priorityEdit(record, e.target.value))}
           >
             {PRIORITIES.map((p) => (
@@ -203,6 +265,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             ))}
           </select>
           <FieldError id="task-field-priority" message={refused("priority")} />
+          {editors("priority")}
         </div>
         <div>
           <label htmlFor="task-field-assignee" className={LABEL}>
@@ -216,6 +279,8 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             className="w-full select select-bordered select-sm"
             disabled={!fields.assignee}
             value={record.assignee_id === null ? "" : String(record.assignee_id)}
+            onFocus={() => claim.focus("assignee")}
+            onBlur={() => claim.blur()}
             onChange={(e) => commit(assigneeEdit(record, e.target.value))}
           >
             <option value="">Unassigned</option>
@@ -226,6 +291,7 @@ export function TaskDetails({ ctx, id, onClose }: TaskDetailsProps) {
             ))}
           </select>
           <FieldError id="task-field-assignee" message={refused("assignee_id")} />
+          {editors("assignee")}
         </div>
       </div>
 
@@ -403,12 +469,80 @@ function FieldError({ id, message }: { id: string; message: string | null }) {
   );
 }
 
+/** "<Name> is editing this too." — one short line, nothing disabled (4.1.2). */
+function EditorsLine({
+  id,
+  editors,
+  members,
+}: {
+  id: string;
+  editors: readonly Selection[];
+  members: ReadonlyMap<number, RowUser>;
+}) {
+  if (editors.length === 0) return null;
+  const names = editors.map((editor) => {
+    const user = members.get(editor.user_id);
+    return user?.name ?? user?.username ?? editor.name;
+  });
+  return (
+    <p id={`${id}-editors`} role="status" className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+      {editingNotice(names)}
+    </p>
+  );
+}
+
+/**
+ * The incoming value under a dirty field, and the Cancel that adopts it (4.2.2,
+ * 4.3). Drawn only while a remote value is waiting. Cancel is a real button —
+ * tab reaches it — and the field's blur knows it by id, so moving to it does
+ * not save the draft on the way; it hands focus back when done.
+ */
+function IncomingNotice({
+  id,
+  edit,
+  onCancel,
+  onLeave,
+}: {
+  id: string;
+  edit: FieldEdit;
+  onCancel: () => void;
+  /** Focus left the Cancel button for somewhere other than the field: that is the field's blur. */
+  onLeave: (e: FocusEvent<HTMLElement>) => void;
+}) {
+  if (edit.incoming === null) return null;
+  return (
+    <div
+      id={`${id}-incoming`}
+      role="status"
+      className="mt-1 flex items-start justify-between gap-2 text-xs text-amber-700 dark:text-amber-400"
+    >
+      <span>{incomingNotice(edit.incoming)}</span>
+      <button
+        id={`${id}-cancel`}
+        type="button"
+        className="flex-none rounded px-1.5 py-0.5 font-semibold text-zinc-700 dark:text-zinc-200 underline underline-offset-2 hover:no-underline hover:bg-zinc-100 dark:hover:bg-zinc-700"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onCancel}
+        onBlur={onLeave}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 interface FieldProps {
   record: TaskRecord;
   disabled: boolean;
   onCommit: (edit: EditableFields | null) => void;
   /** A refused edit on this task; a text field takes its text back as the draft. */
   rejection?: EditRejection | null;
+  /** This window's field-editing presence (4.1.1). */
+  claim: FieldClaim;
+}
+
+interface TextFieldProps extends FieldProps {
+  ctx: TreeContext;
 }
 
 /**
@@ -419,76 +553,172 @@ interface FieldProps {
 function useRefusedDraft(
   refusedText: string | null | undefined,
   rejection: EditRejection | null | undefined,
-  setDraft: (draft: string | null) => void,
+  setEdit: (update: (state: FieldEdit) => FieldEdit) => void,
 ): void {
   useEffect(() => {
     if (rejection !== null && rejection !== undefined && typeof refusedText === "string") {
-      setDraft(refusedText);
+      setEdit((state) => ({ ...state, draft: refusedText }));
     }
-  }, [rejection, refusedText, setDraft]);
+  }, [rejection, refusedText, setEdit]);
+}
+
+/**
+ * One text field's edit state (`field_edit_model.ts`), fed with someone else's
+ * writes to this task while the field is focused (4.2). The record is read
+ * live at that moment — it is already in the store when the signal fires —
+ * and the machine decides against the baseline whether the field even moved.
+ * Focus lost to the field's own Cancel is not a blur.
+ */
+function useFieldEdit(
+  ctx: TreeContext,
+  claim: FieldClaim,
+  field: EditField,
+  taskId: number,
+  read: (record: TaskRecord) => string,
+  onCommit: (draft: string) => void,
+) {
+  const [edit, setEdit] = useState<FieldEdit>(idle);
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  const controlId = `task-field-${field}`;
+
+  useEffect(() => {
+    const source = ctx.remoteChanges;
+    if (source === undefined) return;
+    return source.subscribe((change) => {
+      if (!change.ids.includes(taskId)) return;
+      const current = ctx.tasks.model().tasks[taskId];
+      if (current === undefined) return;
+      const value = read(current);
+      const by = actorName(change.actor);
+      setEdit((state) => remoteEdit(state, value, by));
+    });
+  }, [ctx, taskId, read]);
+
+  // Unmounting while focused (the pane switched task or closed) fires no blur.
+  useEffect(
+    () => () => {
+      if (editRef.current.draft !== null) claim.blur();
+    },
+    [claim],
+  );
+
+  const leave = (): void => {
+    const draft = editRef.current.draft;
+    if (draft !== null) onCommit(draft);
+    setEdit(blurEdit);
+    claim.blur();
+  };
+
+  return {
+    edit,
+    setEdit,
+    controlId,
+    onFocus: (value: string) => {
+      setEdit((state) => focusEdit(state, value));
+      claim.focus(field);
+    },
+    onInput: (value: string) => {
+      setEdit((state) => inputEdit(state, value));
+      claim.input();
+    },
+    onBlur: (e: FocusEvent<HTMLElement>) => {
+      if (e.relatedTarget instanceof HTMLElement && e.relatedTarget.id === `${controlId}-cancel`) return;
+      leave();
+    },
+    onCancel: () => {
+      setEdit(cancelEdit);
+      document.getElementById(controlId)?.focus();
+    },
+    // Tabbed onto Cancel and then past it: the field never blurred, so do it now.
+    onCancelLeave: (e: FocusEvent<HTMLElement>) => {
+      if (e.relatedTarget instanceof HTMLElement && e.relatedTarget.id === controlId) return;
+      leave();
+    },
+  };
 }
 
 /** Draft while focused, the record otherwise; commits on blur or Enter. */
-function TitleField({ record, disabled, onCommit, rejection }: FieldProps) {
-  const [draft, setDraft] = useState<string | null>(null);
-  useRefusedDraft(rejection?.fields.title, rejection, setDraft);
-  const shown = draft ?? record.title;
+function TitleField({ ctx, claim, record, disabled, onCommit, rejection }: TextFieldProps) {
+  const readTitle = useMemo(() => (r: TaskRecord) => r.title, []);
+  const field = useFieldEdit(ctx, claim, "title", record.id, readTitle, (draft) =>
+    onCommit(titleEdit(record, draft)),
+  );
+  const edit = field.edit;
+  useRefusedDraft(rejection?.fields.title, rejection, field.setEdit);
+  const shown = shownValue(edit, record.title);
   const refused = rejection?.fields.title !== undefined;
-
-  const finish = (): void => {
-    if (draft !== null) onCommit(titleEdit(record, draft));
-    setDraft(null);
-  };
+  const describedBy = [refused ? "task-field-title-error" : null, edit.incoming !== null ? "task-field-title-incoming" : null]
+    .filter((part) => part !== null)
+    .join(" ");
 
   return (
-    <input
-      id="task-field-title"
-      type="text"
-      name="task[title]"
-      value={shown}
-      className="w-full input input-bordered input-sm"
-      disabled={disabled}
-      aria-invalid={refused || undefined}
-      aria-describedby={refused ? "task-field-title-error" : undefined}
-      onFocus={() => setDraft(draft ?? record.title)}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={finish}
-      onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          e.currentTarget.blur();
-        }
-      }}
-    />
+    <>
+      <input
+        id="task-field-title"
+        type="text"
+        name="task[title]"
+        value={shown}
+        className="w-full input input-bordered input-sm"
+        disabled={disabled}
+        aria-invalid={refused || undefined}
+        aria-describedby={describedBy === "" ? undefined : describedBy}
+        onFocus={() => field.onFocus(record.title)}
+        onChange={(e) => field.onInput(e.target.value)}
+        onBlur={field.onBlur}
+        onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+      />
+      <IncomingNotice id="task-field-title" edit={edit} onCancel={field.onCancel} onLeave={field.onCancelLeave} />
+    </>
   );
 }
 
 /** Same as the title, committing on blur only. */
-function DescriptionField({ record, disabled, onCommit, rejection }: FieldProps) {
-  const [draft, setDraft] = useState<string | null>(null);
+function DescriptionField({ ctx, claim, record, disabled, onCommit, rejection }: TextFieldProps) {
+  const readDescription = useMemo(() => (r: TaskRecord) => r.description ?? "", []);
+  const field = useFieldEdit(ctx, claim, "description", record.id, readDescription, (draft) =>
+    onCommit(descriptionEdit(record, draft)),
+  );
+  const edit = field.edit;
   const refusedText =
     rejection?.fields.description === undefined ? undefined : (rejection.fields.description ?? "");
-  useRefusedDraft(refusedText, rejection, setDraft);
-  const shown = draft ?? record.description ?? "";
+  useRefusedDraft(refusedText, rejection, field.setEdit);
+  const shown = shownValue(edit, record.description ?? "");
   const refused = refusedText !== undefined;
+  const describedBy = [
+    refused ? "task-field-description-error" : null,
+    edit.incoming !== null ? "task-field-description-incoming" : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" ");
 
   return (
-    <textarea
-      id="task-field-description"
-      name="task[description]"
-      className="w-full textarea textarea-bordered textarea-sm"
-      rows={3}
-      disabled={disabled}
-      value={shown}
-      aria-invalid={refused || undefined}
-      aria-describedby={refused ? "task-field-description-error" : undefined}
-      onFocus={() => setDraft(draft ?? record.description ?? "")}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => {
-        if (draft !== null) onCommit(descriptionEdit(record, draft));
-        setDraft(null);
-      }}
-    />
+    <>
+      <textarea
+        id="task-field-description"
+        name="task[description]"
+        className="w-full textarea textarea-bordered textarea-sm"
+        rows={3}
+        disabled={disabled}
+        value={shown}
+        aria-invalid={refused || undefined}
+        aria-describedby={describedBy === "" ? undefined : describedBy}
+        onFocus={() => field.onFocus(record.description ?? "")}
+        onChange={(e) => field.onInput(e.target.value)}
+        onBlur={field.onBlur}
+      />
+      <IncomingNotice
+        id="task-field-description"
+        edit={edit}
+        onCancel={field.onCancel}
+        onLeave={field.onCancelLeave}
+      />
+    </>
   );
 }
 
@@ -498,6 +728,7 @@ function DescriptionField({ record, disabled, onCommit, rejection }: FieldProps)
  * twenty.
  */
 function ProgressField({
+  claim,
   record,
   value,
   disabled,
@@ -526,6 +757,8 @@ function ProgressField({
       className="w-full"
       disabled={disabled}
       aria-label={ariaLabel}
+      onFocus={() => claim.focus("progress")}
+      onBlur={() => claim.blur()}
       onChange={(e: ChangeEvent<HTMLInputElement>) => {
         const next = e.target.value;
         setDraft(Number.parseInt(next, 10));
@@ -551,12 +784,17 @@ function SortMenu({
   id,
   canEdit,
   leaf,
+  claim,
+  children,
 }: {
   ctx: TreeContext;
   model: TreeModel;
   id: number;
   canEdit: boolean;
   leaf: boolean;
+  claim: FieldClaim;
+  /** The "is editing this too" line, under the controls. */
+  children?: ReactNode;
 }) {
   const record = model.tasks[id];
   if (record === undefined) return null;
@@ -585,6 +823,8 @@ function SortMenu({
           className="flex-1 select select-bordered select-sm"
           disabled={!canEdit}
           value={mode ?? ""}
+          onFocus={() => claim.focus("sort")}
+          onBlur={() => claim.blur()}
           onChange={(e) => commit(sortModeFrom(e.target.value), record.sort_reverse)}
         >
           <option value="">{inheritLabel(model, id)}</option>
@@ -609,11 +849,14 @@ function SortMenu({
             checked={record.sort_reverse}
             disabled={!canEdit || reverseOff}
             className="checkbox checkbox-xs"
+            onFocus={() => claim.focus("sort")}
+            onBlur={() => claim.blur()}
             onChange={(e) => commit(mode, e.target.checked)}
           />{" "}
           Reverse
         </label>
       </form>
+      {children}
       {canEdit && (
         <button
           type="button"

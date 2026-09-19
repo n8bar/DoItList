@@ -7,6 +7,7 @@ import { createPresenceStore, nobodyPresent } from "./presence_store.ts";
 const ann = (task_id: number): Selection => ({
   user_id: 2,
   task_id,
+  field: null,
   name: "Ann",
   initials: "A",
   bg: "#123",
@@ -15,6 +16,7 @@ const ann = (task_id: number): Selection => ({
 const bob = (task_id: number): Selection => ({
   user_id: 3,
   task_id,
+  field: null,
   name: "Bob",
   initials: "B",
   bg: "#456",

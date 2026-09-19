@@ -338,6 +338,7 @@ defmodule DoItWeb.InitiativeChannelTest do
       assert %{^key => %{metas: [meta]}} = state
       assert meta.user_id == owner.id
       assert meta.task_id == nil
+      assert meta.field == nil
       assert meta.name == owner.name
       assert is_binary(meta.initials) and is_binary(meta.bg) and is_binary(meta.fg)
 
@@ -369,6 +370,39 @@ defmodule DoItWeb.InitiativeChannelTest do
       for bad <- [%{"task_id" => "12"}, %{"task_id" => %{}}, %{}] do
         ref = push(channel, "select", bad)
         assert_reply ref, :error, %{reason: "bad_task_id"}
+      end
+    end
+
+    test "a select names the field being edited, and clears it (m04.03 4.1.1)", %{
+      channel: channel,
+      owner: owner,
+      task: task
+    } do
+      assert_push "presence_diff", %{joins: %{}}
+      key = to_string(owner.id)
+
+      ref = push(channel, "select", %{"task_id" => task.id, "field" => "title"})
+      assert_reply ref, :ok
+      assert_push "presence_diff", %{joins: %{^key => %{metas: [meta]}}}
+      assert meta.task_id == task.id
+      assert meta.field == "title"
+
+      # Leaving the field keeps the row selected.
+      clear = push(channel, "select", %{"task_id" => task.id, "field" => nil})
+      assert_reply clear, :ok
+      assert_push "presence_diff", %{joins: %{^key => %{metas: [cleared]}}}
+      assert cleared.task_id == task.id
+      assert cleared.field == nil
+
+      # A select without the key clears it too — the LiveView-era shape still works.
+      plain = push(channel, "select", %{"task_id" => task.id})
+      assert_reply plain, :ok
+    end
+
+    test "a field that isn't a name is refused", %{channel: channel, task: task} do
+      for bad <- [%{"task_id" => task.id, "field" => 7}, %{"task_id" => nil, "field" => %{}}] do
+        ref = push(channel, "select", bad)
+        assert_reply ref, :error, %{reason: "bad_field"}
       end
     end
 

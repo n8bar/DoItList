@@ -15,7 +15,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { RowPreferences } from "../state/preferences.ts";
 import type { AddRequest, AddSlot } from "./add_form_model.ts";
 import { addSlots, moveSlot, sameSlot } from "./add_form_model.ts";
-import type { AddAnchor, TreeContext, TreeIntent } from "./context.ts";
+import type { EditField } from "../live/presence_model.ts";
+import type { AddAnchor, RemoteChangeSource, TreeContext, TreeIntent } from "./context.ts";
 import type { KeyOutcome } from "./keyboard_model.ts";
 import type { TreeModel } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
@@ -64,6 +65,10 @@ export interface UseTreeOptions {
   onBlocked: () => void;
   /** A touch swiped a drag handle instead of holding it. */
   onDragHint?: () => void;
+  /** The pane's field-editing presence (m04.03 4.1.1). */
+  onEditField?: (field: EditField | null) => void;
+  /** Someone else's writes, for the pane's focused field (4.2). */
+  remoteChanges?: RemoteChangeSource;
   /** The selected task id, from the `ui` store, and the writer for it. */
   selectedId: number | null;
   select: (id: number | null) => void;
@@ -112,6 +117,8 @@ export function useTree(options: UseTreeOptions): TreeState {
     onHistory,
     onBlocked,
     onDragHint,
+    onEditField,
+    remoteChanges,
   } = options;
   // Selection lives in the `ui` store, not in this hook: it is view state with a
   // session's lifetime, and it has to survive this component re-rendering or
@@ -365,6 +372,8 @@ export function useTree(options: UseTreeOptions): TreeState {
       onOpenAdd: openAdd,
       onIntent,
       ...(onDragHint === undefined ? {} : { onDragHint }),
+      ...(onEditField === undefined ? {} : { onEditField }),
+      ...(remoteChanges === undefined ? {} : { remoteChanges }),
     }),
     [
       tasks,
@@ -382,6 +391,8 @@ export function useTree(options: UseTreeOptions): TreeState {
       openAdd,
       onIntent,
       onDragHint,
+      onEditField,
+      remoteChanges,
     ],
   );
 

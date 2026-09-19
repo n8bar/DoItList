@@ -11,6 +11,7 @@ import {
   coAssigneeOptions,
   coRows,
   descriptionEdit,
+  editingNotice,
   fieldsFor,
   inheritLabel,
   isLeaf,
@@ -264,5 +265,14 @@ describe("what an edit commits", () => {
     assert.deepEqual(progressEdit(record(11), "-5"), { manual_progress: 0 });
     assert.equal(progressEdit(record(11), "50"), null);
     assert.equal(progressEdit(record(11), ""), null);
+  });
+});
+
+describe("who else is in a field (m04.03 4.1.2)", () => {
+  it("names one, two, or more; nothing for nobody", () => {
+    assert.equal(editingNotice([]), "");
+    assert.equal(editingNotice(["Ann"]), "Ann is editing this too.");
+    assert.equal(editingNotice(["Ann", "Bob"]), "Ann and Bob are editing this too.");
+    assert.equal(editingNotice(["Ann", "Bob", "Cy"]), "Ann, Bob and Cy are editing this too.");
   });
 });

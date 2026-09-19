@@ -42,6 +42,7 @@ const NO_BADGES: readonly Selection[] = [];
 const sameSelection = (a: Selection, b: Selection): boolean =>
   a.user_id === b.user_id &&
   a.task_id === b.task_id &&
+  a.field === b.field &&
   a.name === b.name &&
   a.initials === b.initials &&
   a.bg === b.bg &&

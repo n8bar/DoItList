@@ -6,6 +6,8 @@
 // `tree_model.ts` can be tested against the same shape the screen builds.
 
 import type { SortMode } from "../api/types.ts";
+import type { EditField } from "../live/presence_model.ts";
+import type { RemoteChange } from "../live/refresh.ts";
 import type { RowPreferences } from "../state/preferences.ts";
 import type { TaskRecord } from "./model.ts";
 import type { Permissions } from "./permissions.ts";
@@ -51,6 +53,11 @@ export interface EditRejection {
   readonly id: number;
   readonly fields: Extract<TreeIntent, { kind: "edit" }>["fields"];
   readonly message: string;
+}
+
+/** Someone else's writes as they land (`InitiativeSync.onRemoteChange`), for the pane's focused field (m04.03 4.2). */
+export interface RemoteChangeSource {
+  subscribe(listener: (change: RemoteChange) => void): () => void;
 }
 
 /** Where an add form is being opened from. */
@@ -103,4 +110,11 @@ export interface TreeContext {
   onIntent(intent: TreeIntent): void;
   /** A touch swiped the handle instead of holding it: teach the gesture. */
   onDragHint?(): void;
+  /**
+   * The pane says which of its fields the user is in (`null` for none), for
+   * presence (m04.03 4.1.1). Advisory: announced, never waited on.
+   */
+  onEditField?(field: EditField | null): void;
+  /** Someone else's writes, as the pane's focused field needs them (4.2). */
+  readonly remoteChanges?: RemoteChangeSource;
 }

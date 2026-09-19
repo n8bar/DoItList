@@ -43,6 +43,7 @@ import { Pane } from "../frame/pane.tsx";
 import { Skeleton } from "../frame/skeleton.tsx";
 import { Link } from "../router/link.tsx";
 import { ROUTE_HEADING_ID } from "../router/router.tsx";
+import type { EditField } from "../live/presence_model.ts";
 import { onlineIds, selectionsOf } from "../live/presence_model.ts";
 import type { DomainState } from "../state/domain.ts";
 import { members as membersOf, presence as presenceOf, putMembers } from "../state/domain.ts";
@@ -666,6 +667,22 @@ function TreeSection({
   // Read once, off the address bar the screen arrived on.
   const [deepLinkTaskId] = useState(() => taskParam(window.location.search));
 
+  // The pane's field-editing presence (m04.03 4.1.1) rides the same `select`
+  // as the row: the field is announced against whatever is selected now. A
+  // ref, not a dep — the callback must not change with the selection, or the
+  // tree context would, and every row with it.
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+  const onEditField = useCallback(
+    (field: EditField | null) => connection.select(id, selectedRef.current, field),
+    [connection, id],
+  );
+  // Someone else's writes, for the field the pane has focused (4.2).
+  const remoteChanges = useMemo(
+    () => ({ subscribe: (listener: Parameters<typeof sync.onRemoteChange>[1]) => sync.onRemoteChange(id, listener) }),
+    [sync, id],
+  );
+
   const tree = useTree({
     model,
     tasks,
@@ -681,6 +698,8 @@ function TreeSection({
     onIntent,
     onAdd,
     onHistory,
+    onEditField,
+    remoteChanges,
     onBlocked: useCallback(() => {
       pushNotice(stores.ui, {
         kind: "info",

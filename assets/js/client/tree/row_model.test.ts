@@ -206,6 +206,7 @@ describe("presence on a row (item 3.4.2)", () => {
   const selection = (user_id: number, task_id: number): Selection => ({
     user_id,
     task_id,
+    field: null,
     name: `User ${user_id}`,
     initials: `U${user_id}`,
     bg: `bg-${user_id}`,

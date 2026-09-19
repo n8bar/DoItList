@@ -11,10 +11,15 @@
 // `initiative_workspace_live.ex`, function for function: everyone else's
 // selections, unique per (user, task), and everyone here, self included.
 
-/** One window's entry — `DoItWeb.Presence.selection_meta/2` plus Phoenix's ref. */
+/** The Details-pane fields a window can say it is in (m04.03 4.1.1). */
+export type EditField = "title" | "description" | "priority" | "assignee" | "progress" | "sort";
+
+/** One window's entry — `DoItWeb.Presence.selection_meta/3` plus Phoenix's ref. */
 export interface PresenceMeta {
   readonly user_id: number;
   readonly task_id: number | null;
+  /** The pane field that window is editing, `null` for none. Advisory only. */
+  readonly field: string | null;
   readonly name: string;
   readonly initials: string;
   readonly bg: string;
@@ -30,6 +35,8 @@ export type PresenceState = Readonly<Record<string, readonly PresenceMeta[]>>;
 export interface Selection {
   readonly user_id: number;
   readonly task_id: number;
+  /** The pane field they are in on that task, if any window of theirs says so. */
+  readonly field: string | null;
   readonly name: string;
   readonly initials: string;
   readonly bg: string;
@@ -44,12 +51,22 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 /** One meta, or `null` when the server said something we don't know. */
 export function parseMeta(payload: unknown): PresenceMeta | null {
   if (!isRecord(payload)) return null;
-  const { user_id: userId, task_id: taskId, name, initials, bg, fg, phx_ref: ref } = payload;
+  const { user_id: userId, task_id: taskId, field, name, initials, bg, fg, phx_ref: ref } = payload;
   if (typeof userId !== "number") return null;
   if (typeof taskId !== "number" && taskId !== null && taskId !== undefined) return null;
+  // Absent on a meta from a LiveView window, which never names a field.
+  if (typeof field !== "string" && field !== null && field !== undefined) return null;
   if (typeof name !== "string" || typeof initials !== "string") return null;
   if (typeof bg !== "string" || typeof fg !== "string") return null;
-  const meta: PresenceMeta = { user_id: userId, task_id: taskId ?? null, name, initials, bg, fg };
+  const meta: PresenceMeta = {
+    user_id: userId,
+    task_id: taskId ?? null,
+    field: field ?? null,
+    name,
+    initials,
+    bg,
+    fg,
+  };
   return typeof ref === "string" ? { ...meta, phx_ref: ref } : meta;
 }
 
@@ -72,7 +89,8 @@ export function parsePresences(payload: unknown): PresenceState {
 // What tells two metas apart. Phoenix compares `phx_ref`; a meta without one
 // (a test fixture) falls back to what the ref stands for here — the window's
 // user and its selection.
-const refOf = (meta: PresenceMeta): string => meta.phx_ref ?? `${meta.user_id}:${meta.task_id}`;
+const refOf = (meta: PresenceMeta): string =>
+  meta.phx_ref ?? `${meta.user_id}:${meta.task_id}:${meta.field}`;
 
 /**
  * `presence_state`: the whole topic, replacing what was held. Windows already
@@ -126,26 +144,56 @@ export function applyDiff(current: PresenceState, payload: unknown): PresenceSta
 /**
  * Everyone else's selections — `push_presence/1`'s `selections`. Several
  * windows of the same user on the same task collapse to one badge; my own
- * windows are skipped, because presence marks *other* members' rows.
+ * windows are skipped, because presence marks *other* members' rows. The
+ * badge carries a field when any of those windows names one (the first that
+ * does), so one user is one badge whatever they are doing.
  */
 export function selectionsOf(state: PresenceState, me: number | null): readonly Selection[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, number>();
   const out: Selection[] = [];
   for (const metas of Object.values(state)) {
     for (const meta of metas) {
       if (meta.user_id === me || meta.task_id === null) continue;
       const key = `${meta.user_id}:${meta.task_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+      const at = seen.get(key);
+      if (at !== undefined) {
+        const held = out[at] as Selection;
+        if (held.field === null && meta.field !== null) out[at] = { ...held, field: meta.field };
+        continue;
+      }
+      seen.set(key, out.length);
       out.push({
         user_id: meta.user_id,
         task_id: meta.task_id,
+        field: meta.field,
         name: meta.name,
         initials: meta.initials,
         bg: meta.bg,
         fg: meta.fg,
       });
     }
+  }
+  return out;
+}
+
+/**
+ * Who else is in `field` on `taskId` (m04.03 4.1.2) — one entry per user, in
+ * arrival order. Takes what `selectionsOf` produced (the tree's presence, or
+ * one row's badges), so my own windows are already out of it. Advisory: the
+ * pane says so under the field and disables nothing.
+ */
+export function editorsOf(
+  selections: readonly Selection[],
+  taskId: number,
+  field: EditField,
+): readonly Selection[] {
+  const seen = new Set<number>();
+  const out: Selection[] = [];
+  for (const selection of selections) {
+    if (selection.task_id !== taskId || selection.field !== field) continue;
+    if (seen.has(selection.user_id)) continue;
+    seen.add(selection.user_id);
+    out.push(selection);
   }
   return out;
 }

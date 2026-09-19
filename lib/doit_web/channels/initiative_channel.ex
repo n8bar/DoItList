@@ -36,9 +36,11 @@ defmodule DoItWeb.InitiativeChannel do
   both routes are live each sees the other's members. On join the channel gets
   `"presence_state"` (everyone here now) and thereafter `"presence_diff"` as
   people come, go, and change selection. A client announces its own selection
-  with `"select"`, `%{"task_id" => id | nil}`; the id only labels a row, so it
-  is type-checked and otherwise taken at face value. Presence ends with the
-  channel process — a leave or a dropped socket untracks it.
+  with `"select"`, `%{"task_id" => id | nil, "field" => name | nil}`; the id
+  only labels a row and the field (m04.03 4.1.1) only names the Details-pane
+  field the user is in, so both are type-checked and otherwise taken at face
+  value — nothing is locked by them. Presence ends with the channel process —
+  a leave or a dropped socket untracks it.
   """
   use DoItWeb, :channel
 
@@ -77,16 +79,22 @@ defmodule DoItWeb.InitiativeChannel do
   end
 
   @impl true
-  def handle_in("select", %{"task_id" => task_id}, socket)
+  def handle_in("select", %{"task_id" => task_id} = params, socket)
       when is_integer(task_id) or is_nil(task_id) do
-    Presence.update(
-      self(),
-      Presence.initiative_topic(socket.assigns.initiative_id),
-      to_string(socket.assigns.current_user.id),
-      &Map.put(&1, :task_id, task_id)
-    )
+    case Map.get(params, "field") do
+      field when is_binary(field) or is_nil(field) ->
+        Presence.update(
+          self(),
+          Presence.initiative_topic(socket.assigns.initiative_id),
+          to_string(socket.assigns.current_user.id),
+          &Map.merge(&1, %{task_id: task_id, field: field})
+        )
 
-    {:reply, :ok, socket}
+        {:reply, :ok, socket}
+
+      _other ->
+        {:reply, {:error, %{reason: "bad_field"}}, socket}
+    end
   end
 
   def handle_in("select", _params, socket) do
