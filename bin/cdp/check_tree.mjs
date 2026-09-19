@@ -3276,6 +3276,244 @@ export async function checkHistoryMatchesServer(ctx) {
   return notes.join("; ");
 }
 
+// ---------------------------------------------------------------------------
+// 8.10: the Tree correctness constraints (worklist 6) — an emptied branch
+// stays open at 0%, and a branch's tail drop-zone stays the last item of its
+// list. Both the LiveView (`<ul :if={@task.children != []}>`) and the client
+// (`Children` returns null without children) render a child list, its chevron
+// and its tail zone only while the branch HAS children, so an emptied branch
+// is an open, childless row at 0% until it is refilled. These checks seed
+// their own rows: Papa › Quebec (50%), Romeo › Sierra (50%), Tango › Tumble.
+// ---------------------------------------------------------------------------
+
+const EMPTY_TITLES = { papa: "Papa", quebec: "Quebec", romeo: "Romeo", sierra: "Sierra", tango: "Tango", tumble: "Tumble", tandem: "Tandem", renamed: "Tumble, renamed" };
+
+async function seedEmptyRows(ctx) {
+  if (ctx.ids.papa !== undefined) return;
+  const { session, initiativeId } = ctx;
+  const results = await pageOperations(session, `cdp-tree-${ctx.stamp}-seed-empty`, [
+    { op: "add", type: "task", lid: "papa", data: { initiative_id: initiativeId, title: EMPTY_TITLES.papa } },
+    { op: "add", type: "task", data: { parent_lid: "papa", title: EMPTY_TITLES.quebec, manual_progress: 50 } },
+    { op: "add", type: "task", lid: "romeo", data: { initiative_id: initiativeId, title: EMPTY_TITLES.romeo } },
+    { op: "add", type: "task", data: { parent_lid: "romeo", title: EMPTY_TITLES.sierra, manual_progress: 50 } },
+    { op: "add", type: "task", lid: "tango", data: { initiative_id: initiativeId, title: EMPTY_TITLES.tango } },
+    { op: "add", type: "task", data: { parent_lid: "tango", title: EMPTY_TITLES.tumble } },
+  ]);
+  const ids = results.map((r) => r?.data?.id);
+  if (!ids.every((id) => typeof id === "number")) throw new Error(`the empty-branch seed did not name six tasks: ${JSON.stringify(results)}`);
+  const [papa, quebec, romeo, sierra, tango, tumble] = ids;
+  Object.assign(ctx.ids, { papa, quebec, romeo, sierra, tango, tumble });
+  await waitForRows(session, ids, "the empty-branch rows");
+}
+
+/** A page expression (ends in `return`): how row `id` reads — done, progress, and whether it carries a child list and a chevron. */
+function branchStateJs(id) {
+  return `
+    const row = __tree.rowEl(${id});
+    if (row === null) return null;
+    return {
+      done: row.dataset.done === "true",
+      progress: row.dataset.taskProgress,
+      list: document.getElementById("children-${id}") !== null,
+      chevron: document.getElementById("collapse-${id}") !== null,
+      expanded: row.parentElement.getAttribute("aria-expanded"),
+    };
+  `;
+}
+
+function assertEmptied(state, name, when) {
+  if (state === null || state === false) throw new Error(`"${name}" is not on screen ${when}`);
+  if (state.done || state.progress !== "0" || state.list || state.chevron) {
+    throw new Error(`"${name}" ${when} is not an open, childless row at 0%: ${JSON.stringify(state)}`);
+  }
+}
+
+/**
+ * While a drag is on, every open branch's list ends with its own tail zone
+ * and a collapsed one carries none; the release on the spot sends nothing.
+ * Returns how many lists were looked at.
+ */
+async function assertTailZonesLast(session, ctx, when) {
+  const before = await evaluate(session, `return { tree: __tree.snapshot(), sent: __ops.sent };`);
+  const pointer = await beginDrag(session, ctx.ids.tumble);
+  const lists = await evaluate(
+    session,
+    `
+    return [...document.querySelectorAll('#task-tree ul[id^="children-"]')].map((ul) => {
+      const last = ul.lastElementChild;
+      return {
+        branch: Number(ul.dataset.taskId),
+        collapsed: ul.classList.contains("collapsed-peek"),
+        tails: ul.querySelectorAll(":scope > li.drop-tail").length,
+        lastIsTail: last !== null && last.matches("li.drop-tail") && Number(last.dataset.branch) === Number(ul.dataset.taskId),
+      };
+    });
+  `,
+  );
+  await mouseUp(session, pointer);
+  await assertNothingSent(session, before, `the release on the spot ${when}`);
+  await assertNothingPainted(session, when);
+  if (lists.length === 0) throw new Error(`no branch list is on screen ${when}`);
+  const wrong = lists.filter((l) => (l.collapsed ? l.tails !== 0 : !(l.lastIsTail && l.tails === 1)));
+  if (wrong.length > 0) throw new Error(`a tail zone is out of place ${when}: ${JSON.stringify(wrong)}`);
+  return lists.length;
+}
+
+/**
+ * 8.10 (1): a branch's only child dragged out — to the root's end, and inside
+ * another branch — leaves the branch an open, childless row at 0% (not done,
+ * not its stale 50%), predicted before the reply and kept after it; a fresh
+ * read of the server agrees.
+ */
+export async function checkEmptiedBranchStaysOpen(ctx) {
+  const { session } = ctx;
+  await seedEmptyRows(ctx);
+  const { papa, quebec, romeo, sierra, tango } = ctx.ids;
+  const notes = [];
+
+  const before = await evaluate(session, `return { papa: (() => { ${branchStateJs(papa)} })(), romeo: (() => { ${branchStateJs(romeo)} })() };`);
+  for (const [name, state] of [["Papa", before.papa], ["Romeo", before.romeo]]) {
+    if (state === null || state.progress !== "50" || state.done || !state.list || !state.chevron) {
+      throw new Error(`"${name}" does not start as an open branch at 50%: ${JSON.stringify(state)}`);
+    }
+  }
+
+  // The only child out to the root's end.
+  let pointer = await beginDrag(session, quebec);
+  let paint = await dragOver(session, pointer, await zonePoint(session, `#task-tree > li.drop-root-zone[data-zone="bottom"]`, "the bottom root zone"));
+  if (paint.zone !== "bottom") throw new Error(`the bottom root zone is not lit: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(null); if (o === null || o[o.length - 1] !== ${quebec}) return false; ${branchStateJs(papa)}`);
+  await mouseUp(session, pointer);
+  let ack = await readStopwatch(session, `"Quebec" last at the root`);
+  assertAcknowledged(ack, `the row moved out of "Papa"`);
+  assertEmptied(ack.detail, "Papa", "as predicted");
+  let settled = await settle(session);
+  assertEmptied(await evaluate(session, branchStateJs(papa)), "Papa", `once settled (${settled.note})`);
+  await assertNothingPainted(session, "after the root-zone drop");
+  notes.push(`to the root: "Papa" open at 0% ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, and after it`);
+
+  // The only child into another branch.
+  pointer = await beginDrag(session, sierra);
+  paint = await dragOver(session, pointer, await bandPoint(session, tango, "center"));
+  if (paint.target !== tango) throw new Error(`"Tango" is not ringed as the target: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(${tango}); if (o === null || o[0] !== ${sierra}) return false; ${branchStateJs(romeo)}`);
+  await mouseUp(session, pointer);
+  ack = await readStopwatch(session, `"Sierra" first under "Tango"`);
+  assertAcknowledged(ack, `the row moved out of "Romeo"`);
+  assertEmptied(ack.detail, "Romeo", "as predicted");
+  settled = await settle(session);
+  assertEmptied(await evaluate(session, branchStateJs(romeo)), "Romeo", `once settled (${settled.note})`);
+  await assertNothingPainted(session, "after the reparent");
+  notes.push(`into "Tango": "Romeo" open at 0% ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, and after it`);
+
+  // A fresh read of the server agrees, row for row, and holds both open at 0.
+  const rows = await assertTreeMatchesServer(ctx, "after both moves");
+  const server = await evaluate(session, serverTreeJs(ctx.initiativeId));
+  for (const [name, id] of [["Papa", papa], ["Romeo", romeo]]) {
+    const line = server.lines.find((l) => l.startsWith(`${id}:`));
+    if (line === undefined || !line.endsWith(":false:0")) throw new Error(`the server holds "${name}" as ${line}, not open at 0%`);
+  }
+  notes.push(`a fresh read agrees over ${rows} rows`);
+  return notes.join("; ");
+}
+
+/**
+ * 8.10 (2): the tail zone is the last item of every open branch's list after
+ * an add (API), a keyboard reorder, a reparent in and out (API), a sort
+ * (API), a collapse and expand, and a rename that arrives by the channel.
+ */
+export async function checkTailZonesStayLast(ctx) {
+  const { session } = ctx;
+  await seedEmptyRows(ctx);
+  const { papa, quebec, tango, tumble } = ctx.ids;
+  const key = (name) => `cdp-tree-${ctx.stamp}-tail-${name}`;
+  const steps = [];
+
+  const added = await pageOperation(session, key("add"), { op: "add", type: "task", data: { parent_id: tango, title: EMPTY_TITLES.tandem } });
+  const tandem = added?.data?.id;
+  if (typeof tandem !== "number") throw new Error(`the add did not name a task: ${JSON.stringify(added)}`);
+  ctx.ids.tandem = tandem;
+  await waitForRows(session, [tandem], `"Tandem" under "Tango"`);
+  steps.push(`add child (${await assertTailZonesLast(session, ctx, "after the add")} lists)`);
+
+  const order = await evaluate(session, `return __tree.order(${tango});`);
+  const at = order.indexOf(tumble);
+  if (at === -1) throw new Error(`"Tumble" is not under "Tango": ${JSON.stringify(order)}`);
+  if ((await evaluate(session, `return __tree.selected();`)) !== tumble) await selectRow(session, tumble);
+  await tapKey(session, at === order.length - 1 ? "ArrowUp" : "ArrowDown", MOD.alt);
+  await waitFor(session, `return JSON.stringify(__tree.order(${tango})) !== ${JSON.stringify(JSON.stringify(order))};`, { timeoutMs: 2_000, what: `"Tumble" to move` });
+  await settle(session);
+  steps.push(`reorder within (${await assertTailZonesLast(session, ctx, "after the reorder")} lists)`);
+
+  await pageOperation(session, key("in"), { op: "update", type: "task", id: quebec, data: { parent_id: tango } });
+  await waitFor(session, `return (__tree.order(${tango}) ?? []).includes(${quebec});`, { timeoutMs: 15_000, everyMs: 100, what: `"Quebec" under "Tango"` });
+  await settle(session);
+  steps.push(`reparent in (${await assertTailZonesLast(session, ctx, "after the reparent in")} lists)`);
+
+  await pageOperation(session, key("out"), { op: "update", type: "task", id: quebec, data: { parent_id: papa } });
+  await waitFor(session, `return (__tree.order(${papa}) ?? []).includes(${quebec}) && !(__tree.order(${tango}) ?? []).includes(${quebec});`, { timeoutMs: 15_000, everyMs: 100, what: `"Quebec" under "Papa"` });
+  await settle(session);
+  steps.push(`reparent out (${await assertTailZonesLast(session, ctx, "after the reparent out")} lists)`);
+
+  await pageOperation(session, key("sort"), { op: "update", type: "task", id: tango, data: { sort_mode: "alphabetical" } });
+  await waitFor(session, `return document.getElementById("children-${tango}")?.dataset.sortMode === "alphabetical";`, { timeoutMs: 15_000, everyMs: 100, what: `"Tango" sorted alphabetically` });
+  await settle(session);
+  steps.push(`sort (${await assertTailZonesLast(session, ctx, "after the sort")} lists)`);
+
+  await collapseBranch(session, tango);
+  await clickElement(session, `#collapse-${tango}`);
+  await waitFor(session, `return document.getElementById("children-${tango}")?.classList.contains("collapsed-peek") === false;`, { timeoutMs: 2_000, what: `"Tango" to expand` });
+  steps.push(`collapse and expand (${await assertTailZonesLast(session, ctx, "after the expand")} lists)`);
+
+  await pageOperation(session, key("rename"), { op: "update", type: "task", id: tumble, data: { title: EMPTY_TITLES.renamed } });
+  await waitFor(session, `return __tree.title(${tumble}) === ${JSON.stringify(EMPTY_TITLES.renamed)};`, { timeoutMs: 15_000, everyMs: 100, what: "the rename to arrive" });
+  await settle(session);
+  steps.push(`channel rename (${await assertTailZonesLast(session, ctx, "after the rename")} lists)`);
+
+  return `tail zone last in every open list after: ${steps.join(", ")}`;
+}
+
+/**
+ * 8.10 (3): a just-emptied branch mounts no tail zone (its list exists only
+ * with children); a row dropped on its "inside" band lands as its first child
+ * at once, the branch reads as a branch again, and its tail zone is back —
+ * last — on the next drag. The server agrees.
+ */
+export async function checkFirstChildIntoEmptiedBranch(ctx) {
+  const { session } = ctx;
+  await seedEmptyRows(ctx);
+  const { romeo, sierra, tango, quebec } = ctx.ids;
+
+  // Started here alone, "Romeo" still holds "Sierra": empty it through the API.
+  if ((await evaluate(session, `return __tree.order(${romeo});`)) !== null) {
+    await pageOperation(session, `cdp-tree-${ctx.stamp}-empty-romeo`, { op: "update", type: "task", id: sierra, data: { parent_id: tango } });
+    await waitFor(session, `return __tree.order(${romeo}) === null && (__tree.order(${tango}) ?? []).includes(${sierra});`, { timeoutMs: 15_000, everyMs: 100, what: `"Romeo" emptied` });
+    await settle(session);
+  }
+
+  const pointer = await beginDrag(session, quebec);
+  const tails = await evaluate(session, `return document.querySelectorAll('#task-tree li.drop-tail[data-branch="${romeo}"]').length;`);
+  if (tails !== 0) throw new Error(`the empty "Romeo" mounted ${tails} tail zone(s); its list is meant to exist only with children`);
+  const paint = await dragOver(session, pointer, await bandPoint(session, romeo, "center"));
+  if (paint.target !== romeo) throw new Error(`"Romeo" is not ringed as the target: ${JSON.stringify(paint)}`);
+  await armStopwatch(session, "pointerup", `const o = __tree.order(${romeo}); if (o === null || o.length !== 1 || o[0] !== ${quebec}) return false; ${branchStateJs(romeo)}`);
+  await mouseUp(session, pointer);
+  const ack = await readStopwatch(session, `"Quebec" as "Romeo"'s only child`);
+  assertAcknowledged(ack, "the first child");
+  if (!ack.detail.list || !ack.detail.chevron || ack.detail.progress !== "50") {
+    throw new Error(`"Romeo" did not read as a branch at 50% at once: ${JSON.stringify(ack.detail)}`);
+  }
+  const settled = await settle(session);
+  const after = await evaluate(session, `const state = (() => { ${branchStateJs(romeo)} })(); return { ...state, order: __tree.order(${romeo}), depth: document.getElementById("task-${quebec}")?.dataset.depth };`);
+  if (!sameIds(after.order, [quebec]) || after.depth !== "1" || after.progress !== "50" || after.done || !after.chevron) {
+    throw new Error(`"Romeo" settled as ${JSON.stringify(after)}`);
+  }
+  await assertNothingPainted(session, "after the drop");
+  const lists = await assertTailZonesLast(session, ctx, `with "Romeo" refilled`);
+  const rows = await assertTreeMatchesServer(ctx, "after the drop");
+  return `no tail zone on the empty branch; first child ${ack.ackMs}ms after release, ${ack.replyMs - ack.ackMs}ms before the reply, settled with ${settled.note}; tail zone back and last (${lists} lists); the server agrees over ${rows} rows`;
+}
+
 const CHECKS = [
   ["add a task", checkAddTask],
   ["add a child", checkAddChild],
@@ -3321,6 +3559,9 @@ const CHECKS = [
   ["prediction gives way to the server's number", checkPredictionGivesWay],
   ["a refused op reverts and stays out of undo", checkRefusedOpReverts],
   ["undo and redo across a mix match the server", checkHistoryMatchesServer],
+  ["an emptied branch stays open at 0%", checkEmptiedBranchStaysOpen],
+  ["tail zones stay last", checkTailZonesStayLast],
+  ["first child into an emptied branch", checkFirstChildIntoEmptiedBranch],
 ];
 
 // ---------------------------------------------------------------------------
