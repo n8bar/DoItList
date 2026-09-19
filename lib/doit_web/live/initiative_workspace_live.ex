@@ -2837,6 +2837,10 @@ defmodule DoItWeb.InitiativeWorkspaceLive do
          else: socket
        )}
 
+  # The canonical delta envelope (m04.03 1.2) rides the same topic for the
+  # client; this template still converges through the tuples above.
+  def handle_info({:initiative_delta, _envelope}, socket), do: {:noreply, socket}
+
   # True only when a task-tree broadcast's task belongs to the Initiative now
   # open. @initiative nil (list mode) is always false. A task that POSITIVELY
   # belongs to another Initiative is dropped; a task we can't find (nil — e.g. a

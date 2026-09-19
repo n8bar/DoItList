@@ -1343,7 +1343,7 @@ defmodule DoItWeb.Api.OperationsTest do
       # Simulate residue a prior raised request left queued on this process.
       Process.put(@pending, [{"phantom:topic", {:notification, %{phantom: true}}}])
 
-      {:ok, _results} =
+      {:ok, _results, _seq} =
         Operations.apply_batch(ctx.owner, [
           %{
             "op" => "add",

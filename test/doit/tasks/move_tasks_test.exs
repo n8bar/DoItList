@@ -308,6 +308,10 @@ defmodule DoIt.Tasks.MoveTasksTest do
       first = b1.id
       assert_receive {:task_moved, ^first}
       refute_receive {:task_moved, _}, 50
+      # The delta envelope (m04.03 1.2) rides beside it, naming both moved tasks.
+      assert_receive {:initiative_delta, %{upserts: upserts}}
+      ids = Enum.map(upserts, & &1.id)
+      assert b1.id in ids and a2.id in ids
       refute_receive _, 50
     end
   end

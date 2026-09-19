@@ -353,16 +353,7 @@ defmodule DoItWeb.Api.Serializer do
   index label adds **no** query (batched, no N+1).
   """
   def initiative_tree(initiative, tree, role, subtitle, progress, co_ids, comment_counts, links) do
-    index_style = initiative.index_style
-
-    ctx = %{
-      index_style: index_style,
-      co_ids: co_ids,
-      comment_counts: comment_counts,
-      label_index: DoIt.Tasks.label_index(tree, index_style),
-      outgoing: adjacency(links, :outgoing),
-      incoming: adjacency(links, :incoming)
-    }
+    ctx = tree_ctx(initiative, tree, co_ids, comment_counts, links)
 
     %{
       id: initiative.id,
@@ -374,53 +365,127 @@ defmodule DoItWeb.Api.Serializer do
       progress: progress || 0,
       progress_calc: initiative.progress_calc,
       unit_count: Progress.unit_count(tree, Progress.mode(initiative.progress_calc)),
-      index_style: index_style,
+      index_style: initiative.index_style,
       # AI-KNOBS-PARKED (m03.04): not serialized to agents pending the skill
       # rebuild; column retained. Revive this line.
       # ai_knobs: initiative.ai_knobs,
       root_task_id: initiative.root_task_id,
       version: initiative.version,
+      # The live-delivery sequence this snapshot is current to (m04.03 1.2).
+      # Read with the Initiative row, BEFORE the tasks: the tree can only be
+      # newer than the label, never older, so a delta at seq+1 is safe to apply.
+      seq: initiative.seq,
       tasks: task_nodes(tree, ctx, [], 0)
+    }
+  end
+
+  @doc """
+  The delta envelope's `upserts` (m04.03 1.2): `ids` as task nodes minus `children`.
+  In tree order; walks the whole tree once because `index`, `position` and
+  `depth` are tree-derived. An id not in the live tree is left out.
+  """
+  def task_records(initiative, tree, co_ids, comment_counts, links, ids) do
+    ctx = tree_ctx(initiative, tree, co_ids, comment_counts, links)
+    wanted = MapSet.new(ids)
+
+    tree
+    |> collect_records(ctx, [], 0, wanted)
+    |> Enum.reverse()
+  end
+
+  @doc """
+  The delta envelope's `initiative` header patch (m04.03 1.2). The fields an
+  open view renders, so a client needs no second read when the name, the
+  subtitle, the roll-up, or a setting moves.
+  """
+  def initiative_patch(initiative, tree, subtitle, progress) do
+    %{
+      version: initiative.version,
+      name: initiative.name,
+      subtitle: blank_to_empty(subtitle),
+      progress: progress || 0,
+      unit_count: Progress.unit_count(tree, Progress.mode(initiative.progress_calc)),
+      progress_calc: initiative.progress_calc,
+      index_style: initiative.index_style
+    }
+  end
+
+  # `ctx` carries the index style, co-assignee map, comment counts, the
+  # precomputed label index, and the link adjacency maps — everything a node
+  # needs beyond its own row.
+  defp tree_ctx(initiative, tree, co_ids, comment_counts, links) do
+    %{
+      index_style: initiative.index_style,
+      co_ids: co_ids,
+      comment_counts: comment_counts,
+      label_index: DoIt.Tasks.label_index(tree, initiative.index_style),
+      outgoing: adjacency(links, :outgoing),
+      incoming: adjacency(links, :incoming)
     }
   end
 
   # Serialize a sibling list into task nodes, threading each node's positional
   # index chain (`positions`) and depth down the tree so `index` and `depth`
-  # come out right at every level. `ctx` carries the index style, co-assignee
-  # map, the precomputed label index, and the link adjacency maps.
+  # come out right at every level.
   defp task_nodes(nodes, ctx, parent_positions, depth) do
     nodes
     |> Enum.with_index()
     |> Enum.map(fn {%Task{} = task, position} ->
       positions = parent_positions ++ [position]
 
-      %{
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        index: DoIt.Tasks.Index.label(positions, ctx.index_style),
-        position: position,
-        parent_id: task.parent_id,
-        depth: depth,
-        progress: task.computed_progress,
-        manual_progress: task.manual_progress,
-        status: task.status,
-        done: task.status == "done",
-        leaf: task.children == [],
-        priority: task.priority,
-        assignee_id: task.assignee_id,
-        co_assignee_ids: Map.get(ctx.co_ids, task.id, []),
-        comment_count: Map.get(ctx.comment_counts, task.id, 0),
-        cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
-        referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
-        sort_mode: task.sort_mode,
-        sort_reverse: task.sort_reverse,
-        updated_by: updated_by(task),
-        updated_at: iso8601(task.updated_at),
-        version: task.version,
-        children: task_nodes(task.children, ctx, positions, depth + 1)
-      }
+      task
+      |> task_record(ctx, positions, depth)
+      |> Map.put(:children, task_nodes(task.children, ctx, positions, depth + 1))
     end)
+  end
+
+  # The same walk, keeping only the wanted ids as flat records (newest last
+  # in `acc`, reversed by the caller).
+  defp collect_records(nodes, ctx, parent_positions, depth, wanted) do
+    nodes
+    |> Enum.with_index()
+    |> Enum.reduce([], fn {%Task{} = task, position}, acc ->
+      positions = parent_positions ++ [position]
+
+      acc =
+        if MapSet.member?(wanted, task.id),
+          do: [task_record(task, ctx, positions, depth) | acc],
+          else: acc
+
+      collect_records(task.children, ctx, positions, depth + 1, wanted) ++ acc
+    end)
+  end
+
+  # One task node, minus `children` — shared by the snapshot tree and the
+  # delta envelope so the two can never drift.
+  defp task_record(%Task{} = task, ctx, positions, depth) do
+    position = List.last(positions)
+
+    %{
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      index: DoIt.Tasks.Index.label(positions, ctx.index_style),
+      position: position,
+      parent_id: task.parent_id,
+      depth: depth,
+      progress: task.computed_progress,
+      manual_progress: task.manual_progress,
+      status: task.status,
+      done: task.status == "done",
+      leaf: task.children == [],
+      priority: task.priority,
+      assignee_id: task.assignee_id,
+      co_assignee_ids: Map.get(ctx.co_ids, task.id, []),
+      comment_count: Map.get(ctx.comment_counts, task.id, 0),
+      cross_references: references(ctx.outgoing, task.id, ctx.label_index, :target),
+      referenced_by: references(ctx.incoming, task.id, ctx.label_index, :source),
+      sort_mode: task.sort_mode,
+      sort_reverse: task.sort_reverse,
+      updated_by: updated_by(task),
+      updated_at: iso8601(task.updated_at),
+      version: task.version
+    }
   end
 
   # Who last changed the task, as the Details pane names them (`task_editor/1`

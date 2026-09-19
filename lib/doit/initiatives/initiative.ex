@@ -35,6 +35,10 @@ defmodule DoIt.Initiatives.Initiative do
     # never cast from params. Callers may send expected_version to refuse a
     # stale write.
     field :version, :integer, default: 1
+    # Live-delivery sequence (m04.03 1.1): advanced inside every durable
+    # mutation's transaction by `DoIt.Delta`; the client applies deltas in
+    # this order and resnapshots on a gap. Never cast from params.
+    field :seq, :integer, default: 0
     field :my_role, :string, virtual: true
     # The viewing member's manual index order (initiative_members.sort_order).
     field :my_sort_order, :integer, virtual: true

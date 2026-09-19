@@ -57,12 +57,15 @@ defmodule DoIt.InitiativesIndexStyleTest do
     assert initiative_id == updated.id
   end
 
-  test "an update that leaves the style alone broadcasts nothing" do
+  test "any header change broadcasts the Initiative update; a no-change update broadcasts nothing" do
     {:ok, init} = Initiatives.create_initiative(user("Fay"), %{"name" => "Six"})
     :ok = Tasks.subscribe(init.id)
 
-    {:ok, _} = Initiatives.update_initiative(init, %{"name" => "Six, renamed"})
+    # m04.03 1.2: the name is header content other sessions render.
+    {:ok, renamed} = Initiatives.update_initiative(init, %{"name" => "Six, renamed"})
+    assert_receive {:initiative_updated, _}, 1000
 
+    {:ok, _} = Initiatives.update_initiative(renamed, %{"name" => "Six, renamed"})
     refute_receive {:initiative_updated, _}, 100
   end
 

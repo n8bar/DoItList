@@ -112,8 +112,20 @@ defmodule DoIt.Api.IdempotencyTest do
   describe "repeatable batches and prior_commit/4" do
     setup do
       %{
-        history: [%{"op" => "add", "type" => "history", "data" => %{"initiative_id" => 7, "action" => "undo"}}],
-        content: [%{"op" => "add", "type" => "task", "data" => %{"initiative_id" => 7, "title" => "Alpha"}}],
+        history: [
+          %{
+            "op" => "add",
+            "type" => "history",
+            "data" => %{"initiative_id" => 7, "action" => "undo"}
+          }
+        ],
+        content: [
+          %{
+            "op" => "add",
+            "type" => "task",
+            "data" => %{"initiative_id" => 7, "title" => "Alpha"}
+          }
+        ],
         update: [%{"op" => "update", "type" => "account", "data" => %{"index_sort" => "name"}}]
       }
     end

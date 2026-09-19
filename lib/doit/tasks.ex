@@ -493,6 +493,9 @@ defmodule DoIt.Tasks do
       from(t in Task, where: t.id == ^id, select: t.version)
       |> Repo.update_all(inc: [version: 1])
 
+    # Every intent-bearing write funnels through here, so this is where the
+    # delta envelope (m04.03 1.2) learns the row changed.
+    DoIt.Delta.note_changed(task.initiative_id, [id])
     %{task | version: version}
   end
 
@@ -1077,6 +1080,10 @@ defmodule DoIt.Tasks do
   defp with_parent(query, id), do: from(t in query, where: t.parent_id == ^id)
 
   defp persist_sort_order(%Task{} = task, value) do
+    # A re-sorted sibling changes place without changing intent (no version
+    # bump), but the envelope must still carry its new position.
+    DoIt.Delta.note_changed(task.initiative_id, [task.id])
+
     task
     |> Ecto.Changeset.change(sort_order: value)
     |> Repo.update!()
@@ -1150,6 +1157,9 @@ defmodule DoIt.Tasks do
           from(t in Task, where: t.id in ^ids)
           |> Repo.update_all(set: [deleted_at: now], inc: [version: 1])
 
+        # The whole subtree leaves the live tree, not just the acted task.
+        DoIt.Delta.note_removed(initiative_id, ids)
+
         # The "deleted" event lives on the PARENT's timeline (the task drops out
         # of the tree). Every real task has a parent in the single-root model;
         # only the system root is parentless and it isn't user-deletable.
@@ -1187,9 +1197,12 @@ defmodule DoIt.Tasks do
         |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
 
       if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(initiative_id))
+      # The envelope carries the whole restored subtree, not the one reload id.
+      DoIt.Delta.note_changed(initiative_id, ids)
       broadcast_change(initiative_id, {:task_created, parent_id || List.first(ids)})
       :ok
     end)
+    |> flush_broadcasts()
   end
 
   # --- Undo / redo engine (m02.06 items 2/3) ---------------------------------
@@ -1355,20 +1368,32 @@ defmodule DoIt.Tasks do
     # that would discard the dead-entry marker written below and wedge the
     # stack on the same entry forever. The transaction still gives a
     # multi-write reversal its all-or-nothing on a raise.
-    outcome = Repo.transaction(fn -> reverse(event, direction) end)
+    undone_at = if direction == :undo, do: DateTime.utc_now(), else: nil
+
+    outcome =
+      Repo.transaction(fn ->
+        case reverse(event, direction) do
+          :ok ->
+            set_undone(event, undone_at)
+            record_undo_meta(event, user, direction)
+            # Queued inside the transaction (fired post-commit by the flush
+            # below), so the delivery sequence it advances rides the same
+            # commit as the writes it describes (m04.03 1.1).
+            broadcast_reversal(event, direction)
+            :ok
+
+          {:error, _reason} = conflict ->
+            # Conflict (target deleted, parent gone…): step past the dead entry
+            # so the stack never stalls (item 7).
+            set_undone(event, undone_at)
+            conflict
+        end
+      end)
+      |> flush_broadcasts()
 
     case outcome do
-      {:ok, :ok} ->
-        set_undone(event, if(direction == :undo, do: DateTime.utc_now(), else: nil))
-        record_undo_meta(event, user, direction)
-        broadcast_reversal(event, direction)
-        {:ok, describe_event(event)}
-
-      {:ok, {:error, _reason}} ->
-        # Conflict (target deleted, parent gone…): step past the dead entry so
-        # the stack never stalls (item 7).
-        set_undone(event, if(direction == :undo, do: DateTime.utc_now(), else: nil))
-        {:error, {:conflict, describe_event(event)}}
+      {:ok, :ok} -> {:ok, describe_event(event)}
+      {:ok, {:error, _reason}} -> {:error, {:conflict, describe_event(event)}}
     end
   end
 
@@ -1501,6 +1526,7 @@ defmodule DoIt.Tasks do
         from(t in Task, where: t.id in ^ids)
         |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
 
+      DoIt.Delta.note_changed(event.initiative_id, ids)
       restore_slot(root_id, event.inverse_payload["position"])
     else
       remember_slot(event, root_id)
@@ -1508,6 +1534,8 @@ defmodule DoIt.Tasks do
       {_n, _} =
         from(t in Task, where: t.id in ^ids)
         |> Repo.update_all(set: [deleted_at: now_seconds()], inc: [version: 1])
+
+      DoIt.Delta.note_removed(event.initiative_id, ids)
     end
 
     if parent_id, do: recompute_ancestors(parent_id, progress_calc_mode(event.initiative_id))
@@ -1528,11 +1556,14 @@ defmodule DoIt.Tasks do
           {_n, _} =
             from(t in Task, where: t.id in ^ids)
             |> Repo.update_all(set: [deleted_at: now_seconds()], inc: [version: 1])
+
+          DoIt.Delta.note_removed(task.initiative_id, ids)
         else
           {_n, _} =
             from(t in Task, where: t.id in ^ids)
             |> Repo.update_all(set: [deleted_at: nil], inc: [version: 1])
 
+          DoIt.Delta.note_changed(task.initiative_id, ids)
           restore_slot(task.id, (event.inverse_payload || %{})["position"])
         end
 
@@ -2365,6 +2396,7 @@ defmodule DoIt.Tasks do
       # A sort_mode/sort_reverse write changes what the subtree below inherits —
       # drop every memoized sort resolution (m03.04 2.7.5.2's simplest-safe rule).
       DoIt.BatchMemo.bust_tag(:resolved_sort)
+      DoIt.Delta.note_changed(updated.initiative_id, [updated.id])
 
       if task.sort_mode != updated.sort_mode or task.sort_reverse != updated.sort_reverse do
         record_event(updated, actor, "sort_changed", %{
@@ -2553,18 +2585,21 @@ defmodule DoIt.Tasks do
   end
 
   def add_comment(%Task{} = task, %User{} = actor, body) do
-    %Comment{}
-    |> Comment.changeset(%{task_id: task.id, user_id: actor.id, body: body})
-    |> Repo.insert()
-    |> case do
-      {:ok, comment} ->
-        record_event(task, actor, "commented", %{comment_id: comment.id})
-        broadcast_change(task.initiative_id, {:comment_added, task.id})
-        {:ok, comment}
+    Repo.transaction(fn ->
+      %Comment{}
+      |> Comment.changeset(%{task_id: task.id, user_id: actor.id, body: body})
+      |> Repo.insert()
+      |> case do
+        {:ok, comment} ->
+          record_event(task, actor, "commented", %{comment_id: comment.id})
+          broadcast_change(task.initiative_id, {:comment_added, task.id})
+          comment
 
-      err ->
-        err
-    end
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+    |> flush_broadcasts()
   end
 
   @doc """
@@ -2876,16 +2911,21 @@ defmodule DoIt.Tasks do
   not re-derive it.
   """
   def create_link(%Task{} = source, %Task{} = target) do
-    case %TaskLink{}
-         |> TaskLink.changeset(%{source_task_id: source.id, target_task_id: target.id})
-         |> Repo.insert() do
-      {:ok, link} ->
-        broadcast_change(source.initiative_id, {:task_updated, source.id})
-        {:ok, link}
+    Repo.transaction(fn ->
+      case %TaskLink{}
+           |> TaskLink.changeset(%{source_task_id: source.id, target_task_id: target.id})
+           |> Repo.insert() do
+        {:ok, link} ->
+          # The target's `referenced_by` changes too (m04.03 1.2).
+          DoIt.Delta.note_changed(target.initiative_id, [target.id])
+          broadcast_change(source.initiative_id, {:task_updated, source.id})
+          link
 
-      {:error, changeset} ->
-        {:error, changeset}
-    end
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+    |> flush_broadcasts()
   end
 
   @doc """
@@ -2896,9 +2936,13 @@ defmodule DoIt.Tasks do
   def remove_link(%Task{} = source, %Task{} = target) do
     case Repo.get_by(TaskLink, source_task_id: source.id, target_task_id: target.id) do
       %TaskLink{} = link ->
-        {:ok, deleted} = Repo.delete(link)
-        broadcast_change(source.initiative_id, {:task_updated, source.id})
-        {:ok, deleted}
+        Repo.transaction(fn ->
+          {:ok, deleted} = Repo.delete(link)
+          DoIt.Delta.note_changed(target.initiative_id, [target.id])
+          broadcast_change(source.initiative_id, {:task_updated, source.id})
+          deleted
+        end)
+        |> flush_broadcasts()
 
       nil ->
         {:error, :not_found}
@@ -3625,8 +3669,9 @@ defmodule DoIt.Tasks do
   `{:task_updated, id}` broadcast per ancestor whose value actually changed —
   absorbed by the LiveView's existing patch path, so a screen that
   full-loaded mid-window converges. `progress_calc` mode is resolved fresh
-  here, not at enqueue time. Runs outside any transaction (the pass IS the
-  post-commit work), so the broadcasts below fire after its writes land.
+  here, not at enqueue time. The pass is one transaction so its delivery
+  sequence advances with its writes (m04.03 1.1); the broadcasts queue inside
+  it and fire once it commits.
   """
   def run_rollup_pass(initiative_id, seed_ids) do
     mode = progress_calc_mode(initiative_id)
@@ -3637,10 +3682,14 @@ defmodule DoIt.Tasks do
     live_seed_ids =
       Repo.all(from t in Task, where: t.id in ^seed_ids and is_nil(t.deleted_at), select: t.id)
 
-    {:ok, changed_ids} =
-      with_resort_batching(fn -> {:ok, reconcile_seed_set(live_seed_ids, mode)} end)
+    with_resort_batching(fn ->
+      Repo.transaction(fn ->
+        changed_ids = reconcile_seed_set(live_seed_ids, mode)
+        Enum.each(changed_ids, &broadcast_change(initiative_id, {:task_updated, &1}))
+        changed_ids
+      end)
+    end)
 
-    Enum.each(changed_ids, &broadcast_change(initiative_id, {:task_updated, &1}))
     :ok
   end
 
@@ -3656,22 +3705,29 @@ defmodule DoIt.Tasks do
   actions with no concurrency story.
   """
   def recompute_initiative_tree(initiative_id) do
-    mode = progress_calc_mode(initiative_id)
-    tasks = list_initiative_tasks(initiative_id)
-    values = tasks |> assemble_with_root() |> Progress.compute_all(mode)
+    # One transaction: the delivery sequence advances with the batched write
+    # (m04.03 1.1). A no-op inside a caller's transaction, which flushes.
+    Repo.transaction(fn ->
+      mode = progress_calc_mode(initiative_id)
+      tasks = list_initiative_tasks(initiative_id)
+      values = tasks |> assemble_with_root() |> Progress.compute_all(mode)
 
-    changes =
-      tasks
-      |> Enum.map(fn t ->
-        {t.id, Map.get(values, t.id, t.computed_progress), t.computed_progress}
-      end)
-      |> Enum.reject(fn {_id, new, old} -> new == old end)
-      |> Enum.map(fn {id, new, _old} -> {id, new} end)
+      changes =
+        tasks
+        |> Enum.map(fn t ->
+          {t.id, Map.get(values, t.id, t.computed_progress), t.computed_progress}
+        end)
+        |> Enum.reject(fn {_id, new, old} -> new == old end)
+        |> Enum.map(fn {id, new, _old} -> {id, new} end)
 
-    if changes != [] do
-      batch_persist_progress(changes)
-      Enum.each(changes, fn {id, _} -> broadcast_change(initiative_id, {:task_updated, id}) end)
-    end
+      if changes != [] do
+        batch_persist_progress(changes)
+        Enum.each(changes, fn {id, _} -> broadcast_change(initiative_id, {:task_updated, id}) end)
+      end
+
+      :ok
+    end)
+    |> flush_broadcasts()
 
     :ok
   end
@@ -3936,9 +3992,18 @@ defmodule DoIt.Tasks do
         )
       end)
 
-    from(t in Task, where: t.id in ^ids)
-    |> update([t], set: [computed_progress: ^case_expr, updated_at: ^now])
-    |> Repo.update_all([])
+    # The write reports which Initiatives it touched, so the delta envelope
+    # (m04.03 1.2) carries every ancestor whose roll-up moved.
+    {_n, touched} =
+      from(t in Task, where: t.id in ^ids, select: {t.initiative_id, t.id})
+      |> update([t], set: [computed_progress: ^case_expr, updated_at: ^now])
+      |> Repo.update_all([])
+
+    touched
+    |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+    |> Enum.each(fn {initiative_id, task_ids} ->
+      DoIt.Delta.note_changed(initiative_id, task_ids)
+    end)
 
     :ok
   end
@@ -4016,8 +4081,11 @@ defmodule DoIt.Tasks do
   # queue lives in `DoIt.Broadcast` so member/notification broadcasts ride the
   # same deferral as task broadcasts (so a multi-op batch's PubSub side effects
   # are all-or-nothing too).
+  # `DoIt.Delta.enqueue/2` also advances the Initiative's delivery sequence in
+  # the same transaction (m04.03 1.1) and, at flush, folds the queued tuples
+  # into one `{:initiative_delta, envelope}` per Initiative (1.2).
   defp broadcast_change(initiative_id, message),
-    do: DoIt.Broadcast.broadcast(topic(initiative_id), message)
+    do: DoIt.Delta.enqueue(initiative_id, message)
 
   # The task-message kinds whose workspace reaction is a FULL tree reload
   # (`InitiativeWorkspaceLive.handle_info` → `load_tree`). One such message per
@@ -4089,9 +4157,9 @@ defmodule DoIt.Tasks do
 
   # No-op while still inside a transaction (an outer mutator will flush). Sends
   # the queue on a successful result; drops it otherwise (rollback).
-  defp flush_broadcasts(result), do: DoIt.Broadcast.flush(result)
+  defp flush_broadcasts(result), do: DoIt.Delta.flush(result)
 
-  defp discard_broadcasts(result), do: DoIt.Broadcast.discard(result)
+  defp discard_broadcasts(result), do: DoIt.Delta.discard(result)
 
   defp topic(initiative_id), do: "initiative:#{initiative_id}"
 

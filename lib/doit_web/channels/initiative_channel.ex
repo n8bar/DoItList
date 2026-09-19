@@ -119,9 +119,28 @@ defmodule DoItWeb.InitiativeChannel do
         {:noreply, socket}
 
       {:error, _reason} ->
-        push(socket, "access_revoked", %{initiative_id: socket.assigns.initiative_id})
-        {:stop, :normal, socket}
+        revoke(socket)
     end
+  end
+
+  # The canonical delta (m04.03 1.2/1.3): one `"delta"` push per committed
+  # mutation, carrying the envelope as built. A membership change re-runs the
+  # join check first, exactly as the tuple above does — records must never
+  # reach a user who can no longer view the Initiative.
+  def handle_info({:initiative_delta, %{members_changed: true} = envelope}, socket) do
+    case authorize(socket) do
+      {:ok, _initiative} ->
+        push(socket, "delta", envelope)
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        revoke(socket)
+    end
+  end
+
+  def handle_info({:initiative_delta, envelope}, socket) do
+    push(socket, "delta", envelope)
+    {:noreply, socket}
   end
 
   def handle_info({kind, id}, socket) when kind in @kinds do
@@ -130,6 +149,12 @@ defmodule DoItWeb.InitiativeChannel do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  # Told once, then gone: the user can no longer view this Initiative.
+  defp revoke(socket) do
+    push(socket, "access_revoked", %{initiative_id: socket.assigns.initiative_id})
+    {:stop, :normal, socket}
+  end
 
   # The join check, re-run. Role lookups hit the database, so this reflects the
   # membership as it stands now, not as it stood when the socket was opened.

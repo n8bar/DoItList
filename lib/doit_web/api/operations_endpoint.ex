@@ -35,6 +35,7 @@ defmodule DoItWeb.Api.OperationsEndpoint do
   import Phoenix.Controller, only: [json: 2]
 
   alias DoIt.Api.Idempotency
+  alias DoIt.Delta
   alias DoItWeb.Api.{Errors, Operations}
 
   @doc """
@@ -48,41 +49,48 @@ defmodule DoItWeb.Api.OperationsEndpoint do
   def create(conn, %{"operations" => operations}, opts) do
     user = conn.assigns.current_user
 
-    case idempotency_key(conn) do
-      nil ->
-        render_outcome(conn, Operations.apply_batch(user, operations, opts))
+    key = idempotency_key(conn)
 
-      key ->
-        payload_hash = Idempotency.payload_hash(operations)
+    # The request's origin rides every delta envelope this batch flushes
+    # (m04.03 1.2): the key lets the sending client match its own broadcast
+    # to its acknowledgement; the actor tells everyone else who wrote.
+    Delta.with_origin(%{key: key, actor: user}, fn ->
+      case key do
+        nil ->
+          render_outcome(conn, Operations.apply_batch(user, operations, opts))
 
-        # The whole fetch -> apply -> store window holds the (user, key)
-        # advisory lock (m03.04 2.7.3): a same-key request racing this one
-        # blocks here, then fetches the winner's stored response and replays.
-        Idempotency.with_key_lock(user, key, fn ->
-          case Idempotency.fetch(user, key, payload_hash) do
-            {:replay, {status, body}} ->
-              # Replay the first attempt's stored response — no re-execution.
-              conn |> put_status(status) |> json(body)
+        key ->
+          payload_hash = Idempotency.payload_hash(operations)
 
-            :payload_conflict ->
-              key_conflict(conn)
+          # The whole fetch -> apply -> store window holds the (user, key)
+          # advisory lock (m03.04 2.7.3): a same-key request racing this one
+          # blocks here, then fetches the winner's stored response and replays.
+          Idempotency.with_key_lock(user, key, fn ->
+            case Idempotency.fetch(user, key, payload_hash) do
+              {:replay, {status, body}} ->
+                # Replay the first attempt's stored response — no re-execution.
+                conn |> put_status(status) |> json(body)
 
-            nil ->
-              # A miss for THIS key — but the same payload may already have
-              # committed under another key (m03.04 2.7.6): refuse the re-send
-              # instead of duplicating the work.
-              case Idempotency.prior_commit(user, key, payload_hash, operations) do
-                {earlier_key, committed_at} ->
-                  duplicate_batch(conn, earlier_key, committed_at)
+              :payload_conflict ->
+                key_conflict(conn)
 
-                nil ->
-                  outcome = Operations.apply_batch(user, operations, opts)
-                  store_if_committed(user, key, payload_hash, outcome)
-                  render_outcome(conn, outcome)
-              end
-          end
-        end)
-    end
+              nil ->
+                # A miss for THIS key — but the same payload may already have
+                # committed under another key (m03.04 2.7.6): refuse the re-send
+                # instead of duplicating the work.
+                case Idempotency.prior_commit(user, key, payload_hash, operations) do
+                  {earlier_key, committed_at} ->
+                    duplicate_batch(conn, earlier_key, committed_at)
+
+                  nil ->
+                    outcome = Operations.apply_batch(user, operations, opts)
+                    store_if_committed(user, key, payload_hash, outcome)
+                    render_outcome(conn, outcome)
+                end
+            end
+          end)
+      end
+    end)
   end
 
   def create(conn, _params, _opts), do: invalid_request(conn)
@@ -101,7 +109,7 @@ defmodule DoItWeb.Api.OperationsEndpoint do
   # the payload hash the key now carries. A rollback or a pre-execution
   # rejection commits nothing and stores nothing (m03.04 fix 20): an honest
   # retry of a failed batch re-executes instead of replaying the failure.
-  defp store_if_committed(user, key, payload_hash, {:ok, _results} = outcome) do
+  defp store_if_committed(user, key, payload_hash, {:ok, _results, _seq} = outcome) do
     {status, body} = execution_response(outcome)
     Idempotency.store(user, key, payload_hash, status, body)
   end
@@ -109,8 +117,10 @@ defmodule DoItWeb.Api.OperationsEndpoint do
   defp store_if_committed(_user, _key, _payload_hash, _outcome), do: :ok
 
   # The single {status, body} shape used for BOTH the HTTP response and the
-  # stored idempotency record of an execution outcome.
-  defp execution_response({:ok, results}), do: {200, %{results: results}}
+  # stored idempotency record of an execution outcome. `seq` — the delivery
+  # sequence per Initiative the batch advanced (m04.03 1.2) — is stored with
+  # it, so a replay echoes the same number the first attempt did.
+  defp execution_response({:ok, results, seq}), do: {200, %{results: results, seq: seq}}
 
   defp execution_response({:error, status, results, top_error}),
     do: {status, %{error: top_error, results: results}}

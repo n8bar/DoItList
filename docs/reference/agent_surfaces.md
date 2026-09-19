@@ -2,7 +2,7 @@
 
 How to reach Do It List as an agent: the HTTP API, the MCP server, and the scripted client. The promises they keep are in [`agent_integration.md`](../specs/agent_integration.md).
 
-Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` are written by `mix doit.docs.gen` from the code. Hand-edits inside a fence are lost on the next run.
+Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` are written by `mix doit.docs.gen`; hand-edits inside one are lost on the next run.
 
 ## HTTP API
 
@@ -10,7 +10,7 @@ Blocks between `<!-- generated: SOURCE -->` and `<!-- /generated: SOURCE -->` ar
 
 Every request carries `Authorization: Bearer doit_pat_…`. Tokens are issued and revoked on the account page; the server keeps only a hash, so a lost token is replaced, never recovered.
 
-The browser client has its own session-authenticated surface under `/app/api` and a live socket at `/socket`, sharing this API's operations engine and serializers. A bearer token never works there; a session never works on `/api/v1`. Its extra reads feed the app alone and its writes are the operations below. It is not an agent surface.
+The browser client's session surface (`/app/api`, `/socket`) shares this engine and serializers; a bearer token never works there, a session never on `/api/v1`. It is not an agent surface.
 
 ### Endpoints
 
@@ -43,7 +43,7 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 ### The operations envelope
 
-`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` that later operations in the batch point at; a lid used before it is defined fails the request. The same `Idempotency-Key` replays the stored result; a payload that creates records is refused under a new key with code `duplicate`.
+`POST /api/v1/operations` applies an ordered list all or nothing, 150 at most. A record you create can carry a `lid` for later operations to point at; a lid used before it is defined fails the request. The same `Idempotency-Key` replays the stored result; a payload that creates records is refused under a new key with code `duplicate`.
 
 ```json
 {"operations": [
@@ -55,17 +55,17 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 `add history` reverses the Initiative's newest reversible action: `data` takes an `initiative_id` and an `action` of `undo` or `redo`. The stack is shared and role-gated like the original write. The result names the kind reversed and carries a delta: `upserts`, `removed`, and `refetch` when a delta can't carry the change.
 
-`update task` with `ids` in place of `id` moves many tasks as one block: `data` carries `parent_id` (or `parent_lid`) and an optional `position`, nothing else. They land in list order, from `position` or the top, as one undo step and one activity line; `id` is the first moved task and `records` carries them all. Every task must be editable and share the destination's Initiative; one bad entry, an empty list, or `id` beside `ids` fails the op at `ids` with nothing moved.
+`update task` with `ids` in place of `id` moves many tasks as one block: `data` carries `parent_id` (or `parent_lid`) and an optional `position`, nothing else. They land in list order at `position` (default top) as one undo step; `id` is the first moved task and `records` carries them all. Every task must be editable in the destination's Initiative; one bad entry, an empty list, or `id` beside `ids` fails the op at `ids`.
 
 `update task` with `sort_mode` and/or `sort_reverse` sets how that branch orders its children: `sort_mode` is `manual`, `alphabetical`, `completion`, `priority`, `created`, `updated`, or `null` to inherit; `sort_reverse` flips it; a key left out keeps its value. `cascade_sort: true` makes every descendant branch inherit (a mode sent with it sets first, then cascades). `records` carry the target and every branch changed; read the tree for the new order.
 
-`update initiative` with `position` puts that Initiative at a 0-based slot in your own Manual order of the index. It is your view alone: any member may set it, nobody else's order moves, and `version` does not change. Unplaced rows sit after placed ones; a slot past the end lands last. The result carries `sort_order` and `order`, the full id list. `position` travels alone.
+`update initiative` with `position` puts that Initiative at a 0-based slot in your own Manual order of the index. It is your view alone (`version` does not change); unplaced rows sit after placed ones and a slot past the end lands last. The result carries `sort_order` and `order`, the full id list. `position` travels alone.
 
-`remove initiative` deletes an Initiative forever — the Trash's Delete button. Only its owner may, and only once it is in Trash (`update initiative {state: "trashed"}` first); a live one is refused as irreversible. An optional `expected_version` guards a stale read. Tasks, members, comments, and activity go with it. The result carries the id and `removed: true`.
+`remove initiative` deletes an Initiative forever, with its tasks, members, comments, and activity. Only its owner may, and only once it is in Trash (`update initiative {state: "trashed"}` first); a live one is refused as irreversible. An optional `expected_version` guards a stale read. The result carries the id and `removed: true`.
 
-`update account` sets your own index sort and nothing else: `index_sort` is `manual`, `name`, `progress`, `created`, `updated`, or `null` for Recent; `index_sort_reverse` flips it. It takes no `id`. Reverse is remembered per mode, so a mode sent alone comes back with its last reverse. The result carries the resolved pair.
+`update account` sets your own index sort: `index_sort` is `manual`, `name`, `progress`, `created`, `updated`, or `null` for Recent; `index_sort_reverse` flips it. It takes no `id`. Reverse is remembered per mode. The result carries the resolved pair.
 
-`results` holds one entry per operation, in order, each with a `status` of `ok`, `error`, or `not_applied`; a failure's `pointer` names the field at fault. One failure rolls the batch back, so every other entry reads `not_applied`.
+`results` holds one entry per operation, in order, each with a `status` of `ok`, `error`, or `not_applied`; a failure's `pointer` names the field at fault. One failure rolls the batch back, so every other entry reads `not_applied`. A committed batch also answers `seq`, each changed Initiative's new delivery sequence; the tree read carries the `seq` it is current to.
 
 <!-- generated: DoItWeb.Api.Operations -->
 | Op | Type | Data keys |
@@ -96,6 +96,8 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 | archived_initiative | One row of the user's Archived list (`GET /app/api/initiatives/archive`, m04.02 item 4.5): the summary plus the per-user `hidden` flag |
 | trashed_initiative | One row of the owner's Trash (`GET /app/api/initiatives/archive`): the summary |
 | initiative_tree | The whole-Initiative tree response body (`GET /api/v1/initiatives/:id`) |
+| task_records | The delta envelope's `upserts`: `ids` as task nodes minus `children` |
+| initiative_patch | The delta envelope's `initiative` header patch |
 | initiative_url | The Initiative's web URL |
 | task_ref | The task → Initiative resolver body (`GET /api/v1/tasks/:id`) |
 | activity_event | One activity event (`GET /api/v1/initiatives/:id/activity`) |
@@ -105,8 +107,12 @@ An [Initiative with agent access off](../specs/agent_integration.md#safety-and-a
 
 ### Read-only and writable fields
 
-An Initiative list item carries `description` and `created_at`, so a list can be ordered without reading each tree. `progress` is the server's roll-up; writing it is refused. Leaves take `manual_progress`; branches don't. A task node names its children's `sort_mode` and `sort_reverse` (`null` inherits) and carries `updated_by` (`{id, name, username}`, `null` before anyone) and `updated_at` (UTC); sending either is refused as an unknown key.
+An Initiative list item carries `description` and `created_at`. `progress` is the server's roll-up; writing it is refused. Leaves take `manual_progress`; branches don't. A task node names its children's `sort_mode` and `sort_reverse` (`null` inherits) and carries `updated_by` (`{id, name, username}`, `null` before anyone) and `updated_at` (UTC); sending either is refused as an unknown key.
 
+
+### Live channel
+
+The browser joins `initiative:<id>` on `/socket`; membership is checked on join and on every change, and a member who loses access gets `access_revoked` once. Every committed change is one `delta`: `seq`, `origin_key` (the batch's `Idempotency-Key`), `actor`, `upserts` (task nodes without `children`), `removed` (task ids), `initiative` (header fields, when moved), `members_changed`. Apply only the next `seq`; ignore an older or repeated one; re-read the tree on a gap. Your own `origin_key` is already applied. Untouched rows' positions and labels are derived locally.
 
 ## Scripted client
 
@@ -131,7 +137,7 @@ An Initiative list item carries `description` and `created_at`, so a list can be
 | retry | [key] | --out | resend writes whose outcome is unknown |
 <!-- /generated: scripts/doitlist.py -->
 
-`move` takes one Task or a comma-separated list: `move %12,%15,%9 %7 0` lands the three under Task 7 in that order as one write. Only a single Task sends `expected_version`.
+`move` takes one Task or a comma-separated list: `move %12,%15,%9 %7 0` lands the three under Task 7 as one write. Only a single Task sends `expected_version`.
 
 `show <task>` prints a Task's outline line, then its description or `(no description)`.
 
@@ -188,11 +194,11 @@ A write whose outcome is unknown prints the command that settles it; run it firs
 
 ### Tools and the endpoints behind them
 
-Every write tool is one operation in a batch of one; `apply_operations` passes a whole batch through. Read tools map to the read endpoints one for one. Anything the tools do not cover, the API still does.
+Every write tool is one operation in a batch of one; `apply_operations` passes a whole batch through. Read tools map to the read endpoints one for one; anything else, the API still does.
 
 ### Setup
 
-Paste the block for your client, in the variant for your shell. Only right after minting does the account page show it with your token.
+Paste the block for your client and shell. Only right after minting does the account page show it with your token.
 
 <!-- generated: DoItWeb.AgentConnect -->
 #### Claude Code
@@ -248,11 +254,11 @@ py -3 --version   # if missing: winget install --id Python.Python.3.13 -e
 
 ### Walkthrough
 
-Ask your agent for these in its chat; the tool it reaches for is named beside each.
+Ask your agent for these; the tool it reaches for is named beside each.
 
 1. Confirm the connection — `get_me`. It answers only with a working token.
 2. Import a plan into a new Initiative — `import_text`.
 3. Mark one Task done — `get_initiative_tree` to find it, then `complete_task`.
 4. Read the tree back — `get_initiative_tree`.
 
-Nothing here runs the scripted client; an MCP agent calls tools, never `doitlist.py`.
+An MCP agent calls tools, never `doitlist.py`.

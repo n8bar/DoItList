@@ -152,10 +152,10 @@ defmodule DoItWeb.Api.OperationsQueryBudgetTest do
     attach_qlog()
 
     # --- adds: 1-op vs 6-op batch, all under one parent (one touched branch)
-    {:ok, _} = Operations.apply_batch(owner, [add_op(bottom, 0)])
+    {:ok, _, _} = Operations.apply_batch(owner, [add_op(bottom, 0)])
 
     reset_qlog()
-    {:ok, _} = Operations.apply_batch(owner, [add_op(bottom, 1)])
+    {:ok, _, _} = Operations.apply_batch(owner, [add_op(bottom, 1)])
     q_add_1 = qcount()
 
     assert rollup_chain_fetches() == 1,
@@ -163,7 +163,7 @@ defmodule DoItWeb.Api.OperationsQueryBudgetTest do
              "got #{rollup_chain_fetches()}"
 
     reset_qlog()
-    {:ok, _} = Operations.apply_batch(owner, for(i <- 2..7, do: add_op(bottom, i)))
+    {:ok, _, _} = Operations.apply_batch(owner, for(i <- 2..7, do: add_op(bottom, i)))
     q_add_6 = qcount()
     add_per_op = per_op(q_add_1, q_add_6, 6)
 
@@ -181,11 +181,11 @@ defmodule DoItWeb.Api.OperationsQueryBudgetTest do
     [f1 | rest] = leaf_ids
 
     reset_qlog()
-    {:ok, _} = Operations.apply_batch(owner, [flip_op(f1)])
+    {:ok, _, _} = Operations.apply_batch(owner, [flip_op(f1)])
     q_flip_1 = qcount()
 
     reset_qlog()
-    {:ok, _} = Operations.apply_batch(owner, rest |> Enum.take(6) |> Enum.map(&flip_op/1))
+    {:ok, _, _} = Operations.apply_batch(owner, rest |> Enum.take(6) |> Enum.map(&flip_op/1))
     q_flip_6 = qcount()
     flip_per_op = per_op(q_flip_1, q_flip_6, 6)
 

@@ -396,24 +396,33 @@ defmodule DoIt.Initiatives do
   def update_initiative(%Initiative{} = initiative, attrs) do
     changeset = Initiative.changeset(initiative, stringify_keys(attrs))
     calc_changed? = Ecto.Changeset.get_change(changeset, :progress_calc) != nil
-    index_changed? = Ecto.Changeset.get_change(changeset, :index_style) != nil
 
-    with {:ok, updated} <- Repo.update(changeset) do
-      # A no-change update writes nothing and must not bump (item 32).
-      updated = if changeset.changes == %{}, do: updated, else: bump_version(updated)
-      # A progress_calc switch invalidates every cached branch value at once;
-      # recompute the whole tree so stored roll-ups don't linger in the old
-      # mode until the next edit.
-      if calc_changed?, do: DoIt.Tasks.recompute_initiative_tree(updated.id)
+    # One transaction (m04.03 1.1): the version bump, the tree recompute and
+    # the delivery-sequence step commit together, and the broadcast fires
+    # only once they have.
+    Repo.transaction(fn ->
+      case Repo.update(changeset) do
+        {:ok, updated} ->
+          # A no-change update writes nothing and must not bump (item 32).
+          updated = if changeset.changes == %{}, do: updated, else: bump_version(updated)
+          # A progress_calc switch invalidates every cached branch value at once;
+          # recompute the whole tree so stored roll-ups don't linger in the old
+          # mode until the next edit.
+          if calc_changed?, do: DoIt.Tasks.recompute_initiative_tree(updated.id)
 
-      # An index_style switch re-labels every row's task number, which is
-      # derived at render from @initiative — broadcast the Initiative update
-      # so other connected sessions re-fetch it and re-render with the new
-      # style. Not a tree change: the tasks didn't move, so no tree reload.
-      if index_changed?, do: DoIt.Tasks.notify_initiative_updated(updated.id)
+          # Any change to the row is header content some open view renders
+          # (name, description, progress_calc, index_style …): broadcast the
+          # Initiative update so other sessions re-fetch it. Not a tree
+          # change: the tasks didn't move, so no tree reload.
+          if changeset.changes != %{}, do: DoIt.Tasks.notify_initiative_updated(updated.id)
 
-      {:ok, updated}
-    end
+          updated
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+    |> flush_broadcasts()
   end
 
   @doc """
@@ -459,17 +468,26 @@ defmodule DoIt.Initiatives do
         {:ok, root}
 
       %Task{} = root ->
-        with {:ok, updated} <- root |> Ecto.Changeset.change(title: title) |> Repo.update() do
-          # The subtitle is Initiative content surfaced on its payloads, so it
-          # bumps the Initiative's version (an expected_version must cover
-          # subtitle staleness); the root task row bumps too, like any task
-          # content write.
-          {1, _} =
-            from(t in Task, where: t.id == ^updated.id) |> Repo.update_all(inc: [version: 1])
+        Repo.transaction(fn ->
+          case root |> Ecto.Changeset.change(title: title) |> Repo.update() do
+            {:ok, updated} ->
+              # The subtitle is Initiative content surfaced on its payloads, so it
+              # bumps the Initiative's version (an expected_version must cover
+              # subtitle staleness); the root task row bumps too, like any task
+              # content write.
+              {1, _} =
+                from(t in Task, where: t.id == ^updated.id) |> Repo.update_all(inc: [version: 1])
 
-          bump_version(initiative)
-          {:ok, updated}
-        end
+              bump_version(initiative)
+              # Header content: other sessions re-fetch the Initiative (m04.03 1.2).
+              DoIt.Tasks.notify_initiative_updated(initiative.id)
+              updated
+
+            {:error, changeset} ->
+              Repo.rollback(changeset)
+          end
+        end)
+        |> flush_broadcasts()
 
       nil ->
         {:error, :no_root_task}
@@ -861,19 +879,25 @@ defmodule DoIt.Initiatives do
   Defaults to `nil` for system/seed callers that don't attribute an actor.
   """
   def add_member(initiative_id, user_id, role, actor \\ nil) do
-    %InitiativeMember{}
-    |> InitiativeMember.changeset(%{initiative_id: initiative_id, user_id: user_id, role: role})
-    |> Repo.insert()
-    |> tap(fn
-      {:ok, _} ->
-        DoIt.BatchMemo.bust_tag(:member_role)
-        record_collaborators(initiative_id, user_id)
-        broadcast_members_changed(initiative_id)
-        notify_membership(actor, user_id, initiative_id, "member_added")
+    # One transaction per member op (m04.03 1.1): the membership write and
+    # its delivery-sequence step commit together; the broadcast follows.
+    Repo.transaction(fn ->
+      %InitiativeMember{}
+      |> InitiativeMember.changeset(%{initiative_id: initiative_id, user_id: user_id, role: role})
+      |> Repo.insert()
+      |> case do
+        {:ok, member} ->
+          DoIt.BatchMemo.bust_tag(:member_role)
+          record_collaborators(initiative_id, user_id)
+          broadcast_members_changed(initiative_id)
+          notify_membership(actor, user_id, initiative_id, "member_added")
+          member
 
-      _ ->
-        :ok
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
     end)
+    |> flush_broadcasts()
   end
 
   @doc """
@@ -905,19 +929,25 @@ defmodule DoIt.Initiatives do
   notification. Defaults to `nil` for system callers.
   """
   def remove_member(initiative_id, user_id, actor \\ nil) do
-    from(m in InitiativeMember,
-      where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
-    )
-    |> Repo.delete_all()
-    |> tap(fn
-      {n, _} when n > 0 ->
-        DoIt.BatchMemo.bust_tag(:member_role)
-        broadcast_members_changed(initiative_id)
-        notify_membership(actor, user_id, initiative_id, "member_removed")
+    {:ok, deleted} =
+      Repo.transaction(fn ->
+        from(m in InitiativeMember,
+          where: m.initiative_id == ^initiative_id and m.user_id == ^user_id
+        )
+        |> Repo.delete_all()
+        |> tap(fn
+          {n, _} when n > 0 ->
+            DoIt.BatchMemo.bust_tag(:member_role)
+            broadcast_members_changed(initiative_id)
+            notify_membership(actor, user_id, initiative_id, "member_removed")
 
-      _ ->
-        :ok
-    end)
+          _ ->
+            :ok
+        end)
+      end)
+      |> flush_broadcasts()
+
+    deleted
   end
 
   # Drop a member_added / member_removed notification on the affected user,
@@ -963,8 +993,14 @@ defmodule DoIt.Initiatives do
   # `DoIt.Broadcast` so the message defers to post-commit inside a transaction
   # (e.g. a multi-op batch) instead of leaking pre-commit / surviving rollback.
   defp broadcast_members_changed(initiative_id) do
-    DoIt.Broadcast.broadcast("initiative:#{initiative_id}", {:members_changed, initiative_id})
+    # Through DoIt.Delta so the membership change advances the Initiative's
+    # delivery sequence and rides the delta envelope (m04.03 1.1/1.2).
+    DoIt.Delta.enqueue(initiative_id, {:members_changed, initiative_id})
   end
+
+  # Post-commit broadcast point for the member/setting mutators below — the
+  # `DoIt.Tasks.with_resort_batching/1` role, for this context.
+  defp flush_broadcasts(result), do: DoIt.Delta.flush(result)
 
   @doc """
   Transfer ownership — the "transfer first" path that m02.04 §1.10's
@@ -990,12 +1026,11 @@ defmodule DoIt.Initiatives do
 
           {:ok, _} = do_update_member_role(initiative.id, new_owner_id, "owner")
           {:ok, _} = do_update_member_role(initiative.id, old_owner_id, "editor")
+          # Queued in the transaction, fired by the flush once it commits.
+          broadcast_members_changed(initiative.id)
           updated
         end)
-        |> tap(fn
-          {:ok, _} -> broadcast_members_changed(initiative.id)
-          _ -> :ok
-        end)
+        |> flush_broadcasts()
     end
   end
 
@@ -1009,15 +1044,18 @@ defmodule DoIt.Initiatives do
   """
   def update_member_role(initiative_id, user_id, role, actor \\ nil)
       when role in ~w(owner editor viewer) do
-    do_update_member_role(initiative_id, user_id, role)
-    |> tap(fn
-      {:ok, _} ->
-        broadcast_members_changed(initiative_id)
-        notify_role_changed(actor, user_id, initiative_id, role)
+    Repo.transaction(fn ->
+      case do_update_member_role(initiative_id, user_id, role) do
+        {:ok, member} ->
+          broadcast_members_changed(initiative_id)
+          notify_role_changed(actor, user_id, initiative_id, role)
+          member
 
-      _ ->
-        :ok
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
     end)
+    |> flush_broadcasts()
   end
 
   # No broadcast — for callers inside a transaction (transfer_ownership
@@ -1062,12 +1100,18 @@ defmodule DoIt.Initiatives do
   sessions re-render the knobs control's derived state live.
   """
   def set_agent_access(%Initiative{} = initiative, on) when is_boolean(on) do
-    with {:ok, updated} <-
-           initiative |> Ecto.Changeset.change(agent_access: on) |> Repo.update() do
-      updated = bump_version(updated)
-      DoIt.Tasks.notify_initiative_updated(updated.id)
-      {:ok, updated}
-    end
+    Repo.transaction(fn ->
+      case initiative |> Ecto.Changeset.change(agent_access: on) |> Repo.update() do
+        {:ok, updated} ->
+          updated = bump_version(updated)
+          DoIt.Tasks.notify_initiative_updated(updated.id)
+          updated
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
+      end
+    end)
+    |> flush_broadcasts()
   end
 
   @doc "Whether this admin has acknowledged the agent-trust confirm for this Initiative."

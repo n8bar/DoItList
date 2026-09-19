@@ -251,7 +251,7 @@ defmodule DoItWeb.Api.Operations do
 
   import Ecto.Query, only: [from: 2]
 
-  alias DoIt.{Accounts, Broadcast, Initiatives, Notifications, Repo, Tasks}
+  alias DoIt.{Accounts, Delta, Initiatives, Notifications, Repo, Tasks}
   alias DoIt.Accounts.{User, UserPreferences}
   alias DoIt.Initiatives.Initiative
   alias DoIt.Notifications.Notification
@@ -380,8 +380,10 @@ defmodule DoItWeb.Api.Operations do
 
   Returns:
 
-    * `{:ok, results}` — the batch committed; `results` is an ordered list of
-      per-op success maps (`:index`, optional `:lid`, `:status` `"ok"`, `:data`).
+    * `{:ok, results, seq}` — the batch committed; `results` is an ordered list of
+      per-op success maps (`:index`, optional `:lid`, `:status` `"ok"`, `:data`);
+      `seq` maps each Initiative id the batch advanced to its new delivery
+      sequence (m04.03 1.2), the number the batch's delta envelope carries.
     * `{:error, status, results}` — the batch rolled back; `status` is `403` or
       `422`, `results` carries the offending op (`:status` `"error"`, `:error`)
       and every other op as `"not_applied"`.
@@ -391,7 +393,7 @@ defmodule DoItWeb.Api.Operations do
       (rendered by the controller as the single-error shape).
   """
   @spec apply_batch(User.t(), list(), keyword()) ::
-          {:ok, [map()]}
+          {:ok, [map()], %{optional(integer()) => integer()}}
           | {:error, 403 | 422, [map()], map()}
           | {:error, :batch_too_large, String.t()}
           | {:error, :invalid_request}
@@ -460,7 +462,7 @@ defmodule DoItWeb.Api.Operations do
     # NB: discard/1 wipes the WHOLE per-process queue. That is correct here only
     # because apply_batch owns the entire batch boundary; never call it from
     # inside a nested context that shares this process's queue.
-    Broadcast.discard(:ok)
+    Delta.discard(:ok)
 
     multi =
       operations
@@ -477,21 +479,34 @@ defmodule DoItWeb.Api.Operations do
       # results are unaffected: they echo only the op's own row, which each
       # op wrote synchronously.
       |> Ecto.Multi.run(:rollup, fn _repo, _changes ->
-        {:ok, Tasks.flush_deferred_rollup()}
+        rollup = Tasks.flush_deferred_rollup()
+        # The batch's last statement (m04.03 1.1): one delivery-sequence step
+        # per Initiative the batch touched, taken late so the Initiative row
+        # lock is held briefly rather than for the whole batch.
+        Delta.advance_deferred()
+        {:ok, rollup}
       end)
 
     try do
-      # Two batch scopes in the with_resort_batching pattern (m03.04 2.7.5.2/.3),
-      # both torn down in their own `after`: the read memo (Initiative rows,
-      # member roles, user preferences, resolved sort chains — busted by any
-      # same-batch write to the entity) and the roll-up deferral the :rollup
-      # step flushes. Single-op paths never enter either scope.
+      # Three batch scopes in the with_resort_batching pattern (m03.04
+      # 2.7.5.2/.3), each torn down in its own `after`: the read memo
+      # (Initiative rows, member roles, user preferences, resolved sort chains
+      # — busted by any same-batch write to the entity), the roll-up deferral
+      # the :rollup step flushes, and the delivery-sequence deferral it
+      # advances. Single-op paths never enter any of them.
       result =
         DoIt.BatchMemo.with_scope(fn ->
           Tasks.with_deferred_rollup(fn ->
-            Repo.transaction(multi, timeout: @batch_transaction_timeout)
+            Delta.with_deferred_seq(fn ->
+              Repo.transaction(multi, timeout: @batch_transaction_timeout)
+            end)
           end)
         end)
+
+      # Read before the flush clears them: the sequences this batch advanced,
+      # echoed at the top of the response so a client can match its own
+      # delta (m04.03 1.2).
+      seqs = Delta.seqs()
 
       # Every PubSub message queued by a context fn during the batch (task,
       # member, AND notification broadcasts all route through DoIt.Broadcast)
@@ -500,9 +515,10 @@ defmodule DoItWeb.Api.Operations do
       # batch or leaking pre-commit. Coalesced per batch (item 5.8.2): N per-op
       # task messages would trigger N full tree reloads in every open
       # workspace — O(batch x tree) subscriber work; the coalescer collapses
-      # them to per-batch signals with identical converged state.
-      Broadcast.flush(transaction_ok?(result), &Tasks.coalesce_task_broadcasts/1)
-      render(result, count)
+      # them to per-batch signals with identical converged state. The delta
+      # envelopes (one per Initiative) fire after them.
+      Delta.flush(transaction_ok?(result), &Tasks.coalesce_task_broadcasts/1)
+      render(result, count, seqs)
     after
       # An op may RAISE inside the transaction (a DB constraint / Postgrex /
       # Ecto.StaleEntryError / an unmatched context return). Repo.transaction
@@ -510,7 +526,7 @@ defmodule DoItWeb.Api.Operations do
       # leaving the rolled-back batch's broadcasts queued. `after` runs on EVERY
       # exit — commit, clean rollback, or raise — so the queue is dropped
       # unconditionally; the raise still propagates, just with no leaked queue.
-      Broadcast.discard(:ok)
+      Delta.discard(:ok)
     end
   end
 
@@ -521,7 +537,7 @@ defmodule DoItWeb.Api.Operations do
 
   # --- Result rendering ------------------------------------------------------
 
-  defp render({:ok, changes}, count) do
+  defp render({:ok, changes}, count, seqs) do
     results =
       for index <- 0..(count - 1) do
         %{lid: lid, data: data} = Map.fetch!(changes, {:op, index})
@@ -530,8 +546,10 @@ defmodule DoItWeb.Api.Operations do
         |> maybe_put_lid(lid)
       end
 
-    {:ok, results}
+    {:ok, results, seqs}
   end
+
+  defp render({:error, _, _, _} = failure, count, _seqs), do: render(failure, count)
 
   defp render({:error, {:op, bad_index}, %{} = err, _changes}, count) do
     results =

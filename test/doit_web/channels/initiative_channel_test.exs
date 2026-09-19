@@ -226,6 +226,83 @@ defmodule DoItWeb.InitiativeChannelTest do
     end
   end
 
+  describe "the delta envelope (m04.03 1.3)" do
+    setup %{owner: owner, initiative: initiative} do
+      {:ok, socket} = connect_as(owner)
+
+      {:ok, _reply, channel} =
+        subscribe_and_join(socket, InitiativeChannel, "initiative:#{initiative.id}")
+
+      %{channel: channel}
+    end
+
+    test "a committed write is pushed once as a delta, beside the legacy change", %{
+      owner: owner,
+      task: task,
+      initiative: initiative
+    } do
+      {:ok, _} = Tasks.update_task(task, owner, %{"title" => "Ship it, sequenced"})
+
+      assert_push "changed", %{kind: "task_updated"}
+      assert_push "delta", %{initiative_id: id, seq: seq, upserts: upserts, removed: []}
+      assert id == initiative.id
+      assert seq == DoIt.Initiatives.get_initiative!(initiative.id).seq
+      assert Enum.find(upserts, &(&1.id == task.id)).title == "Ship it, sequenced"
+      refute_push "delta", %{}, 100
+    end
+
+    test "a membership change that leaves access alone is delivered", %{
+      owner: owner,
+      initiative: initiative,
+      channel: channel
+    } do
+      other = user("other")
+      {:ok, _} = Initiatives.add_member(initiative.id, other.id, "viewer", owner)
+
+      assert_push "delta", %{members_changed: true}
+      assert Process.alive?(channel.channel_pid)
+    end
+
+    test "a delta that revokes access is never delivered", %{
+      owner: owner,
+      stranger: stranger,
+      initiative: initiative
+    } do
+      {:ok, _} = Initiatives.add_member(initiative.id, stranger.id, "viewer", owner)
+      # The owner's channel (this describe's setup) forwards that add.
+      assert_push "delta", %{members_changed: true}
+      {:ok, socket} = connect_as(stranger)
+
+      {:ok, _reply, theirs} =
+        subscribe_and_join(socket, InitiativeChannel, "initiative:#{initiative.id}")
+
+      ref = Process.monitor(theirs.channel_pid)
+
+      # Drop the membership row silently, then hand the channel the envelope
+      # itself: the tuple path is covered above, and this proves the
+      # envelope path re-authorizes on its own before pushing records.
+      import Ecto.Query, only: [from: 2]
+
+      {1, _} =
+        DoIt.Repo.delete_all(
+          from(m in DoIt.Initiatives.InitiativeMember,
+            where: m.initiative_id == ^initiative.id and m.user_id == ^stranger.id
+          )
+        )
+
+      send(
+        theirs.channel_pid,
+        {:initiative_delta,
+         %{initiative_id: initiative.id, seq: 99, members_changed: true, upserts: [], removed: []}}
+      )
+
+      assert_push "access_revoked", %{initiative_id: id}
+      assert id == initiative.id
+      assert_receive {:DOWN, ^ref, :process, _pid, :normal}
+      refute_push "delta", %{}, 100
+    end
+  end
+
   describe "selection presence" do
     setup %{owner: owner, initiative: initiative} do
       {:ok, socket} = connect_as(owner)

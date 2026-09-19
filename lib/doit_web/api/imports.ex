@@ -772,7 +772,7 @@ defmodule DoItWeb.Api.Imports do
     rewritten = Enum.map(chunk, &rewrite(&1, resolved, local))
 
     case Operations.apply_batch(user, rewritten) do
-      {:ok, results} ->
+      {:ok, results, _seq} ->
         run_chunks(rest, user, harvest(results, resolved), applied + 1, context)
 
       outcome ->
